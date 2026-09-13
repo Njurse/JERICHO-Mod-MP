@@ -1,0 +1,7 @@
+id = "mp"
+name = "Multiplayer"
+version = "0.1.0"
+author = "JERICHO"
+description = "LAN multiplayer: host/join with UDP discovery, a generic JERICHO addon net bridge, and synchronized play (client-authoritative car replication with host state-resync fallback)."
+dependencies = []
+default-enabled = true
