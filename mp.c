@@ -184,6 +184,11 @@ void MpCarPose(int carId, int* x, int* y, int* z, int* heading)
 	if (heading != NULL) *heading = car_data[carId].hd.direction;
 }
 
+/* Set when a lost connection must land the player on the main menu; the
+ * engine decides where its own exit goes, so we jump on the next frontend
+ * frame instead of trusting it. */
+static int gReturnToMenu;
+
 /* Leave the whole match: back to the main frontend with a notice. Used when
  * the host ends the game or the server connection is lost. */
 void MpReturnToFrontend(void)
@@ -202,11 +207,18 @@ void MpReturnToFrontend(void)
 
 	/* the ENGINE's own way out of a gameplay session: it tears down the level,
 	 * stops the music/sfx and returns to the frontend (the same path the pause
-	 * menu's Exit takes). Do NOT just SetState -- that leaves sounds playing. */
+	 * menu's Exit takes). Do NOT just SetState -- that leaves sounds playing.
+	 * The engine lands where it likes (often the middle of the stock chain that
+	 * launched the level), so ask for the main menu explicitly. */
 	if (!gInFrontend)
+	{
+		gReturnToMenu = 1;
 		EndGame(GAMEMODE_QUIT);
+	}
 	else
+	{
 		jer_frontend_goto(0);	/* already in a menu: back to the main one */
+	}
 }
 void MpCameraPose(int* x, int* y, int* z, int* yaw)
 {
@@ -687,6 +699,15 @@ static int MpOnFrame(void* userdata, void* args)
 
 	MpNetPoll(0);
 	MpUiTick();
+
+	/* A connection loss asked for the main menu: take it as soon as the engine
+	 * is back in the frontend, so the player cannot be left in the middle of
+	 * the menu chain that started the match. */
+	if (gReturnToMenu && gInFrontend)
+	{
+		gReturnToMenu = 0;
+		jer_frontend_goto(0);
+	}
 
 	/* The host quit the match: it is back in the frontend while the session
 	 * is still live, so tell the clients and tear everything down. */
