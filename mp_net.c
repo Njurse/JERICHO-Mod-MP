@@ -49,7 +49,8 @@
 #define MP_SEND_BUF		2048
 #define MP_ACCEPT_BACKLOG	8
 #define MP_SND_TIMEOUT_MS	250
-#define MP_CONN_TIMEOUT_MS	6000	/* drop a silent peer */
+#define MP_CONN_TIMEOUT_MS	10000	/* drop a peer after 10 s of silence (~10
+					 * missed keepalive pings) */
 #define MP_CONNECT_TIMEOUT_MS	5000
 
 /* ------------------------------------------------------------------ */
@@ -69,6 +70,7 @@ typedef struct MP_CONN
 static MP_CONN gConn[MP_MAX_PLAYERS];
 static SOCKET  gListen = INVALID_SOCKET;	/* host listener */
 static int     gNetStarted;
+static unsigned long gLastPollMs;	/* when we last serviced the sockets */
 
 /* ------------------------------------------------------------------ */
 /* Platform helpers                                                    */
@@ -301,26 +303,80 @@ static void MpAcceptPeers(void)
 }
 
 /* ------------------------------------------------------------------ */
-/* Client: connect                                                     */
+/* Client: join state + the asynchronous connect plumbing              */
+/*                                                                     */
+/* The frontend must never freeze on a join, so the UI path starts the  */
+/* connect and lets MpClientConnectPoll() finish it on a later frame,   */
+/* while the menu shows "Connecting to <host>:<port>...".               */
 /* ------------------------------------------------------------------ */
-int MpClientConnect(const char* host, int port)
+static SOCKET gConnectingSock = INVALID_SOCKET;
+static char   gConnectingHost[64];
+static int    gConnectingPort;
+static unsigned long gConnectingSinceMs;
+static int    gJoinState = MP_JOIN_IDLE;
+
+int MpJoinState(void)
+{
+	return gJoinState;
+}
+
+void MpJoinStateSet(int state)
+{
+	gJoinState = state;
+}
+
+const char* MpJoinTarget(void)
+{
+	return gConnectingHost;
+}
+
+int MpJoinTargetPort(void)
+{
+	return gConnectingPort;
+}
+
+static void MpClientConnectCancel(void)
+{
+	MpCloseSock(&gConnectingSock);
+}
+
+/* ------------------------------------------------------------------ */
+/* Client: connect (blocking variant, used by -join / MP_AUTOSTART)     */
+/* ------------------------------------------------------------------ */
+/* NOTE: the join is always asynchronous now (MpClientConnectBegin +
+ * MpClientConnectPoll) so the frontend can show "Connecting to ..." instead
+ * of freezing. The blocking variant was removed with the last caller. */
+
+void MpClientDisconnect(void)
+{
+	int i;
+
+	MpClientConnectCancel();	/* abandon an in-flight connect too */
+
+	for (i = 0; i < MP_MAX_PLAYERS; i++)
+	{
+		if (gConn[i].used && !gConn[i].hostSide)
+		{
+			MpCloseSock(&gConn[i].sock);
+			gConn[i].used = 0;
+			gConn[i].rbufLen = 0;
+		}
+	}
+
+	gMp.connected = 0;
+	gJoinState = MP_JOIN_IDLE;
+}
+
+/* A socket set up for `host:port` (already non-blocking, ready for connect). */
+static SOCKET MpClientSocket(const char* host, int port, struct sockaddr_in* out)
 {
 	struct sockaddr_in addr;
 	SOCKET s;
 	int one = 1;
-	int idx;
-	fd_set wfds;
-	struct timeval tv;
-	int rc;
-
-	if (!gNetStarted && !MpNetStart())
-		return 0;
-
-	MpClientDisconnect();
 
 	s = socket(AF_INET, SOCK_STREAM, 0);
 	if (s == INVALID_SOCKET)
-		return 0;
+		return INVALID_SOCKET;
 
 	setsockopt(s, SOL_SOCKET, SO_REUSEADDR, (const char*)&one, sizeof(one));
 
@@ -334,23 +390,18 @@ int MpClientConnect(const char* host, int port)
 		addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
 	}
 
-	/* non-blocking connect with a bounded wait so a bad IP cannot hang */
+	*out = addr;
+
 	MpSetNonBlocking(s, 1);
 
-	rc = connect(s, (struct sockaddr*)&addr, sizeof(addr));
-	if (rc == SOCKET_ERROR)
-	{
-		FD_ZERO(&wfds);
-		FD_SET(s, &wfds);
-		tv.tv_sec = MP_CONNECT_TIMEOUT_MS / 1000;
-		tv.tv_usec = (MP_CONNECT_TIMEOUT_MS % 1000) * 1000;
+	return s;
+}
 
-		if (select((int)s + 1, NULL, &wfds, NULL, &tv) <= 0)
-		{
-			closesocket(s);
-			return 0;
-		}
-	}
+/* The connect succeeded: adopt the socket as the host connection and start
+ * the handshake. Still CONNECTING until the host answers with a WELCOME. */
+static int MpClientAdopt(SOCKET s, const char* host, int port)
+{
+	int idx;
 
 	MpSetNonBlocking(s, 0);	/* back to blocking recv (guarded by FIONREAD) */
 	MpTuneConn(s);
@@ -368,30 +419,115 @@ int MpClientConnect(const char* host, int port)
 	gConn[idx].lastRecvMs = MpClockMs();
 
 	gMp.connected = 1;
+	gJoinState = MP_JOIN_CONNECTING;
 
-	if (gMpCtx) gMpCtx->jer_log(gMpCtx, "[mp] connected to %s:%d\n", host, port > 0 ? port : gMp.config.port);
+	if (gMpCtx) gMpCtx->jer_log(gMpCtx, "[mp] connected to %s:%d\n", host, port);
 
-	/* begin the handshake immediately */
 	MpSendHello();
 
 	return 1;
 }
 
-void MpClientDisconnect(void)
+/* The attempt is over and it failed: drop the socket, say so plainly (the
+ * UI shows the toast and stops showing "Connecting..."). */
+static void MpJoinFail(const char* why)
 {
-	int i;
+	MpClientConnectCancel();
 
-	for (i = 0; i < MP_MAX_PLAYERS; i++)
+	gJoinState = MP_JOIN_FAILED;
+
+	if (gMp.role == MP_ROLE_CLIENT)
+		gMp.role = MP_ROLE_NONE;
+
+	jer_error("Could not join the server at %s:%d", gConnectingHost, gConnectingPort);
+
+	if (gMpCtx)
+		gMpCtx->jer_log(gMpCtx, "[mp] join FAILED: could not reach %s:%d (%s)\n",
+			gConnectingHost, gConnectingPort, why);
+}
+
+int MpClientConnectBegin(const char* host, int port)
+{
+	struct sockaddr_in addr;
+	SOCKET s;
+	int rc;
+
+	if (!gNetStarted && !MpNetStart())
+		return 0;
+
+	MpClientDisconnect();	/* also cancels any earlier attempt */
+
+	s = MpClientSocket(host, port, &addr);
+	if (s == INVALID_SOCKET)
+		return 0;
+
+	snprintf(gConnectingHost, sizeof(gConnectingHost), "%s", host != NULL ? host : "");
+	gConnectingPort = port > 0 ? port : gMp.config.port;
+	gConnectingSinceMs = MpClockMs();
+	gJoinState = MP_JOIN_CONNECTING;
+
+	if (gMpCtx)
+		gMpCtx->jer_log(gMpCtx, "[mp] connecting to %s:%d\n", gConnectingHost, gConnectingPort);
+
+	rc = connect(s, (struct sockaddr*)&addr, sizeof(addr));
+
+	if (rc == 0)
 	{
-		if (gConn[i].used && !gConn[i].hostSide)
-		{
-			MpCloseSock(&gConn[i].sock);
-			gConn[i].used = 0;
-			gConn[i].rbufLen = 0;
-		}
+		/* connected on the spot (loopback usually does) */
+		MpClientAdopt(s, gConnectingHost, gConnectingPort);
+		return 1;
 	}
 
-	gMp.connected = 0;
+	/* refused/timeout is NOT an error here: a non-blocking connect reports it
+	 * through select() in a moment, which is what keeps the frontend alive */
+	gConnectingSock = s;
+
+	return 1;
+}
+
+void MpClientConnectPoll(void)
+{
+	fd_set wfds, efds;
+	struct timeval tv;
+	int err = 0;
+#ifdef _WIN32
+	int elen = (int)sizeof(err);
+#else
+	socklen_t elen = sizeof(err);
+#endif
+
+	if (gConnectingSock == INVALID_SOCKET)
+		return;
+
+	FD_ZERO(&wfds);
+	FD_SET(gConnectingSock, &wfds);
+	FD_ZERO(&efds);
+	FD_SET(gConnectingSock, &efds);
+	tv.tv_sec = 0;
+	tv.tv_usec = 0;
+
+	if (select((int)gConnectingSock + 1, NULL, &wfds, &efds, &tv) <= 0)
+	{
+		/* not resolved yet -- only give up after the bounded wait */
+		if ((MpClockMs() - gConnectingSinceMs) > (unsigned long)MP_CONNECT_TIMEOUT_MS)
+			MpJoinFail("timed out");
+
+		return;
+	}
+
+	if (FD_ISSET(gConnectingSock, &wfds) || FD_ISSET(gConnectingSock, &efds))
+	{
+		if (getsockopt(gConnectingSock, SOL_SOCKET, SO_ERROR, (char*)&err, &elen) == 0 && err == 0)
+		{
+			SOCKET done = gConnectingSock;
+			gConnectingSock = INVALID_SOCKET;
+			MpClientAdopt(done, gConnectingHost, gConnectingPort);
+		}
+		else
+		{
+			MpJoinFail("connection refused");
+		}
+	}
 }
 
 /* ------------------------------------------------------------------ */
@@ -606,6 +742,49 @@ static void MpProcessConn(int idx)
 	}
 }
 
+/* ------------------------------------------------------------------ */
+/* Keepalive                                                           */
+/* ------------------------------------------------------------------ */
+static unsigned long gLastPingMs;
+
+/* Both sides ping on a timer, so an idle session (frontend lobby, a quiet
+ * stretch, a paused game) keeps proving it is alive -- the silence timeout
+ * then means what it says: the peer really is gone. */
+static void MpKeepaliveTick(void)
+{
+	unsigned long now = MpClockMs();
+	MP_PING pg;
+	int ms;
+
+	if (gMp.role == MP_ROLE_NONE)
+		return;
+
+	if (MpIsHost())
+	{
+		if (MpPeerCount() <= 0)
+			return;	/* nobody to keep alive */
+	}
+	else if (!gMp.connected)
+	{
+		return;		/* still connecting / already gone */
+	}
+
+	ms = gMp.config.keepaliveMs;
+	if (ms < MP_KEEPALIVE_MIN_MS)
+		ms = MP_KEEPALIVE_MIN_MS;
+
+	if (gLastPingMs != 0 && (now - gLastPingMs) < (unsigned long)ms)
+		return;
+
+	gLastPingMs = now;
+	pg.tick = (uint32_t)now;
+
+	if (MpIsHost())
+		MpHostBroadcast(MP_TAG_PING, 0, &pg, sizeof(pg));
+	else
+		MpSendToHost(MP_TAG_PING, 0, &pg, sizeof(pg));
+}
+
 void MpNetPoll(int waitMs)
 {
 	unsigned long now = MpClockMs();
@@ -617,6 +796,23 @@ void MpNetPoll(int waitMs)
 		MpAcceptPeers();
 
 	MpDiscoveryPoll();
+	MpClientConnectPoll();	/* finish an asynchronous join */
+	MpKeepaliveTick();	/* prove we are alive to our peers */
+
+	/* A poll gap longer than the timeout means WE were not running -- a level
+	 * load, a long pause, a debugger. The peers' recv timers went stale because
+	 * we were not listening, not because they went away, so credit that time
+	 * back rather than dropping a healthy connection. */
+	if (gLastPollMs != 0 && (now - gLastPollMs) > (unsigned long)MP_CONN_TIMEOUT_MS)
+	{
+		for (i = 0; i < MP_MAX_PLAYERS; i++)
+		{
+			if (gConn[i].used)
+				gConn[i].lastRecvMs = now;
+		}
+	}
+
+	gLastPollMs = now;
 
 	for (i = 0; i < MP_MAX_PLAYERS; i++)
 	{
@@ -639,6 +835,7 @@ static SOCKET gBeaconSock = INVALID_SOCKET;
 static int    gBeaconAdvertise;
 static unsigned long gLastBeaconMs;
 static MP_SERVER gServers[MP_MAX_SERVERS];
+static unsigned gDiscoveryRev;	/* bumped when the VISIBLE server set changes */
 
 #define MP_SERVER_SLOTS ((int)(sizeof(gServers) / sizeof(gServers[0])))
 
@@ -682,6 +879,15 @@ void MpDiscoveryStop(void)
 {
 	MpCloseSock(&gBeaconSock);
 	gBeaconAdvertise = 0;
+	gLastBeaconMs = 0;
+
+	/* forget the servers we had, so a later browse starts from empty rather
+	 * than showing rows that went silent while we were not listening */
+	if (MpDiscoveryCount() > 0)
+	{
+		memset(gServers, 0, sizeof(gServers));
+		gDiscoveryRev++;
+	}
 }
 
 static void MpBeaconSend(void)
@@ -713,7 +919,12 @@ static void MpBeaconSend(void)
 
 static void MpServerTouch(const char* ip, const MP_BEACON* b)
 {
+	char name[MP_NAME_MAX];
 	int i, freeIdx = -1;
+
+	/* the wire name is a fixed 32-byte field with no guaranteed NUL, so it is
+	 * normalised once here (and compared against the stored copy below) */
+	snprintf(name, sizeof(name), "%s", b->hostName);
 
 	for (i = 0; i < MP_SERVER_SLOTS; i++)
 	{
@@ -721,7 +932,20 @@ static void MpServerTouch(const char* ip, const MP_BEACON* b)
 		{
 			if (strcmp(gServers[i].ip, ip) == 0 && gServers[i].port == (int)b->port)
 			{
-				snprintf(gServers[i].hostName, MP_NAME_MAX, "%s", b->hostName);
+				/* only count a change the browser can actually show: the
+				 * beacon repeats every second and bumping the revision for an
+				 * identical beacon would refresh the menu once a second */
+				if (gServers[i].players != b->players ||
+				    gServers[i].maxPlayers != b->maxPlayers ||
+				    gServers[i].gamemode != b->gamemode ||
+				    gServers[i].city != b->city ||
+				    gServers[i].modsEnforced != b->modsEnforced ||
+				    gServers[i].inProgress != b->inProgress ||
+				    gServers[i].modHash != b->modHash ||
+				    strcmp(gServers[i].hostName, name) != 0)
+					gDiscoveryRev++;
+
+				snprintf(gServers[i].hostName, MP_NAME_MAX, "%s", name);
 				gServers[i].players = b->players;
 				gServers[i].maxPlayers = b->maxPlayers;
 				gServers[i].gamemode = b->gamemode;
@@ -746,7 +970,7 @@ static void MpServerTouch(const char* ip, const MP_BEACON* b)
 	gServers[freeIdx].used = 1;
 	snprintf(gServers[freeIdx].ip, sizeof(gServers[freeIdx].ip), "%s", ip);
 	gServers[freeIdx].port = b->port;
-	snprintf(gServers[freeIdx].hostName, MP_NAME_MAX, "%s", b->hostName);
+	snprintf(gServers[freeIdx].hostName, MP_NAME_MAX, "%s", name);
 	gServers[freeIdx].players = b->players;
 	gServers[freeIdx].maxPlayers = b->maxPlayers;
 	gServers[freeIdx].gamemode = b->gamemode;
@@ -755,6 +979,7 @@ static void MpServerTouch(const char* ip, const MP_BEACON* b)
 	gServers[freeIdx].inProgress = b->inProgress;
 	gServers[freeIdx].modHash = b->modHash;
 	gServers[freeIdx].lastSeenMs = MpClockMs();
+	gDiscoveryRev++;		/* a new row appeared in the browser */
 
 	if (gMpCtx)
 		gMpCtx->jer_log(gMpCtx, "[mp] server found: '%s' %s:%d (%d/%d players, mode %d, city %d)\n",
@@ -812,7 +1037,14 @@ void MpDiscoveryPoll(void)
 	for (i = 0; i < MP_SERVER_SLOTS; i++)
 	{
 		if (gServers[i].used && (now - gServers[i].lastSeenMs) > MP_BEACON_TIMEOUT_MS)
+		{
+			if (gMpCtx)	/* say which one left -- it is gone from here */
+				gMpCtx->jer_log(gMpCtx, "[mp] server gone: '%s' %s:%d\n",
+					gServers[i].hostName, gServers[i].ip, gServers[i].port);
+
 			memset(&gServers[i], 0, sizeof(gServers[i]));
+			gDiscoveryRev++;	/* a row left the browser */
+		}
 	}
 }
 
@@ -842,4 +1074,11 @@ MP_SERVER* MpDiscoveryGet(int index)
 	}
 
 	return NULL;
+}
+
+/* Monotonic counter for the visible server set (mp_ui.c rebuilds the LAN
+ * browser only when this changes, so a live list stays stable otherwise). */
+int MpDiscoveryRevision(void)
+{
+	return (int)gDiscoveryRev;
 }

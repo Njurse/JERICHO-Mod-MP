@@ -68,7 +68,11 @@ int MpBeginHost(void)
 	return 1;
 }
 
-int MpBeginJoin(const char* host, int port)
+/* The frontend's join: start the connect and return at once, so the menu keeps
+ * drawing "Connecting to <ip>:<port>..." until the handshake resolves; the
+ * poll in MpNetPoll finishes it. This is the ONLY join path (the UI, -join and
+ * MP_AUTOSTART all use it), so a slow or dead address never stalls a frame. */
+int MpBeginJoinAsync(const char* host, int port)
 {
 	if (host == NULL || host[0] == '\0')
 		host = "127.0.0.1";
@@ -79,11 +83,11 @@ int MpBeginJoin(const char* host, int port)
 	gMp.role = MP_ROLE_CLIENT;
 	gMp.localPlayerId = -1;
 
-	if (!MpClientConnect(host, port))
+	if (!MpClientConnectBegin(host, port))
 	{
 		gMp.role = MP_ROLE_NONE;
+		MpJoinStateSet(MP_JOIN_FAILED);
 
-		/* tell the player plainly instead of silently doing nothing */
 		jer_error("Could not join the server at %s:%d", host, port);
 
 		if (gMpCtx != NULL)
@@ -482,6 +486,8 @@ static void MpHandleWelcome(const unsigned char* p, int len)
 		gMpCtx->jer_log(gMpCtx, "[mp] accepted as player %d (matched=%d gamemode=%d city=%d)\n",
 			w.playerId, gMp.modsMatched, w.gamemode, w.city);
 
+	MpJoinStateSet(MP_JOIN_READY);	/* the "Connecting..." row goes away */
+
 	/* the match is already live: adopt the host's config and launch so we
 	 * spawn into the running game (the LAN browser only lists live games). */
 	if (w.running)
@@ -531,6 +537,7 @@ static void MpHandleReject(const unsigned char* p, int len)
 
 	MpClientDisconnect();
 	gMp.role = MP_ROLE_NONE;
+	MpJoinStateSet(MP_JOIN_FAILED);	/* the UI shows the refusal, not "Connecting..." */
 }
 
 /* The addon net bridge: deliver an inbound MP_CHANNEL to modules (and, on the
@@ -805,6 +812,23 @@ static void MpSendCarState(void)
 }
 
 /* The transport hands every complete message here. */
+/* 'JPPN' -- liveness. Answer on the SAME connection it arrived on, so the
+ * sender's recv timer is refreshed and it can trust the silence timeout. */
+static void MpHandlePing(int connIndex, const unsigned char* p, int len)
+{
+	MP_PING pg;
+
+	if (len < (int)sizeof(MP_PING))
+		return;
+
+	memcpy(&pg, p, sizeof(pg));
+
+	if (MpIsHost() && connIndex >= 0)
+		MpSendConn(connIndex, MP_TAG_PONG, 0, &pg, sizeof(pg));
+	else
+		MpSendToHost(MP_TAG_PONG, 0, &pg, sizeof(pg));
+}
+
 void MpHandleMessage(int connIndex, const char* tag, const unsigned char* payload, int len)
 {
 	if (getenv("MP_DEBUG") != NULL && gMpCtx != NULL)
@@ -858,6 +882,14 @@ void MpHandleMessage(int connIndex, const char* tag, const unsigned char* payloa
 		return;
 	}
 
-	/* SESSION / PING / LEAVE are handled in later steps; unknown tags are
-	 * ignored. */
+	if (memcmp(tag, MP_TAG_PING, 4) == 0)
+	{
+		MpHandlePing(connIndex, payload, len);
+		return;
+	}
+
+	if (memcmp(tag, MP_TAG_PONG, 4) == 0)
+		return;		/* receiving it IS the liveness proof */
+
+	/* SESSION is not used yet; unknown tags are ignored. */
 }

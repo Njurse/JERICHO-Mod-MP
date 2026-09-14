@@ -34,6 +34,7 @@ typedef struct MP_CONFIG
 	char playerName[MP_NAME_MAX];	/* this player's name */
 	char hostName[MP_NAME_MAX];	/* advertised server name when hosting */
 	int  beaconMs;			/* discovery beacon interval */
+	int  keepaliveMs;		/* liveness ping cadence */
 	int  modCheck;			/* host lobby setting: MP_MODCHECK_* */
 	int  firstNameSet;		/* 0 until the player confirms a name once */
 } MP_CONFIG;
@@ -138,8 +139,24 @@ unsigned long MpNowMs(void);		/* monotonic milliseconds */
 
 int  MpHostBegin(void);			/* open listener + start beaconing */
 void MpHostEnd(void);
-int  MpClientConnect(const char* host, int port);	/* begin connect */
 void MpClientDisconnect(void);
+
+/* Asynchronous join (the UI, -join and MP_AUTOSTART all use it): start, then
+ * poll -- so a slow or dead address cannot freeze a frame. */
+int  MpClientConnectBegin(const char* host, int port);
+void MpClientConnectPoll(void);
+int  MpJoinState(void);			/* MP_JOIN_* */
+void MpJoinStateSet(int state);		/* mp_session.c: WELCOME / REJECT */
+const char* MpJoinTarget(void);		/* host of the current attempt */
+int  MpJoinTargetPort(void);
+
+enum
+{
+	MP_JOIN_IDLE = 0,	/* nothing in flight */
+	MP_JOIN_CONNECTING,	/* socket connecting, or hello awaiting WELCOME */
+	MP_JOIN_READY,		/* the host accepted us */
+	MP_JOIN_FAILED		/* refused / timed out / rejected */
+};
 
 /* Framed sends (envelope + payload) over the session transport. */
 int  MpHostBroadcast(const char* tag, int flags, const void* payload, int len);
@@ -165,7 +182,7 @@ unsigned short MpBuildHash(void);			/* game build digest; mp.c */
 
 void MpSendHello(void);			/* client -> host identity + manifest */
 int  MpBeginHost(void);			/* become host: listen + advertise + self row */
-int  MpBeginJoin(const char* host, int port);	/* become client + connect + hello */
+int  MpBeginJoinAsync(const char* host, int port);	/* the join (non-blocking) */
 void MpLeaveSession(void);		/* tear the session down, keep the module */
 
 /* Addon network bridge (mp_bridge.c / jer_net.h). */
@@ -191,6 +208,7 @@ void       MpDiscoveryStop(void);
 void       MpDiscoveryPoll(void);
 int        MpDiscoveryCount(void);
 MP_SERVER* MpDiscoveryGet(int index);
+int        MpDiscoveryRevision(void);	/* changes when the visible server set does */
 
 /* Short digest of the enabled-module manifest (implemented in mp.c). */
 unsigned short MpModHash(void);

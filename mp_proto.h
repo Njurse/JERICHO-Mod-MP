@@ -153,7 +153,12 @@ typedef struct MP_BEACON
 } MP_BEACON;
 
 /* UDP datagram magic -- 'JMP1' little-endian. */
-#define MP_UDP_MAGIC 0x31504D4Au
+#define MP_UDP_MAGIC 0x31504D4A
+
+/* Liveness: both sides ping on this cadence, so an idle session (frontend
+ * lobby, quiet stretch, paused game) never looks like a dead peer. */
+#define MP_KEEPALIVE_INTERVAL_MS	1000
+#define MP_KEEPALIVE_MIN_MS		250	/* clamp for the config value */
 
 /* ------------------------------------------------------------------ */
 /* Handshake                                                           */

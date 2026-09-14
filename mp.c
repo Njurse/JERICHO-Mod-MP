@@ -17,6 +17,7 @@
 #include "jericho.h"
 #include "jer_events.h"
 #include "jer_config.h"
+#include "jer_frontend.h"
 
 #include "driver2.h"
 #include "main.h"
@@ -75,6 +76,10 @@ void MpConfigLoad(void)
 	if (gMp.config.beaconMs < 250 || gMp.config.beaconMs > 10000)
 		gMp.config.beaconMs = MP_BEACON_INTERVAL_MS;
 
+	gMp.config.keepaliveMs = jer_config_get_int("mp", "keepalive_ms", MP_KEEPALIVE_INTERVAL_MS);
+	if (gMp.config.keepaliveMs < MP_KEEPALIVE_MIN_MS || gMp.config.keepaliveMs > 30000)
+		gMp.config.keepaliveMs = MP_KEEPALIVE_INTERVAL_MS;
+
 	gMp.config.modCheck = jer_config_get_int("mp", "mod_check", MP_MODCHECK_OFF);
 	if (gMp.config.modCheck < 0 || gMp.config.modCheck > MP_MODCHECK_EXACT)
 		gMp.config.modCheck = MP_MODCHECK_OFF;
@@ -103,6 +108,7 @@ void MpConfigSave(void)
 {
 	jer_config_set_int("mp", "port", gMp.config.port);
 	jer_config_set_int("mp", "beacon_ms", gMp.config.beaconMs);
+	jer_config_set_int("mp", "keepalive_ms", gMp.config.keepaliveMs);
 	jer_config_set_int("mp", "mod_check", gMp.config.modCheck);
 	jer_config_set_str("mp", "player_name", gMp.config.playerName);
 	jer_config_set_str("mp", "host_name", gMp.config.hostName);
@@ -185,11 +191,22 @@ void MpReturnToFrontend(void)
 	MpSessionReset();
 	MpResetPlayers();
 
+	/* The session is over (a lost connection, a refusal, the host leaving):
+	 * forget it completely, so nothing can launch into it again. Without this
+	 * the player was left sitting in a menu whose START then began the DEFAULT
+	 * city with no host -- the "dropped into Chicago with a vehicle" report. */
+	MpClientDisconnect();
+	gMp.role = MP_ROLE_NONE;
+	gMp.connected = 0;
+	gMp.running = 0;
+
 	/* the ENGINE's own way out of a gameplay session: it tears down the level,
 	 * stops the music/sfx and returns to the frontend (the same path the pause
 	 * menu's Exit takes). Do NOT just SetState -- that leaves sounds playing. */
 	if (!gInFrontend)
 		EndGame(GAMEMODE_QUIT);
+	else
+		jer_frontend_goto(0);	/* already in a menu: back to the main one */
 }
 void MpCameraPose(int* x, int* y, int* z, int* yaw)
 {
@@ -233,6 +250,15 @@ static int MpOnFrontendConfirm(void* userdata, void* args)
 	return JER_RESULT_CONTINUE;
 }
 
+/* A client join is live only once the host has welcomed us: without that a
+ * frontend START must NOT launch a level (there would be no host to play
+ * with, and it used to start the default city instead). */
+static int MpClientSessionLive(void)
+{
+	return gMp.role == MP_ROLE_CLIENT && gMp.connected &&
+		gMp.localPlayerId >= 0 && MpJoinState() == MP_JOIN_READY;
+}
+
 /* The frontend's START GAME press. When we are hosting a LAN session we take
  * it over: the stock city/map/time/car screens the host just walked through
  * have filled in the level globals, so adopt those and start the match
@@ -257,10 +283,22 @@ static int MpOnMpFrontend(void* userdata, void* args)
 
 			MpStartMatch();
 		}
-		else
+		else if (MpClientSessionLive())
 		{
 			/* client: the host already started, we just launch into it */
 			MpClientLaunch();
+		}
+		else
+		{
+			/* no live session (connection lost, refused, never welcomed): swallow
+			 * the press rather than launching into nothing */
+			jer_error("Not connected to a server");
+
+			if (gMpCtx != NULL)
+				gMpCtx->jer_log(gMpCtx, "[mp] START ignored: no live session\n");
+
+			fe->claimed = 1;
+			return JER_RESULT_CONTINUE;
 		}
 
 		fe->claimed = 1;
@@ -453,6 +491,28 @@ static int gAutoHostStart;	/* MP_AUTOSTART=host: auto-launch when N players are 
 static int gAutoHostFrames;
 static int gAutoHostTarget = 2;	/* players (incl. us) to wait for before starting */
 static int gAutoHostSettle;	/* frames the target has been met for */
+static int gHostInWorld;	/* the host actually reached the running level */
+
+/* The host quit the match? Only once it has really BEEN in the world: at the
+ * start of a match `running` is set a frame or two before gInFrontend clears,
+ * and keying on `running && gInFrontend` alone would tear the fresh session
+ * down during that transition. */
+static int MpHostLeftMatch(void)
+{
+	if (gMp.role != MP_ROLE_HOST || !gMp.running)
+	{
+		gHostInWorld = 0;	/* not hosting a live match */
+		return 0;
+	}
+
+	if (!gInFrontend)
+	{
+		gHostInWorld = 1;	/* we are in the level */
+		return 0;
+	}
+
+	return gHostInWorld;		/* in the frontend AGAIN -> it left */
+}
 
 /* -host [port] / -join <ip>[:port] command-line shortcuts (JER_EVENT_CMDLINE),
  * the argv equivalent of MP_AUTOSTART. Handy for launching two instances on
@@ -518,7 +578,7 @@ static int MpOnCmdLine(void* userdata, void* args)
 			if (gMpCtx != NULL)
 				gMpCtx->jer_log(gMpCtx, "[mp] -join %s:%d\n", ip, port);
 
-			MpBeginJoin(ip, port);
+			MpBeginJoinAsync(ip, port);
 		}
 	}
 
@@ -587,7 +647,7 @@ static void MpAutostartFromEnv(void)
 		}
 
 		gMpCtx->jer_log(gMpCtx, "[mp] autostart join %s:%d\n", ip, port);
-		MpBeginJoin(ip, port);
+		MpBeginJoinAsync(ip, port);
 	}
 }
 
@@ -630,7 +690,7 @@ static int MpOnFrame(void* userdata, void* args)
 
 	/* The host quit the match: it is back in the frontend while the session
 	 * is still live, so tell the clients and tear everything down. */
-	if (gMp.role == MP_ROLE_HOST && gMp.running && gInFrontend)
+	if (MpHostLeftMatch())
 	{
 		if (gMpCtx != NULL)
 			gMpCtx->jer_log(gMpCtx, "[mp] host left the match - notifying clients\n");
@@ -694,6 +754,21 @@ static int MpOnFrame(void* userdata, void* args)
 				car_data[p->carId].hd.speed);
 		}
 	}
+
+	return JER_RESULT_CONTINUE;
+}
+
+/* In-game the DRAW_OVERLAY event fires on every drawn frame -- including while
+ * the game is PAUSED, where StepSim (and so JER_EVENT_FRAME) does not run.
+ * Servicing the socket here is what keeps a paused session alive: we keep
+ * sending our keepalive and keep draining the peer's. */
+static int MpOnDrawOverlay(void* userdata, void* args)
+{
+	(void)userdata;
+	(void)args;
+
+	if (gMp.role != MP_ROLE_NONE)
+		MpNetPoll(0);
 
 	return JER_RESULT_CONTINUE;
 }
@@ -875,6 +950,7 @@ JER_MODULE_ENTRY(jer_module_mp_entry)(JERICHO_CONTEXT* ctx)
 	ctx->jer_register_hook(ctx, JER_EVENT_SHUTDOWN, MpOnShutdown, NULL, 0);
 	ctx->jer_register_hook(ctx, JER_EVENT_FRAME, MpOnFrame, NULL, 0);
 	ctx->jer_register_hook(ctx, JER_EVENT_DRAW_OVERLAY, MpUiDrawOverlay, NULL, 0);
+	ctx->jer_register_hook(ctx, JER_EVENT_DRAW_OVERLAY, MpOnDrawOverlay, NULL, 10);
 	ctx->jer_register_hook(ctx, JER_EVENT_MP_FRONTEND, MpOnMpFrontend, NULL, 0);
 	ctx->jer_register_hook(ctx, JER_EVENT_FRONTEND, MpOnFrontendConfirm, NULL, 0);
 	ctx->jer_register_hook(ctx, JER_EVENT_CMDLINE, MpOnCmdLine, NULL, 0);

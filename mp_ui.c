@@ -33,6 +33,9 @@ extern int  PrintString(char* string, int x, int y);
 
 enum
 {
+	/* NOTE: these MUST match the jer_frontend_register_menu() order in
+	 * MpUiInit -- JerFrontendMenuScreen reports the registered index, which
+	 * is what jer_frontend_current_menu() returns. */
 	M_ROOT = 0,
 	M_LAN,
 	M_HOST,
@@ -54,6 +57,17 @@ static char gNameEdit[11];
 static int  gNameInit;
 static char gManualIp[32] = "127.0.0.1";
 static int  gManualOctet;	/* last octet last edited */
+
+/* LAN browser (Join Game) state -- declared up here because the Join action
+ * below needs it, while the menu arrays live further down. */
+static int  gJoinRev = -1;		/* discovery revision the browser was built from */
+static int  gJoinBrowsing;		/* we opened the discovery socket for the browser */
+static int  gJoinScanning;		/* the browser is still in its first scan window */
+static unsigned long gJoinScanStart;	/* when the browse began (0 = not browsing) */
+
+/* how long "(searching LAN...)" is shown before admitting nothing was found:
+ * one beacon interval plus slack for the sender's timer */
+#define MP_JOIN_SCAN_MS		(MP_BEACON_INTERVAL_MS + 500)
 
 /* ------------------------------------------------------------------ */
 /* Labels / adjusters                                                  */
@@ -86,6 +100,13 @@ static int AdjPort(void* ud, int dir)
 static int ActJoinEnter(void* ud)
 {
 	(void)ud;
+
+	/* (re)start the browse and let the browser say "searching" for the first
+	 * beacon interval, so an empty list is not reported as "no games" */
+	gJoinScanStart = MpNowMs();
+	gJoinScanning = 1;
+	gJoinBrowsing = 1;
+
 	MpDiscoveryStart(0);	/* begin browsing; engine opens the submenu */
 	return 0;
 }
@@ -123,8 +144,13 @@ static int ActHostGame(void* ud)
 {
 	(void)ud;
 
-	if (gMp.role == MP_ROLE_NONE)
-		MpBeginHost();
+	/* Start from a clean session every time: pressing Host Game again after
+	 * backing out of the flow used to keep the previous listener and session
+	 * state, so the second attempt behaved oddly (and could lose the peer). */
+	if (gMp.role != MP_ROLE_NONE)
+		MpLeaveSession();
+
+	MpBeginHost();
 
 	return 0;
 }
@@ -185,7 +211,9 @@ static int ActJoinServer(void* ud)
 	int idx = (int)(intptr_t)ud;
 	MP_SERVER* s = MpDiscoveryGet(idx);
 
-	if (s != NULL && MpBeginJoin(s->ip, s->port))
+	/* asynchronous: the lobby shows "Connecting to <addr>..." while the
+	 * socket connects, instead of the menu freezing for up to 5 s */
+	if (s != NULL && MpBeginJoinAsync(s->ip, s->port))
 		jer_frontend_open(M_LOBBY);
 
 	return 1;
@@ -195,7 +223,7 @@ static int ActJoinManual(void* ud)
 {
 	(void)ud;
 
-	if (MpBeginJoin(gManualIp, gMp.config.port))
+	if (MpBeginJoinAsync(gManualIp, gMp.config.port))
 		jer_frontend_open(M_LOBBY);
 
 	return 1;
@@ -312,7 +340,9 @@ static char gJoinLabel[JER_FE_MAX_ITEMS][64];
 static JER_FE_ITEM gLobbyItems[JER_FE_MAX_ITEMS];
 static JER_FE_MENU gLobbyMenu = { "mp.lobby", gLobbyItems, 0, NULL, NULL };
 static int gLobbyBuiltCount = -1;	/* player count the lobby was last built with */
+static int gLobbyJoinState = -1;	/* join state the lobby was last built with */
 static char gLobbyLabel[MP_MAX_PLAYERS][40];
+static char gLobbyStatus[64];		/* "Connecting to <addr>..." / "(could not connect)" */
 
 static JER_FE_ITEM gNameItems[JER_FE_MAX_ITEMS];
 static JER_FE_MENU gNameMenu = { "mp.name", gNameItems, 0, NULL, NULL };
@@ -326,10 +356,15 @@ static int  AdjNameChar(void* ud, int dir);
 
 static void JoinOnEnter(void* ud)
 {
-	int ns, i, k = 0;
+	int ns, i, k = 0, scanning;
 	(void)ud;
 
 	ns = MpDiscoveryCount();
+
+	/* one beacon interval is the shortest wait before believing the LAN is
+	 * really empty -- a beacon already in flight still counts */
+	scanning = (gJoinScanStart != 0) && (MpNowMs() - gJoinScanStart) < MP_JOIN_SCAN_MS;
+	gJoinScanning = scanning;
 
 	for (i = 0; i < ns && k < JER_FE_MAX_ITEMS - 2; i++)
 	{
@@ -353,7 +388,7 @@ static void JoinOnEnter(void* ud)
 
 	if (ns == 0 && k < JER_FE_MAX_ITEMS - 2)
 	{
-		gJoinItems[k].label = "(searching LAN...)";
+		gJoinItems[k].label = scanning ? "(searching LAN...)" : "(no games found)";
 		gJoinItems[k].get_label = NULL;
 		gJoinItems[k].userdata = NULL;
 		gJoinItems[k].on_activate = NULL;
@@ -384,12 +419,40 @@ static void JoinOnEnter(void* ud)
 	k++;
 
 	gJoinMenu.item_count = k;
+
+	/* remember what this list was built from, so MpUiTick can rebuild it
+	 * only when the server set actually changed */
+	gJoinRev = MpDiscoveryRevision();
 }
 
 static void LobbyOnEnter(void* ud)
 {
-	int i, k = 0;
+	int i, k = 0, joinState;
 	(void)ud;
+
+	/* While a join is in flight (or has just failed) say so on the first row,
+	 * so the player is not staring at an empty lobby wondering. Hosts never
+	 * have an attempt in flight, and READY means the normal lobby. */
+	joinState = MpJoinState();
+	gLobbyJoinState = joinState;
+
+	if (!MpIsHost() && joinState != MP_JOIN_IDLE && joinState != MP_JOIN_READY)
+	{
+		if (joinState == MP_JOIN_CONNECTING)
+			snprintf(gLobbyStatus, sizeof(gLobbyStatus), "Connecting to %s:%d ...",
+				MpJoinTarget(), MpJoinTargetPort());
+		else
+			snprintf(gLobbyStatus, sizeof(gLobbyStatus), "(could not connect)");
+
+		gLobbyItems[k].label = gLobbyStatus;
+		gLobbyItems[k].get_label = NULL;
+		gLobbyItems[k].userdata = NULL;
+		gLobbyItems[k].on_activate = NULL;
+		gLobbyItems[k].on_adjust = NULL;
+		gLobbyItems[k].submenu = -1;
+		gLobbyItems[k].is_back = 0;
+		k++;
+	}
 
 	for (i = 0; i < MP_MAX_PLAYERS && k < JER_FE_MAX_ITEMS - 3; i++)
 	{
@@ -521,11 +584,40 @@ static void WireDynamic(void)
 /* ------------------------------------------------------------------ */
 /* Per-frame hook: rebuild the live lobby menu only when the player list
  * actually changes (never from on_enter -- that rebuilt it every frame and
- * reset the cursor). */
+ * reset the cursor), and the LAN browser when the server set changes. The
+ * engine keeps the cursor across a live refresh, so scrolling does not jump. */
 void MpUiTick(void)
 {
 	if (gLobbyBuiltCount >= 0 && gMp.playerCount != gLobbyBuiltCount)
 		jer_frontend_refresh();
+
+	/* the lobby's "Connecting to ..." row clears itself the moment the join
+	 * resolves -- accepted (READY) or refused/failed */
+	if (jer_frontend_current_menu() == M_LOBBY && MpJoinState() != gLobbyJoinState)
+		jer_frontend_refresh();
+
+	/* The Join screen is rebuilt only by its on_enter, which the engine runs
+	 * on setup/refresh alone -- without this the server list would be frozen
+	 * at whatever had been found when the player opened it. */
+	if (jer_frontend_current_menu() == M_JOIN)
+	{
+		int scanning = (gJoinScanStart != 0) &&
+			(MpNowMs() - gJoinScanStart) < MP_JOIN_SCAN_MS;
+
+		/* rows changed, or "searching" just became "no games found" */
+		if (MpDiscoveryRevision() != gJoinRev || scanning != gJoinScanning)
+			jer_frontend_refresh();
+	}
+	else if (gJoinBrowsing)
+	{
+		/* left the browser: release the discovery socket we opened. Never a
+		 * live host's advertisement -- MpStartMatch arms that separately. */
+		if (gMp.role == MP_ROLE_NONE && !gMp.running)
+			MpDiscoveryStop();
+
+		gJoinBrowsing = 0;
+		gJoinScanStart = 0;
+	}
 }
 
 /* ------------------------------------------------------------------ */
