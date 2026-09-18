@@ -599,7 +599,7 @@ static int MpOnCmdLine(void* userdata, void* args)
 
 /* Headless dev affordance: MP_AUTOSTART=host[:PORT] | join[:IP[:PORT]]
  * brings a session up at boot so the transport can be exercised without
- * the frontend menus (mirrors the combatd2 scripted debug driver). */
+ * the frontend menus (mirrors the cainescrossfire scripted debug driver). */
 static void MpAutostartFromEnv(void)
 {
 	const char* a = getenv("MP_AUTOSTART");
