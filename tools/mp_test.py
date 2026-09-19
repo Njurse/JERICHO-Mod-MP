@@ -54,6 +54,7 @@ CARSTATE = struct.Struct("<IB3B")        # frame, count, reserved[3] = 8
 CARSTATE_ENTRY = struct.Struct("<BB4i")  # playerId, spare, x, y, z, heading = 18
 
 REJECT_NAMES = {0: "NONE", 1: "FULL", 2: "VERSION", 3: "MODS", 4: "INPROGRESS", 5: "CUSTOM"}
+REJECT_IDS = {v.lower(): k for k, v in REJECT_NAMES.items() if k != 0}
 
 
 def cstr(raw):
@@ -119,6 +120,29 @@ def mode_host(args):
     if proto != PROTO or sdk != SDK:
         print("[mock-host] FAIL: protocol/SDK mismatch from the game")
         return 1
+
+    # Mimic the real host's reject path: send MP_REJECT, then close. --reject-hold
+    # keeps the socket open first (isolates "the REJECT was lost" from "the close
+    # raced the REJECT"); --reject-graceful half-closes and drains instead of
+    # slamming the socket shut (isolates the RST race).
+    if args.reject and args.reject != "none":
+        rid = REJECT_IDS[args.reject]
+        text = args.reject_text or f"mock reject: {args.reject}"
+        send_frame(conn, TAG["reject"], REJECT.pack(rid, 0, 0, 0, text.encode()[:63]))
+        print(f"[mock-host] sent REJECT {args.reject.upper()} ({rid}) -- {text!r}")
+        if args.reject_hold > 0:
+            time.sleep(args.reject_hold)
+        if args.reject_graceful:
+            try:
+                conn.shutdown(socket.SHUT_WR)
+                conn.settimeout(2.0)
+                while True:
+                    if not conn.recv(4096):
+                        break
+            except OSError:
+                pass
+        conn.close()
+        return 0
     welcome = WELCOME.pack(1, 8, 0, 1, 1 if args.start else 0, 0, 0, 0, 0, args.city, 1, 0, 1234)
     send_frame(conn, TAG["welcome"], welcome)
     print("[mock-host] sent WELCOME (playerId=1) -- PASS")
@@ -317,6 +341,13 @@ def main():
     h.add_argument("--start", action="store_true", help="after WELCOME, send MP_START to launch a level")
     h.add_argument("--lockstep", action="store_true", help="after START, service the client's MP_INPUT frames")
     h.add_argument("--drive", action="store_true", help="after START, stream a moving MP_CARSTATE for player 1")
+    h.add_argument("--reject", default="none", choices=["none"] + list(REJECT_IDS),
+                   help="send MP_REJECT then close, exactly like the real host does")
+    h.add_argument("--reject-text", default="", help="text to carry in the REJECT")
+    h.add_argument("--reject-hold", type=float, default=0.0,
+                   help="seconds to keep the socket open after the REJECT (0 = close at once, like the real host)")
+    h.add_argument("--reject-graceful", action="store_true",
+                   help="half-close and drain after the REJECT instead of closing the socket")
     h.set_defaults(func=mode_host)
 
     c = sub.add_parser("client", help="mock client: connect to the game's host")
