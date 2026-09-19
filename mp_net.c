@@ -18,7 +18,11 @@
 #  define WIN32_LEAN_AND_MEAN
 #  include <winsock2.h>
 #  include <ws2tcpip.h>
+#  include <windows.h>
+   /* Adapter list, for the per-interface broadcast addresses below. */
+#  include <iphlpapi.h>
 #  pragma comment(lib, "ws2_32.lib")
+#  pragma comment(lib, "iphlpapi.lib")
    /* The Windows SDK renames OpenEvent -> OpenEventW under UNICODE, which
     * would clash with the PSX shim; kill the macro. */
 #  undef OpenEvent
@@ -32,6 +36,8 @@
 #  include <fcntl.h>
 #  include <time.h>
 #  include <errno.h>
+#  include <ifaddrs.h>
+#  include <net/if.h>
    typedef int SOCKET;
 #  define INVALID_SOCKET (-1)
 #  define SOCKET_ERROR   (-1)
@@ -44,6 +50,7 @@
 
 #include <string.h>
 #include <stdio.h>
+#include <stdlib.h>		/* malloc/free for the adapter list */
 
 #define MP_RECV_BUF		8192
 #define MP_SEND_BUF		2048
@@ -839,6 +846,110 @@ static unsigned gDiscoveryRev;	/* bumped when the VISIBLE server set changes */
 
 #define MP_SERVER_SLOTS ((int)(sizeof(gServers) / sizeof(gServers[0])))
 
+/* Every broadcast address worth trying, limited broadcast first.
+ *
+ * Sending only to 255.255.255.255 is the classic reason a host is invisible
+ * on a machine with more than one adapter (Wi-Fi + Ethernet + VPN + Hyper-V
+ * or WSL): Windows picks one adapter to send it out of, and it is regularly
+ * the wrong one. A directed broadcast per adapter (ip | ~mask) removes the
+ * guesswork. */
+static int MpBroadcastTargets(uint32_t* out, int max)
+{
+	int n = 0;
+
+	if (max <= 0)
+		return 0;
+
+	out[n++] = INADDR_BROADCAST;
+
+#ifdef _WIN32
+	{
+		IP_ADAPTER_INFO* list = NULL;
+		ULONG len = 0;
+
+		if (GetAdaptersInfo(NULL, &len) == ERROR_BUFFER_OVERFLOW && len > 0)
+		{
+			list = (IP_ADAPTER_INFO*)malloc(len);
+
+			if (list != NULL && GetAdaptersInfo(list, &len) == ERROR_SUCCESS)
+			{
+				IP_ADAPTER_INFO* a;
+
+				for (a = list; a != NULL; a = a->Next)
+				{
+					IP_ADDR_STRING* ipa;
+
+					for (ipa = &a->IpAddressList; ipa != NULL; ipa = ipa->Next)
+					{
+						uint32_t ip = inet_addr(ipa->IpAddress.String);
+						uint32_t mask = inet_addr(ipa->IpMask.String);
+						uint32_t bcast;
+						int i, seen = 0;
+
+						if (ip == INADDR_NONE || mask == INADDR_NONE)
+							continue;
+
+						if ((ip & 0xFF000000u) == 0x7F000000u)	/* loopback */
+							continue;
+
+						bcast = htonl((ntohl(ip) & ntohl(mask)) | ~ntohl(mask));
+
+						for (i = 0; i < n; i++)			/* no duplicates */
+							if (out[i] == bcast)
+								seen = 1;
+
+						if (!seen && n < max)
+							out[n++] = bcast;
+					}
+				}
+			}
+
+			free(list);
+		}
+	}
+#else
+	{
+		struct ifaddrs* ifa = NULL;
+
+		if (getifaddrs(&ifa) == 0)
+		{
+			struct ifaddrs* p;
+
+			for (p = ifa; p != NULL; p = p->ifa_next)
+			{
+				uint32_t bcast;
+				int i, seen = 0;
+
+				if (p->ifa_addr == NULL || p->ifa_netmask == NULL ||
+					p->ifa_addr->sa_family != AF_INET)
+					continue;
+
+				{
+					uint32_t ip = ntohl(((struct sockaddr_in*)p->ifa_addr)->sin_addr.s_addr);
+					uint32_t mask = ntohl(((struct sockaddr_in*)p->ifa_netmask)->sin_addr.s_addr);
+
+					if ((ip & 0xFF000000u) == 0x7F000000u)
+						continue;
+
+					bcast = htonl((ip & mask) | ~mask);
+				}
+
+				for (i = 0; i < n; i++)
+					if (out[i] == bcast)
+						seen = 1;
+
+				if (!seen && n < max)
+					out[n++] = bcast;
+			}
+
+			freeifaddrs(ifa);
+		}
+	}
+#endif
+
+	return n;
+}
+
 /* LAN discovery fails silently by nature: if the UDP socket or its bind fails,
  * nothing else in the module notices, and the player just gets an empty server
  * list with no explanation. Say so -- in the log and on screen.
@@ -894,8 +1005,13 @@ void MpDiscoveryStart(int advertise)
 	gLastBeaconMs = 0;
 
 	if (gMpCtx)
-		gMpCtx->jer_log(gMpCtx, "[mp] discovery %s on UDP/%d (session TCP/%d)\n",
-			advertise ? "advertising" : "browsing", MP_DISCOVERY_PORT, gMp.config.port);
+	{
+		uint32_t targets[8];
+
+		gMpCtx->jer_log(gMpCtx, "[mp] discovery %s on UDP/%d (session TCP/%d), %d broadcast target(s)\n",
+			advertise ? "advertising" : "browsing", MP_DISCOVERY_PORT, gMp.config.port,
+			MpBroadcastTargets(targets, (int)(sizeof(targets) / sizeof(targets[0]))));
+	}
 }
 
 void MpDiscoveryStop(void)
@@ -917,6 +1033,8 @@ static void MpBeaconSend(void)
 {
 	MP_BEACON b;
 	struct sockaddr_in addr;
+	uint32_t targets[8];
+	int n, i;
 
 	memset(&b, 0, sizeof(b));
 	b.magic = MP_UDP_MAGIC;
@@ -932,14 +1050,20 @@ static void MpBeaconSend(void)
 	b.modHash = MpModHash();
 
 	/* the beacon goes to the FIXED discovery port; b.port carries the session
-	 * port so the browser knows where to connect */
-	memset(&addr, 0, sizeof(addr));
-	addr.sin_family = AF_INET;
-	addr.sin_port = htons((unsigned short)MP_DISCOVERY_PORT);
-	addr.sin_addr.s_addr = htonl(INADDR_BROADCAST);
+	 * port so the browser knows where to connect. Sent once per broadcast
+	 * address -- see MpBroadcastTargets. */
+	n = MpBroadcastTargets(targets, (int)(sizeof(targets) / sizeof(targets[0])));
 
-	sendto(gBeaconSock, (const char*)&b, (int)sizeof(b), 0,
-		(struct sockaddr*)&addr, sizeof(addr));
+	for (i = 0; i < n; i++)
+	{
+		memset(&addr, 0, sizeof(addr));
+		addr.sin_family = AF_INET;
+		addr.sin_port = htons((unsigned short)MP_DISCOVERY_PORT);
+		addr.sin_addr.s_addr = targets[i];
+
+		sendto(gBeaconSock, (const char*)&b, (int)sizeof(b), 0,
+			(struct sockaddr*)&addr, sizeof(addr));
+	}
 }
 
 static void MpServerTouch(const char* ip, const MP_BEACON* b)
