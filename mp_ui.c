@@ -81,6 +81,7 @@ static void LblCity(void* ud, char* o, int n)    { (void)ud; snprintf(o, n, "Cit
 static void LblTime(void* ud, char* o, int n)    { (void)ud; snprintf(o, n, "Time:  < %s >", kTimeNames[gTimeOfDay & 3]); }
 static void LblWeather(void* ud, char* o, int n) { (void)ud; snprintf(o, n, "Weather: < %s >", kWeatherNames[gWeather % 3]); }
 static void LblEnforce(void* ud, char* o, int n) { (void)ud; snprintf(o, n, "Enforce Mods: < %s >", kModCheckNames[gMp.config.modCheck % 3]); }
+static void LblStrict(void* ud, char* o, int n)  { (void)ud; snprintf(o, n, "Strict Version: < %s >", gMp.config.strictVersion ? "On" : "Off"); }
 static void LblPort(void* ud, char* o, int n)    { (void)ud; snprintf(o, n, "Port: %d", gMp.config.port); }
 static void LblManualIp(void* ud, char* o, int n) { (void)ud; snprintf(o, n, "Manual IP: %s ...", gManualIp); }
 static void LblManualOct(void* ud, char* o, int n) { snprintf(o, n, "Part %d: < %d >", (int)(intptr_t)ud + 1, gManualOct[(int)(intptr_t)ud]); }
@@ -90,6 +91,11 @@ static int AdjCity(void* ud, int dir)    { (void)ud; gCity = (gCity + dir + 4) &
 static int AdjTime(void* ud, int dir)    { (void)ud; gTimeOfDay = (gTimeOfDay + dir + 4) & 3; return 1; }
 static int AdjWeather(void* ud, int dir) { (void)ud; gWeather = (gWeather + dir + 3) % 3; return 1; }
 static int AdjEnforce(void* ud, int dir) { (void)ud; gMp.config.modCheck = (gMp.config.modCheck + dir + 3) % 3; MpConfigSave(); return 1; }
+
+/* Host-side policy: also require an identical build hash. Off by default --
+ * the hash tracks git describe, so requiring it shuts out anyone who is on a
+ * different commit. */
+static int AdjStrict(void* ud, int dir) { (void)ud; gMp.config.strictVersion = (gMp.config.strictVersion + dir + 2) & 1; MpConfigSave(); return 1; }
 
 static int AdjPort(void* ud, int dir)
 {
@@ -357,10 +363,11 @@ static const JER_FE_ITEM kOptionsItems[] =
 {
 	{ "Change Name",    NULL, NULL, NULL,       NULL,       M_NAME, 0 },
 	{ NULL, LblEnforce, NULL, NULL, AdjEnforce, -1,       0 },
+	{ NULL, LblStrict,  NULL, NULL, AdjStrict,  -1,       0 },
 	{ NULL, LblPort,    NULL, NULL, AdjPort,    -1,       0 },
 	{ "Back",           NULL, NULL, NULL,       NULL,      -1,     1 },
 };
-static const JER_FE_MENU kOptionsMenu = { "mp.options", kOptionsItems, 4, NULL, NULL };
+static const JER_FE_MENU kOptionsMenu = { "mp.options", kOptionsItems, 5, NULL, NULL };
 
 /* ------------------------------------------------------------------ */
 /* Dynamic menus (join / lobby / name)                                 */

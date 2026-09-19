@@ -352,13 +352,20 @@ static void MpHandleHello(int connIndex, const unsigned char* p, int len)
 		return;
 	}
 
+	/* Protocol and SDK version are always required -- they decide whether the
+	 * two builds can speak to each other at all. The BUILD hash is not: it is
+	 * FNV1a of "git describe --tags --always --dirty", so it changes on every
+	 * commit and even on an unclean tree, and two people playing from dev
+	 * builds would never match. It is now behind the lobby's opt-in
+	 * "Strict Version" toggle, which is off by default. */
 	if (h.protoVersion != (uint16_t)MP_PROTO_VERSION ||
 	    h.sdkVersion != (uint16_t)JERICHO_SDK_VERSION ||
-	    h.gameBuild != MpBuildHash())
+	    (gMp.config.strictVersion && h.gameBuild != MpBuildHash()))
 	{
 		if (gMpCtx)
-			gMpCtx->jer_log(gMpCtx, "[mp] reject: version mismatch (proto %d/%d, build %d/%d)\n",
-				h.protoVersion, MP_PROTO_VERSION, h.gameBuild, MpBuildHash());
+			gMpCtx->jer_log(gMpCtx, "[mp] reject: version mismatch (proto %d/%d, sdk %d/%d, build %d/%d, strict=%d)\n",
+				h.protoVersion, MP_PROTO_VERSION, h.sdkVersion, JERICHO_SDK_VERSION,
+				h.gameBuild, MpBuildHash(), gMp.config.strictVersion);
 
 		MpSendReject(connIndex, MP_REJECT_VERSION, "game/protocol version mismatch");
 		MpConnClose(connIndex);

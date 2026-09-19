@@ -36,6 +36,7 @@ typedef struct MP_CONFIG
 	int  beaconMs;			/* discovery beacon interval */
 	int  keepaliveMs;		/* liveness ping cadence */
 	int  modCheck;			/* host lobby setting: MP_MODCHECK_* */
+	int  strictVersion;		/* host lobby setting: also require the same build */
 	int  firstNameSet;		/* 0 until the player confirms a name once */
 } MP_CONFIG;
 

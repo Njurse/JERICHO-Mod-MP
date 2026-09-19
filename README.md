@@ -63,6 +63,7 @@ join handshake then admits or refuses clients by their enabled-mod manifest.
 | `host_name` | `<name>'s game` | the advertised server name |
 | `beacon_ms` | `1000` | discovery beacon interval |
 | `mod_check` | `0` | host lobby mod policy: 0 off, 1 by id, 2 by id+version |
+| `strict_version` | `0` | host lobby setting: 1 also requires an identical build hash (off by default, because that hash tracks `git describe`) |
 
 ## Command line
 
