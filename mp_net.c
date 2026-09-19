@@ -839,6 +839,25 @@ static unsigned gDiscoveryRev;	/* bumped when the VISIBLE server set changes */
 
 #define MP_SERVER_SLOTS ((int)(sizeof(gServers) / sizeof(gServers[0])))
 
+/* LAN discovery fails silently by nature: if the UDP socket or its bind fails,
+ * nothing else in the module notices, and the player just gets an empty server
+ * list with no explanation. Say so -- in the log and on screen.
+ *
+ * NOTE: this cannot open the Windows Firewall for you. Inbound UDP/TCP 1318 has
+ * to be allowed, or a host on another machine stays invisible even though
+ * everything here succeeded. */
+static void MpDiscoveryFailed(const char* why)
+{
+	char text[128];
+
+	snprintf(text, sizeof(text), "%s (UDP/%d)", why, gMp.config.port);
+
+	if (gMpCtx != NULL)
+		gMpCtx->jer_log(gMpCtx, "[mp] discovery unavailable: %s\n", text);
+
+	jer_error("LAN discovery is off: %s", text);
+}
+
 void MpDiscoveryStart(int advertise)
 {
 	struct sockaddr_in addr;
@@ -848,7 +867,10 @@ void MpDiscoveryStart(int advertise)
 	{
 		gBeaconSock = socket(AF_INET, SOCK_DGRAM, 0);
 		if (gBeaconSock == INVALID_SOCKET)
+		{
+			MpDiscoveryFailed("could not open a discovery socket");
 			return;
+		}
 
 		setsockopt(gBeaconSock, SOL_SOCKET, SO_REUSEADDR, (const char*)&one, sizeof(one));
 		setsockopt(gBeaconSock, SOL_SOCKET, SO_BROADCAST, (const char*)&one, sizeof(one));
@@ -861,6 +883,7 @@ void MpDiscoveryStart(int advertise)
 		if (bind(gBeaconSock, (struct sockaddr*)&addr, sizeof(addr)) == SOCKET_ERROR)
 		{
 			MpCloseSock(&gBeaconSock);
+			MpDiscoveryFailed("the port is already taken by another program");
 			return;
 		}
 

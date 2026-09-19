@@ -78,6 +78,25 @@ carries on.
     REDRIVER2_dev.exe -host 1318
     REDRIVER2_dev.exe -join 192.168.1.20:1318
 
+## If nobody can see your game
+
+Two things have to be true, and the module only controls one of them.
+
+1. **Windows Firewall.** Inbound **UDP 1318** (discovery) and **TCP 1318** (the
+   session) must be allowed on the host. The module cannot create that rule,
+   so if you never see another machine's game, check the firewall first.
+2. **Discovery actually running.** If the discovery socket cannot be opened
+   or its port is taken, the module now says so instead of failing quietly:
+
+       [mp] discovery unavailable: the port is already taken by another program (UDP/1318)
+       [error] LAN discovery is off: the port is already taken by another program (UDP/1318)
+
+   A *second copy of this game* sharing the port is fine (both can still see
+   each other); a different program holding it is not.
+
+`-join <ip>[:port]` still works with discovery off, so a host can always be
+reached by address.
+
 ## Testing
 
 `tools/mp_test.py` is a headless protocol harness (the game writes its log
