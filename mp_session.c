@@ -80,6 +80,17 @@ int MpBeginJoinAsync(const char* host, int port)
 	if (host == NULL || host[0] == '\0')
 		host = "127.0.0.1";
 
+	/* Say what is wrong with the address instead of failing to connect to a
+	 * loopback nobody asked for. */
+	if (!MpIsValidAddress(host))
+	{
+		if (gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx, "[mp] '%s' is not a dotted-quad IP address\n", host);
+
+		jer_error("%s is not a valid IP address", host);
+		return 0;
+	}
+
 	MpSessionReset();
 	MpResetPlayers();
 

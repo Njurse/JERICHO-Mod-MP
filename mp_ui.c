@@ -43,7 +43,8 @@ enum
 	M_JOIN,
 	M_LOBBY,
 	M_OPTIONS,
-	M_NAME
+	M_NAME,
+	M_MANUAL
 };
 
 static const char* const kCityNames[] = { "Chicago", "Havana", "Las Vegas", "Rio" };
@@ -55,8 +56,12 @@ static const char* const kModCheckNames[] = { "Off", "By ID", "By ID+Ver" };
 static int gCity, gTimeOfDay, gWeather;
 static char gNameEdit[11];
 static int  gNameInit;
+/* The manual address is edited one octet at a time in its own submenu: the
+ * join row has a single adjust axis, which can never reach past the last
+ * octet. gManualIp is only ever a rendering of gManualOct. */
+static int  gManualOct[4] = { 127, 0, 0, 1 };
+static int  gManualSeed;		/* seeded from a discovered host yet? */
 static char gManualIp[32] = "127.0.0.1";
-static int  gManualOctet;	/* last octet last edited */
 
 /* LAN browser (Join Game) state -- declared up here because the Join action
  * below needs it, while the menu arrays live further down. */
@@ -77,7 +82,9 @@ static void LblTime(void* ud, char* o, int n)    { (void)ud; snprintf(o, n, "Tim
 static void LblWeather(void* ud, char* o, int n) { (void)ud; snprintf(o, n, "Weather: < %s >", kWeatherNames[gWeather % 3]); }
 static void LblEnforce(void* ud, char* o, int n) { (void)ud; snprintf(o, n, "Enforce Mods: < %s >", kModCheckNames[gMp.config.modCheck % 3]); }
 static void LblPort(void* ud, char* o, int n)    { (void)ud; snprintf(o, n, "Port: %d", gMp.config.port); }
-static void LblManualIp(void* ud, char* o, int n) { (void)ud; snprintf(o, n, "Manual IP: < %s >  (dpad edits)", gManualIp); }
+static void LblManualIp(void* ud, char* o, int n) { (void)ud; snprintf(o, n, "Manual IP: %s ...", gManualIp); }
+static void LblManualOct(void* ud, char* o, int n) { snprintf(o, n, "Part %d: < %d >", (int)(intptr_t)ud + 1, gManualOct[(int)(intptr_t)ud]); }
+static void LblManualGo(void* ud, char* o, int n) { (void)ud; snprintf(o, n, "Connect to %s", gManualIp); }
 
 static int AdjCity(void* ud, int dir)    { (void)ud; gCity = (gCity + dir + 4) & 3; return 1; }
 static int AdjTime(void* ud, int dir)    { (void)ud; gTimeOfDay = (gTimeOfDay + dir + 4) & 3; return 1; }
@@ -219,7 +226,31 @@ static int ActJoinServer(void* ud)
 	return 1;
 }
 
-static int ActJoinManual(void* ud)
+static void MpManualSync(void)
+{
+	snprintf(gManualIp, sizeof(gManualIp), "%d.%d.%d.%d",
+		gManualOct[0], gManualOct[1], gManualOct[2], gManualOct[3]);
+}
+
+/* Seed the address from the first LAN game we can see, so the usual case is
+ * a couple of taps on the last octet rather than typing a whole subnet. */
+static void MpManualSeed(void)
+{
+	MP_SERVER* s = (MpDiscoveryCount() > 0) ? MpDiscoveryGet(0) : NULL;
+
+	if (!gManualSeed && s != NULL &&
+		sscanf(s->ip, "%d.%d.%d.%d",
+			&gManualOct[0], &gManualOct[1], &gManualOct[2], &gManualOct[3]) == 4)
+	{
+		gManualSeed = 1;
+	}
+
+	MpManualSync();
+}
+
+/* The submenu's Connect row. The button sticks to the one we press, so the
+ * accent stays on the last octet it was landed on. */
+static int ActManualConnect(void* ud)
 {
 	(void)ud;
 
@@ -229,25 +260,26 @@ static int ActJoinManual(void* ud)
 	return 1;
 }
 
-static int AdjManualIp(void* ud, int dir)
+static int AdjManualOct(void* ud, int dir)
 {
-	char* p;
+	int i = (int)(intptr_t)ud;
 	int v;
 
-	(void)ud;
+	if (i < 0 || i > 3)
+		return 1;
 
-	p = strrchr(gManualIp, '.');
-	v = (p != NULL) ? atoi(p + 1) + dir : 1;
-	if (v < 0) v = 0;
-	if (v > 255) v = 255;
+	/* holding the button ramps, so wrap around instead of sticking at the end */
+	v = gManualOct[i] + dir;
 
-	if (p != NULL)
-	{
-		*p = '\0';
-		snprintf(gManualIp + strlen(gManualIp), sizeof(gManualIp) - strlen(gManualIp), ".%d", v);
-	}
+	if (v < 0)
+		v = 255;
+	if (v > 255)
+		v = 0;
 
-	(void)gManualOctet;
+	gManualOct[i] = v;
+	gManualSeed = 1;	/* the player has taken over */
+	MpManualSync();
+
 	return 1;
 }
 
@@ -346,12 +378,17 @@ static char gLobbyStatus[64];		/* "Connecting to <addr>..." / "(could not connec
 
 static JER_FE_ITEM gNameItems[JER_FE_MAX_ITEMS];
 static JER_FE_MENU gNameMenu = { "mp.name", gNameItems, 0, NULL, NULL };
+
+/* manual LAN address: one row per octet, then Connect */
+static JER_FE_ITEM gManualItems[6];
+static JER_FE_MENU gManualMenu = { "mp.manual", gManualItems, 0, NULL, NULL };
 static char gNameSlotLabel[10][24];
 static const char kAlpha[] = " ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.";
 
 static void JoinOnEnter(void* ud);
 static void LobbyOnEnter(void* ud);
 static void NameOnEnter(void* ud);
+static void ManualOnEnter(void* ud);
 static int  AdjNameChar(void* ud, int dir);
 
 static void JoinOnEnter(void* ud)
@@ -401,13 +438,14 @@ static void JoinOnEnter(void* ud)
 		k++;
 	}
 
-	/* manual IP */
+	/* manual IP -- a submenu, because a real address needs all four octets and
+	 * this row has one adjust axis */
 	gJoinItems[k].label = NULL;
 	gJoinItems[k].get_label = LblManualIp;
 	gJoinItems[k].userdata = NULL;
-	gJoinItems[k].on_activate = ActJoinManual;
-	gJoinItems[k].on_adjust = AdjManualIp;
-	gJoinItems[k].submenu = -1;
+	gJoinItems[k].on_activate = NULL;
+	gJoinItems[k].on_adjust = NULL;
+	gJoinItems[k].submenu = M_MANUAL;
 	gJoinItems[k].is_back = 0;
 	k++;
 
@@ -575,11 +613,56 @@ static int AdjNameChar(void* ud, int dir)
 }
 
 /* wire the dynamic on_enter callbacks (the menus are non-const statics) */
+/* Four octet rows, Connect, Back. Built on entry so the label picks up the
+ * seeded address, which is why the address defaults to the subnet the first
+ * discovered game is on. */
+static void ManualOnEnter(void* ud)
+{
+	int i, k = 0;
+
+	(void)ud;
+
+	MpManualSeed();
+
+	for (i = 0; i < 4; i++)
+	{
+		gManualItems[k].label = NULL;
+		gManualItems[k].get_label = LblManualOct;
+		gManualItems[k].userdata = (void*)(intptr_t)i;
+		gManualItems[k].on_activate = NULL;
+		gManualItems[k].on_adjust = AdjManualOct;
+		gManualItems[k].submenu = -1;
+		gManualItems[k].is_back = 0;
+		k++;
+	}
+
+	gManualItems[k].label = NULL;
+	gManualItems[k].get_label = LblManualGo;
+	gManualItems[k].userdata = NULL;
+	gManualItems[k].on_activate = ActManualConnect;
+	gManualItems[k].on_adjust = NULL;
+	gManualItems[k].submenu = -1;
+	gManualItems[k].is_back = 0;
+	k++;
+
+	gManualItems[k].label = "Back";
+	gManualItems[k].get_label = NULL;
+	gManualItems[k].userdata = NULL;
+	gManualItems[k].on_activate = NULL;
+	gManualItems[k].on_adjust = NULL;
+	gManualItems[k].submenu = -1;
+	gManualItems[k].is_back = 1;
+	k++;
+
+	gManualMenu.item_count = k;
+}
+
 static void WireDynamic(void)
 {
 	gJoinMenu.on_enter = JoinOnEnter;
 	gLobbyMenu.on_enter = LobbyOnEnter;
 	gNameMenu.on_enter = NameOnEnter;
+	gManualMenu.on_enter = ManualOnEnter;
 }
 
 /* ------------------------------------------------------------------ */
@@ -831,8 +914,11 @@ void MpUiInit(void)
 	jer_frontend_register_menu(&gLobbyMenu);
 	jer_frontend_register_menu(&kOptionsMenu);
 	jer_frontend_register_menu(&gNameMenu);
+	jer_frontend_register_menu(&gManualMenu);
 
 	jer_frontend_set_main_entry("mp.root");
+
+	MpManualSync();
 
 	/* sensible host-settings defaults */
 	gCity = gMp.city;

@@ -374,6 +374,14 @@ void MpClientDisconnect(void)
 	gJoinState = MP_JOIN_IDLE;
 }
 
+/* Is this a dotted-quad IPv4 address? There is no DNS anywhere in this module,
+ * so anything else is a mistake worth reporting rather than something to
+ * silently aim at the loopback. */
+int MpIsValidAddress(const char* host)
+{
+	return host != NULL && host[0] != '\0' && inet_addr(host) != INADDR_NONE;
+}
+
 /* A socket set up for `host:port` (already non-blocking, ready for connect). */
 static SOCKET MpClientSocket(const char* host, int port, struct sockaddr_in* out)
 {
@@ -393,8 +401,10 @@ static SOCKET MpClientSocket(const char* host, int port, struct sockaddr_in* out
 	addr.sin_addr.s_addr = inet_addr(host != NULL ? host : "");
 	if (addr.sin_addr.s_addr == INADDR_NONE)
 	{
-		/* not a dotted-quad: try the loopback, then give up */
-		addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+		/* not a dotted quad -- fail rather than quietly dial the loopback, so
+		 * a typo is reported instead of looking like a dead server */
+		closesocket(s);
+		return INVALID_SOCKET;
 	}
 
 	*out = addr;

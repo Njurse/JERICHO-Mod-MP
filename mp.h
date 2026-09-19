@@ -225,6 +225,7 @@ int  MpInputForPlayer(int id);		/* the pad to apply to this player's car */
 /* ------------------------------------------------------------------ */
 /* UI (mp_ui.c)                                                        */
 /* ------------------------------------------------------------------ */
+int MpIsValidAddress(const char* host);	/* dotted-quad check (no DNS in this module) */
 void MpUiInit(void);			/* register the frontend menus (jer_frontend) */
 void MpUiTick(void);			/* refresh the live lobby menu when needed */
 
