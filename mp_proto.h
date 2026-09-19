@@ -9,7 +9,8 @@
  * Two transports:
  *   - TCP (default port 1318) carries the session: handshake, lobby,
  *     per-frame input, state-resync snapshots and the addon channel.
- *   - UDP (same port, broadcast) carries discovery beacons only.
+ *   - UDP MP_DISCOVERY_PORT (broadcast) carries discovery beacons only, and
+ *     names the host's session port in the payload.
  *
  * TCP framing (identical shape to gaildrv2):
  *
@@ -43,6 +44,12 @@ extern "C" {
  * amx-icsp), so it is a safe, non-reserved choice for a game. Configurable
  * per instance via JERICHO/CONFIG/mp.ini (`port`). */
 #define MP_DEFAULT_PORT		1318
+/* UDP beacon port. FIXED and shared by every instance: it is the address a
+ * browser listens on and a host beacons to, so neither side can be moved by
+ * changing the session port. The session port travels in the beacon payload
+ * (MP_BEACON.port), which is why a host that overrides its port stays
+ * discoverable. */
+#define MP_DISCOVERY_PORT	1318
 
 /* Capacity. The engine renders at most 2 local player views, but a LAN
  * session can carry more remote players as world cars. */

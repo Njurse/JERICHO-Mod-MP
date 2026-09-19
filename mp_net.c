@@ -850,7 +850,7 @@ static void MpDiscoveryFailed(const char* why)
 {
 	char text[128];
 
-	snprintf(text, sizeof(text), "%s (UDP/%d)", why, gMp.config.port);
+	snprintf(text, sizeof(text), "%s (UDP/%d)", why, MP_DISCOVERY_PORT);
 
 	if (gMpCtx != NULL)
 		gMpCtx->jer_log(gMpCtx, "[mp] discovery unavailable: %s\n", text);
@@ -877,7 +877,7 @@ void MpDiscoveryStart(int advertise)
 
 		memset(&addr, 0, sizeof(addr));
 		addr.sin_family = AF_INET;
-		addr.sin_port = htons((unsigned short)gMp.config.port);
+		addr.sin_port = htons((unsigned short)MP_DISCOVERY_PORT);
 		addr.sin_addr.s_addr = htonl(INADDR_ANY);
 
 		if (bind(gBeaconSock, (struct sockaddr*)&addr, sizeof(addr)) == SOCKET_ERROR)
@@ -894,8 +894,8 @@ void MpDiscoveryStart(int advertise)
 	gLastBeaconMs = 0;
 
 	if (gMpCtx)
-		gMpCtx->jer_log(gMpCtx, "[mp] discovery %s on UDP/%d\n",
-			advertise ? "advertising" : "browsing", gMp.config.port);
+		gMpCtx->jer_log(gMpCtx, "[mp] discovery %s on UDP/%d (session TCP/%d)\n",
+			advertise ? "advertising" : "browsing", MP_DISCOVERY_PORT, gMp.config.port);
 }
 
 void MpDiscoveryStop(void)
@@ -931,9 +931,11 @@ static void MpBeaconSend(void)
 	b.inProgress = (uint8_t)gMp.running;
 	b.modHash = MpModHash();
 
+	/* the beacon goes to the FIXED discovery port; b.port carries the session
+	 * port so the browser knows where to connect */
 	memset(&addr, 0, sizeof(addr));
 	addr.sin_family = AF_INET;
-	addr.sin_port = htons((unsigned short)gMp.config.port);
+	addr.sin_port = htons((unsigned short)MP_DISCOVERY_PORT);
 	addr.sin_addr.s_addr = htonl(INADDR_BROADCAST);
 
 	sendto(gBeaconSock, (const char*)&b, (int)sizeof(b), 0,

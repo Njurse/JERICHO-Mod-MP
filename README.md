@@ -58,7 +58,7 @@ join handshake then admits or refuses clients by their enabled-mod manifest.
 
 | Key | Default | Meaning |
 |---|---|---|
-| `port` | `1318` | TCP+UDP port |
+| `port` | `1318` | TCP session port. Discovery always uses a fixed UDP 1318 and advertises the session port in the beacon, so changing this does not hide your game |
 | `player_name` | OS username | your name on the network |
 | `host_name` | `<name>'s game` | the advertised server name |
 | `beacon_ms` | `1000` | discovery beacon interval |
