@@ -168,6 +168,7 @@ int  MpConnFindByPlayer(int playerId);
 void MpConnAssignPlayer(int connIndex, int playerId);
 void MpConnClose(int connIndex);		/* close a peer (after a reject) */
 void MpConnShutdownGraceful(int connIndex);	/* half-close: flush the refusal, then drain */
+void MpConnHandshakeDone(int connIndex);	/* this connection has seen a HELLO/WELCOME */
 int  MpConnPlayerId(int connIndex);	/* peer's assigned player id, -1 until hello */
 int  MpPeerCount(void);
 

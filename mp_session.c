@@ -855,6 +855,11 @@ void MpHandleMessage(int connIndex, const char* tag, const unsigned char* payloa
 	if (getenv("MP_DEBUG") != NULL && gMpCtx != NULL)
 		gMpCtx->jer_log(gMpCtx, "[mp] recv %.4s len=%d conn=%d\n", tag, len, connIndex);
 
+	/* A HELLO or a WELCOME means the handshake is under way, so this
+	 * connection has stopped being a stranger holding a slot. */
+	if (memcmp(tag, MP_TAG_HELLO, 4) == 0 || memcmp(tag, MP_TAG_WELCOME, 4) == 0)
+		MpConnHandshakeDone(connIndex);
+
 	if (memcmp(tag, MP_TAG_HELLO, 4) == 0)
 	{
 		MpHandleHello(connIndex, payload, len);

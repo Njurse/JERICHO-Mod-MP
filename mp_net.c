@@ -65,6 +65,9 @@
 #define MP_CLOSE_GRACE_MS	2000	/* how long a half-closed (refused) peer may
 								 * take to read its rejection before we
 								 * stop waiting and close the socket */
+#define MP_HANDSHAKE_TIMEOUT_MS	5000	/* a peer that connects and then says
+								 * nothing is not a player: give up on it
+								 * long before the 10 s idle timeout */
 #define MP_CONN_TIMEOUT_MS	10000	/* drop a peer after 10 s of silence (~10
 					 * missed keepalive pings) */
 #define MP_CONNECT_TIMEOUT_MS	5000
@@ -78,6 +81,8 @@ typedef struct MP_CONN
 	SOCKET        sock;
 	int           hostSide;	/* 1 = a peer connected to us (host role) */
 	int           playerId;	/* assigned during the handshake, -1 until then */
+	int           hsDone;	/* HELLO/WELCOME exchanged: no longer a stranger */
+	unsigned long acceptedMs;	/* when the connection was adopted */
 	int           closing;	/* we half-closed this peer (refused it): drain, then close */
 	unsigned long closingSinceMs;
 	unsigned long lastRecvMs;
@@ -287,6 +292,7 @@ static int MpAllocConn(void)
 			memset(&gConn[i], 0, sizeof(gConn[i]));
 			gConn[i].used = 1;
 			gConn[i].playerId = -1;
+			gConn[i].acceptedMs = MpClockMs();
 			return i;
 		}
 	}
@@ -708,6 +714,14 @@ void MpConnShutdownGraceful(int connIndex)
 	}
 }
 
+/* A HELLO or a WELCOME has been seen on this connection, so it is no longer
+ * within the handshake deadline. */
+void MpConnHandshakeDone(int connIndex)
+{
+	if (connIndex >= 0 && connIndex < MP_MAX_PLAYERS && gConn[connIndex].used)
+		gConn[connIndex].hsDone = 1;
+}
+
 static void MpProcessConn(int idx)
 {
 	MP_CONN* c = &gConn[idx];
@@ -895,6 +909,20 @@ void MpNetPoll(int waitMs)
 			(now - gConn[i].closingSinceMs) > MP_CLOSE_GRACE_MS)
 		{
 			MpDropConn(i, "refusal not acknowledged");
+			continue;
+		}
+
+		/* A peer that connects and then says nothing is not a player. The idle
+		 * timeout would eventually catch it, but 10 s of silence is a long time
+		 * to hold a slot -- and on the client side the player is staring at
+		 * "Connecting to ..." with no idea anything is wrong. */
+		if (gConn[i].used && !gConn[i].hsDone &&
+			(now - gConn[i].acceptedMs) > MP_HANDSHAKE_TIMEOUT_MS)
+		{
+			if (!MpIsHost())
+				jer_error("The server did not answer at %s", gConnectingHost);
+
+			MpDropConn(i, "no handshake reply");
 			continue;
 		}
 
