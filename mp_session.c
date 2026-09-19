@@ -368,7 +368,7 @@ static void MpHandleHello(int connIndex, const unsigned char* p, int len)
 				h.gameBuild, MpBuildHash(), gMp.config.strictVersion);
 
 		MpSendReject(connIndex, MP_REJECT_VERSION, "game/protocol version mismatch");
-		MpConnClose(connIndex);
+		MpConnShutdownGraceful(connIndex);
 		return;
 	}
 
@@ -382,7 +382,7 @@ static void MpHandleHello(int connIndex, const unsigned char* p, int len)
 				gMpCtx->jer_log(gMpCtx, "[mp] reject: mod mismatch (enforcement=%d)\n", gMp.config.modCheck);
 
 			MpSendReject(connIndex, MP_REJECT_MODS, "mod list does not match the host");
-			MpConnClose(connIndex);
+			MpConnShutdownGraceful(connIndex);
 			return;
 		}
 	}
@@ -395,7 +395,7 @@ static void MpHandleHello(int connIndex, const unsigned char* p, int len)
 	if (id < 0)
 	{
 		MpSendReject(connIndex, MP_REJECT_FULL, "server is full");
-		MpConnClose(connIndex);
+		MpConnShutdownGraceful(connIndex);
 		return;
 	}
 

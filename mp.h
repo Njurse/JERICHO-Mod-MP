@@ -166,7 +166,8 @@ int  MpSendToPlayer(int playerId, const char* tag, int flags, const void* payloa
 int  MpSendConn(int connIndex, const char* tag, int flags, const void* payload, int len);
 int  MpConnFindByPlayer(int playerId);
 void MpConnAssignPlayer(int connIndex, int playerId);
-void MpConnClose(int connIndex);	/* close a peer (after a reject) */
+void MpConnClose(int connIndex);		/* close a peer (after a reject) */
+void MpConnShutdownGraceful(int connIndex);	/* half-close: flush the refusal, then drain */
 int  MpConnPlayerId(int connIndex);	/* peer's assigned player id, -1 until hello */
 int  MpPeerCount(void);
 

@@ -55,7 +55,16 @@
 #define MP_RECV_BUF		8192
 #define MP_SEND_BUF		2048
 #define MP_ACCEPT_BACKLOG	8
+#ifdef _WIN32
+#  define MP_SHUT_WR		SD_SEND
+#else
+#  define MP_SHUT_WR		SHUT_WR
+#endif
+
 #define MP_SND_TIMEOUT_MS	250
+#define MP_CLOSE_GRACE_MS	2000	/* how long a half-closed (refused) peer may
+								 * take to read its rejection before we
+								 * stop waiting and close the socket */
 #define MP_CONN_TIMEOUT_MS	10000	/* drop a peer after 10 s of silence (~10
 					 * missed keepalive pings) */
 #define MP_CONNECT_TIMEOUT_MS	5000
@@ -69,6 +78,8 @@ typedef struct MP_CONN
 	SOCKET        sock;
 	int           hostSide;	/* 1 = a peer connected to us (host role) */
 	int           playerId;	/* assigned during the handshake, -1 until then */
+	int           closing;	/* we half-closed this peer (refused it): drain, then close */
+	unsigned long closingSinceMs;
 	unsigned long lastRecvMs;
 	unsigned char rbuf[MP_RECV_BUF];
 	int           rbufLen;
@@ -676,10 +687,32 @@ void MpConnClose(int connIndex)
 		MpDropConn(connIndex, "closed by us");
 }
 
+/* Refuse a peer without throwing the refusal away. closesocket() immediately
+ * after send() can RST and discard what we just wrote, so half-close and let
+ * the peer read the FIN; the poll closes the socket once the peer is done or
+ * the grace period expires. */
+void MpConnShutdownGraceful(int connIndex)
+{
+	MP_CONN* c;
+
+	if (connIndex < 0 || connIndex >= MP_MAX_PLAYERS || !gConn[connIndex].used)
+		return;
+
+	c = &gConn[connIndex];
+
+	if (!c->closing)
+	{
+		shutdown(c->sock, MP_SHUT_WR);
+		c->closing = 1;
+		c->closingSinceMs = MpClockMs();
+	}
+}
+
 static void MpProcessConn(int idx)
 {
 	MP_CONN* c = &gConn[idx];
 	char buf[2048];
+	int eof = 0;
 
 	/* Drain what is readable. select() with a zero timeout is used rather
 	 * than FIONREAD because a peer that hung up becomes *readable with 0
@@ -700,7 +733,20 @@ static void MpProcessConn(int idx)
 			break;
 
 		n = recv(c->sock, buf, (int)sizeof(buf), 0);
-		if (n <= 0)
+
+		if (n == 0)
+		{
+			/* The peer hung up WITH BYTES STILL QUEUED: TCP hands over the
+			 * data and the FIN together. Dropping here would throw away a
+			 * REJECT, a WELCOME or a LEAVE sitting in the buffer -- which is
+			 * exactly how "refused, your build differs" reached the player as
+			 * "Connection to the server lost!". Remember the EOF and drain
+			 * the buffer first. */
+			eof = 1;
+			break;
+		}
+
+		if (n < 0)
 		{
 			MpDropConn(idx, "closed");
 			return;
@@ -757,6 +803,11 @@ static void MpProcessConn(int idx)
 		memmove(c->rbuf, c->rbuf + total, c->rbufLen - total);
 		c->rbufLen -= total;
 	}
+
+	/* Now act on the EOF. Whatever is left is a half-frame we can never
+	 * complete, so say so rather than pretending it was a clean close. */
+	if (eof && gConn[idx].used)
+		MpDropConn(idx, gConn[idx].rbufLen > 0 ? "closed mid-frame" : "closed");
 }
 
 /* ------------------------------------------------------------------ */
@@ -837,6 +888,15 @@ void MpNetPoll(int waitMs)
 			continue;
 
 		MpProcessConn(i);
+
+		/* a peer we refused: give it time to read the refusal, then let it
+		 * go even if it never closes its side */
+		if (gConn[i].used && gConn[i].closing &&
+			(now - gConn[i].closingSinceMs) > MP_CLOSE_GRACE_MS)
+		{
+			MpDropConn(i, "refusal not acknowledged");
+			continue;
+		}
 
 		if (gConn[i].used && (now - gConn[i].lastRecvMs) > MP_CONN_TIMEOUT_MS)
 			MpDropConn(i, "timeout");
@@ -1080,6 +1140,16 @@ static void MpServerTouch(const char* ip, const MP_BEACON* b)
 {
 	char name[MP_NAME_MAX];
 	int i, freeIdx = -1;
+
+	/* A host beacons and also receives its own beacon, so on a single machine
+	 * it lists itself and offers to join a game it is already running. We hold
+	 * our own session port, so a beacon advertising it is us: skip it.
+	 *
+	 * A second copy of the game cannot bind the same session port, so this
+	 * cannot hide a genuine companion instance -- which is exactly what
+	 * same-machine testing uses. */
+	if (MpIsHost() && (int)b->port == gMp.config.port)
+		return;
 
 	/* the wire name is a fixed 32-byte field with no guaranteed NUL, so it is
 	 * normalised once here (and compared against the stored copy below) */
