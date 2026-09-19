@@ -24,6 +24,7 @@ import math
 import socket
 import struct
 import sys
+import threading
 import time
 
 PROTO = 1
@@ -100,6 +101,11 @@ def mode_host(args):
     srv.bind(("0.0.0.0", args.port))
     srv.listen(4)
     print(f"[mock-host] listening on {args.port}; waiting for the game's HELLO")
+
+    if args.beacon:
+        beacon_start(args.beacon_port, args.beacon_name, args.port,
+                     args.beacon_in_progress, args.beacon_interval)
+
     srv.settimeout(args.timeout)
     try:
         conn, addr = srv.accept()
@@ -120,6 +126,12 @@ def mode_host(args):
     if proto != PROTO or sdk != SDK:
         print("[mock-host] FAIL: protocol/SDK mismatch from the game")
         return 1
+
+    # Stay silent for a while, so the game sits in the handshake and keeps its
+    # discovery browser open -- that is the window same-machine discovery needs.
+    if args.hold_hello > 0:
+        print(f"[mock-host] holding the handshake {args.hold_hello}s (staying silent)")
+        time.sleep(args.hold_hello)
 
     # Mimic the real host's reject path: send MP_REJECT, then close. --reject-hold
     # keeps the socket open first (isolates "the REJECT was lost" from "the close
@@ -192,6 +204,33 @@ def mode_host(args):
     time.sleep(0.5)
     conn.close()
     return 0
+
+
+def beacon_start(port, name, session_port, in_progress, interval):
+    """Broadcast MP_BEACON like a real host, in a daemon thread.
+
+    Deliberately NOT bound to the port: sending needs no bind, so a mock host
+    can advertise while a real game listens on the same machine.
+    """
+    def run():
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        body = BEACON.pack(UDP_MAGIC, PROTO, session_port,
+                           name.encode()[:31], 1, 8, 0, 0, 0, in_progress, 0x1234, 0)
+        n = 0
+        while True:
+            try:
+                s.sendto(body, ("255.255.255.255", port))
+                n += 1
+                if n == 1:
+                    print(f"[mock-host] beaconing '{name}' on UDP/{port} (session {session_port})")
+            except OSError as e:
+                print(f"[mock-host] beacon failed: {e}")
+            time.sleep(interval)
+
+    t = threading.Thread(target=run, daemon=True)
+    t.start()
+    return t
 
 
 def mode_client(args):
@@ -348,6 +387,13 @@ def main():
                    help="seconds to keep the socket open after the REJECT (0 = close at once, like the real host)")
     h.add_argument("--reject-graceful", action="store_true",
                    help="half-close and drain after the REJECT instead of closing the socket")
+    h.add_argument("--hold-hello", type=float, default=0.0,
+                   help="seconds to stay silent after HELLO, stretching the client's handshake")
+    h.add_argument("--beacon", action="store_true", help="broadcast discovery beacons while hosting")
+    h.add_argument("--beacon-port", type=int, default=1318, help="discovery port to beacon on")
+    h.add_argument("--beacon-name", default="MockBob's game", help="advertised host name")
+    h.add_argument("--beacon-in-progress", type=int, default=0, help="1 = advertise as a live match")
+    h.add_argument("--beacon-interval", type=float, default=1.0)
     h.set_defaults(func=mode_host)
 
     c = sub.add_parser("client", help="mock client: connect to the game's host")
