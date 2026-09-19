@@ -567,7 +567,18 @@ static int MpOnCmdLine(void* userdata, void* args)
 			if (i + 1 < cl->argc && cl->argv[i + 1][0] != '-')
 			{
 				const char* s = cl->argv[++i];
-				const char* colon = strrchr(s, ':');
+				const char* colon = NULL;
+				const char* q;
+
+				/* find the LAST ':' by hand rather than with strrchr: the
+				 * game's PSX string shim declares strrchr with a C++ signature,
+				 * so calling it from here emits an external the CRT cannot
+				 * satisfy (LNK2001 on ?strrchr@@...) */
+				for (q = s; *q != '\0'; q++)
+				{
+					if (*q == ':')
+						colon = q;
+				}
 
 				if (colon != NULL)
 				{
