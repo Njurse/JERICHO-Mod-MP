@@ -373,8 +373,11 @@ static void JoinOnEnter(void* ud)
 		if (s == NULL)
 			continue;
 
-		snprintf(gJoinLabel[k], sizeof(gJoinLabel[k]), "%s  %s:%d  %d/%d",
-			s->hostName, s->ip, s->port, s->players, s->maxPlayers);
+		/* LOBBY vs LIVE comes from the beacon's inProgress flag, which the
+		 * host sets from gMp.running. */
+		snprintf(gJoinLabel[k], sizeof(gJoinLabel[k]), "%s  %s:%d  %d/%d  %s",
+			s->hostName, s->ip, s->port, s->players, s->maxPlayers,
+			s->inProgress ? "LIVE" : "LOBBY");
 
 		gJoinItems[k].label = gJoinLabel[k];
 		gJoinItems[k].get_label = NULL;

@@ -58,9 +58,12 @@ int MpBeginHost(void)
 		return 0;
 	}
 
-	/* NOTE: no discovery advertising yet -- the host only starts beaconing
-	 * when the match actually begins (MpStartMatch), so the LAN browser lists
-	 * games that are live rather than lobbies that may never start. */
+	/* Advertise from the moment the lobby exists. A host who is picking a city
+	 * and waiting for people to arrive is exactly what somebody browsing needs
+	 * to see, and the beacon carries inProgress = gMp.running, so a browser can
+	 * still tell a lobby from a match already under way. */
+	MpDiscoveryStart(1);
+
 	if (gMpCtx)
 		gMpCtx->jer_log(gMpCtx, "[mp] hosting as '%s' (mod enforcement=%d)\n",
 			gMp.config.playerName, gMp.config.modCheck);
