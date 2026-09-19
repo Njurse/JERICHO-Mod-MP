@@ -249,7 +249,13 @@ def mode_client(args):
     send_frame(s, TAG["hello"], build_hello(args.name, mods, args.build))
     print(f"[mock-client] sent HELLO (name={args.name}, mods={[m[0] for m in mods]}, build={args.build:#06x})")
 
-    tag, payload = recv_frame(s)
+    # The host pings on a keepalive timer, and it can ping before it has even
+    # answered us, so skip pings/pongs while waiting for the actual reply.
+    while True:
+        tag, payload = recv_frame(s)
+        if tag is None or tag not in (TAG["ping"], TAG["pong"]):
+            break
+
     if tag == TAG["welcome"]:
         pid, maxp, enforce, matched, running, subgame, _r1, _r2, gm, city, tod, wx, seed = WELCOME.unpack_from(payload, 0)
         print(f"[mock-client] WELCOME: playerId={pid} max={maxp} enforced={enforce} "
