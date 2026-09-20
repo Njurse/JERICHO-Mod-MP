@@ -37,6 +37,7 @@ TAG = {
     "session": b"JPSS", "start": b"JPST", "input": b"JPIN",
     "carstate": b"JPCS", "ping": b"JPPN", "pong": b"JPPO",
     "channel": b"JPCH", "leave": b"JPLV", "chat": b"JPCX",
+    "spawn": b"JPSW",
 }
 UDP_MAGIC = 0x31504D4A
 
@@ -46,7 +47,7 @@ MODI = struct.Struct("<24s16sBB")        # 42 bytes
 WELCOME = struct.Struct("<12BI")         # 16 bytes
 REJECT = struct.Struct("<4B64s")         # 68 bytes
 BEACON = struct.Struct("<IHH32s6BHH")    # 50 bytes
-CHANNEL = struct.Struct("<16sHIBB2B")    # 26 bytes
+SPAWN = struct.Struct("<4i")             # 16 bytes: x, y, z, headingCHANNEL = struct.Struct("<16sHIBB2B")    # 26 bytes
 CHAT = struct.Struct("<B3B96s")          # 100 bytes: playerId, reserved[3], text[96]
 SESSION = struct.Struct("<4BIBBH")       # 12 bytes (gamemode,city,tod,weather,seed,numPlayers,state,spare)
 INPUT = struct.Struct("<IB3B")           # frame, count, reserved[3] = 8
@@ -191,8 +192,14 @@ def mode_host(args):
                     pid, _sp, x, y, z, hd = CARSTATE_ENTRY.unpack_from(payload, CARSTATE.size)
                     last = (x, y, z, hd)
                     if not hasattr(args, "_fixed") or args._fixed is None:
-                        args._fixed = (x + 2000, y, z)
-                        print(f"[mock-host] pinning 'host' car at {args._fixed} (client spawn {x},{y},{z})")
+                        args._fixed = (x + args.peer_dist, y, z)
+                        print(f"[mock-host] pinning 'host' car at {args._fixed} "
+                              f"(client spawn {x},{y},{z}, {args.peer_dist} away)")
+                        # a real host hands out its own car's position as the meeting
+                        # point; line everybody up where the client already is
+                        if args.start:
+                            send_frame(conn, TAG["spawn"], SPAWN.pack(x, y, z, 0))
+                            print(f"[mock-host] sent SPAWN meeting point {x},{y},{z}")
                     fx, fy, fz = args._fixed
                     # static "host" car: it must NOT follow the client's car
                     cs = CARSTATE.pack(frame, 1, 0, 0, 0)
@@ -393,6 +400,8 @@ def main():
                    help="seconds to keep the socket open after the REJECT (0 = close at once, like the real host)")
     h.add_argument("--reject-graceful", action="store_true",
                    help="half-close and drain after the REJECT instead of closing the socket")
+    h.add_argument("--peer-dist", type=int, default=260,
+                   help="how far the fake host car sits from the client's (default just in view)")
     h.add_argument("--no-carstate", action="store_true",
                    help="ignore the client's car-state, so only replicated input moves the cars")
     h.add_argument("--peer-pad", type=lambda v: int(v, 0), default=0,
