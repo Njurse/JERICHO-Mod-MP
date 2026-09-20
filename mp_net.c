@@ -995,6 +995,15 @@ static void MpDropConn(int idx, const char* why)
 	gConn[idx].rxBytes = 0;
 }
 
+/* Drop a connection from outside this file, with a reason that will be believed.
+ * The reason string must describe what HAPPENED, not whichever check ran last:
+ * a peer that sent a LEAVE used to be closed by the 30 s liveness check instead
+ * and reported as "timeout", which is a lie that cost a whole investigation. */
+void MpConnDrop(int idx, const char* why)
+{
+	MpDropConn(idx, why);
+}
+
 void MpConnClose(int connIndex)
 {
 	if (connIndex >= 0 && connIndex < MP_MAX_PLAYERS && gConn[connIndex].used)

@@ -956,13 +956,23 @@ static void MpHandleChat(const unsigned char* p, int len)
 }
 
 /* The host ended the match: tell the player and go back to the frontend. */
-static void MpHandleLeave(const unsigned char* p, int len)
+static void MpHandleLeave(int connIndex, const unsigned char* p, int len)
 {
 	(void)p;
 	(void)len;
 
 	if (gMp.role == MP_ROLE_HOST)
-		return;			/* a client asked to leave; its row is dropped anyway */
+	{
+		/* A client told us it is going. Close THAT connection right now, and say
+		 * why. This used to just return -- 'a client asked to leave; its row is
+		 * dropped anyway' -- so the socket sat there until the 30 s liveness check
+		 * reaped it and the log reported the drop as "timeout". That single wrong
+		 * word sent a whole investigation chasing a silence that never happened,
+		 * and it left a zombie socket (and a later RST) for half a minute. */
+		MpConnEvent("peer sent LEAVE", connIndex, "the client is leaving");
+		MpConnDrop(connIndex, "peer sent LEAVE");
+		return;
+	}
 
 	jer_error("The host ended the match");
 
@@ -2343,7 +2353,7 @@ void MpHandleMessage(int connIndex, const char* tag, const unsigned char* payloa
 
 	if (memcmp(tag, MP_TAG_LEAVE, 4) == 0)
 	{
-		MpHandleLeave(payload, len);
+		MpHandleLeave(connIndex, payload, len);
 		return;
 	}
 
