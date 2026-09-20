@@ -271,7 +271,8 @@ def main():
                          "presses Host does, and the case where the join used to get the "
                          "wrong car, default slot1)")
     ap.add_argument("--client-car", default="slot3",
-                    help="the joining player's car: a model number, slotN, or 'random' (default slot3)")
+                    help="the joining player's car: a model number, slotN, 'random', or 'default' "
+                         "(= pass NO -mpcar; default slot3)")
     args = ap.parse_args()
 
     # A random car each, from the level's own domestic set (models 0..4), so a run
@@ -367,7 +368,10 @@ def main():
     log(f"waiting {args.settle}s for the host to load...")
     time.sleep(args.settle)
 
-    client_argv = client_args + ["-mpcar", args.client_car, "-join", f"127.0.0.1:{args.port}"]
+    if args.client_car == "default":
+        client_argv = client_args + ["-join", f"127.0.0.1:{args.port}"]
+    else:
+        client_argv = client_args + ["-mpcar", args.client_car, "-join", f"127.0.0.1:{args.port}"]
     b = launch(dirs["b"], args.exe, client_argv, client_env)
 
     for label, argv in (("host", host_argv), ("client", client_argv)):

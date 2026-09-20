@@ -135,10 +135,11 @@ the gap stops closing for 150 frames, and back out when they wedge. Their progre
 and the resulting host<->client deviation are in the `[mp] bot:` and `[mp] sync:`
 lines.
 
-`--host-car default` runs the host with NO `-mpcar`, i.e. exactly what a player who
-just presses Host does: the ENGINE/level chooses the car (`config.car` stays -1).
-Use it to reproduce the case where a joiner used to be handed the level's slot-0
-car instead of the host's (see trap 12 in `docs/ARCHITECTURE.md`).
+`--host-car default` (and `--client-car default`) pass NO `-mpcar` on that side, i.e.
+exactly what a player who just presses Host/Join does: the ENGINE/level-facing
+assignment decides the car (`config.car` stays -1). Use both together to reproduce
+a whole no-`-mpcar` session -- the case where the two machines used to disagree
+about who drives what (see trap 12 in `docs/ARCHITECTURE.md`).
 
 ## Reading a run
 

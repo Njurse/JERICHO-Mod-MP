@@ -386,20 +386,20 @@ These have each cost real time. They are not hypothetical.
    view of the client's car and the two simulations drifted with no correction at
    all (the "physics/steering not synced"). The `[mp] sync:` deviation line makes
    this visible: it must print for BOTH remote cars.
-12. **A peer's car can be UNKNOWABLE at level init — defer it, never guess.** With no
-   `-mpcar` the host has nothing naming its car (`config.car = -1`,
-   `wantedCar[0] = -1`, `PlayerStartInfo[0]` still NULL at launch), so the WELCOME
-   carried `hostCar = 0xFF` and a joiner fell back to `carNumLookup[lvl][0]` — the
-   per-city FRONTEND car table, i.e. a different machine altogether (the "on the
-   client the host is a police car with a palette that does not match" report; in
-   Rio both happen to be model 1, so it only showed in another city). The owner is
-   really driving the LEVEL's default (`MissionHeader->playerCarModel`), the same
-   number on both machines — but that is not readable at level init either, because
-   the mission header is parsed later (`MissionHeader` is NULL there). So a remote
-   car whose model is unknown is DEFERRED: the player is left carless and
-   `MpSpawnLateJoiners` builds it on a frame once the level is up, resolved from the
-   level default. Do not "fix" this with a better guess. `--host-car default` in
-   `mp_localpair.py` reproduces the case.
+12. **A player who chose no car must get the SAME car on EVERY machine — and a
+   DIFFERENT one from everyone else.** With no `-mpcar` nothing names a player's
+   car: HELLO/WELCOME carry `0xFF`, `config.car` is -1, and the engine's own
+   default is not readable until the mission header is parsed. The old code
+   assigned the level's car table (`carNumLookup`) to REMOTE players only and left
+   the LOCAL player on the level's default, so the machines DISAGREED about the
+   local player's car — the owner's palette then landed on a different model (the
+   "on the client the host is a slot-0 police car with a palette that does not
+   match") — and two un-chosen players could both come out as the same model.
+   `MpAssignedCarModel(playerId)` = `carNumLookup[city][playerId % 4]` is now the
+   single source for that: bounded by the level's pool, computed identically by
+   both machines, different per player -- and the LOCAL player's `wantedCar[0]` is
+   set from it too, so it agrees with what the others assign it.
+   `--host-car default --client-car default` reproduces a whole no-`-mpcar` session.
 13. **A blocking socket under a non-blocking send path stalls the whole frame.** The
    send path (`MpFlushConn`/`MpSendRaw`) QUEUES what the socket will not take, but
    the connection sockets were set BLOCKING, so when a peer's receive window filled

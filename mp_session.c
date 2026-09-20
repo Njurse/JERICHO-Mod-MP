@@ -28,6 +28,9 @@ extern int gWantNight;		/* glaunch.c: 1 = the night take-a-ride level variant */
 #include <stdio.h>
 #include <math.h>	/* sqrt: the deviation readout below */
 
+/* defined below, needed by the launch path above them */
+static int MpAssignedCarModel(int playerId);
+
 /* How long a level load may block our main loop before we assume the peer is
  * gone rather than merely loading. Both sides load at the same time, so both
  * go quiet for the whole load. */
@@ -257,12 +260,25 @@ static void MpLaunchLocal(void)
 
 		wantedCar[0] = car;
 	}
+	else
+	{
+		/* No pick (no -mpcar): take the SAME car the other machines will assign
+		 * this player, so every machine agrees on who drives what. Leaving this to
+		 * the engine's level default is what made the machines disagree (the
+		 * client saw the host as slot 0, with a palette that matched a different
+		 * model) and could make both cars identical. */
+		int me = (gMp.localPlayerId >= 0) ? gMp.localPlayerId : 0;
 
-	/* Diagnose the host's OWN car. WITHOUT -mpcar, config.car is -1 and nothing
-	 * here chooses the vehicle -- the engine's default does -- so the WELCOME's
-	 * hostCar goes out as 0xFF and a joiner falls back to the level's slot-0 car
-	 * (the "the host is in a police car with a palette that does not match"
-	 * report). Log every source so that case is visible. */
+		wantedCar[0] = MpAssignedCarModel(me);
+
+		if (gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx, "[mp] no car chosen -> assigned model %d (player %d, city %d)\n",
+				wantedCar[0], me, GameLevel);
+	}
+
+	/* Log the host's own car sources. WITH -mpcar wantedCar[0] is the pick; without
+	 * one it is the assigned model above -- and if NEITHER ran, the engine's level
+	 * default decides, which is the case where the machines used to disagree. */
 	if (gMpCtx != NULL)
 		gMpCtx->jer_log(gMpCtx,
 			"[mp] car sources: config.car=%d isSlot=%d wantedCar[0]=%d startinfo[0]=%d\n",
@@ -304,20 +320,25 @@ static int MpPlayerCarModel(int car, int isSlot)
 	return car;
 }
 
-/* The LEVEL's own default player car -- what a machine that asked for nothing
- * ends up driving (mission.c: `PlayerStartInfo[0]->model = MissionHeader->
- * playerCarModel`). A peer that never told us its car must be given THIS, not the
- * per-city frontend slot table: without -mpcar the host is driving the level's
- * default, and carNumLookup[lvl][0] is a different machine altogether -- the
- * "on the client the host is a police car with a palette that does not match"
- * report. Both machines load the SAME level, so this is the same number on both.
- * -1 when unavailable. */
-static int MpDefaultPlayerCarModel(void)
+/* The car EVERY machine assigns a player who did not choose one (no -mpcar). It
+ * must be the SAME number on both machines AND different per player, so the two
+ * cars are both distinguishable and agreed on. The level's own car table
+ * (carNumLookup, indexed by player id) is exactly that: bounded by the level's
+ * pool, and both machines compute it from the same city.
+ *
+ * The old code applied this to REMOTE players only and left the LOCAL player on
+ * the level's default, so the machines disagreed about the local player's car
+ * (the client saw the host as slot 0 with a palette that did not match, because
+ * the owner's palette was applied to a different model), and two un-chosen
+ * players could both come out as the same model if the level's default coincided
+ * with one of the assigned ones. */
+static int MpAssignedCarModel(int playerId)
 {
-	if (MissionHeader != NULL && MissionHeader->playerCarModel >= 0)
-		return (int)MissionHeader->playerCarModel;
+	extern char carNumLookup[4][10];
+	int lvl = (GameLevel >= 0 && GameLevel < 4) ? GameLevel : 0;
+	int k = (playerId >= 0) ? (playerId % 4) : 0;
 
-	return -1;
+	return carNumLookup[lvl][k];
 }
 
 void MpHostSendRoster(void)
@@ -388,7 +409,6 @@ void MpHostSendRoster(void)
 void MpSpawnLateJoiners(void)
 {
 	int id, slot, spawned = 0;
-	static int retries;	/* bounded: a level with no default must not spin forever */
 
 	for (id = 0; id < MP_MAX_PLAYERS; id++)
 	{
@@ -424,33 +444,12 @@ void MpSpawnLateJoiners(void)
 		 * (MpOnNetSpawn): the host's own model is NOT this player's, and copying it
 		 * made the joiner's car identical to the host's on the host's screen. */
 		{
-			extern char carNumLookup[4][10];
 			int lvl = (GameLevel >= 0 && GameLevel < 4) ? GameLevel : 0;
 			int cid = MpPlayerCarModel(p->car, p->carIsSlot);
 
-			/* nothing was asked for (or it was never told to us): drive the car
-			 * THIS LEVEL gives its player, which is what the owner is driving */
+			/* an explicit pick, else the model every machine assigns this player */
 			if (cid < 0)
-			{
-				cid = MpDefaultPlayerCarModel();
-
-				if (gMpCtx != NULL)
-					gMpCtx->jer_log(gMpCtx,
-						"[mp] player %d asked no car -> the level's default %d\n", id, cid);
-			}
-
-			/* STILL unknown AND the level is not loaded yet: the mission header
-			 * is parsed later than the level init, so try again next frame rather
-			 * than guessing (bounded, in case a level really has no default). */
-			if (cid < 0 && MissionHeader == NULL && retries < 300)
-			{
-				retries++;
-				gMp.pendingSpawn = 1;
-				continue;
-			}
-
-			if (cid < 0)
-				cid = carNumLookup[lvl][id % 4];
+				cid = MpAssignedCarModel(id);
 
 			PlayerStartInfo[slot]->model = (u_char)cid;
 			PlayerStartInfo[slot]->palette = (u_char)(p->palette >= 0 ? p->palette : 0);
@@ -1188,30 +1187,12 @@ int MpOnNetSpawn(void* userdata, void* args)
 		 * skipped above); i is that player's id. */
 		{
 			int lvl = (GameLevel >= 0 && GameLevel < 4) ? GameLevel : 0;
-			/* the player's OWN car if they told us (HELLO), else the LEVEL's own
-			 * player car -- what a machine that asked for nothing actually drives */
+			/* an explicit pick (-mpcar) if there is one, else the model EVERY machine
+			 * assigns this player id -- see MpAssignedCarModel */
 			int cid = MpPlayerCarModel(p->car, p->carIsSlot);
 
 			if (cid < 0)
-				cid = MpDefaultPlayerCarModel();
-
-			/* STILL unknown: at level INIT the level's mission header is not parsed
-			 * yet (MissionHeader is NULL), so the OWNER's own default is not knowable
-			 * here. Do NOT guess from the per-city frontend table -- that is a
-			 * different machine altogether, the "on the client the host is a police
-			 * car with a palette that does not match" report. Defer instead: leave
-			 * the player carless and let MpSpawnLateJoiners build it on a frame, once
-			 * the level IS loaded and MissionHeader is set. */
-			if (cid < 0)
-			{
-				if (gMpCtx != NULL)
-					gMpCtx->jer_log(gMpCtx,
-						"[mp] player %d: car not knowable at level init (MissionHeader=%s); deferring\n",
-						p->id, MissionHeader ? "set" : "NULL");
-
-				gMp.pendingSpawn = 1;
-				continue;
-			}
+				cid = MpAssignedCarModel(p->id);
 
 			PlayerStartInfo[slot]->model = (u_char)cid;
 			PlayerStartInfo[slot]->palette = (u_char)(p->palette >= 0 ? p->palette : 0);

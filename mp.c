@@ -689,6 +689,7 @@ extern int  gDrawPauseMenus;
  * fires on every drawn frame including while paused. */
 extern void StepSim(void);
 extern int  pauseflag;
+extern void UnPauseSound(void);	/* the engine pauses music/sfx with the world */
 
 /* While the pause menu is up, list who is connected down the left side.
  *
@@ -749,10 +750,10 @@ static void MpDrawPlayerList(void)
 	int id, row = 0;
 
 	/* Top-LEFT corner and HIGH up: the pause menu's items are drawn around the
-	 * middle of the screen, and the row grew a delivery column, so the list
-	 * needs the room. (Was x=8, y=56 -- it overlapped the menu.) */
+	 * middle of the screen, and the row grew a delivery column, so the list needs
+	 * the room. (Was x=8, y=56, then (4,24) -- still crowded the menu.) */
 	SetTextColour(170, 170, 170);
-	PrintString((char*)"-- PLAYERS --", 4, 24);
+	PrintString((char*)"-- PLAYERS --", 4, 6);
 
 	for (id = 0; id < MP_MAX_PLAYERS; id++)
 	{
@@ -801,7 +802,7 @@ static void MpDrawPlayerList(void)
 			snprintf(line, sizeof(line), "%s #%d  car %d", p->name, p->id, veh);
 		}
 
-		y = 36 + row * 20;
+		y = 18 + row * 20;
 		row++;
 
 		if (p->isHost)
@@ -838,15 +839,29 @@ static int MpOnDrawOverlay(void* userdata, void* args)
 
 	MpNetPoll(0);
 
-	/* KEEP A LIVE MATCH RUNNING UNDER THE PAUSE MENU. The engine freezes the
-	 * world while its pause menu is open (pauseflag) and does not run
-	 * JER_EVENT_FRAME -- where our net tick lives -- while frozen. So while a
-	 * session is up and paused we step the world and run our own tick from here,
-	 * once per drawn frame. The menu itself is the engine's, opened normally. */
-	if (gMp.running && pauseflag != 0)
+	/* A LIVE MATCH DOES NOT FREEZE FOR THE PAUSE MENU. The engine freezes the world
+	 * while its pause menu is open (pauseflag) and does not run JER_EVENT_FRAME --
+	 * where our net tick lives -- while frozen, and it pauses the audio with it.
+	 * So while a session is up and paused we step the world, run our own tick, and
+	 * undo the audio pause once on the way in. The menu is still the engine's. */
 	{
-		StepSim();
-		MpLockstepFrame();
+		static int wasPaused;
+
+		if (gMp.running && pauseflag != 0)
+		{
+			if (!wasPaused)
+			{
+				wasPaused = 1;
+				UnPauseSound();
+			}
+
+			StepSim();
+			MpLockstepFrame();
+		}
+		else
+		{
+			wasPaused = 0;
+		}
 	}
 
 	/* the player list / MP options ride on the engine's pause menu */
