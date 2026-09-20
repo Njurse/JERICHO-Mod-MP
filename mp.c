@@ -659,6 +659,28 @@ static int MpOnNetInput(void* userdata, void* args)
 }
 
 /* After a level starts, log the player cars so the spawn is verifiable. */
+/* JERICHO-HOOK: the frontend's idle timer.
+ *
+ * The frontend boots the attract demo after ~30 s without input, and a host
+ * sitting in its lobby waiting for players is idle by definition. The demo
+ * launched a level nobody asked for; that load blocks the main thread for its
+ * whole duration, so every player who was joining went quiet, hit the idle
+ * timeout and dropped -- leaving the host alone in a demo it never asked for.
+ *
+ * Suppress it for as long as a session or a lobby exists. role is NONE for stock
+ * single-player and for the stock split-screen path, which keep their demo. */
+static int MpOnFrontendIdle(void* userdata, void* args)
+{
+	JER_ARGS_FRONTEND_IDLE* idle = (JER_ARGS_FRONTEND_IDLE*)args;
+
+	(void)userdata;
+
+	if (idle != NULL && gMp.role != MP_ROLE_NONE)
+		idle->suppress = 1;
+
+	return JER_RESULT_CONTINUE;
+}
+
 /* JERICHO-HOOK: the multiplayer map.
  *
  * The stock drawer loops `for (i = 0; i < NumPlayers; i++)` and calls
@@ -789,4 +811,4 @@ JER_MODULE_ENTRY(jer_module_mp_entry)(JERICHO_CONTEXT* ctx)
 	ctx->jer_register_hook(ctx, JER_EVENT_NET_INPUT, MpOnNetInput, NULL, 0);
 	ctx->jer_register_hook(ctx, JER_EVENT_GAME_START, MpOnGameStart, NULL, 0);
 	ctx->jer_register_hook(ctx, JER_EVENT_DRAW_MAP, MpOnDrawMap, NULL, 0);
-}
+	ctx->jer_register_hook(ctx, JER_EVENT_FRONTEND_IDLE, MpOnFrontendIdle, NULL, 0);}

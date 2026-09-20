@@ -79,7 +79,8 @@ typedef struct MP_STATE
 	unsigned int seed;
 
 	int modsMatched;		/* client: our manifest matched the host */
-	int localPlaced;		/* client: our own car was gathered next to the host */
+	int localPlaced;
+	unsigned long busyUntilMs;		/* client: our own car was gathered next to the host */
 	int lastRejectReason;		/* client: MP_REJECT_* from a refused join */
 	char lastRejectText[MP_REJECT_TEXT_MAX];
 
@@ -240,6 +241,12 @@ void MpChatSendText(const char* text);	/* send + locally echo a chat line */
 void MpSendChat(const char* text);	/* put a chat line on the wire */
 void MpSendInput(int pad);		/* replicate this frame's input (host relays the set) */
 void MpPlaceSpawns(int x, int y, int z, int heading);	/* line every player car up here */
+
+/* While a level is loading the other side has nothing to say for the whole load,
+ * which is longer than the idle timeout. Every machine that orders a launch
+ * marks itself busy for the duration, and the timeout check stands down. */
+void MpMarkBusy(int ms);
+int  MpBusy(void);
 int  MpUiDrawOverlay(void* userdata, void* args);	/* JER_EVENT_DRAW_OVERLAY */
 int  MpOnDrawMap(void* userdata, void* args);	/* JER_EVENT_DRAW_MAP */
 void MpCarPose(int carId, int* x, int* y, int* z, int* heading);	/* car position (mp.c owns car_data) */

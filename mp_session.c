@@ -22,6 +22,11 @@
 #include <string.h>
 #include <stdio.h>
 
+/* How long a level load may block our main loop before we assume the peer is
+ * gone rather than merely loading. Both sides load at the same time, so both
+ * go quiet for the whole load. */
+#define MP_BUSY_LAUNCH_MS 60000
+
 /* ------------------------------------------------------------------ */
 /* Session lifecycle                                                   */
 /* ------------------------------------------------------------------ */
@@ -43,6 +48,17 @@ void MpSessionReset(void)
 
 int MpBeginHost(void)
 {
+	/* Already the host: do NOT reset.
+	 *
+	 * Re-entering the host menu, or the frontend reaching this a second time,
+	 * used to tear the whole session down -- listener closed, every peer
+	 * dropped -- so a player who was mid-join was sent MP_TAG_LEAVE and told
+	 * "the host ended the match", then kicked back to the frontend moments
+	 * after being accepted. Hosting twice is not an error, it just has nothing
+	 * left to do. */
+	if (gMp.role == MP_ROLE_HOST)
+		return 1;
+
 	MpSessionReset();
 	MpResetPlayers();
 
@@ -155,6 +171,7 @@ static void MpLaunchLocal(void)
 		gMpCtx->jer_log(gMpCtx, "[mp] launching: city %d mode %d (1=TAKEADRIVE, 0=MISSION!) subgame %d time %d weather %d players %d\n",
 			GameLevel, GameType, gSubGameNumber, wantedTimeOfDay, wantedWeather, NumPlayers);
 
+	MpMarkBusy(MP_BUSY_LAUNCH_MS);	/* the load is about to block us */
 	SetState(STATE_GAMESTART);
 }
 
@@ -319,6 +336,13 @@ static void MpSendWelcome(int connIndex, int playerId, int matched)
 	w.seed = gMp.seed;
 
 	MpSendConn(connIndex, MP_TAG_WELCOME, MP_FLAG_RELIABLE, &w, sizeof(w));
+
+	/* The player on the other end is about to launch a level and will say
+	 * nothing for the whole load. Grant the grace from here, not only from
+	 * our own launches: a host that started its match a minute ago has
+	 * already spent its window, and would otherwise time out the very
+	 * player it just accepted. */
+	MpMarkBusy(MP_BUSY_LAUNCH_MS);
 }
 
 static void MpHandleHello(int connIndex, const unsigned char* p, int len)
@@ -589,6 +613,9 @@ static void MpHandleChannel(int connIndex, const unsigned char* p, int len)
 
 static void MpHandleStart(const unsigned char* p, int len)
 {
+	/* the host is launching: it will be silent for the load */
+	MpMarkBusy(MP_BUSY_LAUNCH_MS);
+
 	MP_START st;
 
 	if (len < (int)sizeof(MP_START))
@@ -712,6 +739,21 @@ static int MpLocalPad(void)
 	}
 
 	return (int)Pads[padId].mapped;
+}
+
+/* A launch means the level is about to load, and a load blocks our own main loop
+ * for its whole duration -- during which we neither send nor receive anything.
+ * The peer sees exactly the same silence from a machine that has died, so it used
+ * to drop us a second or two into a perfectly healthy session. Stand the idle
+ * timeout down for the load. */
+void MpMarkBusy(int ms)
+{
+	gMp.busyUntilMs = MpNowMs() + (unsigned long)ms;
+}
+
+int MpBusy(void)
+{
+	return gMp.busyUntilMs != 0 && MpNowMs() < gMp.busyUntilMs;
 }
 
 void MpSendInput(int pad)

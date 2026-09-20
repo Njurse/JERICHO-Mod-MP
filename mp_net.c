@@ -926,7 +926,9 @@ void MpNetPoll(int waitMs)
 			continue;
 		}
 
-		if (gConn[i].used && (now - gConn[i].lastRecvMs) > MP_CONN_TIMEOUT_MS)
+		/* ...but not while a level is loading: both sides go silent for the whole
+		 * load, and that is longer than the idle timeout. */
+		if (gConn[i].used && (now - gConn[i].lastRecvMs) > MP_CONN_TIMEOUT_MS && !MpBusy())
 			MpDropConn(i, "timeout");
 	}
 }

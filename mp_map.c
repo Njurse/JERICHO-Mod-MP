@@ -37,8 +37,14 @@ int MpOnDrawMap(void* userdata, void* args)
 		CAR_DATA* cp;
 		VECTOR target;
 
-		if (!p->active || p->carId < 0 || p->carId >= MAX_CARS || p->isLocal)
-			continue;			/* ours is already drawn by the engine */
+		if (!p->active || p->carId < 0 || p->carId >= MAX_CARS)
+			continue;
+
+		/* The arrows mark the OTHER players, the host included. Our own car is
+		 * already the engine's own blip (it draws one for its single player),
+		 * so drawing one for ourselves here would double it up. */
+		if (p->isLocal || p->id == gMp.localPlayerId)
+			continue;
 
 		cp = &car_data[p->carId];
 
