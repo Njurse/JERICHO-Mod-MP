@@ -100,6 +100,21 @@ reached by address.
 
 ## Testing
 
+`tools/mp_localpair.py` runs **two real instances on one PC** — one hosting, one
+joining — and prints both sides' logs. Each instance gets its own working
+directory (built from junctions, so nothing is copied) which is what keeps the
+two `REDRIVER2.log` files and the two `mp.ini` files apart. It launches the
+executables directly and kills exactly the PIDs it started.
+
+    python tools/mp_localpair.py                # host + join, report, clean up
+    python tools/mp_localpair.py --keep         # leave the run dirs to poke at
+    python tools/mp_localpair.py --clean        # remove them again
+
+Use it for anything that needs two real engines: a car that never appears, a mode
+that launches wrong on one side, a connection that drops. `--clean` (and the
+automatic cleanup) unlinks the junctions before deleting anything, so it can
+never follow one into the real game tree.
+
 `tools/mp_test.py` is a headless protocol harness (the game writes its log
 relative to the CWD, so two live instances cannot share a folder). It drives
 the real module against a scriptable peer:
