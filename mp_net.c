@@ -323,6 +323,9 @@ static void MpCloseSock(SOCKET* s)
 {
 	if (*s != INVALID_SOCKET)
 	{
+		if (getenv("MP_DEBUG") != NULL && gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx, "[mp] MpCloseSock(%llu)\n", (unsigned long long)*s);
+
 		closesocket(*s);
 		*s = INVALID_SOCKET;
 	}
@@ -451,12 +454,13 @@ static void MpAcceptPeers(void)
 			continue;
 		}
 
-		/* Accepted sockets are BLOCKING for recv, like the client's (see
-		 * MpClientAdopt). The recv loop only calls recv() after select() reports
-		 * the socket readable, so a blocking socket can never stall the frame --
-		 * but that guard is the ONLY thing making it safe, so the mode is set
-		 * explicitly here rather than inherited from the non-blocking listener. */
-		MpSetNonBlocking(s, 0);
+		/* NON-BLOCKING in BOTH directions. The recv loop is guarded by select() and
+		 * treats WSAEWOULDBLOCK as "nothing yet", and the SEND path relies on it
+		 * too (MpFlushConn queues whatever the socket will not take yet). A
+		 * BLOCKING socket here was a real bug: when the peer's receive window
+		 * filled, send() blocked INSIDE the game loop, the match froze for a few
+		 * seconds, and the peer then timed us out and dropped the session. */
+		MpSetNonBlocking(s, 1);
 		MpTuneConn(s);
 		gConn[idx].sock = s;
 		gConn[idx].hostSide = 1;
@@ -516,6 +520,9 @@ static void MpClientConnectCancel(void)
 void MpClientDisconnect(void)
 {
 	int i;
+
+	if (gMpCtx != NULL)
+		gMpCtx->jer_log(gMpCtx, "[mp] MpClientDisconnect (closing our link)\n");
 
 	MpClientConnectCancel();	/* abandon an in-flight connect too */
 
@@ -579,7 +586,10 @@ static int MpClientAdopt(SOCKET s, const char* host, int port)
 {
 	int idx;
 
-	MpSetNonBlocking(s, 0);	/* back to blocking recv (guarded by FIONREAD) */
+	/* NON-BLOCKING: the send path queues what the socket will not take yet, and
+	 * a blocking send() would stall the game loop whenever the host's receive
+	 * window fills (the "freezes for a few seconds" symptom). */
+	MpSetNonBlocking(s, 1);
 	MpTuneConn(s);
 
 	idx = MpAllocConn();
@@ -1042,11 +1052,27 @@ static void MpProcessConn(int idx)
 			 * with ECONNRESET means the far end or something in between RST
 			 * the connection -- a different event from a hangup, and the one
 			 * that a filtering middlebox produces. */
-			if (err == WSAECONNRESET)
+			if (err == WSAECONNRESET || err == WSAECONNABORTED)
+			{
 				MpDropConn(idx, "connection reset (WSAECONNRESET)");
-			else
-				MpDropConn(idx, "socket error");
-			return;
+				return;
+			}
+
+			/* Anything else is NOT proof the peer is gone -- under a burst (a
+			 * busy chase, a flurry of contacts) the stack reports transient
+			 * errors like WSAENOBUFS/WSAENETRESET, and dropping on those kills a
+			 * perfectly live session. Skip the read this frame and let the idle
+			 * timeout be the judge of whether the peer is really gone. Run the
+			 * dropped reason through jer_log so the CODE is not a mystery. */
+			{
+				char why[64];
+
+				snprintf(why, sizeof(why), "recv error %d (transient, kept alive)", err);
+
+				if (gMpCtx != NULL)
+					gMpCtx->jer_log(gMpCtx, "[mp] %s conn=%d rx=%lu\n", why, idx, c->rxBytes);
+			}
+			break;
 		}
 
 		if (c->rbufLen + n > MP_RECV_BUF)

@@ -166,6 +166,9 @@ int MpBeginJoinAsync(const char* host, int port)
 
 void MpLeaveSession(void)
 {
+	if (gMpCtx != NULL)
+		gMpCtx->jer_log(gMpCtx, "[mp] MpLeaveSession (role=%d running=%d)\n", (int)gMp.role, gMp.running);
+
 	gMp.leaving = 1;
 
 	/* if we are the host, tell everyone the match is ending so they go back

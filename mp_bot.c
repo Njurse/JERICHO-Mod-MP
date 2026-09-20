@@ -237,10 +237,11 @@ static int MpBotChase(int fight)
 }
 
 /* ------------------------------------------------------------------ */
-/* pursuit / evade: the chase test                                      */
+/* pursuit: MUTUAL chase -- both cars hunt each other                   */
 /*                                                                      */
-/* The JOINER hunts and the HOST runs -- the reverse of `chase`. Neither */
-/* side is ever allowed to idle: a chase is CONSTANT action.            */
+/* Both instances run the same mode. Making one of them flee kept the    */
+/* pair apart for the whole run, so they never met and the car-to-car    */
+/* contact was never exercised. Both hunt, so they converge and collide. */
 /* ------------------------------------------------------------------ */
 #define MPBOT_PROBE	2400	/* how far ahead the pathfinder looks -- long, so it sees a
 				 * wall at an intersection and commits to the turn BEFORE
@@ -266,7 +267,9 @@ static int MpBotHeadingClear(CAR_DATA* mine, int a)
 
 static int MpBotClearHeading(CAR_DATA* mine, int desired)
 {
-	const int STEP = 0x1000 / 12;	/* 30 degrees */
+	const int STEP = 0x1000 / 24;	/* 15 degrees -- a full fan, so a heading
+					 * AROUND a wall (up to a U-turn) is
+					 * findable, not just +-90 degrees */
 	/* HYSTERESIS. Deciding the heading from scratch every frame made the steering
 	 * FLAP: as `desired` drifted, the first clear candidate flipped between +30
 	 * and -30 and the car twitched left/right. Once we have a heading, KEEP it
@@ -286,7 +289,7 @@ static int MpBotClearHeading(CAR_DATA* mine, int desired)
 			return held;
 	}
 
-	for (i = 0; i < 12; i++)
+	for (i = 0; i < 24; i++)
 	{
 		int k = (i + 1) / 2;
 		int a = (i == 0) ? desired : ((desired + ((i & 1) ? (k * STEP) : (-k * STEP))) & 0xfff);
@@ -342,7 +345,7 @@ static int MpBotPursuit(void)
 	{
 		int dx = tgt->hd.where.t[0] - mine->hd.where.t[0];
 		int dz = tgt->hd.where.t[2] - mine->hd.where.t[2];
-		int evade = MpIsHost();	/* the JOINER hunts, the HOST runs */
+		int evade = 0;	/* MUTUAL pursuit: everyone hunts (see the note above) */
 		int desired = evade ? ((ratan2(dx, dz) + 2048) & 0xfff) : (ratan2(dx, dz) & 0xfff);
 		int want = MpBotClearHeading(mine, desired);
 		int diff = ((want - mine->hd.direction + 2048) & 4095) - 2048;
@@ -360,7 +363,7 @@ static int MpBotPursuit(void)
 		 * seconds of sitting still. A stopped car is a wasted frame of the test. */
 		if (spd < 3)
 		{
-			if (++stuckFrames > 40)
+			if (++stuckFrames > 20)
 			{
 				recoverFrames = recoverReverse ? 18 : 26;
 				recoverDir ^= 1;
@@ -377,6 +380,38 @@ static int MpBotPursuit(void)
 			stuckFrames = 0;
 		}
 
+		/* NO PROGRESS = TURN ROUND. A car that is moving but NOT closing (steered
+		 * away by the pathfinder, or grinding along a wall the wrong way) will
+		 * "drive" forever and never meet the other car. If the gap has not shrunk
+		 * for a while, the answer is a decisive U-turn, not more of the same. */
+		{
+			static long best;
+			static int noProg;
+
+			if (dist < 300L * 300L)
+			{
+				best = 0;
+				noProg = 0;
+			}
+			else if (best == 0 || dist < best - 300L * 300L)
+			{
+				best = dist;
+				noProg = 0;
+			}
+			else if (++noProg > 150)
+			{
+				recoverFrames = 55;
+				recoverReverse = 0;
+				recoverDir ^= 1;
+				best = 0;
+				noProg = 0;
+
+				if (gMpCtx != NULL)
+					gMpCtx->jer_log(gMpCtx, "[mp] bot: no progress for 150 frames, turning round (dir %d)\n",
+						recoverDir);
+			}
+		}
+
 		/* Speed on the straights, DECISIVE turns in the corners. Powering into a big
 		 * heading error is what scrapes the car along the wall: it understeers,
 		 * nose-first, for as long as the turn takes. So a large error BRAKES into the
@@ -386,12 +421,19 @@ static int MpBotPursuit(void)
 			/* a real U-turn: slow right down and turn hard */
 			pad = CAR_PAD_BRAKE | ((diff > 0) ? CAR_PAD_LEFT : CAR_PAD_RIGHT);
 		else if (adiff > 420)
-			/* a corner: lift and steer; the momentum carries it round */
-			pad = (diff > 0) ? CAR_PAD_LEFT : CAR_PAD_RIGHT;
+			/* a corner. NEVER steer-only: a stationary car cannot steer, and the
+			 * old steer-only pad left the bot sitting still "thinking" for
+			 * seconds whenever it came to rest facing the wrong way. */
+			pad = CAR_PAD_ACCEL | ((diff > 0) ? CAR_PAD_LEFT : CAR_PAD_RIGHT);
 		else if (adiff > 70)
 			pad = CAR_PAD_ACCEL | ((diff > 0) ? CAR_PAD_LEFT : CAR_PAD_RIGHT);
 		else
 			pad = CAR_PAD_ACCEL;
+
+		/* a car that has STOPPED always gets the throttle back (unless we are
+		 * deliberately braking into a U-turn), so it never idles in place */
+		if (spd < 3 && (pad & CAR_PAD_BRAKE) == 0)
+			pad |= CAR_PAD_ACCEL;
 
 		/* the pursuer keeps the power on when it is closing, so the collision is
 		 * actually tested; the runner never relents either */

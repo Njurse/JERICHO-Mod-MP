@@ -258,8 +258,9 @@ def main():
                          "MP_DEBUG is invisible otherwise.")
     ap.add_argument("--bot", default="off", choices=["off", "random", "chase", "fight", "pursuit"],
                     help="drive the player cars with the mp test bot: random / chase (host flees, "
-                         "joiner chases) / fight (both charge). OFF by default -- this drives a "
-                         "real player's car.")
+                         "joiner chases) / fight (both charge) / pursuit (BOTH hunt each other, so "
+                         "they reliably meet and collide). OFF by default -- this drives a real "
+                         "player's car.")
     ap.add_argument("--level", default="rio",
                     help="city for the host to host (default rio)")
     ap.add_argument("--mp-arena", default="1",
