@@ -245,8 +245,10 @@ static int MpBotChase(int fight)
 /* motion: a pursuer that has to keep line of sight, and a runner that  */
 /* has to get away.                                                     */
 /* ------------------------------------------------------------------ */
-#define MPBOT_PROBE	1300	/* how far ahead the pathfinder looks */
-#define MPBOT_NEAR	520	/* ... and the near probe that stops it nosing into a wall */
+#define MPBOT_PROBE	2400	/* how far ahead the pathfinder looks -- long, so it sees a
+				 * wall at an intersection and commits to the turn BEFORE
+				 * reaching it, instead of nosing into it */
+#define MPBOT_NEAR	650	/* ... and the near probe that stops it nosing into a wall */
 
 /* Is a heading's path clear at both the near and the far probe? */
 static int MpBotHeadingClear(CAR_DATA* mine, int a)
@@ -357,11 +359,11 @@ static int MpBotPursuit(void)
 
 		/* same wedge detection as chase: a car stopped against scenery has to be
 		 * backed out; the runner wedges at least as often as the pursuer */
-		if (spd < 4)
+		if (spd < 3)
 		{
-			if (++stuckFrames > 90)
+			if (++stuckFrames > 150)
 			{
-				recoverFrames = recoverReverse ? 45 : 70;
+				recoverFrames = recoverReverse ? 30 : 45;
 				recoverDir ^= 1;
 				recoverReverse ^= 1;
 				stuckFrames = 0;
@@ -376,15 +378,18 @@ static int MpBotPursuit(void)
 			stuckFrames = 0;
 		}
 
-		if (adiff > 1500)
-			/* the target is straight behind: reversing round is the coherent move */
+		/* Speed on the straights, DECISIVE turns in the corners. Powering into a big
+		 * heading error is what scrapes the car along the wall: it understeers,
+		 * nose-first, for as long as the turn takes. So a large error BRAKES into the
+		 * turn (the move that replaces scraping along the wall), a medium one coasts
+		 * through it, and only a roughly aligned car gets full throttle. */
+		if (adiff > 1200)
+			/* a real U-turn: slow right down and turn hard */
 			pad = CAR_PAD_BRAKE | ((diff > 0) ? CAR_PAD_LEFT : CAR_PAD_RIGHT);
-		else if (adiff > 700)
-			/* badly off line: keep the power on and steer. Coasting into a
-			 * correction just stops the car and it wedges -- the accelerator is
-			 * what completes the turn. */
-			pad = CAR_PAD_ACCEL | ((diff > 0) ? CAR_PAD_LEFT : CAR_PAD_RIGHT);
-		else if (adiff > 120)
+		else if (adiff > 420)
+			/* a corner: lift and steer; the momentum carries it round */
+			pad = (diff > 0) ? CAR_PAD_LEFT : CAR_PAD_RIGHT;
+		else if (adiff > 70)
 			pad = CAR_PAD_ACCEL | ((diff > 0) ? CAR_PAD_LEFT : CAR_PAD_RIGHT);
 		else
 			pad = CAR_PAD_ACCEL;

@@ -260,14 +260,14 @@ def main():
                     help="drive the player cars with the mp test bot: random / chase (host flees, "
                          "joiner chases) / fight (both charge). OFF by default -- this drives a "
                          "real player's car.")
-    ap.add_argument("--level", default="lasvegas",
-                    help="city for the host to host (default lasvegas)")
-    ap.add_argument("--mp-arena", default="0",
-                    help="multiplayer map/arena for both sides (default 0)")
-    ap.add_argument("--host-car", default="random",
-                    help="the host's car: a model number, slotN, or 'random' (default)")
-    ap.add_argument("--client-car", default="random",
-                    help="the joining player's car: a model number, slotN, or 'random' (default)")
+    ap.add_argument("--level", default="rio",
+                    help="city for the host to host (default rio)")
+    ap.add_argument("--mp-arena", default="1",
+                    help="multiplayer map/arena for both sides (default 1)")
+    ap.add_argument("--host-car", default="slot1",
+                    help="the host's car: a model number, slotN, or 'random' (default slot1)")
+    ap.add_argument("--client-car", default="slot3",
+                    help="the joining player's car: a model number, slotN, or 'random' (default slot3)")
     args = ap.parse_args()
 
     # A random car each, from the level's own domestic set (models 0..4), so a run
