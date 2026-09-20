@@ -807,16 +807,18 @@ void MpLockstepFrame(void)
 	/* tell everyone where our wheel is pointing before anything is simulated */
 	MpSendInput(MpLocalPad());
 
-	if (MpIsHost())
+	/* Snapshots correct drift across the two simulations; they are NOT the
+	 * pose. Placing every car every frame is what made them puppets and threw
+	 * away collision responses, so they go out on an interval instead. */
+	if ((gMp.frame % MP_SYNC_INTERVAL) == 0)
 	{
-		MpNetPoll(0);
-		MpHostSendCarState();		/* replicate every car we know */
+		if (MpIsHost())
+			MpHostSendCarState();		/* every car we know */
+		else
+			MpSendCarState();		/* just our own car */
 	}
-	else
-	{
-		MpSendCarState();		/* replicate just our own car */
-		MpNetPoll(0);
-	}
+
+	MpNetPoll(0);
 }
 
 /* ------------------------------------------------------------------ */
@@ -889,8 +891,23 @@ static void MpHandleCarState(const unsigned char* p, int len)
 
 		cp = &car_data[pl->carId];
 
+		/* MP_CARSTATE is a RESYNC, not the pose. Applying it every frame is
+		 * what kept remote cars puppets, and worse, it erased the collision
+		 * response the engine had just computed -- so a car you hit could never
+		 * be pushed. Snap only when the two simulations have actually drifted
+		 * apart; between snaps the engine owns the car. */
+		{
+			long dx = (long)e.x - (long)cp->hd.where.t[0];
+			long dy = (long)e.y - (long)cp->hd.where.t[1];
+			long dz = (long)e.z - (long)cp->hd.where.t[2];
+
+			if (dx * dx + dy * dy + dz * dz <
+				(long)MP_SYNC_SNAP_DIST * (long)MP_SYNC_SNAP_DIST)
+				continue;
+		}
+
 		/* keep the remote car placed and alive: the engine spools a
-		 * non-local player car out of the world, so re-assert it each frame
+		 * non-local player car out of the world, so re-assert it on a snap
 		 * (controlType included, or the spooler parks it). */
 		cp->controlType = CONTROL_TYPE_PLAYER;
 		cp->hd.where.t[0] = e.x;
