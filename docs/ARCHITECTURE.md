@@ -521,3 +521,31 @@ collision actually pushing both cars.
 
 **Known broken:** the frontend-driven second start (Chicago); a snap does not write
 a rigid body; damage is not synced.
+
+## 13. Version identity, and shipping one build to both machines
+
+`JERICHO_BUILD_VERSION` is baked in at PREMAKE time (`git describe --tags --always
+--dirty`), so the digest the game reports — `MpBuildHash()`, printed as
+`[mp] multiplayer ready (... build be0d, mods 13bd)` and on the pause-menu
+scoreboard under `-- PLAYERS --` — describes the tree the vcxproj was generated
+from, NOT the source as it stands now. That is why `sync_lan.bat` runs
+`premake5 vs2019` BEFORE the build: a stale `build/` directory would otherwise ship
+the previous release's stamp. `MpModHash()` folds the enabled module list in the
+same way, so a mod enabled on one machine only is a mismatch too.
+
+`strict_version = 1` makes the handshake REFUSE a peer whose build or mod digest
+differs, instead of accepting it and desyncing mid-race. It defaults to 0 so a pair
+mid-iteration can still connect; the LAN package ships it as 1, because that
+package is always copied whole.
+
+One command produces the package:
+
+    JERICHO\MODS\mp\tools\pack_lan\sync_lan.bat
+
+(regenerate -> build -> `REDRIVER2_mp_lan_<build>.7z`: the exe, the DLLs,
+`config.ini`, `VERSION.txt`, `DRIVER2` minus the FMV, `JERICHO` with `modlist.ini`
+`mp = 1`, an `mp.ini` with `strict_version = 1`, and the launchers.) Two traps live
+in that script: `build_dev.bat` hands msbuild a RELATIVE project path, so it needs
+`src_rebuild` as the current directory; and computing the root as `..\..\..` breaks
+`cd /d "%~dp0"` (the trailing backslash escapes the quote), so the root is
+normalised with `pushd`.

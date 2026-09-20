@@ -65,6 +65,11 @@ STAYING ON THE SAME BUILD
    players silently failing to see each other. To deliberately test mismatched
    builds, set it back to 0 in that file.
 
+   The usual symptom of a stale exe on one side is a session that HALF works --
+   the two players never see each other's car, or one HUD lists a peer that never
+   moves. Check the two scoreboards (or the two startup lines) before anything
+   else.
+
 
 IF IT GOES WRONG
    JERICHO.log next to the exe is the game log; it reports the session detail

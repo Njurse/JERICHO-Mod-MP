@@ -141,6 +141,31 @@ assignment decides the car (`config.car` stays -1). Use both together to reprodu
 a whole no-`-mpcar` session -- the case where the two machines used to disagree
 about who drives what (see trap 12 in `docs/ARCHITECTURE.md`).
 
+## Updating the other PC — one command
+
+    JERICHO\MODS\mp\tools\pack_lan\sync_lan.bat
+
+Regenerates the project files (so the build stamp is current — `premake5 vs2019`
+bakes `git describe --tags --always --dirty` in as `JERICHO_BUILD_VERSION`),
+builds `Release_dev`, and writes `REDRIVER2_mp_lan_<build>.7z` in the project
+root. Copy that ONE file to the other machine and extract it over the folder; that
+machine needs neither Visual Studio nor git.
+
+**The stale-exe symptom.** An older exe on one side does not necessarily fail
+outright — it half-works: the two players never see each other's car, or the HUD
+lists a peer that never moves. Check the build before anything else:
+
+* the startup line `[mp] multiplayer ready (... build be0d, mods 13bd)` — both
+  machines must print the same `build` and `mods`;
+* the pause-menu scoreboard, which prints those same digests under
+  `-- PLAYERS --` as `build be0d  mods 13bd`.
+
+`<build>` in the package name is that same string, so the file you copied and what
+a machine reports can be compared directly. The package also ships
+`JERICHO\CONFIG\mp.ini` with `strict_version = 1`, which REFUSES a peer on a
+different exe at the handshake instead of letting it desync mid-race; set it to 0
+if you want to test mismatched builds deliberately.
+
 ## Reading a run
 
 The logs are chatty at `MP_DEBUG=1`; `JPPN`, `JPPO`, `pose:`, `JPIN` and `JPCS`
