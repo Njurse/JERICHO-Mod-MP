@@ -17,6 +17,7 @@
 #include "pad.h"
 #include "cars.h"
 #include "convert.h"	/* _RotMatrixY: a car's box is built from its matrix */
+extern int gBootMpLevel;	/* main.c: 1 = the small multiplayer map, 0 = the full city */
 #include "players.h"	/* InitPlayer: a late joiner needs a car the same way the engine makes one */
 #include "state.h"
 
@@ -538,6 +539,7 @@ static void MpSendWelcome(int connIndex, int playerId, int matched)
 	w.modsMatched = (uint8_t)(matched ? 1 : 0);
 	w.running = (uint8_t)(gMp.running ? 1 : 0);
 	w.subGame = (uint8_t)(gSubGameNumber & 0xff);
+	w.mpLevel = (uint8_t)(gBootMpLevel ? 1 : 0);	/* the map SHAPE, not the arena */
 	w.gamemode = (uint8_t)gMp.gamemode;
 	w.city = (uint8_t)gMp.city;
 	w.timeOfDay = (uint8_t)(gMp.timeOfDay < 0 ? 0 : gMp.timeOfDay);
@@ -738,6 +740,15 @@ static void MpHandleWelcome(const unsigned char* p, int len)
 	gMp.timeOfDay = w.timeOfDay;
 	gMp.weather = w.weather;
 	gMp.seed = w.seed;
+
+	/* Enforce the host's map. Which multiplayer map (arena 0/1), and whether it is
+	 * a multiplayer map at all, are LOCAL boot flags -- -mp and -level set them --
+	 * so two machines could quietly load different maps and then disagree about
+	 * everything standing on them. The host is the authority: its session says
+	 * which shape the level is and the client loads that, whatever its own
+	 * arguments said. */
+	gBootMpLevel = w.mpLevel ? 1 : 0;
+	MpSetSubGame(w.subGame);	/* the arena within that shape */
 
 	MpAddPlayer(0, "Host", 0);
 
