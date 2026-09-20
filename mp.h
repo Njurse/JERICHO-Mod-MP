@@ -53,6 +53,8 @@ typedef struct MP_PLAYER
 	int  isLocal;			/* 1 = this machine's own player */
 	int  connected;			/* peer link still alive */
 	int  modsMatched;		/* handshake: manifest matched the host */
+	int  isHost;			/* the host's own row (first in the list) */
+	int  pingMs;			/* round trip, measured by the host */
 	unsigned long lastSeenMs;	/* liveness */
 } MP_PLAYER;
 
@@ -168,7 +170,9 @@ int  MpSendConn(int connIndex, const char* tag, int flags, const void* payload, 
 int  MpConnFindByPlayer(int playerId);
 void MpConnAssignPlayer(int connIndex, int playerId);
 void MpConnClose(int connIndex);		/* close a peer (after a reject) */
-void MpConnShutdownGraceful(int connIndex);	/* half-close: flush the refusal, then drain */
+void MpConnShutdownGraceful(int connIndex);
+void MpConnSetPing(int connIndex, unsigned long ms);
+int  MpPingForPlayer(int playerId);	/* half-close: flush the refusal, then drain */
 void MpConnHandshakeDone(int connIndex);	/* this connection has seen a HELLO/WELCOME */
 int  MpConnPlayerId(int connIndex);	/* peer's assigned player id, -1 until hello */
 int  MpPeerCount(void);
@@ -241,6 +245,7 @@ void MpChatSendText(const char* text);	/* send + locally echo a chat line */
 void MpSendChat(const char* text);	/* put a chat line on the wire */
 void MpSendInput(int pad);		/* replicate this frame's input (host relays the set) */
 void MpPlaceSpawns(int x, int y, int z, int heading);	/* line every player car up here */
+void MpHostSendRoster(void);		/* host: publish who is in the match */
 
 /* While a level is loading the other side has nothing to say for the whole load,
  * which is longer than the idle timeout. Every machine that orders a launch

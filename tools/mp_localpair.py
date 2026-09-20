@@ -201,14 +201,24 @@ def main():
     if args.map:
         env["MP_MAP"] = "1"
 
-    a = launch(dirs["a"], args.exe, ["-nointro", "-nofmv", "-host", str(args.port)], env)
+    # The host has to start the match itself: the attract demo that used to do it
+    # by accident is suppressed now (it was launching a level nobody asked for and
+    # blocking through the load). MP_AUTOSTART=host is the module's own lever --
+    # it launches once a player is in. The client must NOT get it, or it would try
+    # to host as well.
+    host_env = dict(env)
+    host_env["MP_AUTOSTART"] = "host"
+    client_env = dict(env)
+    client_env.pop("MP_AUTOSTART", None)
+
+    a = launch(dirs["a"], args.exe, ["-nointro", "-nofmv", "-host", str(args.port)], host_env)
     log(f"host  pid {a.pid}  (port {args.port})")
 
     log(f"waiting {args.settle}s for the host to load...")
     time.sleep(args.settle)
 
     b = launch(dirs["b"], args.exe,
-               ["-nointro", "-nofmv", "-join", f"127.0.0.1:{args.port}"], env)
+               ["-nointro", "-nofmv", "-join", f"127.0.0.1:{args.port}"], client_env)
     log(f"client pid {b.pid}")
 
     remaining = max(5, args.seconds - args.settle)

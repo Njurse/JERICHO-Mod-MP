@@ -176,6 +176,97 @@ static void MpLaunchLocal(void)
 }
 
 /* Host: broadcast the agreed config, then launch locally for everyone. */
+/* ------------------------------------------------------------------ */
+/* The roster                                                          */
+/* ------------------------------------------------------------------ */
+
+/* Publish who is in the match: one row per player, ASCENDING PLAYER ID (the host
+ * is id 0 and so comes first). Broadcast before a launch -- every machine needs
+ * to know how many cars to spawn before its level loads -- and refreshed every
+ * couple of seconds so the ping column is live. */
+void MpHostSendRoster(void)
+{
+	MP_ROSTER r;
+	int id, len;
+
+	if (!MpIsHost())
+		return;
+
+	memset(&r, 0, sizeof(r));
+
+	for (id = 0; id < MP_MAX_PLAYERS; id++)
+	{
+		MP_PLAYER* p = MpGetPlayer(id);
+		MP_ROSTER_ENTRY* e;
+
+		if (p == NULL)
+			continue;
+
+		e = &r.entries[r.count++];
+		e->id = (uint8_t)id;
+		e->flags = (uint8_t)(id == 0 ? MP_ROSTER_FLAG_HOST : 0);
+		e->carId = 0xff;
+		e->model = 0xff;
+		e->ping = (uint16_t)(id == 0 ? 0 : MpPingForPlayer(id));
+		snprintf(e->name, sizeof(e->name), "%s", p->name);
+
+		if (p->carId >= 0 && p->carId < MAX_CARS)
+		{
+			CAR_DATA* cp = &car_data[p->carId];
+
+			e->carId = (uint8_t)p->carId;
+			e->x = cp->hd.where.t[0];
+			e->y = cp->hd.where.t[1];
+			e->z = cp->hd.where.t[2];
+
+			/* on foot: nobody is driving that car any more */
+			e->model = (cp->controlType == CONTROL_TYPE_NONE) ? 0xff : (uint8_t)cp->ap.model;
+		}
+	}
+
+	len = (int)(sizeof(MP_ROSTER) - (size_t)(MP_MAX_PLAYERS - r.count) * sizeof(MP_ROSTER_ENTRY));
+	MpHostBroadcast(MP_TAG_ROSTER, 0, &r, len);
+}
+
+static void MpHandleRoster(const unsigned char* p, int len)
+{
+	const int fixed = (int)(sizeof(MP_ROSTER) - MP_MAX_PLAYERS * sizeof(MP_ROSTER_ENTRY));
+	MP_ROSTER r;
+	int n, i;
+
+	if (len < fixed || ((len - fixed) % (int)sizeof(MP_ROSTER_ENTRY)) != 0)
+		return;
+
+	n = (len - fixed) / (int)sizeof(MP_ROSTER_ENTRY);
+	if (n > MP_MAX_PLAYERS)
+		n = MP_MAX_PLAYERS;
+
+	memset(&r, 0, sizeof(r));
+	memcpy(&r, p, (size_t)fixed + (size_t)n * sizeof(MP_ROSTER_ENTRY));
+
+	/* Adopt the players we did not know about. Their CAR SLOT is deliberately
+	 * NOT taken from here: carId is a local slot and the host's numbering means
+	 * nothing on this machine. We assign our own in the spawn, walking player
+	 * ids in this same order so both sides agree on who is who. */
+	for (i = 0; i < n; i++)
+	{
+		MP_ROSTER_ENTRY* e = &r.entries[i];
+		MP_PLAYER* pl = MpGetPlayer(e->id);
+
+		if (pl == NULL)
+			pl = MpAddPlayer(e->id, e->name, e->id == gMp.localPlayerId);
+
+		if (pl == NULL)
+			continue;
+
+		if (e->name[0] != 0)
+			snprintf(pl->name, sizeof(pl->name), "%s", e->name);
+
+		pl->isHost = (e->flags & MP_ROSTER_FLAG_HOST) ? 1 : 0;
+		pl->pingMs = (int)e->ping;
+	}
+}
+
 int MpStartMatch(void)
 {
 	MP_START st;
@@ -208,6 +299,11 @@ int MpStartMatch(void)
 	st.session.seed = gMp.seed;
 	st.session.numPlayers = (uint8_t)gMp.playerCount;
 	st.session.state = MP_SESSION_STARTING;
+
+	/* The roster goes first, so a client knows how many player cars to spawn
+	 * BEFORE its level loads. Without it the client added no car for the host
+	 * and left the level's own AI car sitting in that slot. */
+	MpHostSendRoster();
 
 	MpHostBroadcast(MP_TAG_START, MP_FLAG_RELIABLE, &st, sizeof(st));
 
@@ -654,11 +750,15 @@ int MpOnNetSpawn(void* userdata, void* args)
 
 	slot = sp->numPlayers;
 
+	/* ASCENDING PLAYER ID, not registry-row order. Rows are handed out
+	 * first-free, so walking them lets two machines put the same two players in
+	 * opposite slots -- and then each drives the other's car, or reads a level
+	 * AI car as a player. Player ids are the one ordering both sides agree on. */
 	for (i = 0; i < MP_MAX_PLAYERS && slot < sp->maxPlayers; i++)
 	{
-		MP_PLAYER* p = &gMp.players[i];
+		MP_PLAYER* p = MpGetPlayer(i);
 
-		if (!p->active || p->isLocal)
+		if (p == NULL || p->isLocal)
 			continue;
 
 		PlayerStartInfo[slot] = &ReplayStreams[slot].SourceType;
@@ -914,6 +1014,11 @@ void MpLockstepFrame(void)
 	/* Snapshots correct drift across the two simulations; they are NOT the
 	 * pose. Placing every car every frame is what made them puppets and threw
 	 * away collision responses, so they go out on an interval instead. */
+	/* refreshed so the pause menu's names/vehicles/ping are live, and so a
+	 * player joining a match already in progress learns the roster */
+	if ((gMp.frame % 120) == 0)
+		MpHostSendRoster();
+
 	if ((gMp.frame % MP_SYNC_INTERVAL) == 0)
 	{
 		if (MpIsHost())
@@ -1127,6 +1232,12 @@ void MpHandleMessage(int connIndex, const char* tag, const unsigned char* payloa
 		return;
 	}
 
+	if (memcmp(tag, MP_TAG_ROSTER, 4) == 0)
+	{
+		MpHandleRoster(payload, len);
+		return;
+	}
+
 	if (memcmp(tag, MP_TAG_REJECT, 4) == 0)
 	{
 		MpHandleReject(payload, len);
@@ -1170,7 +1281,18 @@ void MpHandleMessage(int connIndex, const char* tag, const unsigned char* payloa
 	}
 
 	if (memcmp(tag, MP_TAG_PONG, 4) == 0)
-		return;		/* receiving it IS the liveness proof */
+	{
+		/* the peer echoed the tick we sent it: that round trip is our ping to it */
+		if (len >= (int)sizeof(MP_PING))
+		{
+			MP_PING pg;
+
+			memcpy(&pg, payload, sizeof(pg));
+			MpConnSetPing(connIndex, MpNowMs() - (unsigned long)pg.tick);
+		}
+
+		return;
+	}
 
 	/* SESSION is not used yet; unknown tags are ignored. */
 }

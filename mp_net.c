@@ -88,6 +88,7 @@ typedef struct MP_CONN
 	unsigned long lastRecvMs;
 	unsigned char rbuf[MP_RECV_BUF];
 	int           rbufLen;
+	unsigned long pingMs;	/* round trip, from the PING/PONG tick */
 } MP_CONN;
 
 static MP_CONN gConn[MP_MAX_PLAYERS];
@@ -567,6 +568,29 @@ void MpClientConnectPoll(void)
 /* ------------------------------------------------------------------ */
 /* Framed send                                                         */
 /* ------------------------------------------------------------------ */
+/* The round trip to the peer playing `playerId`, or 0 if unknown. The host is
+ * the only side that has one for everybody, so it is the host's measurement that
+ * travels in the roster. */
+int MpPingForPlayer(int playerId)
+{
+	int i;
+
+	for (i = 0; i < MP_MAX_PLAYERS; i++)
+	{
+		if (gConn[i].used && gConn[i].playerId == playerId)
+			return (int)gConn[i].pingMs;
+	}
+
+	return 0;
+}
+
+/* Record a PONG's round trip against the peer that owns this connection. */
+void MpConnSetPing(int idx, unsigned long ms)
+{
+	if (idx >= 0 && idx < MP_MAX_PLAYERS && gConn[idx].used)
+		gConn[idx].pingMs = ms;
+}
+
 int MpSendConn(int idx, const char* tag, int flags, const void* payload, int len)
 {
 	unsigned char buf[MP_ENVELOPE_SIZE + MP_SEND_BUF];

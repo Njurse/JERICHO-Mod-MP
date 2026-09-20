@@ -546,13 +546,88 @@ static int MpOnFrame(void* userdata, void* args)
  * the game is PAUSED, where StepSim (and so JER_EVENT_FRAME) does not run.
  * Servicing the socket here is what keeps a paused session alive: we keep
  * sending our keepalive and keep draining the peer's. */
+extern void SetTextColour(unsigned char Red, unsigned char Green, unsigned char Blue);
+extern int  PrintString(char* string, int x, int y);
+extern int  gDrawPauseMenus;
+
+/* While the pause menu is up, list who is connected down the left side.
+ *
+ * The host leads the list and is cyan, because it is the one machine that owns
+ * the session. Everyone else follows in ascending player id -- the same order the
+ * car slots are handed out in, so the list reads the way the match is built. Each
+ * row is the player's name and index, the vehicle they are in (-1 = on foot) and
+ * their round trip as the host measures it. */
+static void MpDrawPlayerList(void)
+{
+	int id, row = 0;
+
+	SetTextColour(170, 170, 170);
+	PrintString((char*)"-- PLAYERS --", 8, 56);
+
+	for (id = 0; id < MP_MAX_PLAYERS; id++)
+	{
+		MP_PLAYER* p = MpGetPlayer(id);
+		CAR_DATA* cp;
+		char line[80];
+		int veh = -1;
+		int y;
+
+		if (p == NULL)
+			continue;
+
+		/* -1 means on foot: either we have no car slot for them, or the car is
+		 * standing there with nobody driving it */
+		if (p->carId >= 0 && p->carId < MAX_CARS)
+		{
+			cp = &car_data[p->carId];
+
+			if (cp->controlType != CONTROL_TYPE_NONE)
+				veh = cp->ap.model;
+		}
+
+		snprintf(line, sizeof(line), "%s #%d  car %d  %d ms",
+			p->name, p->id, veh, p->pingMs);
+
+		y = 68 + row * 10;
+		row++;
+
+		if (p->isHost)
+			SetTextColour(0, 255, 255);	/* the host, cyan */
+		else
+			SetTextColour(200, 200, 200);
+
+		PrintString(line, 8, y);
+
+		/* so the list can be checked without eyes on the screen */
+		if (getenv("MP_DEBUG") != NULL && gMpCtx != NULL)
+		{
+			static unsigned long lastListMs;
+
+			if ((MpNowMs() - lastListMs) > 2000)
+			{
+				lastListMs = MpNowMs();
+				gMpCtx->jer_log(gMpCtx, "[mp] list: %s\n", line);
+			}
+		}
+	}
+}
+
 static int MpOnDrawOverlay(void* userdata, void* args)
 {
 	(void)userdata;
 	(void)args;
 
-	if (gMp.role != MP_ROLE_NONE)
-		MpNetPoll(0);
+	if (gMp.role == MP_ROLE_NONE)
+		return JER_RESULT_CONTINUE;
+
+	MpNetPoll(0);
+
+	/* a test lever: hold the pause menu open so the list can be exercised */
+	if (getenv("MP_PAUSE") != NULL && gMp.running)
+		gDrawPauseMenus = 1;
+
+	if (gDrawPauseMenus)
+		MpDrawPlayerList();
 
 	return JER_RESULT_CONTINUE;
 }

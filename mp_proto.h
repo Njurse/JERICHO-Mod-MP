@@ -81,6 +81,7 @@ extern "C" {
 #define MP_TAG_CHANNEL	"JPCH"	/* addon net bridge payload */
 #define MP_TAG_LEAVE	"JPLV"	/* either side: leaving the session */
 #define MP_TAG_SPAWN	"JPSW"	/* host -> all: where everyone lines up */
+#define MP_TAG_ROSTER	"JPRS"	/* host -> all: who is in the match */
 
 /* How far apart the player cars stand at the meeting point: close enough that
  * everybody is on one screen, far enough not to spawn inside each other. */
@@ -91,6 +92,39 @@ typedef struct MP_SPAWN
 	int32_t x, y, z;
 	int32_t heading;
 } MP_SPAWN;
+
+/* The host's view of the match: one row per player, in ASCENDING PLAYER ID.
+ *
+ * That order is the point. Car slots are handed out by the engine in the order
+ * the player cars are created, so if each machine walked its own registry (rows
+ * are given out first-free) the two sides could put the same two players in
+ * opposite slots and each would then drive the other's car. Walking player ids
+ * instead gives both machines the same answer.
+ *
+ * It is also sent BEFORE the launch, so every machine knows how many cars to
+ * spawn: a client that did not know about the host yet added no car at all and
+ * left the level's own AI car sitting in the remote player's slot. */
+#define MP_ROSTER_NAME_MAX	20
+#define MP_ROSTER_FLAG_HOST	1
+
+typedef struct MP_ROSTER_ENTRY
+{
+	uint8_t  id;
+	uint8_t  carId;		/* that machine's local CAR_DATA slot, informational */
+	uint8_t  model;		/* car model, 0xFF = on foot */
+	uint8_t  flags;		/* MP_ROSTER_FLAG_* */
+	int32_t  x, y, z;	/* where that player's car is now */
+	uint16_t ping;		/* round trip in ms, as the host measured it */
+	uint16_t reserved;
+	char     name[MP_ROSTER_NAME_MAX];
+} MP_ROSTER_ENTRY;
+
+typedef struct MP_ROSTER
+{
+	uint8_t        count;
+	uint8_t        reserved[3];
+	MP_ROSTER_ENTRY entries[MP_MAX_PLAYERS];
+} MP_ROSTER;
 #define MP_TAG_CHAT	"JPCX"	/* either side: a chat line (scaffolding) */
 
 /* Envelope flags */
