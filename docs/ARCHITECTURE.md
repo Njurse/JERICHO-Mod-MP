@@ -226,6 +226,12 @@ what the pause-menu list reads.
   whose input is late repeats the last one.
 - **Nothing blocks.** The abandoned lockstep barrier is the reason this is stated
   twice.
+- **Now only a fallback.** Since car sync became owner-authoritative (section 7), a
+  remote car is placed by its owner's state, so the replicated pad no longer drives
+  it: `MpOnNetInput` sends pad 0 and hands off, and only falls back to the
+  replicated pad after `MP_INPUT_FALLBACK_FRAMES` of silence from the owner, so a
+  snapshot gap coasts instead of freezing. The engine and the adoption must not
+  fight over the same car.
 
 ---
 
@@ -249,21 +255,29 @@ path through.
 
 ---
 
-## 7. Resync
+## 7. Car sync: owner-authoritative
 
-Snapshots exist to correct drift between two simulations, never to carry the pose.
-The host sends them every `MP_SYNC_INTERVAL` frames; the receiver snaps only when
-the incoming position is further than `MP_SYNC_SNAP_DIST` from where its own
-simulation has the car.
+Each machine sends the ONE car it owns, every frame (`MpSendOwnCarState`), and every
+other machine **adopts** that state in full (`MpHandleCarState`): position, heading,
+the orientation quaternion and both velocities, written verbatim. There is no easing
+and no tolerance -- the owner is the truth for its own car. The host relays a
+client's car to the other clients (`MpHostRelay`), because each machine sends only
+its own car.
 
-Between snaps the engine owns every car. Applying a snapshot every frame is what
-turned remote cars into puppets and erased collision responses.
+This replaced a model in which every machine simulated every car from input that
+arrived a round trip late, and a coarse resync (30-frame cadence, correct only past
+600 units, eased a quarter per correction) tried to pull them back. Two
+non-deterministic simulations cannot be reconciled that way -- the follower's view of
+a remote car wandered +/-100-900 units while driving, and no threshold fixes that.
+With adoption it is 0-2 units.
 
-**Known gap:** a snap writes position and heading (`hd.where.t`, `hd.direction`)
-but not the rigid body — not the orientation quaternion, not
-`st.n.linearVelocity`. `hd.direction` is an *output* the engine re-derives; a snap
-that relies on it is not a proper body state. This is a real defect, not a
-stylistic one.
+**Accepted trade-off:** because our engine's response to a contact is overwritten by
+the owner's next frame, **a car you drive into is not pushed**. That is the price of
+the tight sync. A collision hand-off (give the engine authority on contact) is the
+follow-up if pushes are wanted back.
+
+**Leftover to clean:** `MP_SYNC_INTERVAL`, `MP_SYNC_SNAP_DIST` and
+`MP_SYNC_HARD_DIST` are now dead.
 
 ---
 
