@@ -74,6 +74,7 @@ typedef struct MP_STATE
 	int localPlayerId;		/* this machine's player id */
 	int  autoSession;		/* -host/-join/MP_AUTOSTART: bring a match up with no menus */
 	int  pendingLaunch;		/* an auto session asked to launch: do it on a frame, not mid-poll */
+	int  pendingSpawn;		/* a peer with no car joined: build one on a frame, not mid-poll */
 
 	/* agreed lobby config */
 	int gamemode;			/* MP_GAMEMODE_* */
@@ -248,6 +249,7 @@ void MpChatSendText(const char* text);	/* send + locally echo a chat line */
 void MpSendChat(const char* text);	/* put a chat line on the wire */
 void MpSendInput(int pad);		/* replicate this frame's input (host relays the set) */
 void MpPlaceSpawns(int x, int y, int z, int heading);	/* line every player car up here */
+void MpSpawnLateJoiners(void);	/* give a car to a player who joined a live match */
 void MpHostSendRoster(void);		/* host: publish who is in the match */
 
 /* While a level is loading the other side has nothing to say for the whole load,

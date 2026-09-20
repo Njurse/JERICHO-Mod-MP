@@ -489,6 +489,28 @@ static int MpOnFrame(void* userdata, void* args)
 	MpNetPoll(0);
 	MpUiTick();
 
+	/* Deferred work, done on a FRAME rather than inside the poll that noticed it
+	 * -- calling into the state machine from a message handler is re-entrant and
+	 * crashed the client. FRAME and not PRE_SIM: a joining client is sitting in
+	 * the FRONTEND, and PRE_SIM only runs in game, so the request was set and
+	 * then never acted on. */
+	if (gMp.pendingLaunch)
+	{
+		gMp.pendingLaunch = 0;
+
+		if (gMp.autoSession && MpJoinState() == MP_JOIN_READY)
+			MpClientLaunch();
+	}
+
+	/* a peer with no car joined a live match: build it here, on a frame */
+	if (gMp.pendingSpawn)
+	{
+		gMp.pendingSpawn = 0;
+
+		if (MpIsHost() && gMp.running)
+			MpSpawnLateJoiners();
+	}
+
 	/* Test lever: hold the in-game map open, so the multiplayer-map blip hook
 	 * can be exercised without a human pressing the map button. */
 	if (getenv("MP_MAP") != NULL && gMp.running)
@@ -687,17 +709,6 @@ static int MpOnDrawOverlay(void* userdata, void* args)
 
 static int MpOnPreSim(void* userdata, void* args)
 {
-	/* An auto session (-join / MP_AUTOSTART) asked to launch when its welcome
-	 * arrived. Do it HERE, on a frame boundary: the welcome is handled inside
-	 * the network poll, and calling into the state machine from in there is
-	 * re-entrant -- it crashed the client outright. */
-	if (gMp.pendingLaunch)
-	{
-		gMp.pendingLaunch = 0;
-
-		if (gMp.autoSession && MpJoinState() == MP_JOIN_READY)
-			MpClientLaunch();
-	}
 	(void)userdata;
 	(void)args;
 
@@ -708,6 +719,7 @@ static int MpOnPreSim(void* userdata, void* args)
 
 	return JER_RESULT_CONTINUE;
 }
+
 
 /* Drive each player car from the synchronized input set (lockstep). With
  * MP_TESTDRIVE set, the remote players' cars are driven by a canned pattern

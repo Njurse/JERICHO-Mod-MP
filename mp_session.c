@@ -17,6 +17,7 @@
 #include "pad.h"
 #include "cars.h"
 #include "convert.h"	/* _RotMatrixY: a car's box is built from its matrix */
+#include "players.h"	/* InitPlayer: a late joiner needs a car the same way the engine makes one */
 #include "state.h"
 
 #include <string.h>
@@ -234,6 +235,94 @@ void MpHostSendRoster(void)
 
 	len = (int)(sizeof(MP_ROSTER) - (size_t)(MP_MAX_PLAYERS - r.count) * sizeof(MP_ROSTER_ENTRY));
 	MpHostBroadcast(MP_TAG_ROSTER, 0, &r, len);
+}
+
+/* Give a car to any player who has none, exactly the way the engine's own
+ * player-creation loop does it. A peer that joins a match already in progress
+ * gets no car from the engine at all -- and a player with no car is invisible
+ * on every screen, has no input applied to anything, and cannot be hit. That is
+ * the "no client shows up on the host" report.
+ *
+ * The player cars occupy slots [0, n) and are assigned in ascending player id,
+ * so the first slot that is not already claimed is simply how many rows have
+ * one. player[] is MAX_PLAYERS (16) entries, so this is safe past slot 1. */
+void MpSpawnLateJoiners(void)
+{
+	int id, slot, spawned = 0;
+
+	for (id = 0; id < MP_MAX_PLAYERS; id++)
+	{
+		MP_PLAYER* p = MpGetPlayer(id);
+		int rot, k;
+		char padid;
+
+		if (p == NULL || p->isLocal || p->carId >= 0)
+			continue;
+
+		slot = 0;
+		for (k = 0; k < MP_MAX_PLAYERS; k++)
+		{
+			MP_PLAYER* q = MpGetPlayer(k);
+
+			if (q != NULL && q->carId >= 0)
+				slot++;
+		}
+
+		if (slot < 1 || slot >= MAX_CARS)
+			continue;
+
+		/* copy the local player's start record, then overwrite what is ours to
+			 * choose (see MpOnNetSpawn for the same construction at level init) */
+		PlayerStartInfo[slot] = &ReplayStreams[slot].SourceType;
+		memcpy((u_char*)PlayerStartInfo[slot], (u_char*)PlayerStartInfo[0], sizeof(STREAM_SOURCE));
+
+		PlayerStartInfo[slot]->type = 1;
+		PlayerStartInfo[slot]->controlType = CONTROL_TYPE_PLAYER;
+		PlayerStartInfo[slot]->flags = 0;
+
+		/* alongside the host, not at the level's own start point */
+		PlayerStartInfo[slot]->position.vy = 0;
+		PlayerStartInfo[slot]->position.vx = car_data[0].hd.where.t[0] + (MP_SPAWN_SLOT_DIST * slot);
+		PlayerStartInfo[slot]->position.vz = car_data[0].hd.where.t[2];
+
+		rot = car_data[0].hd.direction;
+		PlayerStartInfo[slot]->rotation = rot;
+
+		padid = (char)-slot;
+
+		InitPlayer(&player[slot], &car_data[slot], CONTROL_TYPE_PLAYER, rot,
+			(LONGVECTOR4*)&PlayerStartInfo[slot]->position,
+			PlayerStartInfo[slot]->model, PlayerStartInfo[slot]->palette, &padid);
+
+		/* the same field the engine sets for a player car it created itself */
+		car_data[slot].ap.needsDenting = 1;
+
+		/* InitPlayer resolves the start record, so place the car after it and
+			 * rebuild the matrix (the collision box is built from the matrix) */
+		car_data[slot].hd.where.t[0] = PlayerStartInfo[slot]->position.vx;
+		car_data[slot].hd.where.t[1] = car_data[0].hd.where.t[1];
+		car_data[slot].hd.where.t[2] = PlayerStartInfo[slot]->position.vz;
+		car_data[slot].hd.direction = rot;
+		{
+			MATRIX m;
+
+			_RotMatrixY(&m, (short)rot);
+			memcpy(car_data[slot].hd.where.m, m.m, sizeof(car_data[slot].hd.where.m));
+		}
+
+		p->carId = slot;
+		spawned++;
+
+		if (gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx, "[mp] late joiner: player %d given car slot %d\n", id, slot);
+	}
+
+	if (spawned > 0)
+	{
+		/* tell everyone, so the clients build the car too instead of waiting for
+		 * a snapshot to paste a transform onto whatever is in that slot */
+		MpHostSendRoster();
+	}
 }
 
 static void MpHandleRoster(const unsigned char* p, int len)
@@ -551,6 +640,13 @@ static void MpHandleHello(int connIndex, const unsigned char* p, int len)
 		if (pl != NULL)
 			pl->modsMatched = matched;
 	}
+
+	/* A match that is already running has no car for this player: the engine
+	 * creates player cars exactly once, at level init (InitGameVariables), and
+	 * that has long since happened. Ask for one on the NEXT FRAME -- building it
+	 * here would be doing engine work from inside the network poll. */
+	if (gMp.running)
+		gMp.pendingSpawn = 1;
 
 	MpSendWelcome(connIndex, id, matched);
 
