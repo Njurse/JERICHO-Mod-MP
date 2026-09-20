@@ -184,6 +184,9 @@ static int MpFlushConn(int idx)
 
 		if (n > 0)
 		{
+			if (getenv("MP_DEBUG") != NULL && gMpCtx != NULL)
+				gMpCtx->jer_log(gMpCtx, "[mp] wrote %d byte(s) conn=%d\n", n, idx);
+
 			c->sbufOff += n;
 			continue;
 		}
@@ -848,10 +851,23 @@ static void MpProcessConn(int idx)
 		tv.tv_sec = 0;
 		tv.tv_usec = 0;
 
-		if (select(0, &rd, NULL, NULL, &tv) <= 0 || !FD_ISSET(c->sock, &rd))
-			break;
+		{
+			int sel = select(0, &rd, NULL, NULL, &tv);
+			int isset = FD_ISSET(c->sock, &rd);
+
+			if (getenv("MP_DEBUG") != NULL && gMpCtx != NULL)
+
+
+			if (sel <= 0 || !isset)
+				break;
+		}
 
 		n = recv(c->sock, buf, (int)sizeof(buf), 0);
+		if (n <= 0 && getenv("MP_DEBUG") != NULL && gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx, "[mp] recv n=%d\n", n);
+
+		if (n > 0 && getenv("MP_DEBUG") != NULL && gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx, "[mp] read %d byte(s) conn=%d\n", n, idx);
 
 		if (n == 0)
 		{

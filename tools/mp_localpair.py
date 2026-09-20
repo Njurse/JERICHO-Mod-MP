@@ -23,6 +23,7 @@ Both instances are launched directly (not via a .bat), so the PIDs here are real
 and the cleanup kills exactly what it started -- nothing else.
 """
 import argparse
+import atexit
 import os
 import shutil
 import subprocess
@@ -36,6 +37,46 @@ GAME_LOG = "REDRIVER2.log"
 
 def log(msg):
     print(f"[pair] {msg}", flush=True)
+
+
+# Every instance this run started. Cleanup is registered with atexit as well as
+# done inline, because the inline path only runs on the happy path: when the
+# harness itself raised, its instances were left ALIVE -- holding the game's
+# files (so the next run could not even copy them) and, far worse, still
+# listening on the session port. A later client then connects to that stale
+# host and the whole run is nonsense. That is the shape of a lot of the
+# confusing results so far.
+STARTED = []
+
+
+def stop_started():
+    for p in reversed(STARTED):
+        if p.poll() is None:
+            try:
+                p.terminate()
+                p.wait(timeout=8)
+            except Exception:
+                try:
+                    p.kill()
+                except Exception:
+                    pass
+
+
+atexit.register(stop_started)
+
+
+def stale_instances():
+    """REDRIVER2 processes still running out of a run directory."""
+    try:
+        out = subprocess.run(
+            ["powershell", "-NoProfile", "-Command",
+             "Get-Process REDRIVER2_dev -ErrorAction SilentlyContinue | "
+             "Where-Object { $_.Path -like '*mp-pair*' } | ForEach-Object { $_.Id }"],
+            capture_output=True, text=True)
+    except Exception:
+        return []
+
+    return [int(tok) for tok in out.stdout.split() if tok.strip().isdigit()]
 
 
 def junction(link, target):
@@ -136,6 +177,7 @@ def launch(run_dir, exe, args, env_extra):
     env.update(env_extra)
     p = subprocess.Popen([os.path.join(run_dir, exe)] + args, cwd=run_dir, env=env,
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    STARTED.append(p)
     return p
 
 
@@ -183,6 +225,17 @@ def main():
         log(f"no {args.exe} in {game_dir}")
         return 2
 
+    stale = stale_instances()
+    if stale:
+        log(f"found {len(stale)} instance(s) left over from an earlier run: {stale}")
+        log("killing them: they hold the game's files and a stale host would still "
+            "be listening on the session port")
+        for pid in stale:
+            subprocess.run(["powershell", "-NoProfile", "-Command",
+                            f"Stop-Process -Id {pid} -Force"],
+                           capture_output=True)
+        time.sleep(1)
+
     pair_root = os.path.join(game_dir, ".mp-pair")
     dirs = {n: os.path.join(pair_root, n) for n in INSTANCE_DIR_NAMES}
 
@@ -226,16 +279,19 @@ def main():
     host_args = ["-nointro", "-nofmv", "-level", args.level, "-mp", args.mp_arena]
     client_args = ["-nointro", "-nofmv", "-mp", args.mp_arena]
 
-    a = launch(dirs["a"], args.exe,
-               host_args + ["-car", args.host_car, "-host", str(args.port)], host_env)
+    host_argv = host_args + ["-car", args.host_car, "-host", str(args.port)]
+    a = launch(dirs["a"], args.exe, host_argv, host_env)
     log(f"host  pid {a.pid}  (port {args.port}, {args.level} arena {args.mp_arena}, "
         f"host car {args.host_car}, client car {args.client_car})")
 
     log(f"waiting {args.settle}s for the host to load...")
     time.sleep(args.settle)
 
-    b = launch(dirs["b"], args.exe,
-               client_args + ["-car", args.client_car, "-join", f"127.0.0.1:{args.port}"], client_env)
+    client_argv = client_args + ["-car", args.client_car, "-join", f"127.0.0.1:{args.port}"]
+    b = launch(dirs["b"], args.exe, client_argv, client_env)
+
+    for label, argv in (("host", host_argv), ("client", client_argv)):
+        log(f"{label} args: {' '.join(argv)}")
     log(f"client pid {b.pid}")
 
     remaining = max(5, args.seconds - args.settle)

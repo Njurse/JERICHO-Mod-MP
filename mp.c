@@ -267,6 +267,31 @@ static int MpOnCmdLine(void* userdata, void* args)
 	if (gMpCtx != NULL)
 		gMpCtx->jer_log(gMpCtx, "[mp] cmdline: %d arg(s)\n", cl->argc);
 
+	/* Log the whole line, not just the count: a wrong argument is invisible
+	 * otherwise, and the game's own -help text (which prints on -help/-h/--help/-?)
+	 * is the fastest way to see the flags it knows. */
+	if (gMpCtx != NULL)
+	{
+		char line[256];
+		int k, used = 0;
+
+		line[0] = 0;
+
+		for (k = 0; k < cl->argc && used < (int)sizeof(line) - 4; k++)
+		{
+			int wrote = snprintf(line + used, sizeof(line) - (size_t)used, "%s%s",
+				k > 0 ? " " : "", cl->argv[k] != NULL ? cl->argv[k] : "(null)");
+
+			if (wrote <= 0)
+				break;
+
+			used += wrote;
+		}
+
+		gMpCtx->jer_log(gMpCtx, "[mp] cmdline: %s\n", line);
+	}
+
+
 	for (i = 1; i < cl->argc; i++)
 	{
 		if (!strcmp(cl->argv[i], "-host"))
