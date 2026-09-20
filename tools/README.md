@@ -122,7 +122,7 @@ inert unless `MP_BOT` asks for it.
 | `random` (also `MP_TESTDRIVE=1`) | the canned manoeuvre: a pad that changes every 0.5–4 s |
 | `chase` | the HOST flees, the joiner chases |
 | `fight` | both charge each other |
-| `pursuit` | the HOST hunts, the JOINER runs -- with probe-based obstacle avoidance |
+| `pursuit` | the JOINER hunts, the HOST runs -- with probe-based obstacle avoidance and no dead time |
 
 `mp_localpair.py --bot <mode>` sets it on both instances. `pursuit` is the one to
 reach for when you want the pair actually driving a distance around scenery (so the

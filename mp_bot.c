@@ -237,13 +237,10 @@ static int MpBotChase(int fight)
 }
 
 /* ------------------------------------------------------------------ */
-/* pursuit / evade: SMART pathfinding test                              */
+/* pursuit / evade: the chase test                                      */
 /*                                                                      */
-/* The HOST hunts, the JOINER runs -- the opposite of `chase` (where    */
-/* the host flees). The point is to make the pair actually drive a long */
-/* distance around scenery, so the network layer is exercised under real*/
-/* motion: a pursuer that has to keep line of sight, and a runner that  */
-/* has to get away.                                                     */
+/* The JOINER hunts and the HOST runs -- the reverse of `chase`. Neither */
+/* side is ever allowed to idle: a chase is CONSTANT action.            */
 /* ------------------------------------------------------------------ */
 #define MPBOT_PROBE	2400	/* how far ahead the pathfinder looks -- long, so it sees a
 				 * wall at an intersection and commits to the turn BEFORE
@@ -345,7 +342,7 @@ static int MpBotPursuit(void)
 	{
 		int dx = tgt->hd.where.t[0] - mine->hd.where.t[0];
 		int dz = tgt->hd.where.t[2] - mine->hd.where.t[2];
-		int evade = !MpIsHost();	/* the HOST hunts, the JOINER runs */
+		int evade = MpIsHost();	/* the JOINER hunts, the HOST runs */
 		int desired = evade ? ((ratan2(dx, dz) + 2048) & 0xfff) : (ratan2(dx, dz) & 0xfff);
 		int want = MpBotClearHeading(mine, desired);
 		int diff = ((want - mine->hd.direction + 2048) & 4095) - 2048;
@@ -359,11 +356,13 @@ static int MpBotPursuit(void)
 
 		/* same wedge detection as chase: a car stopped against scenery has to be
 		 * backed out; the runner wedges at least as often as the pursuer */
+		/* Constant action: a wedge is cleared in a fraction of a second, not after
+		 * seconds of sitting still. A stopped car is a wasted frame of the test. */
 		if (spd < 3)
 		{
-			if (++stuckFrames > 150)
+			if (++stuckFrames > 40)
 			{
-				recoverFrames = recoverReverse ? 30 : 45;
+				recoverFrames = recoverReverse ? 18 : 26;
 				recoverDir ^= 1;
 				recoverReverse ^= 1;
 				stuckFrames = 0;
