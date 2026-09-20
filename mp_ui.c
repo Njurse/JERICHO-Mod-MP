@@ -62,6 +62,7 @@ static int  gNameInit;
 static int  gManualOct[4] = { 127, 0, 0, 1 };
 static int  gManualSeed;		/* seeded from a discovered host yet? */
 static char gManualIp[32] = "127.0.0.1";
+static int gManualPort;
 
 /* LAN browser (Join Game) state -- declared up here because the Join action
  * below needs it, while the menu arrays live further down. */
@@ -224,6 +225,16 @@ static int ActJoinServer(void* ud)
 	int idx = (int)(intptr_t)ud;
 	MP_SERVER* s = MpDiscoveryGet(idx);
 
+	/* Say exactly what we are joining. The browser is the one path that can
+	 * silently target a stale entry, or our own address on a machine running
+	 * both sides -- and the only symptom is "connection lost", which says
+	 * nothing. With this in the log the address is on the record. */
+	if (gMpCtx != NULL)
+		gMpCtx->jer_log(gMpCtx, "[mp] joining discovered %s %s:%d (inProgress=%d, %d/%d)\n",
+			s != NULL ? s->hostName : "?", s != NULL ? s->ip : "?", s != NULL ? s->port : -1,
+			s != NULL ? s->inProgress : -1, s != NULL ? s->players : -1,
+			s != NULL ? s->maxPlayers : -1);
+
 	/* asynchronous: the lobby shows "Connecting to <addr>..." while the
 	 * socket connects, instead of the menu freezing for up to 5 s */
 	if (s != NULL && MpBeginJoinAsync(s->ip, s->port))
@@ -260,7 +271,15 @@ static int ActManualConnect(void* ud)
 {
 	(void)ud;
 
-	if (MpBeginJoinAsync(gManualIp, gMp.config.port))
+	/* gManualPort, not our own configured port: the manual entry has to be able
+	 * to reach a host listening somewhere else. */
+	if (gManualPort <= 0)
+		gManualPort = gMp.config.port;
+
+	if (gMpCtx != NULL)
+		gMpCtx->jer_log(gMpCtx, "[mp] joining manual %s:%d\n", gManualIp, gManualPort);
+
+	if (MpBeginJoinAsync(gManualIp, gManualPort))
 		jer_frontend_open(M_LOBBY);
 
 	return 1;
