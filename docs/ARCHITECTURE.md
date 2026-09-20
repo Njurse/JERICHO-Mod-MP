@@ -549,3 +549,41 @@ in that script: `build_dev.bat` hands msbuild a RELATIVE project path, so it nee
 `src_rebuild` as the current directory; and computing the root as `..\..\..` breaks
 `cd /d "%~dp0"` (the trailing backslash escapes the quote), so the root is
 normalised with `pushd`.
+
+## 14. Following a player who changes car
+
+The ENGINE owns changing cars: `ChangePedPlayerToCar` / `ChangeCarPlayerToPed`
+(players.c) mutate `player[]` and the car's pad link IN PLACE and never call
+`InitPlayer`, so no spawn path sees it — and there is no enter/exit event either.
+The mod therefore watches the engine's own `player[0].playerCarId` (a char, -1 = on
+foot) every sim frame (`MpFollowLocalCar`) and adopts the change: slot, model,
+palette. `player[0]` is always US — every machine runs its one local player in
+engine slot 0, and the remote players live in the higher slots the mod inits.
+
+The change travels in the per-frame carstate: `MP_CARSTATE_ENTRY` carries the driven
+model (0xFF = on foot) and the owner's slot. The peer matches the VEHICLE **in
+place**: `cp->ap.model` and the colour, on the slot it already drives for that
+player.
+
+Two hard-won rules:
+
+* **NEVER move a player onto the car the owner named.** Slot numbers do not mean the
+  same car on two machines (traffic is not replicated), so that warps the player
+  into an unrelated car — seen as "the host teleported into the client's old car and
+  the client ended up warped in as a traffic car". The hijacked car also belongs to
+  the LOCAL traffic system, which then recycles or steps it and CRASHES
+  (`PingInCivCar` on one side, `StepSim` on the other, both read out of dumps).
+  `carSlot` in the carstate is informational only.
+* **NEVER hand a car the mod created (`InitPlayer`) to the traffic AI.** Flipping
+  its controlType to CIV_AI gives the engine's traffic AI a car whose civ-AI state
+  does not exist — an access violation inside `CivSteerAngle` (rva 0xC961 in one
+  dump). Getting OUT therefore only stops driving the car: it is left standing where
+  the player left it, and the input fallback coasts it to a stop.
+
+A model the renderer has not loaded is NOT applied (`gCarCleanModelPtr[model] ==
+NULL`): pointing `ap.model` at a mesh that does not exist is a crash, not a
+cosmetic glitch — it keeps the old model and logs.
+
+Headless: `MP_TEST_CARCHANGE=<seconds>[,<exitSeconds>]` performs a real change (the
+engine's own `ChangePedPlayerToCar`, onto the nearest civilian car) and optionally
+gets out afterwards. It fires on every machine the env var reaches.

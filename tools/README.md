@@ -166,6 +166,39 @@ a machine reports can be compared directly. The package also ships
 different exe at the handshake instead of letting it desync mid-race; set it to 0
 if you want to test mismatched builds deliberately.
 
+## A crash is not an Alt+F4
+
+An access violation leaves `JERICHO.dmp` beside the exe; an Alt+F4 — or any clean
+exit — leaves none, and the log simply stops. So:
+
+    ls JERICHO.dmp                                # crash, or did someone close it?
+    python tools/dmp_fault.py JERICHO.dmp         # exception + module + RVA
+    python tools/map_lookup.py <exe>.map 0xC961   # RVA -> the function
+
+`dmp_fault.py` prints `in module REDRIVER2_dev.exe at rva 0x....`; give that RVA to
+`map_lookup.py` together with the `.map` beside the exe and it names the function.
+Correlate with the log's own tail: the last `[mp]` lines are what it was doing —
+though a buffered log can lose the final line or two, so read it as "around here",
+not "exactly here".
+
+**Give a run enough time.** `--settle` is the wait before the client joins and
+`--seconds` is the TOTAL run, so a large `--settle` with a short `--seconds` leaves
+almost no match to observe (both sides stop at ~150 carstates, symmetrically, which
+looks like a fault and is not). `--seconds 60 --settle 5` gives a full window.
+
+## Driving a car change by hand
+
+`MP_TEST_CARCHANGE=<seconds>[,<exitSeconds>]` makes every machine it reaches get out
+of its car and into the nearest civilian one that many seconds into a live match,
+and — with the second number — get out again that long after. It calls the ENGINE's
+own `ChangePedPlayerToCar` / `ChangeCarPlayerToPed`, i.e. the real ped path, so what
+is under test is the game's own code.
+
+    MP_TEST_CARCHANGE=8,10 python mp_localpair.py --seconds 60 --settle 5
+
+Use it to check that the other machine's copy of your car becomes the vehicle you
+actually got into (`[mp] player N changed car: model A -> B (slot S)`).
+
 ## Reading a run
 
 The logs are chatty at `MP_DEBUG=1`; `JPPN`, `JPPO`, `pose:`, `JPIN` and `JPCS`
