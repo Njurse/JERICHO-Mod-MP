@@ -1268,6 +1268,7 @@ int MpInputForPlayer(int id)
 /* forward: the owner's own-car replication (defined later) */
 static void MpSendOwnCarState(void);
 static void MpTestCarChangeTick(void);
+static int  MpCarIsSomeones(int slot);
 
 /* ------------------------------------------------------------------ */
 /* Input replication                                                   */
@@ -1650,15 +1651,17 @@ void MpLockstepFrame(void)
  * Inert unless the env var is set. */
 static void MpTestCarChangeTick(void)
 {
-	static int done;
+	static int stage;
 	static unsigned long startMs;
 	const char* s;
-	int secs, i, best = -1;
-	long bestD = 0;
+	const char* comma;
+	int secs, exitSecs = 0, i, best = -1, bestDiff = -1;
+	long bestD = 0, bestDiffD = 0;
 	MP_PLAYER* me;
 	CAR_DATA* mine;
+	unsigned long now;
 
-	if (done)
+	if (stage >= 2)
 		return;
 
 	s = getenv("MP_TEST_CARCHANGE");
@@ -1668,10 +1671,33 @@ static void MpTestCarChangeTick(void)
 
 	secs = atoi(s);
 
+	/* MP_TEST_CARCHANGE=<changeSecs>[,<exitSecs>] -- the second number makes it
+	 * also GET OUT that long after the change, so the peer-side on-foot path (and
+	 * the engine's own player -> CIV_AI handover) is exercised as well. */
+	comma = strchr(s, ',');
+	if (comma != NULL)
+		exitSecs = atoi(comma + 1);
+
 	if (startMs == 0)
 		startMs = MpNowMs();
 
-	if ((int)((MpNowMs() - startMs) / 1000) < secs)
+	now = MpNowMs();
+
+	if (stage == 1)
+	{
+		if (exitSecs <= 0 || (int)((now - startMs) / 1000) < secs + exitSecs)
+			return;
+
+		stage = 2;
+
+		if (gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx, "[mp] TEST car change: getting OUT now\n");
+
+		ChangeCarPlayerToPed(0);
+		return;
+	}
+
+	if ((int)((now - startMs) / 1000) < secs)
 		return;
 
 	me = MpLocalPlayer();
@@ -1686,7 +1712,14 @@ static void MpTestCarChangeTick(void)
 		CAR_DATA* cp = &car_data[i];
 		long dx, dy, dz, d;
 
+		/* ONLY a proper civilian car. Taking over a car that is NOT one (a spooled
+		 * placeholder, a special) and then vacating it hands the traffic AI a car
+		 * whose civ-AI state was never set up, and it crashes in CivSteerAngle. Keep
+		 * the lever to the same kind of car a player could actually get into. */
 		if (i == me->carId || cp->controlType != CONTROL_TYPE_CIV_AI)
+			continue;
+
+		if (MpCarIsSomeones(i))
 			continue;
 
 		/* squared distances are 64 bit: a 32-bit one wraps negative on a far car
@@ -1701,12 +1734,52 @@ static void MpTestCarChangeTick(void)
 			best = i;
 			bestD = d;
 		}
+
+		/* prefer a car of a DIFFERENT model, so the test always exercises the
+		 * model swap and not just a move between two cars of the same kind */
+		if (cp->ap.model != mine->ap.model && (bestDiff < 0 || d < bestDiffD))
+		{
+			bestDiff = i;
+			bestDiffD = d;
+		}
+	}
+
+	if (bestDiff >= 0)
+	{
+		best = bestDiff;
+		bestD = bestDiffD;
 	}
 
 	if (best < 0)
 		return;		/* no traffic nearby yet -- try again next frame */
 
-	done = 1;
+	/* what was there to choose from, and what we are -- so a run says whether the
+	 * takeover could even change the model */
+	if (gMpCtx != NULL)
+	{
+		char list[160];
+		int c, shown = 0;
+
+		list[0] = 0;
+
+		for (c = 0; c < MAX_CARS && shown < 8; c++)
+		{
+			size_t used;
+
+			if (c == me->carId || car_data[c].controlType == CONTROL_TYPE_NONE)
+				continue;
+
+			used = strlen(list);
+			snprintf(list + used, sizeof(list) - used, " %d:m%d", c, car_data[c].ap.model);
+			shown++;
+		}
+
+		gMpCtx->jer_log(gMpCtx,
+			"[mp] TEST car change: we are model %d; what is in the world:%s\n",
+			mine->ap.model, list);
+	}
+
+	stage = 1;
 
 	if (gMpCtx != NULL)
 		gMpCtx->jer_log(gMpCtx,
@@ -1836,6 +1909,125 @@ static void MpSendOwnCarState(void)
 		MpSendToHost(MP_TAG_CARSTATE, 0, buf, len);
 }
 
+/* ------------------------------------------------------------------ */
+/* The REMOTE player's car: keeping it on the vehicle its owner is driving.
+ *
+ * A player who gets out of one car and into another changes vehicles mid-session
+ * (see MpFollowLocalCar). The carstate carries the model now, so we can follow
+ * it; these helpers make our copy match. */
+
+/* Is this CAR_DATA slot already spoken for by some OTHER player? */
+static int MpCarIsSomeones(int slot)
+{
+	int i;
+
+	for (i = 0; i < MP_MAX_PLAYERS; i++)
+	{
+		MP_PLAYER* p = MpGetPlayer(i);
+
+		if (p != NULL && p->active && p->carId == slot)
+			return 1;
+	}
+
+	return 0;
+}
+
+/* A remote player got OUT. The car we were driving for them is left exactly as
+ * it is, standing where they left it.
+ *
+ * DELIBERATELY NOT handed to the traffic AI. That car is one the MOD created
+ * (InitPlayer), so its civil-AI state was never set up; flipping its controlType
+ * to CIV_AI hands it to the engine's traffic AI, which then steers a car with no
+ * AI data -- an access violation inside CivSteerAngle (found from a dump:
+ * REDRIVER2_dev.exe rva 0xC961). Leaving it a player car and simply never sending
+ * it anything again does what was asked for ANYWAY: it stays put (the engine's
+ * input fallback coasts it to a stop) instead of an AI driving it away. */
+static void MpReleaseRemoteCar(MP_PLAYER* p)
+{
+	CAR_DATA* cp;
+
+	if (p == NULL || p->carId < 0 || p->carId >= MAX_CARS)
+		return;
+
+	cp = &car_data[p->carId];
+
+	if (cp->controlType == CONTROL_TYPE_PLAYER)
+	{
+		if (gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx,
+				"[mp] player %d got out; car slot %d left standing where it was\n",
+				p->id, p->carId);
+	}
+}
+
+/* Make this player's car in OUR world the vehicle their owner just got into.
+ *
+ * IN PLACE, on the slot we already drive for them -- the safe default: only the
+ * cosmetic model and the colour change, so nothing about this world's car slots
+ * is disturbed and a wrong guess cannot hijack an unrelated car.
+ *
+ * RE-LINK only when it is SAFE: the slot the owner named is a plain traffic car
+ * HERE -- same model, CIV_AI, claimed by nobody -- so our copy is literally the
+ * same car in both worlds and the pose we adopt lands on the right entity. */
+static void MpAdoptRemoteCar(MP_PLAYER* p, int model, int slot)
+{
+	CAR_DATA* cp = NULL;
+
+	if (p == NULL)
+		return;
+
+	if (slot >= 0 && slot < MAX_CARS && slot != p->carId)
+	{
+		CAR_DATA* other = &car_data[slot];
+
+		if (other->ap.model == model
+		    && other->controlType == CONTROL_TYPE_CIV_AI
+		    && !MpCarIsSomeones(slot))
+		{
+			MpReleaseRemoteCar(p);		/* what they left goes back */
+
+			p->carId = slot;
+			cp = other;
+
+			if (gMpCtx != NULL)
+				gMpCtx->jer_log(gMpCtx,
+					"[mp] player %d changed car: re-linked to slot %d (model %d)\n",
+					p->id, slot, model);
+		}
+	}
+
+	if (cp == NULL && p->carId >= 0 && p->carId < MAX_CARS)
+		cp = &car_data[p->carId];
+
+	if (cp == NULL)
+		return;
+
+	/* SWAP IN PLACE -- but only to a model the renderer actually HAS. Pointing
+	 * ap.model at a mesh we never loaded is a crash, not a cosmetic glitch, so an
+	 * unavailable model keeps the old one and says so. */
+	if (cp->ap.model != model)
+	{
+		if (model >= 0 && model < MAX_CAR_RESIDENT_MODELS
+		    && gCarCleanModelPtr[model] != NULL)
+		{
+			if (gMpCtx != NULL)
+				gMpCtx->jer_log(gMpCtx,
+					"[mp] player %d changed car: model %d -> %d (slot %d)\n",
+					p->id, cp->ap.model, model, p->carId);
+
+			cp->ap.model = model;
+			p->car = model;
+			p->carIsSlot = 0;
+		}
+		else if (gMpCtx != NULL)
+		{
+			gMpCtx->jer_log(gMpCtx,
+				"[mp] player %d changed car: model %d is not loaded here; keeping %d\n",
+				p->id, model, cp->ap.model);
+		}
+	}
+}
+
 static void MpHandleCarState(int connIndex, const unsigned char* p, int len)
 {
 	MP_CARSTATE h;
@@ -1861,10 +2053,40 @@ static void MpHandleCarState(int connIndex, const unsigned char* p, int len)
 		memcpy(&e, p + sizeof(MP_CARSTATE) + i * sizeof(e), sizeof(e));
 
 		pl = MpGetPlayer(e.playerId);
-		if (pl == NULL || pl->isLocal || pl->carId < 0)
+
+		if (pl == NULL || pl->isLocal)
+			continue;
+
+		/* NO CAR: the owner is on foot. Let the car we were driving for them go
+		 * back to the world -- it stays where they left it (their own engine
+		 * does the same), so nobody is left steering an empty car. */
+		if (e.model == MP_CARSTATE_NO_CAR)
+		{
+			MpReleaseRemoteCar(pl);
+			continue;
+		}
+
+		if (pl->carId < 0 || pl->carId >= MAX_CARS)
 			continue;
 
 		cp = &car_data[pl->carId];
+
+		/* The owner changed VEHICLE: match it BEFORE adopting this pose, so the
+		 * body we are about to write lands on the right car.
+		 *
+		 * Compare the model the car ACTUALLY renders with, not pl->car: the roster
+		 * refresh (every 120 frames) writes the owner's new model into pl->car
+		 * long before the car itself is changed, so gating on pl->car silently
+		 * agreed with the roster while the car on screen stayed the old one. */
+		if (cp->ap.model != (int)e.model)
+		{
+			MpAdoptRemoteCar(pl, (int)e.model, (int)e.carSlot);
+
+			if (pl->carId < 0 || pl->carId >= MAX_CARS)
+				continue;
+
+			cp = &car_data[pl->carId];
+		}
 
 		/* OWNER-AUTHORITATIVE: this car belongs to another machine, so its owner is
 		 * the truth. Adopt the WHOLE body every snapshot -- no easing, no tolerance.
@@ -1889,8 +2111,8 @@ static void MpHandleCarState(int connIndex, const unsigned char* p, int len)
 			 * ours -- gating on `frame % 30` silently logged nothing. */
 			if (gMpCtx != NULL)
 				gMpCtx->jer_log(gMpCtx,
-					"[mp] adopt: player %d snap %u |d|=%ld d2=%ld (dx=%ld dy=%ld dz=%ld) dh=%d pal=%d\n",
-					e.playerId, (unsigned)h.frame, (long)sqrt((double)d2), d2, dx, dy, dz, dh, (int)e.palette);
+					"[mp] adopt: player %d snap %u |d|=%ld d2=%ld (dx=%ld dy=%ld dz=%ld) dh=%d pal=%d md=%d\n",
+					e.playerId, (unsigned)h.frame, (long)sqrt((double)d2), d2, dx, dy, dz, dh, (int)e.palette, (int)e.model);
 
 			/* Adopt in full: the owner is the truth for its own car. */
 
