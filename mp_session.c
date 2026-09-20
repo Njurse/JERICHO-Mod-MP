@@ -23,6 +23,7 @@ extern int gWantNight;		/* glaunch.c: 1 = the night take-a-ride level variant */
 #include "players.h"	/* InitPlayer: a late joiner needs a car the same way the engine makes one */
 #include "handling.h"	/* LongQuaternion2Matrix: rebuild a car's matrix from its body */
 #include "state.h"
+#include "dr2roads.h"	/* FindSurfaceD2: the real ground height at a point */
 
 #include <string.h>
 #include <stdio.h>
@@ -30,6 +31,8 @@ extern int gWantNight;		/* glaunch.c: 1 = the night take-a-ride level variant */
 
 /* defined below, needed by the launch path above them */
 static int MpAssignedCarModel(int playerId);
+
+extern int MapHeight(VECTOR* pos);	/* the engine's ground height at an x/z */
 
 /* How long a level load may block our main loop before we assume the peer is
  * gone rather than merely loading. Both sides load at the same time, so both
@@ -462,12 +465,12 @@ void MpSpawnLateJoiners(void)
 					id, slot, PlayerStartInfo[slot]->model, lvl);
 		}
 
-		/* alongside the host, not at the level's own start point. The HEIGHT is
-		 * the local start record's: forcing it to 0 dropped the remote car in from
-		 * above (the level's datum is not y=0). */
-		PlayerStartInfo[slot]->position.vy = PlayerStartInfo[0]->position.vy;
-		PlayerStartInfo[slot]->position.vx = car_data[0].hd.where.t[0] + (MP_SPAWN_SLOT_DIST * slot);
-		PlayerStartInfo[slot]->position.vz = car_data[0].hd.where.t[2];
+		/* NOTHING ELSE TOUCHES THE POSITION. The engine's own spawn for this slot is
+		 * already the SAME on both machines (verified: the second car lands at the
+		 * same x/z/y whether we look from the host or the client), and it is already
+		 * on the ground. The old code moved the slot alongside the host's live car
+		 * and forced the local start record's vy -- which reads 0 -- so the car
+		 * started in the air and fell in. */
 
 		rot = car_data[0].hd.direction;
 		PlayerStartInfo[slot]->rotation = rot;
@@ -1206,8 +1209,24 @@ int MpOnNetSpawn(void* userdata, void* args)
 				wantedCar[slot] = cid;
 
 			if (gMpCtx != NULL)
-				gMpCtx->jer_log(gMpCtx, "[mp] netspawn: player %d -> slot %d model %d (city %d, asked %d)\n",
+			{
+				VECTOR g, nrm, out;
+				sdPlane* plane = NULL;
+
+				g.vx = PlayerStartInfo[slot]->position.vx;
+				g.vy = PlayerStartInfo[slot]->position.vy;
+				g.vz = PlayerStartInfo[slot]->position.vz;
+				FindSurfaceD2(&g, &nrm, &out, &plane);
+
+				gMpCtx->jer_log(gMpCtx,
+					"[mp] netspawn: player %d -> slot %d model %d (city %d, asked %d)\n",
 					i, slot, PlayerStartInfo[slot]->model, lvl, p->car);
+
+				gMpCtx->jer_log(gMpCtx,
+					"[mp] spawn y: slot %d vy=%d (local slot 0 vy=%d) surface y=%d\n",
+					slot, PlayerStartInfo[slot]->position.vy,
+					PlayerStartInfo[0]->position.vy, out.vy);
+			}
 		}
 
 		/* The HEIGHT is the local start record's -- forcing it to 0 dropped the
@@ -1402,43 +1421,28 @@ static void MpHandleInput(const unsigned char* p, int len)
  */
 void MpPlaceSpawns(int x, int y, int z, int heading)
 {
-	int i, placed = 0;
-
-	for (i = 0; i < MP_MAX_PLAYERS; i++)
-	{
-		MP_PLAYER* p = &gMp.players[i];
-		CAR_DATA* cp;
-
-		if (!p->active || p->carId < 0 || p->carId >= MAX_CARS)
-			continue;
-
-		cp = &car_data[p->carId];
-
-		cp->hd.where.t[0] = x + (i % 4) * MP_SPAWN_SLOT_DIST;
-		cp->hd.where.t[1] = y;
-		cp->hd.where.t[2] = z + (i / 4) * MP_SPAWN_SLOT_DIST;
-		cp->hd.direction = heading;
-
-		/* the car must be pointing that way too, or its box -- and so its
-		 * collisions -- stays at the old angle */
-		{
-			MATRIX m;
-
-			_RotMatrixY(&m, (short)heading);
-			memcpy(cp->hd.where.m, m.m, sizeof(cp->hd.where.m));
-		}
-
-		/* drop any momentum from the move so nobody inherits a jump */
-		cp->st.n.linearVelocity[0] = 0;
-		cp->st.n.linearVelocity[1] = 0;
-		cp->st.n.linearVelocity[2] = 0;
-		cp->hd.speed = 0;
-
-		placed++;
-	}
-
+	/* RETIRED: this used to teleport EVERY car onto the host's car spot with the
+	 * host's car Y. That is what put the cars in the air -- a single y taken from
+	 * the host and applied at every other car's x/z leaves them above or below the
+	 * ground actually under them, and the engine then pulls them down (logs showed
+	 * the local car at y=75 falling to 26 on the first sim frames).
+	 *
+	 * It was there because the two machines were thought to spawn on opposite
+	 * sides of the map. They do not: with the line-up off, BOTH machines place
+	 * both cars at exactly the same x/z/y (the engine's own spawn is
+	 * deterministic), so the map's baked start is already agreed on and there is
+	 * nothing to correct. Kept as a logged no-op so the call sites stay obvious. */
 	if (gMpCtx != NULL)
-		gMpCtx->jer_log(gMpCtx, "[mp] lined up %d car(s) at %d,%d,%d\n", placed, x, y, z);
+	{
+		static unsigned long lastMs;
+
+		if ((MpNowMs() - lastMs) > 1000)
+		{
+			lastMs = MpNowMs();
+			gMpCtx->jer_log(gMpCtx,
+				"[mp] spawn: using the map's own start (line-up retired; was %d,%d,%d)\n", x, y, z);
+		}
+	}
 }
 
 static void MpHandleSpawn(const unsigned char* p, int len)

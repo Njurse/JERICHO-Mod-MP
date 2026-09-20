@@ -136,14 +136,20 @@ asks how many extra player cars to create, and the module answers by filling
 negative pad ids and are appended to `active_car_list` by the normal physics path,
 which is what makes them real.
 
-At `GAME_START` every car exists. The host then broadcasts `SPAWN` — the meeting
-point — and every machine lines up on it, spaced `MP_SPAWN_SLOT_DIST`, all facing
-the host's heading, with the orientation matrix rebuilt (the collision box is
-built from the matrix, so a heading alone is not enough) and velocity zeroed.
+At `GAME_START` every car exists.
 
-The meeting point is the host's own car, and the host is the only machine that can
-decide it. A per-machine "gather the others next to me" makes the two sides
-disagree, the resync sees the divergence and drags the cars back and forth.
+**Every car keeps the position the ENGINE gave it.** The host used to broadcast a
+`SPAWN` "meeting point" (its own car) and every machine teleported all the cars
+onto it, spaced `MP_SPAWN_SLOT_DIST` in world X and all at the host's car Y. That
+is what put the cars IN THE AIR: a single Y taken from the host, applied at every
+other car's x/z, leaves each car above or below the ground actually under it, and
+the engine then pulls it down — the logs showed the local car starting at y=75 and
+falling to 26 within a couple of frames. It was believed the two machines spawned
+on opposite sides of the map; they do not. With the line-up off, BOTH machines
+place both cars at exactly the same x/z/y (the engine's own spawn is
+deterministic), so the map's baked start is already agreed on and `MpPlaceSpawns`
+is now a logged no-op. Do not reintroduce a single-Y teleport: to move a car, move
+it in x/z and let the engine place its height, or offset it ALONG the road.
 
 ### The steady state
 
