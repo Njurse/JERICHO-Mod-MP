@@ -34,8 +34,16 @@ extern int gBootMpArena;	/* main.c: which multiplayer map (0/1) */
 /* ------------------------------------------------------------------ */
 /* Session lifecycle                                                   */
 /* ------------------------------------------------------------------ */
+/* One launch per session. The client asks to launch twice -- once from the
+ * live-match WELCOME (gMp.pendingLaunch) and once when the car select's START is
+ * claimed -- and two SetState(STATE_GAMESTART) calls load the level twice, i.e.
+ * the match appears to restart the moment the joiner arrives. Cleared by
+ * MpSessionReset, so a new session can launch again. */
+static int gMpLaunched;
+
 void MpSessionReset(void)
 {
+	gMpLaunched = 0;
 	gMp.gamemode = MP_GAMEMODE_TAKEADRIDE;
 	gMp.city = 0;
 	gMp.timeOfDay = -1;
@@ -162,6 +170,13 @@ void MpLeaveSession(void)
  * and placed from the network every frame. */
 static void MpLaunchLocal(void)
 {
+	/* Idempotent: see gMpLaunched. A second SetState(STATE_GAMESTART) would load
+	 * the level again and restart the match on the joining machine. */
+	if (gMpLaunched)
+		return;
+
+	gMpLaunched = 1;
+
 	GameLevel = gMp.city;
 	GameType = GAME_TAKEADRIVE;
 	NumPlayers = 1;
