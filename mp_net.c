@@ -96,6 +96,8 @@ typedef struct MP_CONN
 	char          peer[32];	/* "ip:port" of the far end, for the log */
 	int           hsStage;	/* client: how far the join got (MP_HS_*) */
 	unsigned long pingMs;	/* round trip, from the PING/PONG tick */
+	unsigned long lossMarkMs;	/* lastRecvMs as of the previous sample (delivery stat) */
+	int           lossPct;	/* EWMA of the % of polls in which NOTHING arrived (0..100) */
 	unsigned char sbuf[MP_SEND_QUEUE];	/* frames waiting for the socket */
 	int           sbufLen;
 	int           sbufOff;	/* bytes already written out */
@@ -769,7 +771,7 @@ int MpPeerStats(int playerId, MP_PEER_STATS* out)
 		out->txBytes = gConn[i].txBytes;
 		out->pingMs = (int)gConn[i].pingMs;
 		out->linkMs = (now > gConn[i].acceptedMs) ? (now - gConn[i].acceptedMs) : 1;
-		out->lossPct = -1;	/* TCP: nothing to report */
+		out->lossPct = gConn[i].lossPct;	/* frames with no data from this peer */
 
 		return 1;
 	}
@@ -1177,6 +1179,52 @@ static void MpKeepaliveTick(void)
 		MpSendToHost(MP_TAG_PING, 0, &pg, sizeof(pg));
 }
 
+/* Application-level DELIVERY statistic, replacing the "packet loss" column.
+ *
+ * TCP retransmits, so there is no packet loss to read out of the stack -- and a
+ * TCP socket happily reports "0%" while the peer's data is seconds late. What
+ * actually matters to a game is whether the peer's data is arriving each frame,
+ * so that is what we measure: an EWMA (1/8) of the fraction of polls in which
+ * NOTHING arrived from that peer. 0 = every frame delivered; 100 = nothing is
+ * getting through. A level load is silent BY DESIGN, so it is not sampled. */
+static void MpLossTick(void)
+{
+	static unsigned long lastFrame = (unsigned long)-1;
+	int i;
+
+	/* MpNetPoll runs SEVERAL times per frame (the frame hook, the overlay and
+	 * the lockstep tick). Sampling per POLL would count the extra calls as
+	 * "nothing arrived" and report a large phantom loss, so sample ONCE per
+	 * sim frame -- the unit the statistic is defined in. */
+	if (gMp.frame == lastFrame)
+		return;
+
+	lastFrame = gMp.frame;
+
+	if (MpBusy())
+		return;
+
+	for (i = 0; i < MP_MAX_PLAYERS; i++)
+	{
+		MP_CONN* c = &gConn[i];
+
+		if (!c->used || c->playerId < 0 || c->lastRecvMs == 0)
+			continue;
+
+		if (c->lastRecvMs == c->lossMarkMs)
+			c->lossPct += (100 - c->lossPct) / 8;	/* nothing this poll */
+		else
+			c->lossPct -= c->lossPct / 8;		/* it delivered */
+
+		if (c->lossPct < 0)
+			c->lossPct = 0;
+		else if (c->lossPct > 100)
+			c->lossPct = 100;
+
+		c->lossMarkMs = c->lastRecvMs;
+	}
+}
+
 void MpNetPoll(int waitMs)
 {
 	unsigned long now = MpClockMs();
@@ -1249,6 +1297,9 @@ void MpNetPoll(int waitMs)
 		if (gConn[i].used && (now - gConn[i].lastRecvMs) > MP_CONN_TIMEOUT_MS && !MpBusy())
 			MpDropConn(i, "timeout");
 	}
+
+	/* sample the delivery statistic LAST, so it sees this poll's arrivals */
+	MpLossTick();
 }
 
 /* ------------------------------------------------------------------ */

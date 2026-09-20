@@ -728,8 +728,8 @@ static void MpLogPlayerList(void)
 				unsigned long rxS = st.rxBytes * 1000UL / st.linkMs;
 				unsigned long txS = st.txBytes * 1000UL / st.linkMs;
 
-				snprintf(net, sizeof(net), "%d ms  rx %luB/s  tx %luB/s  loss %s",
-					st.pingMs, rxS, txS, st.lossPct < 0 ? "n/a" : "0%");
+				snprintf(net, sizeof(net), "%d ms  rx %luB/s  tx %luB/s  loss %d%%",
+					st.pingMs, rxS, txS, st.lossPct);
 			}
 			else
 			{
@@ -746,14 +746,18 @@ static void MpDrawPlayerList(void)
 {
 	int id, row = 0;
 
+	/* Top-LEFT corner and HIGH up: the pause menu's items are drawn around the
+	 * middle of the screen, and the row grew a delivery column, so the list
+	 * needs the room. (Was x=8, y=56 -- it overlapped the menu.) */
 	SetTextColour(170, 170, 170);
-	PrintString((char*)"-- PLAYERS --", 8, 56);
+	PrintString((char*)"-- PLAYERS --", 4, 24);
 
 	for (id = 0; id < MP_MAX_PLAYERS; id++)
 	{
 		MP_PLAYER* p = MpGetPlayer(id);
 		CAR_DATA* cp;
-		char line[128];
+		char line[160];
+		char net[72];
 		int veh = -1;
 		int y;
 
@@ -772,25 +776,30 @@ static void MpDrawPlayerList(void)
 
 		{
 			MP_PEER_STATS st;
-			char net[72];
 
 			if (!p->isLocal && MpPeerStats(p->id, &st) && st.linkMs > 0)
 			{
 				unsigned long rxS = st.rxBytes * 1000UL / st.linkMs;
 				unsigned long txS = st.txBytes * 1000UL / st.linkMs;
 
-				snprintf(net, sizeof(net), "  %d ms  rx %luB/s  tx %luB/s  loss %s",
-					st.pingMs, rxS, txS, st.lossPct < 0 ? "n/a" : "0%");
+				/* stall/delivery %, not "packet loss": the fraction of
+				 * frames in which nothing arrived from them. */
+				snprintf(net, sizeof(net), "%d ms  rx %luB/s  tx %luB/s  loss %d%%",
+					st.pingMs, rxS, txS, st.lossPct);
 			}
 			else
 			{
-				snprintf(net, sizeof(net), "  %d ms  (local)", p->pingMs);
+				snprintf(net, sizeof(net), "%d ms  (local)", p->pingMs);
 			}
 
-			snprintf(line, sizeof(line), "%s #%d  car %d%s", p->name, p->id, veh, net);
+			/* TWO lines per player -- name/vehicle, then the link readout
+			 * indented under it. The screen is only ~40 characters wide, so
+			 * one row carrying the name AND the rates AND the loss would run
+			 * off the right edge (which is exactly what it did). */
+			snprintf(line, sizeof(line), "%s #%d  car %d", p->name, p->id, veh);
 		}
 
-		y = 68 + row * 10;
+		y = 36 + row * 20;
 		row++;
 
 		if (p->isHost)
@@ -798,7 +807,10 @@ static void MpDrawPlayerList(void)
 		else
 			SetTextColour(200, 200, 200);
 
-		PrintString(line, 8, y);
+		PrintString(line, 4, y);
+
+		SetTextColour(150, 150, 150);
+		PrintString(net, 10, y + 10);
 
 		/* so the list can be checked without eyes on the screen */
 		if (getenv("MP_DEBUG") != NULL && gMpCtx != NULL)
@@ -808,7 +820,7 @@ static void MpDrawPlayerList(void)
 			if ((MpNowMs() - lastListMs) > 2000)
 			{
 				lastListMs = MpNowMs();
-				gMpCtx->jer_log(gMpCtx, "[mp] list: %s\n", line);
+				gMpCtx->jer_log(gMpCtx, "[mp] list: %s | %s\n", line, net);
 			}
 		}
 	}

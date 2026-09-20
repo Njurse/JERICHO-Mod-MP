@@ -198,7 +198,9 @@ typedef struct MP_PEER_STATS
 	unsigned long txBytes;
 	unsigned long linkMs;	/* how long the link has been up */
 	int           pingMs;	/* round trip, from the PING/PONG tick */
-	int           lossPct;	/* -1 = n/a (TCP) */
+	int           lossPct;	/* % of polls in which NO data arrived from this peer
+				 * (0..100), measured at the APPLICATION layer -- TCP
+				 * itself never reports loss; -1 = unknown */
 } MP_PEER_STATS;
 
 int  MpPeerStats(int playerId, MP_PEER_STATS* out);	/* 0 = no such link */
