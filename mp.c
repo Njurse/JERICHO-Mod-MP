@@ -893,9 +893,12 @@ static int MpOnNetInput(void* userdata, void* args)
 		}
 		else if (!p->isLocal)
 		{
-			/* Remote cars are pure network puppets: no local driving at all --
-			 * their transform is placed from the owner's car-state each frame. */
-			in->pad = 0;
+			/* Engine-driven: this car gets the pad its owner sent, and the
+			 * engine simulates it exactly like a local one. That is what makes
+			 * it a real car -- it collides, it takes damage, its wheels turn --
+			 * instead of a transform we paste in every frame. With no input yet
+			 * (a fresh joiner) it coasts, which is harmless. */
+			in->pad = MpInputForPlayer(p->id);
 			in->handled = 1;
 		}
 		/* local car, no bot: leave the stock pad (handled stays 0) */

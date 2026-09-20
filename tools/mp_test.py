@@ -181,11 +181,11 @@ def mode_host(args):
                 rows = [PLAYER_INPUT.unpack_from(payload, INPUT.size + i * PLAYER_INPUT.size) for i in range(count)]
                 peer_pad = rows[0][1] if rows else 0
                 out = INPUT.pack(frame, 2, 0, 0, 0)
-                out += PLAYER_INPUT.pack(0, 0, 0)          # our neutral input (player 0)
-                out += PLAYER_INPUT.pack(1, peer_pad, 0)   # echo the client's own pad (player 1)
+                out += PLAYER_INPUT.pack(0, args.peer_pad, 0)   # the fake host player's own pad
+                out += PLAYER_INPUT.pack(1, peer_pad, 0)       # echo the client's own pad (player 1)
                 send_frame(conn, TAG["input"], out)
                 seen += 1
-            elif tag == TAG["carstate"]:
+            elif tag == TAG["carstate"] and not args.no_carstate:
                 frame, count, _a, _b, _c = CARSTATE.unpack_from(payload, 0)
                 if count >= 1:
                     pid, _sp, x, y, z, hd = CARSTATE_ENTRY.unpack_from(payload, CARSTATE.size)
@@ -393,6 +393,10 @@ def main():
                    help="seconds to keep the socket open after the REJECT (0 = close at once, like the real host)")
     h.add_argument("--reject-graceful", action="store_true",
                    help="half-close and drain after the REJECT instead of closing the socket")
+    h.add_argument("--no-carstate", action="store_true",
+                   help="ignore the client's car-state, so only replicated input moves the cars")
+    h.add_argument("--peer-pad", type=lambda v: int(v, 0), default=0,
+                   help="pad the fake host player holds, in engine mapped bits (e.g. 0x40 = accelerate)")
     h.add_argument("--hold-hello", type=float, default=0.0,
                    help="seconds to stay silent after HELLO, stretching the client's handshake")
     h.add_argument("--beacon", action="store_true", help="broadcast discovery beacons while hosting")

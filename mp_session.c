@@ -676,14 +676,136 @@ int MpInputForPlayer(int id)
 static void MpHostSendCarState(void);
 static void MpSendCarState(void);
 
-/* One network tick (per simulation frame). Client-authoritative model: every
- * machine replicates the cars it owns; nobody blocks on the network. */
+/* ------------------------------------------------------------------ */
+/* Input replication                                                   */
+/*                                                                     */
+/* Every machine drives every car through the engine's own physics. A  */
+/* client sends one row (its own pad) up to the host; the host merges  */
+/* every row it has seen and broadcasts the whole set, so all machines */
+/* simulate all cars. That is the point: engine-driven cars collide    */
+/* with each other, and position puppets cannot.                       */
+/*                                                                     */
+/* Nothing here ever waits for a row. A car whose input has not        */
+/* arrived simply repeats the last one, so a slow or lossy link costs  */
+/* smoothness, never a stalled frame.                                  */
+/* ------------------------------------------------------------------ */
+
+/* The pad the local player is holding this frame, in the engine's own mapped
+ * bit space (what ProcessCarPad would read for a local car). */
+static int MpLocalPad(void)
+{
+	int id = gMp.localPlayerId;
+	int padId = 0;
+
+	if (id >= 0 && id < MP_MAX_PLAYERS)
+	{
+		MP_PLAYER* me = &gMp.players[id];
+
+		if (me->carId >= 0 && me->carId < MAX_CARS && car_data[me->carId].ai.padid != NULL)
+		{
+			int p = *car_data[me->carId].ai.padid;
+
+			if (p >= 0 && p < 2)
+				padId = p;
+		}
+	}
+
+	return (int)Pads[padId].mapped;
+}
+
+void MpSendInput(int pad)
+{
+	unsigned char buf[sizeof(MP_INPUT) + MP_MAX_PLAYERS * sizeof(MP_PLAYER_INPUT)];
+	MP_INPUT h;
+	int i, k = 0, len;
+
+	if (!gMp.running || gMp.localPlayerId < 0 || gMp.localPlayerId >= MP_MAX_PLAYERS)
+		return;
+
+	/* our own row is part of the set whichever side we are */
+	gMp.padForPlayer[gMp.localPlayerId] = pad;
+
+	memset(&h, 0, sizeof(h));
+	h.frame = (uint32_t)gMp.frame;
+
+	for (i = 0; i < MP_MAX_PLAYERS; i++)
+	{
+		MP_PLAYER_INPUT r;
+
+		if (!gMp.players[i].active)
+			continue;
+
+		/* the host only forwards input it has actually seen */
+		if (i != gMp.localPlayerId && !gMp.inputHave[i])
+			continue;
+
+		memset(&r, 0, sizeof(r));
+		r.playerId = (uint8_t)i;
+		r.pad = (uint16_t)gMp.padForPlayer[i];
+
+		memcpy(buf + sizeof(MP_INPUT) + (size_t)k * sizeof(r), &r, sizeof(r));
+		k++;
+	}
+
+	h.count = (uint8_t)k;
+	memcpy(buf, &h, sizeof(h));
+
+	len = (int)(sizeof(MP_INPUT) + (size_t)k * sizeof(MP_PLAYER_INPUT));
+
+	if (MpIsHost())
+		MpHostBroadcast(MP_TAG_INPUT, 0, buf, len);
+	else
+		MpSendToHost(MP_TAG_INPUT, 0, buf, len);
+}
+
+static void MpHandleInput(const unsigned char* p, int len)
+{
+	MP_INPUT h;
+	int n, i;
+
+	if (len < (int)sizeof(MP_INPUT))
+		return;
+
+	memcpy(&h, p, sizeof(h));
+
+	n = h.count;
+	if (n > MP_MAX_PLAYERS)
+		n = MP_MAX_PLAYERS;
+
+	if (len < (int)(sizeof(MP_INPUT) + (size_t)n * sizeof(MP_PLAYER_INPUT)))
+		return;
+
+	for (i = 0; i < n; i++)
+	{
+		MP_PLAYER_INPUT r;
+
+		memcpy(&r, p + sizeof(MP_INPUT) + (size_t)i * sizeof(MP_PLAYER_INPUT), sizeof(r));
+
+		if (r.playerId >= MP_MAX_PLAYERS)
+			continue;
+
+		/* our own row comes back to us in the host's set: our local pad is the
+		 * truth for our own car, so leave it alone */
+		if (r.playerId == gMp.localPlayerId)
+			continue;
+
+		gMp.padForPlayer[r.playerId] = (int)r.pad;
+		gMp.inputHave[r.playerId] = 1;
+	}
+}
+
+/* One network tick (per simulation frame). Every machine drives every car from
+ * replicated input, so nobody blocks on the network and nobody owns a car it
+ * cannot see move. */
 void MpLockstepFrame(void)
 {
 	if (!gMp.running)
 		return;
 
 	++gMp.frame;
+
+	/* tell everyone where our wheel is pointing before anything is simulated */
+	MpSendInput(MpLocalPad());
 
 	if (MpIsHost())
 	{
@@ -869,6 +991,12 @@ void MpHandleMessage(int connIndex, const char* tag, const unsigned char* payloa
 	if (memcmp(tag, MP_TAG_WELCOME, 4) == 0)
 	{
 		MpHandleWelcome(payload, len);
+		return;
+	}
+
+	if (memcmp(tag, MP_TAG_INPUT, 4) == 0)
+	{
+		MpHandleInput(payload, len);
 		return;
 	}
 
