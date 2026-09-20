@@ -39,6 +39,21 @@ join handshake then admits or refuses clients by their enabled-mod manifest.
 - **State-resync fallback** — the host periodically broadcasts player-car
   transforms (`MP_CARSTATE`); a client whose car diverges beyond a threshold
   snaps it to the host's state.
+- **The host owns the roster** — `MP_ROSTER` publishes who is in the match,
+  ascending player id (host first), with each player's name, vehicle and ping.
+  It goes out *before* a launch so every machine knows how many cars to spawn
+  before its level loads, and is refreshed every couple of seconds. Car slots are
+  handed out walking player ids, because that is the only ordering both machines
+  agree on -- walking a per-machine registry let two sides put the same players in
+  opposite slots, and a client that did not yet know about the host added no car
+  at all and left a level AI car (a cop) in the remote player's slot.
+- **Ping** — PONG echoes the tick from PING, so the host holds a round trip per
+  peer and publishes it; that is the number in the pause menu list.
+- **The frontend's idle demo is suppressed** while a session or lobby exists
+  (`JER_EVENT_FRONTEND_IDLE`). A host waiting for players is idle by definition,
+  and the demo's level load blocks the main thread, which used to drop everyone
+  who was joining. `mp_host.bat` therefore sets `MP_AUTOSTART=host`: with the demo
+  gone, nothing starts a match unless the host says so.
 - **Addon network bridge** (`jer_net.h`) — any module can send named
   reliable / latest-wins channels over the session (`jer_net_send` /
   `JER_EVENT_NET_RECV`).
@@ -47,12 +62,24 @@ join handshake then admits or refuses clients by their enabled-mod manifest.
 
 | File | Role |
 |---|---|
-| `mp.c` | module entry, config, player registry, hooks |
-| `mp_net.c` | sockets: TCP session + UDP discovery |
-| `mp_session.c` | handshake, start, lockstep, resync, dispatch |
+| `mp.c` | the module's engine-facing entry point and hooks |
+| `mp_net.c` | sockets: TCP session + UDP discovery, framing, per-peer ping |
+| `mp_session.c` | handshake, start, input replication, resync, roster, dispatch |
+| `mp_players.c` | the player registry and the car accessors built on it |
+| `mp_config.c` | config, module identity, build/manifest hashes |
+| `mp_map.c` | the multiplayer-map blips (`JER_EVENT_DRAW_MAP`) |
 | `mp_bridge.c` | the `jer_net.h` addon bridge |
 | `mp_ui.c` | the frontend menus (registered via `jer_frontend.h`) |
 | `mp_proto.h` | the wire protocol (framed, little-endian) |
+| `tools/` | launchers + harnesses, documented in `tools/README.md` |
+
+## In game
+
+While the pause menu is open, the players are listed down the left of the screen:
+the host first and in cyan, then each player's name, index, the vehicle they are
+in (`-1` = on foot) and their ping. The order is the roster's, so it reads the way
+the match was built. `MP_PAUSE=1` holds the pause menu open for testing and
+`MP_DEBUG` logs each row.
 
 ## Config (`JERICHO/CONFIG/mp.ini`)
 
