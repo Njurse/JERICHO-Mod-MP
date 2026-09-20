@@ -54,6 +54,7 @@
 
 #define MP_RECV_BUF		8192
 #define MP_SEND_BUF		2048
+#define MP_SEND_QUEUE	8192	/* frames waiting for a busy socket */
 #define MP_ACCEPT_BACKLOG	8
 #ifdef _WIN32
 #  define MP_SHUT_WR		SD_SEND
@@ -89,6 +90,9 @@ typedef struct MP_CONN
 	unsigned char rbuf[MP_RECV_BUF];
 	int           rbufLen;
 	unsigned long pingMs;	/* round trip, from the PING/PONG tick */
+	unsigned char sbuf[MP_SEND_QUEUE];	/* frames waiting for the socket */
+	int           sbufLen;
+	int           sbufOff;	/* bytes already written out */
 } MP_CONN;
 
 static MP_CONN gConn[MP_MAX_PLAYERS];
@@ -148,20 +152,97 @@ static void MpTuneConn(SOCKET s)
 	setsockopt(s, SOL_SOCKET, SO_SNDTIMEO, (const char*)&sndTimeout, sizeof(sndTimeout));
 }
 
-static int MpSendRaw(SOCKET s, const void* data, int len)
+static void MpDropConn(int idx, const char* why);	/* used by the send queue */
+
+/* Would this send only have had to wait? Non-blocking sockets say so this way,
+ * and it is NOT an error -- it is the normal case on a busy link. */
+static int MpWouldBlock(void)
 {
-	const char* p = (const char*)data;
-	int sent = 0;
+#ifdef _WIN32
+	int e = WSAGetLastError();
 
-	while (sent < len)
+	return e == WSAEWOULDBLOCK || e == WSAEINPROGRESS;
+#else
+	return errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR;
+#endif
+}
+
+/* Write whatever is queued for this peer. 1 = still fine (possibly with bytes
+ * left to send), 0 = the peer is gone. */
+static int MpFlushConn(int idx)
+{
+	MP_CONN* c;
+
+	if (idx < 0 || idx >= MP_MAX_PLAYERS || !gConn[idx].used)
+		return 0;
+
+	c = &gConn[idx];
+
+	while (c->sbufOff < c->sbufLen)
 	{
-		int n = send(s, p + sent, len - sent, 0);
+		int n = send(c->sock, (const char*)c->sbuf + c->sbufOff, c->sbufLen - c->sbufOff, 0);
 
-		if (n <= 0)
-			return 0;
+		if (n > 0)
+		{
+			c->sbufOff += n;
+			continue;
+		}
 
-		sent += n;
+		if (n < 0 && MpWouldBlock())
+			return 1;		/* it will take more next poll */
+
+		return 0;			/* a real error: this peer is gone */
 	}
+
+	c->sbufLen = 0;
+	c->sbufOff = 0;
+
+	return 1;
+}
+
+/* Queue a frame and write what the socket will take now.
+ *
+ * This used to hand the bytes straight to send() and DROP the frame whenever the
+ * non-blocking socket was not ready -- and, worse, give up after a partial write,
+ * leaving half a frame on the wire. Both are fatal for a reliable frame: a lost
+ * WELCOME leaves the joining player sitting there until their timeout expires,
+ * and a half-written frame desynchronises the stream for good. Bytes the socket
+ * will not take yet wait in the queue and go out on the next poll instead. */
+static int MpSendRaw(int idx, const void* data, int len)
+{
+	MP_CONN* c;
+
+	if (idx < 0 || idx >= MP_MAX_PLAYERS || !gConn[idx].used)
+		return 0;
+
+	c = &gConn[idx];
+
+	/* whatever was already written is finished with: close the gap */
+	if (c->sbufOff > 0)
+	{
+		int left = c->sbufLen - c->sbufOff;
+
+		if (left > 0)
+			memmove(c->sbuf, c->sbuf + c->sbufOff, (size_t)left);
+
+		c->sbufLen = left;
+		c->sbufOff = 0;
+	}
+
+	if (len > 0 && c->sbufLen + len > (int)sizeof(c->sbuf))
+	{
+		/* a peer that will not read even this much is not coming back */
+		MpDropConn(idx, "peer is not reading");
+		return 0;
+	}
+
+	if (len > 0)
+	{
+		memcpy(c->sbuf + c->sbufLen, data, (size_t)len);
+		c->sbufLen += len;
+	}
+
+	MpFlushConn(idx);
 
 	return 1;
 }
@@ -613,7 +694,7 @@ int MpSendConn(int idx, const char* tag, int flags, const void* payload, int len
 	if (len > 0)
 		memcpy(buf + MP_ENVELOPE_SIZE, payload, len);
 
-	return MpSendRaw(gConn[idx].sock, buf, MP_ENVELOPE_SIZE + len);
+	return MpSendRaw(idx, buf, MP_ENVELOPE_SIZE + len);
 }
 
 int MpHostBroadcast(const char* tag, int flags, const void* payload, int len)
@@ -926,6 +1007,13 @@ void MpNetPoll(int waitMs)
 			continue;
 
 		MpProcessConn(i);
+
+		/* anything that had to wait for the socket last poll goes out now */
+		if (gConn[i].used && !MpFlushConn(i))
+		{
+			MpDropConn(i, "send failed");
+			continue;
+		}
 
 		/* a peer we refused: give it time to read the refusal, then let it
 		 * go even if it never closes its side */
