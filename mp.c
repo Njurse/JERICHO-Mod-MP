@@ -156,10 +156,13 @@ static int MpOnMpFrontend(void* userdata, void* args)
 
 	(void)userdata;
 
-	if (fe->action == JER_MP_FE_START && !gMp.running &&
-	    (gMp.role == MP_ROLE_HOST || gMp.role == MP_ROLE_CLIENT))
+	if (fe->action != JER_MP_FE_START)
+		return JER_RESULT_CONTINUE;
+
+	if (gMp.role == MP_ROLE_HOST)
 	{
-		if (gMp.role == MP_ROLE_HOST)
+		/* the host starts the match once; a later press has nothing to do */
+		if (!gMp.running)
 		{
 			gMp.city = GameLevel;
 
@@ -170,25 +173,36 @@ static int MpOnMpFrontend(void* userdata, void* args)
 
 			MpStartMatch();
 		}
-		else if (MpClientSessionLive())
+
+		fe->claimed = 1;
+		return JER_RESULT_CONTINUE;
+	}
+
+	if (gMp.role == MP_ROLE_CLIENT)
+	{
+		/* This must NOT be gated on !gMp.running.
+		 *
+		 * Joining a game that is already in progress sets running the moment the
+		 * WELCOME lands -- that is what "a live game" means -- so a gate on
+		 * !running refused the press, the stock start-game path ran instead, and
+		 * GameType was still 0. 0 is GAME_MISSION, and glaunch.c's
+		 * `case GAME_MISSION: RunMissionLadder(1)` is the mission ladder: the
+		 * client launched Undercover mission 1 instead of joining the session.
+		 * The session state that matters here is the JOIN state, not running. */
+		if (MpClientSessionLive())
 		{
-			/* client: the host already started, we just launch into it */
 			MpClientLaunch();
 		}
 		else
 		{
-			/* no live session (connection lost, refused, never welcomed): swallow
-			 * the press rather than launching into nothing */
 			jer_error("Not connected to a server");
 
 			if (gMpCtx != NULL)
 				gMpCtx->jer_log(gMpCtx, "[mp] START ignored: no live session\n");
-
-			fe->claimed = 1;
-			return JER_RESULT_CONTINUE;
 		}
 
 		fe->claimed = 1;
+		return JER_RESULT_CONTINUE;
 	}
 
 	return JER_RESULT_CONTINUE;

@@ -152,8 +152,8 @@ static void MpLaunchLocal(void)
 		wantedWeather = gMp.weather;
 
 	if (gMpCtx)
-		gMpCtx->jer_log(gMpCtx, "[mp] launching: city %d time %d weather %d\n",
-			GameLevel, wantedTimeOfDay, wantedWeather);
+		gMpCtx->jer_log(gMpCtx, "[mp] launching: city %d mode %d (1=TAKEADRIVE, 0=MISSION!) subgame %d time %d weather %d players %d\n",
+			GameLevel, GameType, gSubGameNumber, wantedTimeOfDay, wantedWeather, NumPlayers);
 
 	SetState(STATE_GAMESTART);
 }
