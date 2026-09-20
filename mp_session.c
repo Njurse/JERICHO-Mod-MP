@@ -360,6 +360,14 @@ static void MpHandleRoster(const unsigned char* p, int len)
 			snprintf(pl->name, sizeof(pl->name), "%s", e->name);
 
 		pl->isHost = (e->flags & MP_ROSTER_FLAG_HOST) ? 1 : 0;
+
+		/* isLocal is only knowable once we have been welcomed: the roster is sent
+		 * BEFORE the welcome (deliberately -- a live joiner must know who else is
+		 * in the match before it spawns cars), so at that moment localPlayerId is
+		 * still -1 and every row would be marked as someone else. Mark it only
+		 * when it is known, and re-mark on every roster so it stays right. */
+		if (gMp.localPlayerId >= 0)
+			pl->isLocal = (e->id == gMp.localPlayerId) ? 1 : 0;
 		pl->pingMs = (int)e->ping;
 	}
 }
