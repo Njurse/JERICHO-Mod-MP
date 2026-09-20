@@ -62,6 +62,7 @@ typedef struct MP_PLAYER
 	int  pingMs;			/* round trip, measured by the host */
 	unsigned long lastSeenMs;	/* liveness */
 	unsigned long lastStateFrame;	/* sim frame we last adopted this car's owner state */
+	unsigned long lastHitFrame;	/* sim frame we last reported a contact with this player */
 } MP_PLAYER;
 
 /* ------------------------------------------------------------------ */

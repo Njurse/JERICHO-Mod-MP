@@ -662,6 +662,13 @@ extern void SetTextColour(unsigned char Red, unsigned char Green, unsigned char 
 extern int  PrintString(char* string, int x, int y);
 extern int  gDrawPauseMenus;
 
+/* A live match must keep simulating while the pause menu is up, but the engine
+ * freezes the world (pauseflag blocks its StepSim). StepSim is an EXPORTED
+ * engine symbol, so we drive the world ourselves from the overlay hook, which
+ * fires on every drawn frame including while paused. */
+extern void StepSim(void);
+extern int  pauseflag;
+
 /* While the pause menu is up, list who is connected down the left side.
  *
  * The host leads the list and is cyan, because it is the one machine that owns
@@ -798,6 +805,20 @@ static int MpOnDrawOverlay(void* userdata, void* args)
 
 	MpNetPoll(0);
 
+	/* KEEP A LIVE MATCH RUNNING UNDER THE PAUSE MENU. The engine freezes the
+	 * world while its pause menu is open (pauseflag) and does not run
+	 * JER_EVENT_FRAME -- where our net tick lives -- while frozen. So while a
+	 * session is up and paused we step the world and run our own tick from here,
+	 * once per drawn frame. The menu itself is the engine's, opened normally. */
+	if (gMp.running && pauseflag != 0)
+	{
+		StepSim();
+		MpLockstepFrame();
+	}
+
+	/* the player list / MP options ride on the engine's pause menu */
+	gMpShowPlayers = (gMp.running && pauseflag != 0) ? 1 : 0;
+
 	/* MP_PAUSE logs the list for a test, and deliberately does NOT force the
 	 * engine's pause flag. It used to set gDrawPauseMenus = 1 every frame, which
 	 * makes the engine draw pause menus whose state was never set up -- a wild
@@ -850,14 +871,14 @@ static int MpOnPauseMenu(void* userdata, void* args)
 	if (!gMp.running)
 		return JER_RESULT_CONTINUE;
 
-	gMpShowPlayers = !gMpShowPlayers;
-
+	/* Let the ENGINE open its pause menu -- do not claim START. The world keeps
+	 * running because MpOnDrawOverlay steps it while paused, and our player list
+	 * (and MP options) ride on top of the menu the player expects to see. */
 	if (gMpCtx != NULL)
 		gMpCtx->jer_log(gMpCtx,
-			"[mp] pause claimed: the world keeps running (%s the player list)\n",
-			gMpShowPlayers ? "showing" : "hiding");
+			"[mp] pause menu opened; the world keeps running\n");
 
-	return JER_RESULT_STOP;
+	return JER_RESULT_CONTINUE;
 }
 
 static int MpOnPreSim(void* userdata, void* args)

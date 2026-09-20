@@ -1401,9 +1401,149 @@ static void MpHandleSpawn(const unsigned char* p, int len)
 	MpPlaceSpawns(s.x, s.y, s.z, s.heading);
 }
 
-/* One network tick (per simulation frame). Every machine drives every car from
- * replicated input, so nobody blocks on the network and nobody owns a car it
- * cannot see move. */
+/* ------------------------------------------------------------------ */
+/* Collisions, without giving up owner-authority                       */
+/*                                                                     */
+/* A machine can only move the ONE car it owns, so a naive contact      */
+/* would see the follower's push overwritten by the owner's next state  */
+/* (the "cars drive through each other" trade-off). Instead, when our   */
+/* car touches a peer's we push OUR car and TELL THE PEER'S OWNER to    */
+/* push theirs. Both cars actually move, and neither machine ever       */
+/* writes a car it does not own.                                       */
+/* ------------------------------------------------------------------ */
+#define MP_FIXEDH		4096	/* the velocity fix-point scale (FIXEDH / units << 12) */
+#define MP_HIT_RADIUS		900	/* world units; car body scale */
+#define MP_HIT_MIN_CLOSING	4	/* whole units/frame; don't fire on mere adjacency */
+#define MP_HIT_PUSH		60	/* per-cent of the closing speed given up */
+#define MP_HIT_MAX_PUSH		20	/* whole units/frame cap */
+#define MP_HIT_ARM_FRAMES	120	/* let the spawn/drop settle before contacts count */
+#define MP_HIT_COOLDOWN_FRAMES	15
+
+static void MpHitFrame(void)
+{
+	MP_PLAYER* me = MpLocalPlayer();
+	CAR_DATA* mine;
+	int i;
+	static unsigned long armFrame;   /* contacts only count after the spawn settles */
+
+	if (me == NULL || me->carId < 0)
+		return;
+
+	if (armFrame == 0)
+		armFrame = gMp.frame + MP_HIT_ARM_FRAMES;
+	if (gMp.frame < armFrame)
+		return;
+
+	mine = &car_data[me->carId];
+
+	for (i = 0; i < MP_MAX_PLAYERS; i++)
+	{
+		MP_PLAYER* pl = &gMp.players[i];
+		CAR_DATA* other;
+		long dx, dy, dz, d2, d, px, py, pz, closing, push;
+		MP_HIT h;
+
+		if (!pl->active || pl->isLocal || pl->id == me->id || pl->carId < 0)
+			continue;
+		if (gMp.frame - pl->lastHitFrame < MP_HIT_COOLDOWN_FRAMES)
+			continue;
+
+		other = &car_data[pl->carId];
+
+		dx = other->hd.where.t[0] - mine->hd.where.t[0];
+		dy = other->hd.where.t[1] - mine->hd.where.t[1];
+		dz = other->hd.where.t[2] - mine->hd.where.t[2];
+		d2 = dx * dx + dy * dy + dz * dz;
+
+		if (d2 == 0 || d2 > (long)MP_HIT_RADIUS * MP_HIT_RADIUS)
+			continue;
+
+		d = (long)sqrt((double)d2);
+		if (d == 0)
+			continue;
+
+		px = dx * MP_FIXEDH / d;	/* unit normal in the velocity fix-point, US -> THEM */
+		py = dy * MP_FIXEDH / d;
+		pz = dz * MP_FIXEDH / d;
+
+		closing = ((mine->st.n.linearVelocity[0] - other->st.n.linearVelocity[0]) * px
+			+ (mine->st.n.linearVelocity[1] - other->st.n.linearVelocity[1]) * py
+			+ (mine->st.n.linearVelocity[2] - other->st.n.linearVelocity[2]) * pz) / MP_FIXEDH;
+
+		if (closing < MP_HIT_MIN_CLOSING)
+			continue;
+
+		push = closing * MP_HIT_PUSH / 100;
+		if (push > MP_HIT_MAX_PUSH)
+			push = MP_HIT_MAX_PUSH;
+
+		/* we give up the closing component ... */
+		mine->st.n.linearVelocity[0] -= px * push / MP_FIXEDH;
+		mine->st.n.linearVelocity[1] -= py * push / MP_FIXEDH;
+		mine->st.n.linearVelocity[2] -= pz * push / MP_FIXEDH;
+
+		/* ... and ask THEIR owner to give it up too. */
+		memset(&h, 0, sizeof(h));
+		h.targetId = (uint8_t)pl->id;
+		h.impulse[0] = px * push / MP_FIXEDH;
+		h.impulse[1] = py * push / MP_FIXEDH;
+		h.impulse[2] = pz * push / MP_FIXEDH;
+
+		pl->lastHitFrame = gMp.frame;
+
+		if (MpIsHost())
+		{
+			int ci = MpConnFindByPlayer(pl->id);
+
+			if (ci >= 0)
+				MpSendConn(ci, MP_TAG_HIT, 0, &h, sizeof(h));
+		}
+		else
+			MpSendToHost(MP_TAG_HIT, 0, &h, sizeof(h));
+
+		if (gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx, "[mp] hit: we bumped player %d (closing %ld, push %ld,%ld,%ld)\n",
+				pl->id, closing, (long)h.impulse[0], (long)h.impulse[1], (long)h.impulse[2]);
+	}
+}
+
+static void MpHandleHit(int connIndex, const unsigned char* p, int len)
+{
+	MP_HIT h;
+	MP_PLAYER* me = MpLocalPlayer();
+
+	if (len < (int)sizeof(h))
+		return;
+
+	memcpy(&h, p, sizeof(h));
+
+	if (me != NULL && h.targetId == me->id && me->carId >= 0)
+	{
+		CAR_DATA* cp = &car_data[me->carId];
+
+		cp->st.n.linearVelocity[0] += h.impulse[0];
+		cp->st.n.linearVelocity[1] += h.impulse[1];
+		cp->st.n.linearVelocity[2] += h.impulse[2];
+
+		if (gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx, "[mp] hit: player %d bumped us (push %ld,%ld,%ld)\n",
+				MpConnPlayerId(connIndex), (long)h.impulse[0], (long)h.impulse[1], (long)h.impulse[2]);
+		return;
+	}
+
+	/* The host is the hub: a hit aimed at another CLIENT is relayed to it. */
+	if (MpIsHost())
+	{
+		int ci = MpConnFindByPlayer(h.targetId);
+
+		if (ci >= 0 && ci != connIndex)
+			MpSendConn(ci, MP_TAG_HIT, 0, p, len);
+	}
+}
+
+/* One network tick (per simulation frame). Each machine owns ITS OWN car and
+ * broadcasts that; everyone else adopts it, so nobody blocks on the network and
+ * every car you see is the truth of the machine driving it. */
 void MpLockstepFrame(void)
 {
 	if (!gMp.running)
@@ -1427,6 +1567,9 @@ void MpLockstepFrame(void)
 	 * every car from input that arrived a round trip late and hoped a coarse resync
 	 * would pull them back together -- which is exactly where the drift came from. */
 	MpSendOwnCarState();
+
+	/* owner-authoritative contacts: push ourselves, tell the peer's owner */
+	MpHitFrame();
 
 	MpNetPoll(0);
 }
@@ -1729,6 +1872,12 @@ void MpHandleMessage(int connIndex, const char* tag, const unsigned char* payloa
 	if (memcmp(tag, MP_TAG_CARSTATE, 4) == 0)
 	{
 		MpHandleCarState(connIndex, payload, len);
+		return;
+	}
+
+	if (memcmp(tag, MP_TAG_HIT, 4) == 0)
+	{
+		MpHandleHit(connIndex, payload, len);
 		return;
 	}
 

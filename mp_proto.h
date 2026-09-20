@@ -82,6 +82,7 @@ extern "C" {
 #define MP_TAG_LEAVE	"JPLV"	/* either side: leaving the session */
 #define MP_TAG_SPAWN	"JPSW"	/* host -> all: where everyone lines up */
 #define MP_TAG_ROSTER	"JPRS"	/* host -> all: who is in the match */
+#define MP_TAG_HIT	"JPHI"	/* either side: "my car bumped yours, you push yourself" */
 
 /* How far apart the player cars stand at the meeting point: close enough that
  * everybody is on one screen, far enough not to spawn inside each other. */
@@ -371,6 +372,16 @@ typedef struct MP_CHAT
 	char    text[MP_CHAT_TEXT_MAX];
 } MP_CHAT;
 
+/* A contact report. Cars are owner-authoritative, so a machine can only move
+ * the ONE car it owns: when MY car touches YOURS I push MINE, and I send you
+ * this so you push YOURS. Both cars move, and each stays the owner's truth. */
+typedef struct MP_HIT
+{
+	uint8_t  targetId;	/* the player whose car should receive the impulse */
+	uint8_t  reserved[3];
+	int32_t  impulse[3];	/* velocity delta to ADD to the target's car */
+} MP_HIT;
+
 #pragma pack(pop)
 
 /* Compile-time layout checks (modules compile as C++). */
@@ -385,8 +396,10 @@ static_assert(sizeof(MP_SESSION) == 12, "MP_SESSION layout");
 static_assert(sizeof(MP_PLAYER_INPUT) == 4, "MP_PLAYER_INPUT layout");
 static_assert(sizeof(MP_INPUT) == 8, "MP_INPUT layout");
 static_assert(sizeof(MP_CARSTATE_ENTRY) == 45, "MP_CARSTATE_ENTRY layout");
+static_assert(sizeof(MP_HIT) == 16, "MP_HIT layout");
 static_assert(sizeof(MP_CARSTATE) == 8, "MP_CARSTATE layout");
 static_assert(sizeof(MP_CHANNEL) == 26, "MP_CHANNEL layout");
+
 #endif
 
 #ifdef __cplusplus
