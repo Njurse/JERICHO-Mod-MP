@@ -45,6 +45,27 @@ FIREWALL
      this apart from a firewall problem.
 
 
+STAYING ON THE SAME BUILD
+   Build it from the project with ONE command:
+
+       JERICHO\MODS\mp\tools\pack_lan\sync_lan.bat
+
+   It regenerates the project files (so the build stamp is current), builds, and
+   writes REDRIVER2_mp_lan_<build>.7z in the project root. Copy that ONE file to
+   the other machine and extract it over this folder -- nothing else is needed
+   there (no Visual Studio, no git).
+
+   <build> is the same string the game logs at startup
+       [mp] multiplayer ready (... build be0d, mods 13bd)
+   and prints on the pause-menu scoreboard, right under "-- PLAYERS --". If those
+   two do not match, the two machines are not on the same build.
+
+   This package ships JERICHO\CONFIG\mp.ini with `strict_version = 1`, so a
+   mismatched build is REFUSED at join with a clear message, instead of the two
+   players silently failing to see each other. To deliberately test mismatched
+   builds, set it back to 0 in that file.
+
+
 IF IT GOES WRONG
    JERICHO.log next to the exe is the game log; it reports the session detail
    (join, launch, resync). A `JERICHO.dmp` next to it is a crash dump.
@@ -52,4 +73,5 @@ IF IT GOES WRONG
 NOTES
    * The test bot is OFF. Nothing drives your car unless you set MP_BOT.
    * Take a Ride with the two of you is the supported path for now. Car-to-car
-     collisions and damage are not replicated yet.
+     collisions are replicated -- each machine owns its own car's response, so a
+     shove lands after one round trip -- but damage is not.
