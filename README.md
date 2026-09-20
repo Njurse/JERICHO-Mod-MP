@@ -72,6 +72,7 @@ join handshake then admits or refuses clients by their enabled-mod manifest.
 | `mp_ui.c` | the frontend menus (registered via `jer_frontend.h`) |
 | `mp_proto.h` | the wire protocol (framed, little-endian) |
 | `tools/` | launchers + harnesses, documented in `tools/README.md` |
+| `docs/ARCHITECTURE.md` | how it all works: the model, protocol, lifecycle, traps, roadmap |
 
 ## In game
 
