@@ -923,6 +923,25 @@ int MpOnNetSpawn(void* userdata, void* args)
 		PlayerStartInfo[slot]->type = 1;
 		PlayerStartInfo[slot]->controlType = CONTROL_TYPE_PLAYER;
 		PlayerStartInfo[slot]->flags = 0;
+
+		/* Each remote player gets a POOL-CHECKED vehicle: the engine's own
+		 * per-level car table (carNumLookup), indexed by player id, so both
+		 * machines independently pick the SAME car for the same player. The old
+		 * code inherited the LOCAL player's model from the memcpy above, so on the
+		 * host the client drove the host's car and on the client the host drove the
+		 * client's -- two machines simulating different cars for one player, and
+		 * with a chosen special car (e.g. -mpcar 12) an unloaded model on both.
+		 * carNumLookup's entries are the level's own cars, so this cannot ask for a
+		 * model the level lacks. Only remote cars reach here (the local player is
+		 * skipped above); i is that player's id. */
+		{
+			extern char carNumLookup[4][10];
+			int lvl = (GameLevel >= 0 && GameLevel < 4) ? GameLevel : 0;
+
+			PlayerStartInfo[slot]->model = (u_char)carNumLookup[lvl][i % 4];
+			PlayerStartInfo[slot]->palette = 0;
+		}
+
 		PlayerStartInfo[slot]->position.vy = 0;
 		PlayerStartInfo[slot]->position.vx = PlayerStartInfo[0]->position.vx + 900 * slot;
 		PlayerStartInfo[slot]->position.vz = PlayerStartInfo[0]->position.vz;
