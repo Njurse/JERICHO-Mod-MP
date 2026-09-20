@@ -88,6 +88,12 @@ typedef struct MP_CONN
 	unsigned long lastRecvMs;
 	unsigned char rbuf[MP_RECV_BUF];
 	int           rbufLen;
+	unsigned long rxBytes;	/* bytes received in total. "the peer never
+							 * spoke" and "the peer spoke, then died" are
+							 * different problems with different causes, and a
+							 * bare "closed" cannot tell them apart. */
+	char          peer[32];	/* "ip:port" of the far end, for the log */
+	int           hsStage;	/* client: how far the join got (MP_HS_*) */
 	unsigned long pingMs;	/* round trip, from the PING/PONG tick */
 	unsigned char sbuf[MP_SEND_QUEUE];	/* frames waiting for the socket */
 	int           sbufLen;
@@ -98,6 +104,48 @@ static MP_CONN gConn[MP_MAX_PLAYERS];
 static SOCKET  gListen = INVALID_SOCKET;	/* host listener */
 static int     gNetStarted;
 static unsigned long gLastPollMs;	/* when we last serviced the sockets */
+
+/* How far a join got. A bare "connection lost" says nothing useful: the stage
+ * says whether the server was never reached, accepted the TCP connection but
+ * never answered the handshake, or dropped a running match. */
+enum {
+	MP_HS_NONE = 0,
+	MP_HS_CONNECTING, MP_HS_CONNECTED, MP_HS_HELLO_SENT,
+	MP_HS_WELCOME, MP_HS_PLAYING
+};
+
+static const char* MpStageName(int s)
+{
+	switch (s)
+	{
+	case MP_HS_CONNECTING: return "still connecting";
+	case MP_HS_CONNECTED:  return "connected, handshake not sent";
+	case MP_HS_HELLO_SENT: return "HELLO sent, no WELCOME";
+	case MP_HS_WELCOME:    return "WELCOME received, awaiting the level";
+	case MP_HS_PLAYING:    return "in the match";
+	default:               return "not connecting";
+	}
+}
+
+/* "ip:port" of the far end of a socket, for logs. Worth the effort: without it
+ * a drop says nothing about WHICH machine failed to reach which. */
+static void MpPeerName(SOCKET s, char* out, size_t cap)
+{
+	struct sockaddr_in a;
+	int len = (int)sizeof a;
+
+	out[0] = 0;
+	if (s == INVALID_SOCKET) { snprintf(out, cap, "?"); return; }
+
+	if (getpeername(s, (struct sockaddr*)&a, &len) == 0)
+	{
+		const unsigned char* ip = (const unsigned char*)&a.sin_addr.s_addr;
+		snprintf(out, cap, "%u.%u.%u.%u:%u",
+			ip[0], ip[1], ip[2], ip[3], (unsigned)ntohs(a.sin_port));
+	}
+	else
+		snprintf(out, cap, "?");
+}
 
 /* ------------------------------------------------------------------ */
 /* Platform helpers                                                    */
@@ -405,8 +453,10 @@ static void MpAcceptPeers(void)
 		gConn[idx].sock = s;
 		gConn[idx].hostSide = 1;
 		gConn[idx].lastRecvMs = MpClockMs();
+		MpPeerName(s, gConn[idx].peer, sizeof gConn[idx].peer);
 
-		if (gMpCtx) gMpCtx->jer_log(gMpCtx, "[mp] peer connected (awaiting handshake)\n");
+		if (gMpCtx) gMpCtx->jer_log(gMpCtx, "[mp] peer %s connected (awaiting handshake)\n",
+			gConn[idx].peer);
 	}
 }
 
@@ -535,6 +585,8 @@ static int MpClientAdopt(SOCKET s, const char* host, int port)
 	gConn[idx].hostSide = 0;
 	gConn[idx].playerId = 0;	/* the host */
 	gConn[idx].lastRecvMs = MpClockMs();
+	MpPeerName(s, gConn[idx].peer, sizeof gConn[idx].peer);
+	gConn[idx].hsStage = MP_HS_CONNECTED;
 
 	gMp.connected = 1;
 	gJoinState = MP_JOIN_CONNECTING;
@@ -542,6 +594,10 @@ static int MpClientAdopt(SOCKET s, const char* host, int port)
 	if (gMpCtx) gMpCtx->jer_log(gMpCtx, "[mp] connected to %s:%d\n", host, port);
 
 	MpSendHello();
+	gConn[idx].hsStage = MP_HS_HELLO_SENT;
+
+	if (gMpCtx) gMpCtx->jer_log(gMpCtx, "[mp] HELLO sent to %s, awaiting WELCOME\n",
+		gConn[idx].peer[0] ? gConn[idx].peer : host);
 
 	return 1;
 }
@@ -777,10 +833,14 @@ static void MpDropConn(int idx, const char* why)
 {
 	/* on a client, losing the server connection is worth telling the player
 	 * about -- and it means the match is over, so go back to the frontend.
-	 * `gMp.leaving` marks a deliberate leave, which must stay quiet. */
+	 * `gMp.leaving` marks a deliberate leave, which must stay quiet.
+	 * The toast names WHERE it stopped: "lost" alone cannot distinguish a
+	 * server that was never reached from one that dropped a running match. */
 	if (gMp.role == MP_ROLE_CLIENT && !gMp.leaving)
 	{
-		jer_error("Connection to the server lost!");
+		jer_error("Lost the server %s (%s)",
+			gConn[idx].peer[0] ? gConn[idx].peer : gConnectingHost,
+			MpStageName(gConn[idx].hsStage));
 		MpReturnToFrontend();
 	}
 
@@ -791,7 +851,29 @@ static void MpDropConn(int idx, const char* why)
 	gConn[idx].used = 0;
 	gConn[idx].rbufLen = 0;
 
-	if (gMpCtx) gMpCtx->jer_log(gMpCtx, "[mp] peer dropped (%s)\n", why);
+	if (gMpCtx)
+	{
+		gMpCtx->jer_log(gMpCtx, "[mp] peer %s dropped (%s); %lu byte(s) received\n",
+			gConn[idx].peer[0] ? gConn[idx].peer : "?", why, gConn[idx].rxBytes);
+
+		/* A peer that CONNECTED, was accepted and then said NOTHING is not a
+		 * timeout -- the socket was live and the TCP handshake completed.
+		 * A blocked port cannot look like this, so it is almost always
+		 * something between the two machines interfering with the flow.
+		 * Name the suspects instead of leaving a bare "closed". */
+		if (gConn[idx].hostSide && gConn[idx].rxBytes == 0 && !gConn[idx].hsDone)
+			gMpCtx->jer_log(gMpCtx,
+				"[mp] ^ that peer completed a TCP handshake and then sent ZERO "
+				"bytes, which a closed port or a stealthed firewall cannot do. "
+				"Likely causes, in order: security software (Norton/McAfee/AVG/"
+				"ESET/Kaspersky), a VPN or Hyper-V/VirtualBox/WSL virtual adapter "
+				"on either machine, then Wi-Fi client isolation. Try a wired link "
+				"or a phone hotspot to tell them apart.\n");
+	}
+
+	gConn[idx].hsStage = MP_HS_NONE;
+	gConn[idx].peer[0] = 0;
+	gConn[idx].rxBytes = 0;
 }
 
 void MpConnClose(int connIndex)
@@ -826,7 +908,10 @@ void MpConnShutdownGraceful(int connIndex)
 void MpConnHandshakeDone(int connIndex)
 {
 	if (connIndex >= 0 && connIndex < MP_MAX_PLAYERS && gConn[connIndex].used)
+	{
 		gConn[connIndex].hsDone = 1;
+		gConn[connIndex].hsStage = MP_HS_WELCOME;
+	}
 }
 
 static void MpProcessConn(int idx)
@@ -882,7 +967,16 @@ static void MpProcessConn(int idx)
 
 		if (n < 0)
 		{
-			MpDropConn(idx, "closed");
+			int err = WSAGetLastError();
+
+			/* An orderly close arrives as n == 0 and is handled above. n < 0
+			 * with ECONNRESET means the far end or something in between RST
+			 * the connection -- a different event from a hangup, and the one
+			 * that a filtering middlebox produces. */
+			if (err == WSAECONNRESET)
+				MpDropConn(idx, "connection reset (WSAECONNRESET)");
+			else
+				MpDropConn(idx, "socket error");
 			return;
 		}
 
@@ -894,6 +988,7 @@ static void MpProcessConn(int idx)
 
 		memcpy(c->rbuf + c->rbufLen, buf, n);
 		c->rbufLen += n;
+		c->rxBytes += (unsigned long)n;
 		c->lastRecvMs = MpClockMs();
 	}
 
@@ -1288,9 +1383,25 @@ static void MpBeaconSend(void)
 		addr.sin_port = htons((unsigned short)MP_DISCOVERY_PORT);
 		addr.sin_addr.s_addr = targets[i];
 
+		/* Which interfaces the beacon actually left by. "I can't see his
+		 * server" is usually a beacon going out of the wrong adapter -- or
+		 * out of none at all -- so log every target, not just the send. */
+		if (getenv("MP_DEBUG") != NULL && gMpCtx != NULL)
+		{
+			struct in_addr ia;
+			ia.s_addr = targets[i];
+			gMpCtx->jer_log(gMpCtx, "[mp] beacon -> %s:%d\n",
+				inet_ntoa(ia), MP_DISCOVERY_PORT);
+		}
+
 		sendto(gBeaconSock, (const char*)&b, (int)sizeof(b), 0,
 			(struct sockaddr*)&addr, sizeof(addr));
 	}
+
+	if (n <= 0 && getenv("MP_DEBUG") != NULL && gMpCtx != NULL)
+		gMpCtx->jer_log(gMpCtx,
+			"[mp] beacon: no broadcast target at all -- no usable adapter? "
+			"A server on this machine will be invisible to everyone.\n");
 }
 
 static void MpServerTouch(const char* ip, const MP_BEACON* b)
@@ -1395,6 +1506,14 @@ static void MpBeaconRecv(void)
 
 		if (b.magic != MP_UDP_MAGIC || b.protoVersion != (uint16_t)MP_PROTO_VERSION)
 			continue;
+
+		/* Log every beacon we actually received, with its sender: when a
+		 * server is visible from one machine and not the other, this line is
+		 * the difference between the two. */
+		if (getenv("MP_DEBUG") != NULL && gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx, "[mp] beacon <- %s \"%s\" players=%u/%u city=%u\n",
+				inet_ntoa(from.sin_addr), b.hostName,
+				(unsigned)b.players, (unsigned)b.maxPlayers, (unsigned)b.city);
 
 		MpServerTouch(inet_ntoa(from.sin_addr), &b);
 	}
