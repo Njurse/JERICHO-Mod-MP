@@ -122,15 +122,23 @@ inert unless `MP_BOT` asks for it.
 | `random` (also `MP_TESTDRIVE=1`) | the canned manoeuvre: a pad that changes every 0.5–4 s |
 | `chase` | the HOST flees, the joiner chases |
 | `fight` | both charge each other |
-| `pursuit` | the JOINER hunts, the HOST runs -- with probe-based obstacle avoidance and no dead time |
+| `pursuit` | MUTUAL chase: both cars hunt each other, so the pair reliably meets and collides |
 
 `mp_localpair.py --bot <mode>` sets it on both instances. `pursuit` is the one to
 reach for when you want the pair actually driving a distance around scenery (so the
 network layer is exercised under real motion): the bots pick a clear heading with
-the engine's own `CellEmpty` out of a fan of 30° steps, looking both near (so they
-do not nose into a wall) and far (so they do not commit to a gap that closes), and
-back out when they wedge. Their progress and the resulting host<->client deviation
-are in the `[mp] bot:` and `[mp] sync:` lines.
+the engine's own `CellEmpty` out of a fan of 15° steps covering a full ±180° (so a
+heading AROUND a wall, up to a U-turn, is findable), looking both near (so they do
+not nose into a wall) and far (so they do not commit to a gap that closes), hold a
+chosen heading until it is blocked (otherwise the steering flaps), turn round when
+the gap stops closing for 150 frames, and back out when they wedge. Their progress
+and the resulting host<->client deviation are in the `[mp] bot:` and `[mp] sync:`
+lines.
+
+`--host-car default` runs the host with NO `-mpcar`, i.e. exactly what a player who
+just presses Host does: the ENGINE/level chooses the car (`config.car` stays -1).
+Use it to reproduce the case where a joiner used to be handed the level's slot-0
+car instead of the host's (see trap 12 in `docs/ARCHITECTURE.md`).
 
 ## Reading a run
 

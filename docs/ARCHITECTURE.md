@@ -386,6 +386,35 @@ These have each cost real time. They are not hypothetical.
    view of the client's car and the two simulations drifted with no correction at
    all (the "physics/steering not synced"). The `[mp] sync:` deviation line makes
    this visible: it must print for BOTH remote cars.
+12. **A peer's car can be UNKNOWABLE at level init — defer it, never guess.** With no
+   `-mpcar` the host has nothing naming its car (`config.car = -1`,
+   `wantedCar[0] = -1`, `PlayerStartInfo[0]` still NULL at launch), so the WELCOME
+   carried `hostCar = 0xFF` and a joiner fell back to `carNumLookup[lvl][0]` — the
+   per-city FRONTEND car table, i.e. a different machine altogether (the "on the
+   client the host is a police car with a palette that does not match" report; in
+   Rio both happen to be model 1, so it only showed in another city). The owner is
+   really driving the LEVEL's default (`MissionHeader->playerCarModel`), the same
+   number on both machines — but that is not readable at level init either, because
+   the mission header is parsed later (`MissionHeader` is NULL there). So a remote
+   car whose model is unknown is DEFERRED: the player is left carless and
+   `MpSpawnLateJoiners` builds it on a frame once the level is up, resolved from the
+   level default. Do not "fix" this with a better guess. `--host-car default` in
+   `mp_localpair.py` reproduces the case.
+13. **A blocking socket under a non-blocking send path stalls the whole frame.** The
+   send path (`MpFlushConn`/`MpSendRaw`) QUEUES what the socket will not take, but
+   the connection sockets were set BLOCKING, so when a peer's receive window filled
+   `send()` blocked inside the game loop: the world froze for seconds (both cars
+   logged `spd=0`, sitting in place), the peer then looked dead, the host timed the
+   client out and the client's socket died mid-`recv` with `WSA_INVALID_HANDLE`
+   (error 6 — OUR handle was already closed). Every connection socket must stay
+   NON-BLOCKING; `recv` is already guarded by `select()` and treats
+   `WSAEWOULDBLOCK` as "nothing yet". (See `mp-sockets-must-be-nonblocking`.)
+14. **A "packet loss" readout on TCP is meaningless — measure delivery.** TCP
+   retransmits, so the stack always says 0% while the peer's data may be seconds
+   late. The scoreboard's `loss N%` is an application-level EWMA of the frames in
+   which NOTHING arrived from that peer, sampled ONCE per sim frame — `MpNetPoll`
+   runs several times a frame (frame hook, overlay, lockstep) and per-poll sampling
+   counted the extra calls as "nothing arrived" (a phantom 77% on a healthy link).
 
 ---
 
