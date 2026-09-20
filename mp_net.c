@@ -203,6 +203,7 @@ static void MpTuneConn(SOCKET s)
 }
 
 static void MpDropConn(int idx, const char* why);	/* used by the send queue */
+static void MpLinkTick(void);				/* link-state logging, MP_DEBUG only */
 
 /* Would this send only have had to wait? Non-blocking sockets say so this way,
  * and it is NOT an error -- it is the normal case on a busy link. */
@@ -1300,6 +1301,43 @@ void MpNetPoll(int waitMs)
 
 	/* sample the delivery statistic LAST, so it sees this poll's arrivals */
 	MpLossTick();
+
+	/* and a periodic look at the link itself, so a stall is visible before it
+	 * turns into a drop */
+	MpLinkTick();
+}
+
+/* MP_DEBUG: a periodic look at the LINK, so a stall can be seen BEFORE it becomes
+ * a drop. Prints our frame, how long ago we last HEARD from each peer, and how
+ * many bytes are stuck in that peer's send queue -- the three numbers that
+ * separate "they stopped talking" from "we stopped listening" from "we queued but
+ * never flushed". Log-only. */
+static void MpLinkTick(void)
+{
+	static unsigned long lastMs;
+	unsigned long now = MpNowMs();
+	int i;
+
+	/* NOTE: nothing here returns or breaks on the MP_DEBUG guard -- control flow
+	 * conditional on a debug flag is exactly what the debug-independence check
+	 * refuses, so even the interval test lives in the guard's condition. */
+	if (getenv("MP_DEBUG") != NULL && gMpCtx != NULL && (now - lastMs) >= 5000)
+	{
+		lastMs = now;
+
+		for (i = 0; i < MP_MAX_PLAYERS; i++)
+		{
+			MP_CONN* c = &gConn[i];
+
+			if (!c->used)
+				continue;
+
+			gMpCtx->jer_log(gMpCtx,
+				"[mp] link: conn %d frame %lu heard %lums ago queued %d tx=%lu\n",
+				i, gMp.frame, now - c->lastRecvMs,
+				c->sbufLen - c->sbufOff, c->txBytes);
+		}
+	}
 }
 
 /* ------------------------------------------------------------------ */

@@ -1873,6 +1873,39 @@ static void MpSendOwnCarState(void)
 	{
 		cp = &car_data[me->carId];
 
+		/* MP_DEBUG: flag anything that will NOT survive the wire. orientation[4]
+		 * and angularVelocity[3] are int16 on the wire, so a violent spin -- a hard
+		 * hit -- is the one thing that can arrive as garbage on the peer. This is
+		 * the detector for "the client died after a big crash": if it never fires,
+		 * the int16 wrap is not the explanation and the fault is elsewhere.
+		 * Log-only, so it cannot change behaviour. */
+		if (getenv("MP_DEBUG") != NULL && gMpCtx != NULL)
+		{
+			int a, big = 0;
+
+			for (a = 0; a < 4; a++)
+			{
+				if (cp->st.n.orientation[a] > 32767 || cp->st.n.orientation[a] < -32768)
+					big = 1;
+			}
+
+			for (a = 0; a < 3; a++)
+			{
+				if (cp->st.n.angularVelocity[a] > 32767 || cp->st.n.angularVelocity[a] < -32768)
+					big = 1;
+			}
+
+			if (big)
+			{
+				gMpCtx->jer_log(gMpCtx,
+					"[mp] WIRE: off-wire values on our car -- orient %d %d %d %d ang %d %d %d\n",
+					(int)cp->st.n.orientation[0], (int)cp->st.n.orientation[1],
+					(int)cp->st.n.orientation[2], (int)cp->st.n.orientation[3],
+					(int)cp->st.n.angularVelocity[0], (int)cp->st.n.angularVelocity[1],
+					(int)cp->st.n.angularVelocity[2]);
+			}
+		}
+
 		e.palette = (uint8_t)cp->ap.palette;	/* the colour WE see our car in -- we own it */
 		e.model = (uint8_t)cp->ap.model;	/* ...and WHAT we are driving */
 		e.carSlot = (uint8_t)me->carId;		/* so a peer can drive the same car */
