@@ -26,7 +26,7 @@ echo packaging %EXEDIR% -^> %OUT%
 pushd "%EXEDIR%" || exit /b 1
 "%SEVENZ%" a -t7z -mx=5 "-xr!FMV" "%OUT%" ^
     REDRIVER2_dev.exe SDL2.dll OpenAL32.dll soft_oal.dll config.ini ^
-    DRIVER2 JERICHO
+    VERSION.txt DRIVER2 JERICHO
 popd
 
 pushd "%HERE%" || exit /b 1
