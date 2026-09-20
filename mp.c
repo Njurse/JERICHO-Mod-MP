@@ -739,7 +739,8 @@ static void MpLogPlayerList(void)
 				snprintf(net, sizeof(net), "%d ms", p->pingMs);
 			}
 
-			gMpCtx->jer_log(gMpCtx, "[mp] list: %s #%d  car %d  slot %d  %s%s\n",
+			gMpCtx->jer_log(gMpCtx, "[mp] list: (build %04x mods %04x) %s #%d  car %d  slot %d  %s%s\n",
+				MpBuildHash(), MpModHash(),
 				p->name, p->id, veh, p->carId, net, p->isHost ? "  (host)" : "");
 		}
 	}
@@ -754,6 +755,20 @@ static void MpDrawPlayerList(void)
 	 * the room. (Was x=8, y=56, then (4,24) -- still crowded the menu.) */
 	SetTextColour(170, 170, 170);
 	PrintString((char*)"-- PLAYERS --", 4, 6);
+
+	/* The build identity, right under the title. These are the SAME numbers the
+	 * startup log prints and the ones strict_version compares, so two players can
+	 * confirm at a glance that they are on the same build (a mismatch is the most
+	 * common cause of "we don't see each other"). */
+	{
+		char ident[72];
+
+		snprintf(ident, sizeof(ident), "build %04x  mods %04x",
+			MpBuildHash(), MpModHash());
+
+		SetTextColour(140, 140, 140);
+		PrintString(ident, 4, 14);
+	}
 
 	for (id = 0; id < MP_MAX_PLAYERS; id++)
 	{
@@ -802,7 +817,7 @@ static void MpDrawPlayerList(void)
 			snprintf(line, sizeof(line), "%s #%d  car %d", p->name, p->id, veh);
 		}
 
-		y = 18 + row * 20;
+		y = 26 + row * 20;
 		row++;
 
 		if (p->isHost)
@@ -823,7 +838,8 @@ static void MpDrawPlayerList(void)
 			if ((MpNowMs() - lastListMs) > 2000)
 			{
 				lastListMs = MpNowMs();
-				gMpCtx->jer_log(gMpCtx, "[mp] list: %s | %s\n", line, net);
+				gMpCtx->jer_log(gMpCtx, "[mp] list: (build %04x mods %04x) %s | %s\n",
+					MpBuildHash(), MpModHash(), line, net);
 			}
 		}
 	}
