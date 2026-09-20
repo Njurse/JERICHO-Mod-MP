@@ -113,16 +113,34 @@ def serve(conn, addr, args):
     except OSError:
         pass
 
+    # Poll fast so we can keep the link fresh from OUR side too: a dedicated
+    # server should not depend on the client to prove the link is alive.
+    conn.settimeout(1.0)
+    silent = 0
+
     while True:
         try:
             tag, payload = m.recv_frame(conn)
-        except (socket.timeout, OSError):
-            tag = None
+        except socket.timeout:
+            # A second of silence. Send our own keepalive PING and only give the
+            # client up after `--timeout` seconds of real silence. Without this a
+            # quiet client (a lobby, a load) would be dropped by our own timeout.
+            silent += 1
+            if silent >= args.timeout:
+                break
+            try:
+                m.send_frame(conn, m.TAG["ping"],
+                             struct.pack("<I", int(time.time() * 1000) & 0xFFFFFFFF))
+            except OSError:
+                break
+            continue
         except Exception:
-            tag = None
+            break
 
         if tag is None:
             break
+
+        silent = 0
 
         if tag == m.TAG["carstate"]:
             with LOCK:
@@ -135,6 +153,14 @@ def serve(conn, addr, args):
             broadcast(carstate_union(int(time.time() * 30)), m.TAG["carstate"], skip=conn)
         elif tag == m.TAG["chat"]:
             broadcast(payload, m.TAG["chat"], skip=conn)
+        elif tag == m.TAG["ping"]:
+            # Liveness. A client pings on its keepalive interval and expects the
+            # tick echoed back; with no PONG the client's last-receive clock stops
+            # advancing and it drops itself after its idle timeout. Echo it.
+            try:
+                m.send_frame(conn, m.TAG["pong"], payload or b"\x00\x00\x00\x00")
+            except OSError:
+                break
         elif tag == m.TAG["leave"]:
             break
 

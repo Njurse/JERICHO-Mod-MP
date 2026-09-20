@@ -37,14 +37,14 @@ TAG = {
     "session": b"JPSS", "start": b"JPST", "input": b"JPIN",
     "carstate": b"JPCS", "ping": b"JPPN", "pong": b"JPPO",
     "channel": b"JPCH", "leave": b"JPLV", "chat": b"JPCX",
-    "spawn": b"JPSW",
+    "spawn": b"JPSW", "roster": b"JPRS",
 }
 UDP_MAGIC = 0x31504D4A
 
 ENV = struct.Struct("<I4sBBH")
 HELLO = struct.Struct("<HHHH32s4B")      # 44 bytes
 MODI = struct.Struct("<24s16sBB")        # 42 bytes
-WELCOME = struct.Struct("<13BI")          # 17 bytes
+WELCOME = struct.Struct("<12BIB")        # 17 bytes: 12xu8, u32 seed, u8 hostCar (matches mp_proto.h; NOT <13BI, which shifts seed/hostCar by one)
 REJECT = struct.Struct("<4B64s")         # 68 bytes
 BEACON = struct.Struct("<IHH32s6BHH")    # 50 bytes
 SPAWN = struct.Struct("<4i")             # 16 bytes: x, y, z, headingCHANNEL = struct.Struct("<16sHIBB2B")    # 26 bytes
@@ -165,50 +165,59 @@ def mode_host(args):
         send_frame(conn, TAG["start"], sess)
         print(f"[mock-host] sent START (city={args.city})")
 
-    if args.lockstep:
-        conn.settimeout(3.0)
-        seen = 0
-        carstate = 0
-        last = None
-        for _ in range(3000):
-            try:
-                tag, payload = recv_frame(conn)
-            except socket.timeout:
-                break
-            if tag is None:
-                break
-            if tag == TAG["input"]:
-                frame, count, _a, _b, _c = INPUT.unpack_from(payload, 0)
-                rows = [PLAYER_INPUT.unpack_from(payload, INPUT.size + i * PLAYER_INPUT.size) for i in range(count)]
-                peer_pad = rows[0][1] if rows else 0
-                out = INPUT.pack(frame, 2, 0, 0, 0)
-                out += PLAYER_INPUT.pack(0, args.peer_pad, 0)   # the fake host player's own pad
-                out += PLAYER_INPUT.pack(1, peer_pad, 0)       # echo the client's own pad (player 1)
-                send_frame(conn, TAG["input"], out)
-                seen += 1
-            elif tag == TAG["carstate"] and not args.no_carstate:
-                frame, count, _a, _b, _c = CARSTATE.unpack_from(payload, 0)
-                if count >= 1:
-                    pid, _fl, _o0, _o1, _o2, _o3, x, y, z, hd, _a0, _a1, _a2, _v0, _v1, _v2 = CARSTATE_ENTRY.unpack_from(payload, CARSTATE.size)
-                    last = (x, y, z, hd)
-                    if not hasattr(args, "_fixed") or args._fixed is None:
-                        args._fixed = (x + args.peer_dist, y, z)
-                        print(f"[mock-host] pinning 'host' car at {args._fixed} "
-                              f"(client spawn {x},{y},{z}, {args.peer_dist} away)")
-                        # a real host hands out its own car's position as the meeting
-                        # point; line everybody up where the client already is
-                        if args.start:
-                            send_frame(conn, TAG["spawn"], SPAWN.pack(x, y, z, 0))
-                            print(f"[mock-host] sent SPAWN meeting point {x},{y},{z}")
-                    fx, fy, fz = args._fixed
-                    # static "host" car: it must NOT follow the client's car
-                    cs = CARSTATE.pack(frame, 1, 0, 0, 0)
-                    cs += CARSTATE_ENTRY.pack(0, 1, 0, 0, 0, 0, fx, fy, fz, 0, 0, 0, 0, 0, 0, 0)
-                    send_frame(conn, TAG["carstate"], cs)
-                    carstate += 1
-        print(f"[mock-host] served {seen} input / {carstate} car-state frame(s); last client car {last}")
-
-    time.sleep(0.5)
+    # Service the connection. A real host does NOT hang up the moment it has said
+    # hello: it answers keepalives and stays up. Closing 0.5 s after WELCOME is
+    # exactly why a joining client logged "Lost the server" seconds into an
+    # otherwise clean handshake. So: always reply to PING with PONG, service
+    # input/car-state with --lockstep, and stay up until the client goes away
+    # (or --hold seconds pass).
+    conn.settimeout(1.0)
+    seen = 0
+    carstate = 0
+    last = None
+    deadline = time.time() + args.hold if args.hold > 0 else None
+    while deadline is None or time.time() < deadline:
+        try:
+            tag, payload = recv_frame(conn)
+        except socket.timeout:
+            continue
+        except OSError:
+            break
+        if tag is None:
+            print("[mock-host] client closed the connection")
+            break
+        if tag == TAG["ping"]:
+            send_frame(conn, TAG["pong"], payload if payload else b"\0\0\0\0")
+        elif tag == TAG["input"] and args.lockstep:
+            frame, count, _a, _b, _c = INPUT.unpack_from(payload, 0)
+            rows = [PLAYER_INPUT.unpack_from(payload, INPUT.size + i * PLAYER_INPUT.size) for i in range(count)]
+            peer_pad = rows[0][1] if rows else 0
+            out = INPUT.pack(frame, 2, 0, 0, 0)
+            out += PLAYER_INPUT.pack(0, args.peer_pad, 0)   # the fake host player's own pad
+            out += PLAYER_INPUT.pack(1, peer_pad, 0)       # echo the client's own pad (player 1)
+            send_frame(conn, TAG["input"], out)
+            seen += 1
+        elif tag == TAG["carstate"] and args.lockstep and not args.no_carstate:
+            frame, count, _a, _b, _c = CARSTATE.unpack_from(payload, 0)
+            if count >= 1:
+                pid, _fl, _o0, _o1, _o2, _o3, x, y, z, hd, _a0, _a1, _a2, _v0, _v1, _v2 = CARSTATE_ENTRY.unpack_from(payload, CARSTATE.size)
+                last = (x, y, z, hd)
+                if not hasattr(args, "_fixed") or args._fixed is None:
+                    args._fixed = (x + args.peer_dist, y, z)
+                    print(f"[mock-host] pinning 'host' car at {args._fixed} "
+                          f"(client spawn {x},{y},{z}, {args.peer_dist} away)")
+                    # a real host hands out its own car's position as the meeting
+                    # point; line everybody up where the client already is
+                    if args.start:
+                        send_frame(conn, TAG["spawn"], SPAWN.pack(x, y, z, 0))
+                        print(f"[mock-host] sent SPAWN meeting point {x},{y},{z}")
+                fx, fy, fz = args._fixed
+                # static "host" car: it must NOT follow the client's car
+                cs = CARSTATE.pack(frame, 1, 0, 0, 0)
+                cs += CARSTATE_ENTRY.pack(0, 1, 0, 0, 0, 0, fx, fy, fz, 0, 0, 0, 0, 0, 0, 0)
+                send_frame(conn, TAG["carstate"], cs)
+                carstate += 1
+    print(f"[mock-host] served {seen} input / {carstate} car-state frame(s); last client car {last}")
     conn.close()
     return 0
 
@@ -413,6 +422,11 @@ def main():
     h.add_argument("--beacon-name", default="MockBob's game", help="advertised host name")
     h.add_argument("--beacon-in-progress", type=int, default=0, help="1 = advertise as a live match")
     h.add_argument("--beacon-interval", type=float, default=1.0)
+    h.add_argument("--hold", type=float, default=0.0,
+                   help="seconds to keep the connection up after the handshake "
+                        "(0 = until the client disconnects). A real host does not "
+                        "close after saying hello; closing early made a client see "
+                        "'Lost the server' right after a clean join.")
     h.set_defaults(func=mode_host)
 
     c = sub.add_parser("client", help="mock client: connect to the game's host")

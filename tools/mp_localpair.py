@@ -33,7 +33,10 @@ import time
 
 DEFAULT_GAME_DIR = os.path.join("src_rebuild", "bin", "Release_dev")
 INSTANCE_DIR_NAMES = ("a", "b")
-GAME_LOG = "REDRIVER2.log"
+# The game writes its log as JERICHO.log -- the LOADER owns the file. REDRIVER2.log
+# is kept as a fallback for a build that writes that name instead. Reporting the
+# wrong one made every run print "no REDRIVER2.log" even when the game logged fine.
+GAME_LOGS = ("JERICHO.log", "REDRIVER2.log")
 
 
 def log(msg):
@@ -183,9 +186,10 @@ def launch(run_dir, exe, args, env_extra):
 
 
 def report(run_dir, label, patterns):
-    path = os.path.join(run_dir, GAME_LOG)
-    if not os.path.exists(path):
-        log(f"{label}: no {GAME_LOG}")
+    path = next((os.path.join(run_dir, n) for n in GAME_LOGS
+                 if os.path.exists(os.path.join(run_dir, n))), None)
+    if path is None:
+        log(f"{label}: no {'/'.join(GAME_LOGS)}")
         return
 
     hits = []
@@ -198,6 +202,40 @@ def report(run_dir, label, patterns):
     print(f"--- {label} ({len(hits)} line(s)) ---")
     for line in hits[-24:]:
         print("   ", line)
+
+
+def read_log(run_dir):
+    for name in GAME_LOGS:
+        path = os.path.join(run_dir, name)
+        if os.path.exists(path):
+            with open(path, "rb") as f:
+                return f.read().decode("utf-8", "replace")
+    return ""
+
+
+def verdict(dirs):
+    """Pass/fail for the run: the pair must connect AND must not drop.
+
+    This is what turns the harness from a log dump into a regression test.
+    "The client dropped instantly" was invisible in a wall of logs, so the two
+    markers that actually mean it -- a client that never got accepted, and either
+    side reporting a peer that spoke 0 bytes (the signature of the receive-guard
+    bug) -- are asserted here. A benign end-of-run close ('dropped (closed)')
+    is not counted.
+    """
+    host = read_log(dirs["a"])
+    client = read_log(dirs["b"])
+
+    host_join = "joined (" in host
+    client_ok = "accepted as player" in client
+    client_lost = client.count("Lost the server")
+    zero_byte = (host + client).count("0 byte(s) received")
+
+    ok = host_join and client_ok and client_lost == 0 and zero_byte == 0
+    log(f"verdict: host_join={host_join} client_accepted={client_ok} "
+        f"client_lost={client_lost} zero_byte_peers={zero_byte} -> "
+        f"{'PASS' if ok else 'FAIL'}")
+    return 0 if ok else 1
 
 
 def main():
@@ -213,6 +251,11 @@ def main():
     ap.add_argument("--clean", action="store_true",
                     help="remove the run dirs and exit (never follows a junction)")
     ap.add_argument("--map", action="store_true", help="hold the in-game map open (MP_MAP=1)")
+    ap.add_argument("--no-debug", action="store_true",
+                    help="do NOT set MP_DEBUG=1. This is what the packaged launchers "
+                         "(PLAY_HOST.bat / PLAY_JOIN.bat) do, so it is the only way to test "
+                         "what a player actually runs -- a bug that only appears without "
+                         "MP_DEBUG is invisible otherwise.")
     ap.add_argument("--bot", default="off", choices=["off", "random", "chase", "fight"],
                     help="drive the player cars with the mp test bot: random / chase (host flees, "
                          "joiner chases) / fight (both charge). OFF by default -- this drives a "
@@ -272,7 +315,7 @@ def main():
     # NOTE: both instances want UDP/1318 for discovery, so the second one reports
     # "discovery unavailable" and simply does not browse. The join below uses the
     # address directly, which is the path that must work anyway.
-    env = {"MP_DEBUG": "1"}
+    env = {} if args.no_debug else {"MP_DEBUG": "1"}
     if args.map:
         env["MP_MAP"] = "1"
 
@@ -329,6 +372,9 @@ def main():
     report(dirs["a"], "HOST", patterns)
     report(dirs["b"], "CLIENT", patterns)
 
+    # Pass/fail BEFORE the run dirs (and their logs) are removed.
+    passes = verdict(dirs)
+
     for p, label in ((b, "client"), (a, "host")):
         if p.poll() is None:
             p.terminate()
@@ -347,7 +393,7 @@ def main():
             pass
         log("run dirs removed (--keep to keep them)")
 
-    return 0
+    return passes
 
 
 if __name__ == "__main__":

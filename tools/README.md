@@ -34,7 +34,7 @@ mp_pair.bat --help                everything else
 
 It builds two throwaway run directories beside the game from directory junctions,
 so the big trees are shared and nothing is copied. **Separate working directories
-are the whole trick** — they are what stop the two `REDRIVER2.log` files and the
+are the whole trick** — they are what stop the two `JERICHO.log` files and the
 two `mp.ini` files fighting each other, which is why two instances could not be
 tested before this existed.
 
@@ -90,9 +90,23 @@ connected and was then dropped. Ctrl-C stops it.
 
 | File | What it is |
 | --- | --- |
-| `mp_localpair.py` | the two-instance harness `mp_pair.bat` wraps |
+| `mp_localpair.py` | the two-instance harness `mp_pair.bat` wraps; prints a PASS/FAIL verdict and reads `JERICHO.log` |
 | `mp_test.py` | mock host / client / beacon, plus the protocol checks |
 | `mp_dediserver.py` | the dedicated server `mp_dedi.bat` wraps |
+| `check_debug_independence.py` | fails if any debug `getenv` guard wraps control flow or state (see the traps doc) |
+| `_liveness_probe.py` | connects as a bare client and reports WELCOME/START/PONG/EOF -- the quick way to tell a server that answers from one that is silent |
+
+**Liveness contract for any mock/dedi host.** A server here must answer a client's
+`PING` with a `PONG` (echo the tick) and keep the connection up; a client that gets
+nothing after the handshake drops itself at its idle timeout. The mock used to close
+0.5 s after `WELCOME` and the dedi never replied to `PING`, so both looked like
+instant drops. The wire format lives in `mp_test.py` -- when `mp_proto.h` changes,
+update it there (e.g. `WELCOME` is `<12BIB`, 12xu8 + u32 seed + u8 hostCar; a
+`<13BI` there crashes both simulated hosts).
+
+`mp_localpair.py` takes `--no-debug` to run WITHOUT `MP_DEBUG=1` -- the packaged
+launchers (PLAY_HOST/JOIN) never set it, so it is the only way to test what a player
+actually runs (a bug that appears only without `MP_DEBUG` is invisible otherwise).
 
 `mp_test.py` is also the reference for the wire format — it packs every message by
 hand, so when a field changes there is exactly one other place to update.
@@ -103,7 +117,7 @@ The logs are chatty at `MP_DEBUG=1`; `JPPN`, `JPPO`, `pose:`, `JPIN` and `JPCS`
 flood them. Filter those out:
 
 ```sh
-grep -a "\[mp\]\|\[error\]" REDRIVER2.log | grep -av "JPPN\|JPPO\|pose:\|JPIN\|JPCS"
+grep -a "\[mp\]\|\[error\]" JERICHO.log | grep -av "JPPN\|JPPO\|pose:\|JPIN\|JPCS"
 ```
 
 Useful markers: `launching: city N mode M (1=TAKEADRIVE, 0=MISSION!)` — mode 0
