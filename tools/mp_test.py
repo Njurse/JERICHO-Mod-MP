@@ -53,7 +53,7 @@ SESSION = struct.Struct("<4BIBBH")       # 12 bytes (gamemode,city,tod,weather,s
 INPUT = struct.Struct("<IB3B")           # frame, count, reserved[3] = 8
 PLAYER_INPUT = struct.Struct("<BHB")     # playerId, pad, spare = 4
 CARSTATE = struct.Struct("<IB3B")        # frame, count, reserved[3] = 8
-CARSTATE_ENTRY = struct.Struct("<BBBBB4h3ii3h3i")  # pid, flags, palette, model, carSlot, orient[4], x,y,z, heading, angVel[3], vel[3] = 47 (model 0xFF = on foot)
+CARSTATE_ENTRY = struct.Struct("<BBBBB4h3ii3i3i")  # pid, flags, palette, model, carSlot, orient[4], x,y,z, heading, angVel[3], vel[3] = 53 (model 0xFF = on foot; angVel is int32)
 
 REJECT_NAMES = {0: "NONE", 1: "FULL", 2: "VERSION", 3: "MODS", 4: "INPROGRESS", 5: "CUSTOM"}
 REJECT_IDS = {v.lower(): k for k, v in REJECT_NAMES.items() if k != 0}

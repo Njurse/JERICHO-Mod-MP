@@ -1573,7 +1573,7 @@ static void MpHandleHit(int connIndex, const unsigned char* p, int len)
 
 	memcpy(&h, p, sizeof(h));
 
-	if (me != NULL && h.targetId == me->id && me->carId >= 0)
+	if (me != NULL && h.targetId == me->id && me->carId >= 0 && me->carId < MAX_CARS)
 	{
 		CAR_DATA* cp = &car_data[me->carId];
 
@@ -1785,6 +1785,41 @@ static void MpTestCarChangeTick(void)
 	ChangePedPlayerToCar(0, &car_data[best]);
 }
 
+/* A SATURATING cast to int16, for the wire fields that are still 16-bit.
+ *
+ * The orientation is a quaternion whose components are normally small, but a
+ * violent impact can push one past 32767 -- and a WRAPPING cast turns that into a
+ * completely different orientation on the peer, which is how a crash becomes a
+ * car pointing somewhere absurd. Clamp instead: a saturated extreme is at least
+ * in the right direction. */
+static int16_t MpSat16(long v)
+{
+	if (v > 32767)
+		return 32767;
+
+	if (v < -32768)
+		return -32768;
+
+	return (int16_t)v;
+}
+
+/* A ceiling for an ADOPTED angular velocity. The engine's own values reach about
+ * 1.5 million, so this is far above anything legitimate and never touches a real
+ * value -- it only stops a corrupt or hostile snapshot from handing the physics an
+ * absurd spin to digest. */
+#define MP_ANGVEL_LIMIT	(8L * 1024L * 1024L)
+
+static long MpClampAngVel(long v)
+{
+	if (v > MP_ANGVEL_LIMIT)
+		return MP_ANGVEL_LIMIT;
+
+	if (v < -MP_ANGVEL_LIMIT)
+		return -MP_ANGVEL_LIMIT;
+
+	return v;
+}
+
 /* ------------------------------------------------------------------ */
 /* FOLLOWING THE CAR THE PLAYER IS ACTUALLY DRIVING.
  *
@@ -1873,12 +1908,10 @@ static void MpSendOwnCarState(void)
 	{
 		cp = &car_data[me->carId];
 
-		/* MP_DEBUG: flag anything that will NOT survive the wire. orientation[4]
-		 * and angularVelocity[3] are int16 on the wire, so a violent spin -- a hard
-		 * hit -- is the one thing that can arrive as garbage on the peer. This is
-		 * the detector for "the client died after a big crash": if it never fires,
-		 * the int16 wrap is not the explanation and the fault is elsewhere.
-		 * Log-only, so it cannot change behaviour. */
+		/* MP_DEBUG: the ORIENTATION is now the only 16-bit field left on the wire, so
+		 * it is the only one a violent impact can saturate. If this fires, the peer is
+		 * seeing a CLAMPED attitude (the intended degradation) rather than a wrapped
+		 * one. Log-only. */
 		if (getenv("MP_DEBUG") != NULL && gMpCtx != NULL)
 		{
 			int a, big = 0;
@@ -1889,20 +1922,12 @@ static void MpSendOwnCarState(void)
 					big = 1;
 			}
 
-			for (a = 0; a < 3; a++)
-			{
-				if (cp->st.n.angularVelocity[a] > 32767 || cp->st.n.angularVelocity[a] < -32768)
-					big = 1;
-			}
-
 			if (big)
 			{
 				gMpCtx->jer_log(gMpCtx,
-					"[mp] WIRE: off-wire values on our car -- orient %d %d %d %d ang %d %d %d\n",
+					"[mp] WIRE: orientation clamped on the wire -- orient %d %d %d %d\n",
 					(int)cp->st.n.orientation[0], (int)cp->st.n.orientation[1],
-					(int)cp->st.n.orientation[2], (int)cp->st.n.orientation[3],
-					(int)cp->st.n.angularVelocity[0], (int)cp->st.n.angularVelocity[1],
-					(int)cp->st.n.angularVelocity[2]);
+					(int)cp->st.n.orientation[2], (int)cp->st.n.orientation[3]);
 			}
 		}
 
@@ -1913,16 +1938,16 @@ static void MpSendOwnCarState(void)
 		e.y = cp->hd.where.t[1];
 		e.z = cp->hd.where.t[2];
 		e.heading = cp->hd.direction;
-		e.orient[0] = (int16_t)cp->st.n.orientation[0];
-		e.orient[1] = (int16_t)cp->st.n.orientation[1];
-		e.orient[2] = (int16_t)cp->st.n.orientation[2];
-		e.orient[3] = (int16_t)cp->st.n.orientation[3];
+		e.orient[0] = MpSat16(cp->st.n.orientation[0]);
+		e.orient[1] = MpSat16(cp->st.n.orientation[1]);
+		e.orient[2] = MpSat16(cp->st.n.orientation[2]);
+		e.orient[3] = MpSat16(cp->st.n.orientation[3]);
 		e.vel[0] = cp->st.n.linearVelocity[0];
 		e.vel[1] = cp->st.n.linearVelocity[1];
 		e.vel[2] = cp->st.n.linearVelocity[2];
-		e.angVel[0] = (int16_t)cp->st.n.angularVelocity[0];
-		e.angVel[1] = (int16_t)cp->st.n.angularVelocity[1];
-		e.angVel[2] = (int16_t)cp->st.n.angularVelocity[2];
+		e.angVel[0] = cp->st.n.angularVelocity[0];
+		e.angVel[1] = cp->st.n.angularVelocity[1];
+		e.angVel[2] = cp->st.n.angularVelocity[2];
 	}
 
 	memcpy(buf, &h, sizeof(h));
@@ -2142,7 +2167,7 @@ static void MpHandleCarState(int connIndex, const unsigned char* p, int len)
 					for (i = 0; i < 3; i++)
 						cp->st.n.linearVelocity[i] = e.vel[i];
 					for (i = 0; i < 3; i++)
-						cp->st.n.angularVelocity[i] = e.angVel[i];
+						cp->st.n.angularVelocity[i] = MpClampAngVel(e.angVel[i]);
 
 					LongQuaternion2Matrix(&q, &m);
 					m.t[0] = tx;
@@ -2176,7 +2201,7 @@ static void MpHandleCarState(int connIndex, const unsigned char* p, int len)
 		{
 			MP_PLAYER* me = MpLocalPlayer();
 
-			if (me != NULL && me->carId >= 0 && me->carId != pl->carId)
+			if (me != NULL && me->carId >= 0 && me->carId < MAX_CARS && me->carId != pl->carId)
 			{
 				CAR_DATA* my = &car_data[me->carId];
 				MATRIX m;

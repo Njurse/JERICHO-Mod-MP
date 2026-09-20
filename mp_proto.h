@@ -38,7 +38,7 @@
 extern "C" {
 #endif
 
-#define MP_PROTO_VERSION	2
+#define MP_PROTO_VERSION	3
 
 /* Default UDP+TCP port. 1318 is IANA-unassigned (the neighbour 1319 is
  * amx-icsp), so it is a safe, non-reserved choice for a game. Configurable
@@ -352,7 +352,10 @@ typedef struct MP_CARSTATE_ENTRY
 	int16_t  orient[4];	/* st.n.orientation */
 	int32_t  x, y, z;	/* world units */
 	int32_t  heading;	/* hd.direction */
-	int16_t  angVel[3];	/* st.n.angularVelocity */
+	int32_t  angVel[3];	/* st.n.angularVelocity -- int32, NOT int16: the engine's
+				 * angular velocity routinely exceeds 16 bits (a spin
+				 * reaches +-1.5 MILLION), so a 16-bit field truncated
+				 * every snapshot into a different spin. */
 	int32_t  vel[3];	/* st.n.linearVelocity */
 } MP_CARSTATE_ENTRY;
 
@@ -412,7 +415,7 @@ static_assert(sizeof(MP_REJECT) == 68, "MP_REJECT layout");
 static_assert(sizeof(MP_SESSION) == 12, "MP_SESSION layout");
 static_assert(sizeof(MP_PLAYER_INPUT) == 4, "MP_PLAYER_INPUT layout");
 static_assert(sizeof(MP_INPUT) == 8, "MP_INPUT layout");
-static_assert(sizeof(MP_CARSTATE_ENTRY) == 47, "MP_CARSTATE_ENTRY layout");
+static_assert(sizeof(MP_CARSTATE_ENTRY) == 53, "MP_CARSTATE_ENTRY layout");
 static_assert(sizeof(MP_HIT) == 16, "MP_HIT layout");
 static_assert(sizeof(MP_CARSTATE) == 8, "MP_CARSTATE layout");
 static_assert(sizeof(MP_CHANNEL) == 26, "MP_CHANNEL layout");
