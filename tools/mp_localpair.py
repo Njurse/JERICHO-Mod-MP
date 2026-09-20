@@ -266,7 +266,10 @@ def main():
     ap.add_argument("--mp-arena", default="1",
                     help="multiplayer map/arena for both sides (default 1)")
     ap.add_argument("--host-car", default="slot1",
-                    help="the host's car: a model number, slotN, or 'random' (default slot1)")
+                    help="the host's car: a model number, slotN, 'random', or 'default' "
+                         "(= pass NO -mpcar, so the level chooses -- what a player who just "
+                         "presses Host does, and the case where the join used to get the "
+                         "wrong car, default slot1)")
     ap.add_argument("--client-car", default="slot3",
                     help="the joining player's car: a model number, slotN, or 'random' (default slot3)")
     args = ap.parse_args()
@@ -350,7 +353,13 @@ def main():
     # giving it -car alone popped a blocking message box that made the client look
     # like it could not connect at all.
 
-    host_argv = host_args + ["-mpcar", args.host_car, "-host", str(args.port)]
+    # "default" = pass NO -mpcar, so the ENGINE/level chooses the host's car -- the
+    # way a player who just presses Host does it (config.car stays -1). That is the
+    # case where the joiner used to be handed the level's slot-0 car instead.
+    if args.host_car == "default":
+        host_argv = host_args + ["-host", str(args.port)]
+    else:
+        host_argv = host_args + ["-mpcar", args.host_car, "-host", str(args.port)]
     a = launch(dirs["a"], args.exe, host_argv, host_env)
     log(f"host  pid {a.pid}  (port {args.port}, {args.level} arena {args.mp_arena}, "
         f"host car {args.host_car}, client car {args.client_car})")

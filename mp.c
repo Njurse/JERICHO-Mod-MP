@@ -563,9 +563,11 @@ static int MpOnFrame(void* userdata, void* args)
 	{
 		gMp.pendingSpawn = 0;
 
-		if (MpIsHost() && gMp.running)
-			MpSpawnLateJoiners();
-	}
+		/* BOTH sides: a client can also defer a remote car it could not name at
+		 * level init (the level's mission header is not parsed yet) and build it
+		 * here once the level is up. */
+		if (gMp.running)
+			MpSpawnLateJoiners();	}
 
 	/* Test lever: hold the in-game map open, so the multiplayer-map blip hook
 	 * can be exercised without a human pressing the map button.

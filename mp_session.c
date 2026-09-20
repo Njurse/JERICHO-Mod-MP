@@ -258,6 +258,17 @@ static void MpLaunchLocal(void)
 		wantedCar[0] = car;
 	}
 
+	/* Diagnose the host's OWN car. WITHOUT -mpcar, config.car is -1 and nothing
+	 * here chooses the vehicle -- the engine's default does -- so the WELCOME's
+	 * hostCar goes out as 0xFF and a joiner falls back to the level's slot-0 car
+	 * (the "the host is in a police car with a palette that does not match"
+	 * report). Log every source so that case is visible. */
+	if (gMpCtx != NULL)
+		gMpCtx->jer_log(gMpCtx,
+			"[mp] car sources: config.car=%d isSlot=%d wantedCar[0]=%d startinfo[0]=%d\n",
+			gMp.config.car, gMp.config.carIsSlot, wantedCar[0],
+			(PlayerStartInfo[0] != NULL) ? PlayerStartInfo[0]->model : -9);
+
 	SetState(STATE_GAMESTART);
 }
 
@@ -291,6 +302,22 @@ static int MpPlayerCarModel(int car, int isSlot)
 	}
 
 	return car;
+}
+
+/* The LEVEL's own default player car -- what a machine that asked for nothing
+ * ends up driving (mission.c: `PlayerStartInfo[0]->model = MissionHeader->
+ * playerCarModel`). A peer that never told us its car must be given THIS, not the
+ * per-city frontend slot table: without -mpcar the host is driving the level's
+ * default, and carNumLookup[lvl][0] is a different machine altogether -- the
+ * "on the client the host is a police car with a palette that does not match"
+ * report. Both machines load the SAME level, so this is the same number on both.
+ * -1 when unavailable. */
+static int MpDefaultPlayerCarModel(void)
+{
+	if (MissionHeader != NULL && MissionHeader->playerCarModel >= 0)
+		return (int)MissionHeader->playerCarModel;
+
+	return -1;
 }
 
 void MpHostSendRoster(void)
@@ -361,6 +388,7 @@ void MpHostSendRoster(void)
 void MpSpawnLateJoiners(void)
 {
 	int id, slot, spawned = 0;
+	static int retries;	/* bounded: a level with no default must not spin forever */
 
 	for (id = 0; id < MP_MAX_PLAYERS; id++)
 	{
@@ -399,6 +427,27 @@ void MpSpawnLateJoiners(void)
 			extern char carNumLookup[4][10];
 			int lvl = (GameLevel >= 0 && GameLevel < 4) ? GameLevel : 0;
 			int cid = MpPlayerCarModel(p->car, p->carIsSlot);
+
+			/* nothing was asked for (or it was never told to us): drive the car
+			 * THIS LEVEL gives its player, which is what the owner is driving */
+			if (cid < 0)
+			{
+				cid = MpDefaultPlayerCarModel();
+
+				if (gMpCtx != NULL)
+					gMpCtx->jer_log(gMpCtx,
+						"[mp] player %d asked no car -> the level's default %d\n", id, cid);
+			}
+
+			/* STILL unknown AND the level is not loaded yet: the mission header
+			 * is parsed later than the level init, so try again next frame rather
+			 * than guessing (bounded, in case a level really has no default). */
+			if (cid < 0 && MissionHeader == NULL && retries < 300)
+			{
+				retries++;
+				gMp.pendingSpawn = 1;
+				continue;
+			}
 
 			if (cid < 0)
 				cid = carNumLookup[lvl][id % 4];
@@ -1138,13 +1187,31 @@ int MpOnNetSpawn(void* userdata, void* args)
 		 * model the level lacks. Only remote cars reach here (the local player is
 		 * skipped above); i is that player's id. */
 		{
-			extern char carNumLookup[4][10];
 			int lvl = (GameLevel >= 0 && GameLevel < 4) ? GameLevel : 0;
-			/* the player's OWN car if they told us (HELLO), else the level table */
+			/* the player's OWN car if they told us (HELLO), else the LEVEL's own
+			 * player car -- what a machine that asked for nothing actually drives */
 			int cid = MpPlayerCarModel(p->car, p->carIsSlot);
 
 			if (cid < 0)
-				cid = carNumLookup[lvl][i % 4];
+				cid = MpDefaultPlayerCarModel();
+
+			/* STILL unknown: at level INIT the level's mission header is not parsed
+			 * yet (MissionHeader is NULL), so the OWNER's own default is not knowable
+			 * here. Do NOT guess from the per-city frontend table -- that is a
+			 * different machine altogether, the "on the client the host is a police
+			 * car with a palette that does not match" report. Defer instead: leave
+			 * the player carless and let MpSpawnLateJoiners build it on a frame, once
+			 * the level IS loaded and MissionHeader is set. */
+			if (cid < 0)
+			{
+				if (gMpCtx != NULL)
+					gMpCtx->jer_log(gMpCtx,
+						"[mp] player %d: car not knowable at level init (MissionHeader=%s); deferring\n",
+						p->id, MissionHeader ? "set" : "NULL");
+
+				gMp.pendingSpawn = 1;
+				continue;
+			}
 
 			PlayerStartInfo[slot]->model = (u_char)cid;
 			PlayerStartInfo[slot]->palette = (u_char)(p->palette >= 0 ? p->palette : 0);
