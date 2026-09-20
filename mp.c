@@ -868,7 +868,7 @@ static int MpBotChase(void)
 	{
 		int dx = tgt->hd.where.t[0] - mine->hd.where.t[0];
 		int dz = tgt->hd.where.t[2] - mine->hd.where.t[2];
-		int flee = MpIsHost();	/* the host runs, the joiner chases: two cars in a line */
+		int flee = (getenv("MP_BOTFIGHT") == NULL) && MpIsHost();	/* the host runs, the joiner chases: two cars in a line. MP_BOTFIGHT makes both charge, to force a collision. */
 		int want = flee ? ((ratan2(dx, dz) + 2048) & 0xfff) : (ratan2(dx, dz) & 0xfff);
 		int diff = ((want - mine->hd.direction + 2048) & 4095) - 2048;	/* DIFF_ANGLES */
 		int adiff = (diff < 0) ? -diff : diff;
