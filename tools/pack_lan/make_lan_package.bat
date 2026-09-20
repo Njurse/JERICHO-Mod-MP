@@ -30,7 +30,7 @@ pushd "%EXEDIR%" || exit /b 1
 popd
 
 pushd "%HERE%" || exit /b 1
-"%SEVENZ%" a -t7z -mx=5 "%OUT%" PLAY_HOST.bat PLAY_JOIN.bat README_LAN.txt
+"%SEVENZ%" a -t7z -mx=5 "%OUT%" PLAY_HOST.bat PLAY_JOIN.bat FIREWALL_FIX.bat README_LAN.txt
 popd
 
 echo done: %OUT%

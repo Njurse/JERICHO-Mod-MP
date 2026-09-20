@@ -23,9 +23,27 @@ HOW TO PLAY
    loads, so just start a normal Take a Ride on the host.
 
 FIREWALL
-   On the HOST, allow inbound TCP and UDP on the session port (1400 here) --
-   Windows will usually ask the first time you run it. Joining by IP needs only
-   the TCP port, which is why PLAY_JOIN.bat asks for the address.
+   On the HOST, inbound TCP + UDP on the session port (1400 here) must be
+   allowed. Run FIREWALL_FIX.bat AS ADMINISTRATOR on the host -- it prints the
+   current state and opens exactly those two ports.
+
+   The CLIENT's firewall is almost never the problem: joining is an OUTBOUND
+   connection, which Windows allows by default. If the join fails, look at the
+   host first.
+
+   Three things that look like "the firewall" but are not:
+   * Windows keys its allow/block rules to the FULL PATH of the exe. If the
+     "allow this app through the firewall" prompt was cancelled, Windows made a
+     BLOCK rule for the old folder that still wins. FIREWALL_FIX.bat prints any
+     such block rule; remove it if it names a stale path.
+   * Windows 11 puts an unfamiliar network on the PUBLIC profile, which blocks
+     inbound by default. FIREWALL_FIX.bat adds its rules for every profile, so
+     this is covered -- but check the profile it prints.
+   * Wi-Fi "AP/client isolation" (common on guest and ISP routers) stops two
+     wireless machines from talking to each other at all, whatever the firewall
+     says. Test with both machines on ethernet, or over a phone hotspot, to tell
+     this apart from a firewall problem.
+
 
 IF IT GOES WRONG
    JERICHO.log next to the exe is the game log; it reports the session detail
