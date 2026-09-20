@@ -1090,7 +1090,8 @@ int MpOnNetSpawn(void* userdata, void* args)
 /* ------------------------------------------------------------------ */
 #define MP_BARRIER_MS 200
 #define MP_SYNC_INTERVAL	30	/* host resync snapshot cadence (frames) */
-#define MP_SYNC_SNAP_DIST	600	/* divergence that triggers a snap. Was 300: the host's correction of the client's car fired on ordinary simulation differences, which reads as the host overcorrecting. */
+#define MP_SYNC_SNAP_DIST	600	/* divergence past which the remote car is corrected. Was 300: the host's correction of the client's car fired on ordinary simulation differences, which reads as the host overcorrecting. */
+#define MP_SYNC_HARD_DIST	3000	/* divergence past which the correction TELEPORTS. Anything closer is eased across a quarter of the gap per snapshot instead, because a hard snap is the "the car warped weirdly" the player sees. */
 
 int MpInputForPlayer(int id)
 {
@@ -1431,6 +1432,7 @@ static void MpHandleCarState(const unsigned char* p, int len)
 			long dy = (long)e.y - (long)cp->hd.where.t[1];
 			long dz = (long)e.z - (long)cp->hd.where.t[2];
 			long d2 = dx * dx + dy * dy + dz * dz;
+			int hard;
 
 			if (d2 < (long)MP_SYNC_SNAP_DIST * (long)MP_SYNC_SNAP_DIST)
 			{
@@ -1444,52 +1446,84 @@ static void MpHandleCarState(const unsigned char* p, int len)
 				continue;
 			}
 
+			/* A hard snap TELEPORTS the car, which is the "warped weirdly" the
+			 * player sees. Only a genuine desync gets one. Ordinary drift is eased
+			 * across instead -- see below. */
+			hard = (d2 > (long)MP_SYNC_HARD_DIST * (long)MP_SYNC_HARD_DIST);
+
 			if (gMpCtx != NULL)
-				gMpCtx->jer_log(gMpCtx, "[mp] resync: player %d SNAP d=(%ld,%ld,%ld)\n",
-					e.playerId, dx, dy, dz);
-		}
+				gMpCtx->jer_log(gMpCtx, "[mp] resync: player %d %s d=(%ld,%ld,%ld)\n",
+					e.playerId, hard ? "SNAP" : "ease", dx, dy, dz);
 
-		/* keep the remote car placed and alive: the engine spools a
-		 * non-local player car out of the world, so re-assert it on a snap
-		 * (controlType included, or the spooler parks it). */
-		cp->controlType = CONTROL_TYPE_PLAYER;
-		cp->hd.where.t[0] = e.x;
-		cp->hd.where.t[1] = e.y;
-		cp->hd.where.t[2] = e.z;
+			/* keep the remote car placed and alive: the engine spools a
+			 * non-local player car out of the world, so re-assert it
+			 * (controlType included, or the spooler parks it). */
+			cp->controlType = CONTROL_TYPE_PLAYER;
 
-		/* Write the WHOLE body, not a position and a heading. hd.direction is an
-		 * output the engine re-derives from st.n.orientation, so a snap that set
-		 * only the heading left the car's ATTITUDE unsynced -- the remote car sat
-		 * at whatever roll/pitch its own simulation had drifted to, i.e. driving
-		 * around upside down on the other machine. Rebuild the handling matrix with
-		 * the engine's own quaternion helper rather than poking hd.where. */
-		if (e.flags & MP_CARSTATE_HAS_BODY)
-		{
-			LONGQUATERNION q;
-			MATRIX m;
+			{
+				/* Move the fraction of the gap each snapshot. A quarter closes it in
+				 * a handful of snapshots with no visible jump; a hard snap is saved
+				 * for a real desync, where easing would take seconds to catch up. */
+				int tx, ty, tz;
 
-			q[0] = e.orient[0];
-			q[1] = e.orient[1];
-			q[2] = e.orient[2];
-			q[3] = e.orient[3];
+				if (hard)
+				{
+					tx = e.x;
+					ty = e.y;
+					tz = e.z;
+				}
+				else
+				{
+					tx = cp->hd.where.t[0] + (int)(dx / 4);
+					ty = cp->hd.where.t[1] + (int)(dy / 4);
+					tz = cp->hd.where.t[2] + (int)(dz / 4);
+				}
 
-			cp->st.n.orientation[0] = q[0];
-			cp->st.n.orientation[1] = q[1];
-			cp->st.n.orientation[2] = q[2];
-			cp->st.n.orientation[3] = q[3];
+				cp->hd.where.t[0] = tx;
+				cp->hd.where.t[1] = ty;
+				cp->hd.where.t[2] = tz;
 
-			cp->st.n.linearVelocity[0] = e.vel[0];
-			cp->st.n.linearVelocity[1] = e.vel[1];
-			cp->st.n.linearVelocity[2] = e.vel[2];
-			cp->st.n.angularVelocity[0] = e.angVel[0];
-			cp->st.n.angularVelocity[1] = e.angVel[1];
-			cp->st.n.angularVelocity[2] = e.angVel[2];
+				/* Write the WHOLE body, not a position and a heading: hd.direction
+				 * is an OUTPUT the engine re-derives from st.n.orientation, so a
+				 * correction that set only the heading left the car's ATTITUDE
+				 * unsynced (driving around upside down). Rebuild the handling matrix
+				 * with the engine's own quaternion helper rather than poking
+				 * hd.where. */
+				if (e.flags & MP_CARSTATE_HAS_BODY)
+				{
+					LONGQUATERNION q;
+					MATRIX m;
+					int i;
+					int div = hard ? 1 : 4;
 
-			LongQuaternion2Matrix(&q, &m);
-			m.t[0] = e.x;
-			m.t[1] = e.y;
-			m.t[2] = e.z;
-			memcpy(&cp->hd.where, &m, sizeof(m));
+					for (i = 0; i < 4; i++)
+						q[i] = (short)(cp->st.n.orientation[i] + (e.orient[i] - cp->st.n.orientation[i]) / div);
+
+					cp->st.n.orientation[0] = q[0];
+					cp->st.n.orientation[1] = q[1];
+					cp->st.n.orientation[2] = q[2];
+					cp->st.n.orientation[3] = q[3];
+
+					for (i = 0; i < 3; i++)
+						cp->st.n.linearVelocity[i] = hard ? e.vel[i]
+							: (cp->st.n.linearVelocity[i] + (e.vel[i] - cp->st.n.linearVelocity[i]) / div);
+					for (i = 0; i < 3; i++)
+						cp->st.n.angularVelocity[i] = hard ? e.angVel[i]
+							: (cp->st.n.angularVelocity[i] + (e.angVel[i] - cp->st.n.angularVelocity[i]) / div);
+
+					LongQuaternion2Matrix(&q, &m);
+					m.t[0] = tx;
+					m.t[1] = ty;
+					m.t[2] = tz;
+					memcpy(&cp->hd.where, &m, sizeof(m));
+				}
+
+				{
+					int dd = ((e.heading - cp->hd.direction + 2048) & 4095) - 2048;
+
+					cp->hd.direction = (cp->hd.direction + (hard ? dd : dd / 4)) & 4095;
+				}
+			}
 		}
 
 		cp->hd.direction = e.heading;
