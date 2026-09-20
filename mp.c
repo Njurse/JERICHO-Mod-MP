@@ -27,6 +27,7 @@
 #include "cars.h"
 #include "camera.h"
 #include "overmap.h"	/* gMapXOffset/gMapYOffset for the multiplayer map */
+#include "dr2roads.h"	/* RoadInCell: the engine's own road test, for the test bot */
 #include "glaunch.h"
 #include "state.h"
 
@@ -889,14 +890,14 @@ static int MpBotChase(int fight)
 	{
 		recoverFrames--;
 
-		/* Alternate. Wheelspin alone just burns the tyres against the thing we are
-		 * wedged on and the car never moves, so every other recovery is a real
-		 * back-up-and-turn: that is the only thing that gets a car off a wall.
-		 * (Preferring wheelspin is right for TURNING, not for escaping.) */
+		/* Alternate: back out and turn (the only thing that frees a car off a
+		 * wall), then swing round on the wheel with no throttle. NO WHEELSPIN --
+		 * spinning the wheels is a grip loss, which is what made the cars bobble
+		 * and slide into the scenery. */
 		if (recoverReverse)
 			return CAR_PAD_BRAKE | (recoverDir ? CAR_PAD_LEFT : CAR_PAD_RIGHT);
 
-		return CAR_PAD_ACCEL | CAR_PAD_WHEELSPIN | (recoverDir ? CAR_PAD_LEFT : CAR_PAD_RIGHT);
+		return (recoverDir ? CAR_PAD_LEFT : CAR_PAD_RIGHT);
 	}
 
 	{
@@ -904,10 +905,40 @@ static int MpBotChase(int fight)
 		int dz = tgt->hd.where.t[2] - mine->hd.where.t[2];
 		int flee = (!fight && MpIsHost());	/* chase: the host runs, the joiner chases. fight: both charge. */
 		int want = flee ? ((ratan2(dx, dz) + 2048) & 0xfff) : (ratan2(dx, dz) & 0xfff);
-		int diff = ((want - mine->hd.direction + 2048) & 4095) - 2048;	/* DIFF_ANGLES */
-		int adiff = (diff < 0) ? -diff : diff;
+		int diff, adiff;
 		long dist;
 		int pad;
+
+		/* Road awareness, piggybacked on the engine's OWN road test: a straight
+		 * line at the peer ploughs into whatever is between them, so look at a
+		 * point ahead, ahead-left and ahead-right and take the first heading whose
+		 * probe is still on a ROAD CELL (RoadInCell, the same test the road code
+		 * uses). Following the road is what keeps the cars off the scenery; it is
+		 * not a pathfinder, just a preference, and it falls back to the straight
+		 * line when the car is off-road. */
+		{
+			static const int RPROBE = 1600;
+			const int probe[3] = { want, (want + 384) & 0xfff, (want - 384) & 0xfff };
+			int i;
+
+			for (i = 0; i < 3; i++)
+			{
+				VECTOR p;
+
+				p.vx = mine->hd.where.t[0] + (int)(((long)rsin(probe[i]) * RPROBE) >> 12);
+				p.vy = mine->hd.where.t[1];
+				p.vz = mine->hd.where.t[2] + (int)(((long)rcos(probe[i]) * RPROBE) >> 12);
+
+				if (RoadInCell(&p))
+				{
+					want = probe[i];
+					break;
+				}
+			}
+		}
+
+		diff = ((want - mine->hd.direction + 2048) & 4095) - 2048;	/* DIFF_ANGLES */
+		adiff = (diff < 0) ? -diff : diff;
 
 		/* Only feed it throttle while the peer is roughly ahead: flooring it
 		 * through a big correction just spins the car, and a spin never closes the
@@ -950,11 +981,15 @@ static int MpBotChase(int fight)
 			 * so the pair does not ram itself out of sight. */
 			pad = (adiff > 96) ? ((diff > 0) ? CAR_PAD_LEFT : CAR_PAD_RIGHT) : 0;
 		}
-		else if (adiff > 400)
-			/* Turn to face rather than reversing: wheelspin swings the car round at
-			 * speed, where reverse only creeps it backwards into its peer. */
-			pad = CAR_PAD_ACCEL | CAR_PAD_WHEELSPIN | ((diff > 0) ? CAR_PAD_LEFT : CAR_PAD_RIGHT);
-		else if (adiff > 96)
+		else if (adiff > 1500)
+			/* The peer is behind us: reversing round is the only coherent way about,
+			 * and it is the one case where reverse is right. */
+			pad = CAR_PAD_BRAKE | ((diff > 0) ? CAR_PAD_LEFT : CAR_PAD_RIGHT);
+		else if (adiff > 700)
+			/* Badly off line: EASE OFF and steer. Powering through a big correction
+			 * is what made them bobble and slide into the scenery. */
+			pad = (diff > 0) ? CAR_PAD_LEFT : CAR_PAD_RIGHT;
+		else if (adiff > 120)
 			pad = CAR_PAD_ACCEL | ((diff > 0) ? CAR_PAD_LEFT : CAR_PAD_RIGHT);
 		else
 			pad = CAR_PAD_ACCEL;

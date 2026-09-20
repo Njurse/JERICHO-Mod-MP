@@ -1090,7 +1090,7 @@ int MpOnNetSpawn(void* userdata, void* args)
 /* ------------------------------------------------------------------ */
 #define MP_BARRIER_MS 200
 #define MP_SYNC_INTERVAL	30	/* host resync snapshot cadence (frames) */
-#define MP_SYNC_SNAP_DIST	300	/* divergence that triggers a snap */
+#define MP_SYNC_SNAP_DIST	600	/* divergence that triggers a snap. Was 300: the host's correction of the client's car fired on ordinary simulation differences, which reads as the host overcorrecting. */
 
 int MpInputForPlayer(int id)
 {

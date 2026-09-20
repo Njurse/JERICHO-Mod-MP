@@ -68,9 +68,8 @@
 								 * stop waiting and close the socket */
 #define MP_HANDSHAKE_TIMEOUT_MS	5000	/* a peer that connects and then says
 								 * nothing is not a player: give up on it
-								 * long before the 10 s idle timeout */
-#define MP_CONN_TIMEOUT_MS	10000	/* drop a peer after 10 s of silence (~10
-					 * missed keepalive pings) */
+								 * long before the idle timeout */
+#define MP_CONN_TIMEOUT_MS	30000	/* drop a peer after 30 s of silence. It was 10 s, and the busy guard that excuses a SILENT LEVEL LOAD is OUR OWN flag (MpBusy) -- the peer's is not visible to us, so a peer that was loading (or just hitching) for longer than 10 s got dropped by the OTHER side: the "it disconnects after a while" report. Real liveness still comes from the 1 s keepalive, which is why this grace can be generous. */
 #define MP_CONNECT_TIMEOUT_MS	5000
 
 /* ------------------------------------------------------------------ */
