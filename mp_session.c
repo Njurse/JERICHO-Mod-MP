@@ -89,6 +89,14 @@ int MpBeginHost(void)
 	gMp.localPlayerId = 0;
 	{
 		MP_PLAYER* me = MpAddPlayer(0, gMp.config.playerName, 1);
+		{
+			extern u_char defaultPlayerPalette;
+
+			/* our own car/palette, so the roster advertises them to joiners */
+			me->car = gMp.config.car;
+			me->carIsSlot = gMp.config.carIsSlot;
+			me->palette = defaultPlayerPalette;
+		}
 		if (me != NULL) me->carId = 0;
 	}
 
@@ -259,6 +267,29 @@ static void MpLaunchLocal(void)
  * is id 0 and so comes first). Broadcast before a launch -- every machine needs
  * to know how many cars to spawn before its level loads -- and refreshed every
  * couple of seconds so the ping column is live. */
+/* A player's chosen vehicle as a concrete MODEL: "slotN" is resolved against the
+ * SESSION's city (GameLevel) -- the city the match actually runs in -- while a raw
+ * model number passes straight through. -1 when unset. This is the ONE place the
+ * slot/model ambiguity is resolved, so a slot picked on one machine becomes the
+ * same model on the other. */
+static int MpPlayerCarModel(int car, int isSlot)
+{
+	extern char carNumLookup[4][10];
+
+	if (car < 0)
+		return -1;
+
+	if (isSlot)
+	{
+		int lvl = (GameLevel >= 0 && GameLevel < 4) ? GameLevel : 0;
+		int slotNo = (car >= 1 && car <= 10) ? car : 1;
+
+		return carNumLookup[lvl][slotNo - 1];
+	}
+
+	return car;
+}
+
 void MpHostSendRoster(void)
 {
 	MP_ROSTER r;
@@ -282,6 +313,18 @@ void MpHostSendRoster(void)
 		e->flags = (uint8_t)(id == 0 ? MP_ROSTER_FLAG_HOST : 0);
 		e->carId = 0xff;
 		e->model = 0xff;
+		e->reserved = (uint16_t)p->palette;
+
+		/* the car this player ASKED for, resolved here on the host (the session
+		 * city) -- so a joiner knows everyone's car before anything is spawned.
+		 * The spawn overrides this with the model actually loaded. */
+		{
+			int m = MpPlayerCarModel(p->car, p->carIsSlot);
+
+			if (m >= 0 && m <= 0xff)
+				e->model = (uint8_t)m;
+		}
+
 		e->ping = (uint16_t)(id == 0 ? 0 : MpPingForPlayer(id));
 		snprintf(e->name, sizeof(e->name), "%s", p->name);
 
@@ -352,10 +395,13 @@ void MpSpawnLateJoiners(void)
 		{
 			extern char carNumLookup[4][10];
 			int lvl = (GameLevel >= 0 && GameLevel < 4) ? GameLevel : 0;
-			int cid = (p->car >= 0) ? p->car : carNumLookup[lvl][id % 4];
+			int cid = MpPlayerCarModel(p->car, p->carIsSlot);
+
+			if (cid < 0)
+				cid = carNumLookup[lvl][id % 4];
 
 			PlayerStartInfo[slot]->model = (u_char)cid;
-			PlayerStartInfo[slot]->palette = 0;
+			PlayerStartInfo[slot]->palette = (u_char)(p->palette >= 0 ? p->palette : 0);
 
 			if (slot >= 0 && slot < 2)
 				wantedCar[slot] = cid;
@@ -456,6 +502,16 @@ static void MpHandleRoster(const unsigned char* p, int len)
 		if (gMp.localPlayerId >= 0)
 			pl->isLocal = (e->id == gMp.localPlayerId) ? 1 : 0;
 		pl->pingMs = (int)e->ping;
+
+		/* Adopt this player's CAR too. Without this a third client kept the
+		 * level-table fallback for everyone and showed the wrong vehicles. The host
+		 * resolved the model (whole roster, session city), so it is a model here. */
+		if (!pl->isLocal && e->model != 0xff)
+		{
+			pl->car = (int)e->model;
+			pl->carIsSlot = 0;
+		}
+		pl->palette = (int)e->reserved;
 	}
 }
 
@@ -536,7 +592,17 @@ void MpSendHello(void)
 	 * car and the two disagreed (the joiner's car looked like the host's). A slot
 	 * (-mpcar slotN) cannot be resolved yet -- GameLevel is the host's, unknown
 	 * here -- so only a plain car id travels; the rest falls back. */
-	h.car = (uint16_t)((gMp.config.car >= 0 && !gMp.config.carIsSlot) ? gMp.config.car : 0xFFFF);
+	/* Send the RAW selection plus a SLOT FLAG: "slotN" is a per-city frontend slot,
+	 * so only the HOST can resolve it (against the session city -- we are still in
+	 * our boot city here). A raw model number passes straight through. reserved[1]
+	 * carries our palette so the host paints our car the colour we see. */
+	{
+		extern u_char defaultPlayerPalette;
+
+		h.car = (uint16_t)((gMp.config.car >= 0) ? gMp.config.car : 0xFFFF);
+		h.reserved[0] = (uint8_t)(gMp.config.carIsSlot ? 1 : 0);
+		h.reserved[1] = (uint8_t)defaultPlayerPalette;
+	}
 	snprintf(h.playerName, sizeof(h.playerName), "%s", gMp.config.playerName);
 	h.modCount = (uint8_t)n;
 
@@ -642,7 +708,13 @@ static void MpSendWelcome(int connIndex, int playerId, int matched)
 	 * guessing a different one from the level table -- that guess is how the two
 	 * machines ended up disagreeing about the host's car. 0xFF = "I have not
 	 * chosen one", and the joiner falls back to the deterministic pick. */
-	w.hostCar = (uint8_t)((gMp.config.car >= 0 && !gMp.config.carIsSlot) ? gMp.config.car : 0xFF);
+	/* Our OWN car as a resolved MODEL -- GameLevel is our city by now, so a slot
+	 * resolves correctly and the client spawns the car we actually drive. */
+	{
+		int m = MpPlayerCarModel(gMp.config.car, gMp.config.carIsSlot);
+
+		w.hostCar = (uint8_t)((m >= 0 && m <= 0xff) ? m : 0xFF);
+	}
 
 	/* The roster must be on the wire BEFORE the welcome. A live joiner launches
 	 * the moment it is welcomed, and if it does not yet know who else is in the
@@ -749,6 +821,8 @@ static void MpHandleHello(int connIndex, const unsigned char* p, int len)
 		{
 			pl->modsMatched = matched;
 			pl->car = (h.car == 0xFFFF) ? -1 : (int)h.car;
+			pl->carIsSlot = h.reserved[0] ? 1 : 0;
+			pl->palette = (int)h.reserved[1];
 
 			if (gMpCtx)
 				gMpCtx->jer_log(gMpCtx, "[mp] hello from player %d: vehicle %d\n", id, pl->car);
@@ -869,6 +943,13 @@ static void MpHandleWelcome(const unsigned char* p, int len)
 
 	{
 		MP_PLAYER* me = MpAddPlayer(w.playerId, gMp.config.playerName, 1);
+		{
+			extern u_char defaultPlayerPalette;
+
+			me->car = gMp.config.car;
+			me->carIsSlot = gMp.config.carIsSlot;
+			me->palette = defaultPlayerPalette;
+		}
 
 		if (me != NULL)
 		{
@@ -1053,10 +1134,13 @@ int MpOnNetSpawn(void* userdata, void* args)
 			extern char carNumLookup[4][10];
 			int lvl = (GameLevel >= 0 && GameLevel < 4) ? GameLevel : 0;
 			/* the player's OWN car if they told us (HELLO), else the level table */
-			int cid = (p->car >= 0) ? p->car : carNumLookup[lvl][i % 4];
+			int cid = MpPlayerCarModel(p->car, p->carIsSlot);
+
+			if (cid < 0)
+				cid = carNumLookup[lvl][i % 4];
 
 			PlayerStartInfo[slot]->model = (u_char)cid;
-			PlayerStartInfo[slot]->palette = 0;
+			PlayerStartInfo[slot]->palette = (u_char)(p->palette >= 0 ? p->palette : 0);
 
 			/* Also put it in wantedCar, which the engine re-applies to
 			 * PlayerStartInfo[] as its LAST word before the level runs (main.c).

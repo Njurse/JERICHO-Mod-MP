@@ -52,6 +52,8 @@ typedef struct MP_PLAYER
 	char name[MP_NAME_MAX];
 	int  carId;			/* CAR_DATA slot it drives, -1 = none yet */
 	int  car;			/* vehicle (car id) it asked for, -1 = unknown */
+	int  carIsSlot;			/* 'car' is a per-city frontend SLOT to resolve, not a model */
+	int  palette;			/* that player's car colour (0 = default) */
 	int  padId;			/* engine pad id bound to it, -1 = none */
 	int  isLocal;			/* 1 = this machine's own player */
 	int  connected;			/* peer link still alive */
