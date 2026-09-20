@@ -31,6 +31,23 @@ int MpOnDrawMap(void* userdata, void* args)
 	if (m == NULL || m->fullscreen || !gMp.running)
 		return JER_RESULT_CONTINUE;
 
+
+	/* Take the player blips over. NumPlayers is held at 1 in a multiplayer
+	 * session, so without this the engine draws one blip -- ours -- and we can
+	 * only add to it, leaving the local player with an arrow stuck on them. The
+	 * map is now ours: every OTHER player gets a marker below, and none for us. */
+	m->suppressStockBlip = 1;
+
+	if (getenv("MP_DEBUG") != NULL && gMpCtx != NULL)
+	{
+		static int announced;
+
+		if (!announced)
+		{
+			announced = 1;
+			gMpCtx->jer_log(gMpCtx, "[mp] map: took over the player blips\n");
+		}
+	}
 	for (i = 0; i < MP_MAX_PLAYERS; i++)
 	{
 		MP_PLAYER* p = &gMp.players[i];
