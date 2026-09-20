@@ -522,7 +522,7 @@ collision actually pushing both cars.
 **Known broken:** the frontend-driven second start (Chicago); a snap does not write
 a rigid body; damage is not synced.
 
-## 13. Version identity, and shipping one build to both machines
+## 14. Version identity, and shipping one build to both machines
 
 `JERICHO_BUILD_VERSION` is baked in at PREMAKE time (`git describe --tags --always
 --dirty`), so the digest the game reports — `MpBuildHash()`, printed as
@@ -550,7 +550,7 @@ in that script: `build_dev.bat` hands msbuild a RELATIVE project path, so it nee
 `cd /d "%~dp0"` (the trailing backslash escapes the quote), so the root is
 normalised with `pushd`.
 
-## 14. Following a player who changes car
+## 15. Following a player who changes car
 
 The ENGINE owns changing cars: `ChangePedPlayerToCar` / `ChangeCarPlayerToPed`
 (players.c) mutate `player[]` and the car's pad link IN PLACE and never call
@@ -587,3 +587,53 @@ cosmetic glitch — it keeps the old model and logs.
 Headless: `MP_TEST_CARCHANGE=<seconds>[,<exitSeconds>]` performs a real change (the
 engine's own `ChangePedPlayerToCar`, onto the nearest civilian car) and optionally
 gets out afterwards. It fires on every machine the env var reaches.
+
+## 16. Testing against the other PC, without touching it
+
+A two-machine bug is diagnosed from two logs, so the rig exists to get both logs
+with one command -- but it is built as a resident **agent** rather than a one-shot
+push, because a test machine you have to visit between iterations is the thing
+that makes two-machine testing not happen.
+
+`tools/remote/mp_agent.ps1` runs on the other PC (`START_AGENT.bat`, once, in its
+own window) and serves a fixed command set over TCP: `ping`, `status`, `sync`,
+`start`, `stop`, `log`, `quit`. It is PowerShell because that is already on every
+Windows box -- no Python, no install, no admin beyond the firewall rule -- and it
+only ever writes inside the folder it is pointed at. The token is a courtesy
+label, not a security boundary.
+
+`tools/remote/mp_remote.py` is the client: `status`, `deploy`, `run`, `logs`,
+`stop`. It drives the LOCAL seat directly (`Popen`, so a real PID we can kill
+without guessing) and the remote seat through the agent.
+
+The two properties that make it hands-free, both of which are worth keeping if
+this is ever rewritten:
+
+* **It syncs what changed, not the build.** `status` returns a SHA256 map of the
+exe, `VERSION.txt` and `JERICHO`; the client sends a zip of just the differing
+files plus a manifest. The game data (1.6 GB) is deliberately outside that set
+because it does not change between builds.
+* **The agent is resident and restarts the game itself.** A sync that arrives while
+a game is running stops it, applies the build and starts it again with the same
+arguments. Leave the other PC running a seat, push a build, and the new build comes
+up on its own.
+
+Traps found by actually running it (each one defeated the rig until fixed):
+
+* A package is **verified before it is applied** and refused whole if any file
+disagrees -- unpack to staging, check every hash, then copy. A half-applied build
+is worse than a failed sync.
+* `Get-FileHash` returns **UPPERCASE** hex and Python's `hexdigest()` lowercase, so
+the two ends must agree on case or every sync resends the whole tree (and the loss
+is silent: it just looks slow). Paths likewise: the agent must report forward
+slashes or nothing ever matches.
+* `sync` has no ready handshake -- the agent reads the payload as its first action,
+so a client that waits for a reply line before sending it **deadlocks both ends**.
+Read and write the raw stream; a `StreamReader` would also buffer away the
+payload that follows a command line.
+* Never derive control flow from a function's return value in PowerShell: every
+helper emits its own output, so `$quit = Invoke-Command ...` read "OK stopped" as
+"quit" and shut the agent down on the first sync.
+* The log is read with `FileShare.ReadWrite`. The game holds `JERICHO.log` open
+while it runs, and pulling a LIVE log is the point -- `ReadAllBytes` fails with
+"being used by another process" exactly when the log matters most.

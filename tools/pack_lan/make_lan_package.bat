@@ -33,6 +33,14 @@ pushd "%HERE%" || exit /b 1
 "%SEVENZ%" a -t7z -mx=5 "%OUT%" PLAY_HOST.bat PLAY_JOIN.bat FIREWALL_FIX.bat README_LAN.txt
 popd
 
+rem The remote-testing agent, staged at the package ROOT (next to the exe) so the
+rem other PC gets it by unpacking -- that is what makes it a fixture you set up once
+rem and then stop thinking about: START_AGENT.bat there, and this machine can push
+rem builds to it, start either seat, and pull both logs.
+pushd "%HERE%..\remote" || exit /b 1
+"%SEVENZ%" a -t7z -mx=5 "%OUT%" mp_agent.ps1 START_AGENT.bat README_REMOTE.txt
+popd
+
 rem Ship an mp.ini that REFUSES a build mismatch instead of half-working. The
 rem package is always copied whole, so the two machines' digests match; if someone
 rem later replaces only the exe on one side, the join is refused with a clear

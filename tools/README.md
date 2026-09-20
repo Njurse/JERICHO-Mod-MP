@@ -166,6 +166,47 @@ a machine reports can be compared directly. The package also ships
 different exe at the handshake instead of letting it desync mid-race; set it to 0
 if you want to test mismatched builds deliberately.
 
+## Testing on the other PC without touching it (the agent)
+
+    JERICHO\MODS\mp\tools\remote\START_AGENT.bat      <- run ONCE on the other PC
+    python JERICHO\MODS\mp\tools\remote\mp_remote.py run --peer 192.168.50.244 --seat host
+
+Copy the two files in `tools\remote\` (they already ride along in the LAN package)
+next to `REDRIVER2_dev.exe` on the other machine, double-click `START_AGENT.bat`
+once, and leave the window open. That machine is then a **fixture**, not a
+chore: everything below happens from here, and you never touch it again.
+
+    status   what build it is on, whether the game is up, how many files differ
+    deploy   send only what CHANGED, then start both seats on the same build
+    run      deploy, wait, pull BOTH logs back, print a PASS/FAIL verdict
+    logs     pull both logs and give the verdict
+    stop     close the game on both machines (PID-scoped: only the one we started)
+
+`deploy`/`run` send the exe, `JERICHO` and `VERSION.txt` — a few MB — and never
+the 1.6 GB of game data, because only those files ever change between builds. The
+agent verifies every file's SHA256 against the manifest inside the package and
+refuses the WHOLE update if one file disagrees, so a bad transfer can never leave
+a half-applied build.
+
+**Hands-free** means the agent is resident: if a sync arrives while a game is
+running it stops the game, updates, and starts it AGAIN with the same arguments.
+Leave that PC running a client, push a build from here, and watch the new build
+come up on its own. Its log of every command and what it did is `mp_agent.log`
+next to the game.
+
+Two things the loopback dry run taught us, worth knowing because they look like
+the agent is broken:
+
+* **A game started by the agent is stopped when a later `start`/`sync` arrives.**
+  It checks "is a game running" by process name, so on ONE machine the two seats
+  cannot coexist — that is only an artifact of testing both halves locally, and is
+  exactly what you want on two machines.
+* **The first run needs the firewall.** `START_AGENT.bat` as administrator, once,
+  or the connection is refused (it says so).
+
+The token (`-Token`, default `jericho-mp`) is not a security boundary: it stops a
+stray program on the same LAN from driving that machine by accident.
+
 ## A crash is not an Alt+F4
 
 An access violation leaves `JERICHO.dmp` beside the exe; an Alt+F4 — or any clean
