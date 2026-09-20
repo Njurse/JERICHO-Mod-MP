@@ -213,6 +213,10 @@ def main():
     ap.add_argument("--clean", action="store_true",
                     help="remove the run dirs and exit (never follows a junction)")
     ap.add_argument("--map", action="store_true", help="hold the in-game map open (MP_MAP=1)")
+    ap.add_argument("--bot", default="off", choices=["off", "random", "chase", "fight"],
+                    help="drive the player cars with the mp test bot: random / chase (host flees, "
+                         "joiner chases) / fight (both charge). OFF by default -- this drives a "
+                         "real player's car.")
     ap.add_argument("--level", default="lasvegas",
                     help="city for the host to host (default lasvegas)")
     ap.add_argument("--mp-arena", default="0",
@@ -281,6 +285,11 @@ def main():
     host_env["MP_AUTOSTART"] = "host"
     client_env = dict(env)
     client_env.pop("MP_AUTOSTART", None)
+
+    # The test bot is OFF unless asked for; it drives the player's actual car.
+    if args.bot != "off":
+        host_env["MP_BOT"] = args.bot
+        client_env["MP_BOT"] = args.bot
 
     # -level only on the HOST. It boots the engine straight into a city, frontend
     # bypassed -- giving it to the client too means the client is already booting

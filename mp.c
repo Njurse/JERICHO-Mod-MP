@@ -822,17 +822,42 @@ static int MpBotPad(void)
 	return cur;
 }
 
-/* MP_BOTCHASE: instead of the canned manoeuvre, drive the LOCAL car straight at
- * the nearest other player's car. Two instances that both chase each other close
- * the gap on their own, which is how car-to-car collision and the two players
- * actually meeting gets exercised without two humans at two machines. Returns 0
- * (coast) when there is nobody else to drive at. */
-static int MpBotChase(void)
+/* The test bot. OFF unless MP_BOT says otherwise -- these levers drive a real
+ * player's car, so nothing here may be on by default:
+ *
+ *   MP_BOT=random   the old canned manoeuvre (MP_TESTDRIVE is the older name)
+ *   MP_BOT=chase    the host flees, the joiner chases
+ *   MP_BOT=fight    both charge each other
+ *
+ * Returns 0 (no bot), 1 (random), 2 (chase) or 3 (fight). */
+static int MpBotMode(void)
+{
+	const char* m = getenv("MP_BOT");
+
+	if (m == NULL)
+		return (getenv("MP_TESTDRIVE") != NULL) ? 1 : 0;
+
+	if (strcmp(m, "chase") == 0)
+		return 2;
+	if (strcmp(m, "fight") == 0)
+		return 3;
+	if (strcmp(m, "off") == 0 || strcmp(m, "0") == 0)
+		return 0;
+
+	return 1;
+}
+
+/* MP_BOT=chase/fight: drive the LOCAL car at (or away from) the nearest other
+ * player's car. Two instances then close the gap on their own, which is how
+ * car-to-car collision and the two players actually meeting gets exercised
+ * without two humans at two machines. Returns 0 (coast) with nobody else to
+ * drive at. */
+static int MpBotChase(int fight)
 {
 	MP_PLAYER* me = MpLocalPlayer();
 	CAR_DATA* mine;
 	CAR_DATA* tgt = NULL;
-	static int stuckFrames, recoverFrames, recoverDir;
+	static int stuckFrames, recoverFrames, recoverDir, recoverReverse;
 	int k;
 
 	if (me == NULL || me->carId < 0)
@@ -856,19 +881,28 @@ static int MpBotChase(void)
 
 	/* The very primitive "pathfinder": a straight line at the peer is enough on an
 	 * open map, but the cars wedge on the first building and never meet again.
-	 * So if we are feeding it throttle and the car is still not moving, back out
-	 * and turn the other way for a moment, then carry on -- a wall-follow that is
-	 * a few lines and gets two bots around Havana's blocks to each other. */
+	 * So if the car is not moving, SPIN the wheels and swing round to face the
+	 * peer rather than reversing into it -- reverse creeps the two cars toward
+	 * each other at a crawl, which reads badly; wheelspin turns them around at
+	 * speed. A few lines, and enough to get two bots around the blocks. */
 	if (recoverFrames > 0)
 	{
 		recoverFrames--;
-		return (recoverDir ? CAR_PAD_LEFT : CAR_PAD_RIGHT) | CAR_PAD_BRAKE;
+
+		/* Alternate. Wheelspin alone just burns the tyres against the thing we are
+		 * wedged on and the car never moves, so every other recovery is a real
+		 * back-up-and-turn: that is the only thing that gets a car off a wall.
+		 * (Preferring wheelspin is right for TURNING, not for escaping.) */
+		if (recoverReverse)
+			return CAR_PAD_BRAKE | (recoverDir ? CAR_PAD_LEFT : CAR_PAD_RIGHT);
+
+		return CAR_PAD_ACCEL | CAR_PAD_WHEELSPIN | (recoverDir ? CAR_PAD_LEFT : CAR_PAD_RIGHT);
 	}
 
 	{
 		int dx = tgt->hd.where.t[0] - mine->hd.where.t[0];
 		int dz = tgt->hd.where.t[2] - mine->hd.where.t[2];
-		int flee = (getenv("MP_BOTFIGHT") == NULL) && MpIsHost();	/* the host runs, the joiner chases: two cars in a line. MP_BOTFIGHT makes both charge, to force a collision. */
+		int flee = (!fight && MpIsHost());	/* chase: the host runs, the joiner chases. fight: both charge. */
 		int want = flee ? ((ratan2(dx, dz) + 2048) & 0xfff) : (ratan2(dx, dz) & 0xfff);
 		int diff = ((want - mine->hd.direction + 2048) & 4095) - 2048;	/* DIFF_ANGLES */
 		int adiff = (diff < 0) ? -diff : diff;
@@ -892,12 +926,14 @@ static int MpBotChase(void)
 			{
 				if (++stuckFrames > 100)
 				{
-					recoverFrames = 55;
+					recoverFrames = recoverReverse ? 45 : 70;
 					recoverDir ^= 1;
+					recoverReverse ^= 1;
 					stuckFrames = 0;
 
 					if (gMpCtx != NULL)
-						gMpCtx->jer_log(gMpCtx, "[mp] chase: stuck, backing out (dir %d)\n", recoverDir);
+						gMpCtx->jer_log(gMpCtx, "[mp] chase: stuck, %s (dir %d)\n",
+							recoverReverse ? "backing out" : "spinning round", recoverDir);
 				}
 			}
 			else
@@ -914,8 +950,10 @@ static int MpBotChase(void)
 			 * so the pair does not ram itself out of sight. */
 			pad = (adiff > 96) ? ((diff > 0) ? CAR_PAD_LEFT : CAR_PAD_RIGHT) : 0;
 		}
-		else if (adiff > 1400)
-			pad = CAR_PAD_BRAKE;
+		else if (adiff > 400)
+			/* Turn to face rather than reversing: wheelspin swings the car round at
+			 * speed, where reverse only creeps it backwards into its peer. */
+			pad = CAR_PAD_ACCEL | CAR_PAD_WHEELSPIN | ((diff > 0) ? CAR_PAD_LEFT : CAR_PAD_RIGHT);
 		else if (adiff > 96)
 			pad = CAR_PAD_ACCEL | ((diff > 0) ? CAR_PAD_LEFT : CAR_PAD_RIGHT);
 		else
@@ -947,7 +985,9 @@ static int MpOnNetInput(void* userdata, void* args)
 	{
 		if (p->isLocal)
 		{
-			if (getenv("MP_TESTDRIVE") != NULL)
+			int mode = MpBotMode();
+
+			if (mode != 0)
 			{
 				if ((gMp.frame % 60) == 0 && gMpCtx != NULL)
 				{
@@ -958,7 +998,7 @@ static int MpOnNetInput(void* userdata, void* args)
 						car_data[1].hd.where.t[0], car_data[1].hd.where.t[1], car_data[1].hd.where.t[2], car_data[1].hd.speed);
 				}
 
-				in->pad = (getenv("MP_BOTCHASE") != NULL) ? MpBotChase() : MpBotPad();		/* the test AI drives OUR car */
+				in->pad = (mode == 3) ? MpBotChase(1) : ((mode == 2) ? MpBotChase(0) : MpBotPad());		/* the test AI drives OUR car */
 				in->handled = 1;
 			}
 
