@@ -61,8 +61,12 @@ extern "C" {
 #define MP_MAX_MODS		32
 #define MP_NAME_MAX		32
 #define MP_REJECT_TEXT_MAX	64
-#define MP_NOTIFY_MAX		6	/* lines kept in the lower-left info log */
+#define MP_NOTIFY_MAX		6	/* lines kept in the lower-left info log (6 rows from
+					 * y=178 fit the 240-high screen) */
 #define MP_NOTIFY_TEXT_MAX	96
+#define MP_NOTIFY_WRAP		34	/* chars that fit on one overlay row; a longer notice
+					 * WRAPS into several log lines. Keep in step with
+					 * JER_ERROR_WRAP (jer_system.c). */
 #define MP_NOTIFY_MS		6000	/* how long a line stays on screen (ms) */
 #define MP_CHANNEL_NAME_MAX	16
 

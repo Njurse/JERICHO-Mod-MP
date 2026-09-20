@@ -737,18 +737,53 @@ void MpUiTick(void)
 /* ------------------------------------------------------------------ */
 void MpNotify(const char* text)
 {
-	int slot;
+	int len, pos;
 
 	if (text == NULL || text[0] == '\0')
 		return;
 
-	slot = gMp.notifyNext % MP_NOTIFY_MAX;
-	snprintf(gMp.notifyText[slot], MP_NOTIFY_TEXT_MAX, "%s", text);
-	gMp.notifyUntil[slot] = MpNowMs() + MP_NOTIFY_MS;
-	gMp.notifyNext = (slot + 1) % MP_NOTIFY_MAX;
-
 	if (gMpCtx != NULL)
 		gMpCtx->jer_log(gMpCtx, "[mp] info: %s\n", text);
+
+	len = (int)strlen(text);
+
+	/* WRAP at MP_NOTIFY_WRAP so a long notice is not clipped at the screen
+	 * edge. Each wrapped line takes its own slot in the lower-left log and the
+	 * draw stacks them, so the message reads across several rows. Same width
+	 * and same break rules as jer_error(): prefer a space in the latter half,
+	 * otherwise hard-break (a long token must still wrap). */
+	for (pos = 0; pos < len; )
+	{
+		int take = len - pos;
+		int slot;
+
+		if (take > MP_NOTIFY_WRAP)
+		{
+			int cut = MP_NOTIFY_WRAP;
+
+			while (cut > MP_NOTIFY_WRAP / 2 && text[pos + cut] != ' ')
+				cut--;
+
+			take = (cut > MP_NOTIFY_WRAP / 2) ? cut : MP_NOTIFY_WRAP;
+		}
+
+		if (take <= 0)
+			take = 1;
+
+		slot = gMp.notifyNext % MP_NOTIFY_MAX;
+		memcpy(gMp.notifyText[slot], text + pos, (size_t)take);
+		gMp.notifyText[slot][take] = 0;
+		gMp.notifyUntil[slot] = MpNowMs() + MP_NOTIFY_MS;
+		gMp.notifyNext = (slot + 1) % MP_NOTIFY_MAX;
+
+		if (getenv("MP_DEBUG") != NULL && gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx, "[mp] notify row '%s'\n", gMp.notifyText[slot]);
+
+		pos += take;
+
+		while (pos < len && text[pos] == ' ')	/* drop the space we broke at */
+			pos++;
+	}
 }
 
 void MpNotifyf(const char* fmt, ...)

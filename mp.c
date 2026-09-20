@@ -526,6 +526,25 @@ static int MpOnFrame(void* userdata, void* args)
 	MpNetPoll(0);
 	MpUiTick();
 
+	/* MP_DEBUG: echo the engine's notice ROWS, so the WRAP can be checked from
+	 * the log without eyes on the screen -- a wrapped message is several
+	 * entries, one per drawn line. Log-only, so it cannot change behaviour. */
+	if (getenv("MP_DEBUG") != NULL && gMpCtx != NULL)
+	{
+		static int lastNotices = -1;
+		int n = jer_error_count();
+
+		if (n != lastNotices)
+		{
+			int k;
+
+			lastNotices = n;
+
+			for (k = 0; k < n; k++)
+				gMpCtx->jer_log(gMpCtx, "[mp] notice[%d] = '%s'\n", k, jer_error_at(k));
+		}
+	}
+
 	/* Deferred work, done on a FRAME rather than inside the poll that noticed it
 	 * -- calling into the state machine from a message handler is re-entrant and
 	 * crashed the client. FRAME and not PRE_SIM: a joining client is sitting in
