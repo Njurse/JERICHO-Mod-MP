@@ -37,6 +37,7 @@ typedef struct MP_CONFIG
 	int  keepaliveMs;		/* liveness ping cadence */
 	int  modCheck;			/* host lobby setting: MP_MODCHECK_* */
 	int  strictVersion;		/* host lobby setting: also require the same build */
+	int  car;			/* this machine's vehicle for the match, -1 = level default */
 	int  firstNameSet;		/* 0 until the player confirms a name once */
 } MP_CONFIG;
 

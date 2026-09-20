@@ -44,6 +44,10 @@ void MpConfigLoad(void)
 	if (gMp.config.keepaliveMs < MP_KEEPALIVE_MIN_MS || gMp.config.keepaliveMs > 30000)
 		gMp.config.keepaliveMs = MP_KEEPALIVE_INTERVAL_MS;
 
+	gMp.config.car = jer_config_get_int("mp", "car", -1);
+	if (gMp.config.car < -1 || gMp.config.car > 255)
+		gMp.config.car = -1;
+
 	gMp.config.modCheck = jer_config_get_int("mp", "mod_check", MP_MODCHECK_OFF);
 	if (gMp.config.modCheck < 0 || gMp.config.modCheck > MP_MODCHECK_EXACT)
 		gMp.config.modCheck = MP_MODCHECK_OFF;
@@ -78,6 +82,7 @@ void MpConfigSave(void)
 	jer_config_set_int("mp", "beacon_ms", gMp.config.beaconMs);
 	jer_config_set_int("mp", "keepalive_ms", gMp.config.keepaliveMs);
 	jer_config_set_int("mp", "mod_check", gMp.config.modCheck);
+	jer_config_set_int("mp", "car", gMp.config.car);
 	jer_config_set_int("mp", "strict_version", gMp.config.strictVersion);
 	jer_config_set_str("mp", "player_name", gMp.config.playerName);
 	jer_config_set_str("mp", "host_name", gMp.config.hostName);

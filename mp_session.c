@@ -173,6 +173,13 @@ static void MpLaunchLocal(void)
 			GameLevel, GameType, gSubGameNumber, wantedTimeOfDay, wantedWeather, NumPlayers);
 
 	MpMarkBusy(MP_BUSY_LAUNCH_MS);	/* the load is about to block us */
+	/* A chosen vehicle, applied here rather than as a boot argument. The engine
+	 * re-applies wantedCar to PlayerStartInfo immediately before the level runs,
+	 * and it is only cleared on the way back to the frontend, so setting it now
+	 * survives the launch. Slot 0 is this machine's own player. */
+	if (gMp.config.car >= 0)
+		wantedCar[0] = gMp.config.car;
+
 	SetState(STATE_GAMESTART);
 }
 
@@ -275,6 +282,14 @@ int MpStartMatch(void)
 	if (!MpIsHost() || gMp.running)
 		return 0;
 
+
+	/* An unattended session (-host / MP_AUTOSTART) takes its level from the
+	 * engine's own -level/-mp. Adopted HERE and not when the arguments were
+	 * parsed, because -level only sets gBootLevel at that point and GameLevel
+	 * is assigned afterwards. A frontend lobby does not need this: the player
+	 * picked a city in the menus. */
+	if (gMp.autoSession)
+		gMp.city = GameLevel;
 	/* the lobby values may still be unset (-1): clamp to valid ones BEFORE
 	 * both the broadcast and the local launch so host and clients agree, and
 	 * the mission loader never sees an out-of-range index */

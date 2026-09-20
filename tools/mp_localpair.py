@@ -279,7 +279,13 @@ def main():
     host_args = ["-nointro", "-nofmv", "-level", args.level, "-mp", args.mp_arena]
     client_args = ["-nointro", "-nofmv", "-mp", args.mp_arena]
 
-    host_argv = host_args + ["-car", args.host_car, "-host", str(args.port)]
+    # The car comes from the MODULE's -mpcar, not the engine's -car. -car is a
+    # dependent option that requires -level, and -level boots the engine straight
+    # into a city -- so the client could only ever have one or the other, and
+    # giving it -car alone popped a blocking message box that made the client look
+    # like it could not connect at all.
+
+    host_argv = host_args + ["-mpcar", args.host_car, "-host", str(args.port)]
     a = launch(dirs["a"], args.exe, host_argv, host_env)
     log(f"host  pid {a.pid}  (port {args.port}, {args.level} arena {args.mp_arena}, "
         f"host car {args.host_car}, client car {args.client_car})")
@@ -287,7 +293,7 @@ def main():
     log(f"waiting {args.settle}s for the host to load...")
     time.sleep(args.settle)
 
-    client_argv = client_args + ["-car", args.client_car, "-join", f"127.0.0.1:{args.port}"]
+    client_argv = client_args + ["-mpcar", args.client_car, "-join", f"127.0.0.1:{args.port}"]
     b = launch(dirs["b"], args.exe, client_argv, client_env)
 
     for label, argv in (("host", host_argv), ("client", client_argv)):

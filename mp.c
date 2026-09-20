@@ -305,23 +305,34 @@ static int MpOnCmdLine(void* userdata, void* args)
 			if (gMpCtx != NULL)
 				gMpCtx->jer_log(gMpCtx, "[mp] -host on port %d\n", gMp.config.port);
 
-			/* -host means: bring a match up by itself, no frontend walking.
-			 * The level comes from the engine's own -level/-mp (parsed by now)
-			 * and the car from -car. */
+			/* -host means: bring a match up by itself, no frontend walking. The car
+			 * comes from -mpcar; the CITY is adopted later, at match start. -level
+			 * only stores gBootLevel (a static in main.c) and GameLevel is assigned
+			 * after the argument loop -- so reading GameLevel here still sees the
+			 * default and the host launched Chicago while -level said havana. */
 			gMp.autoSession = 1;
 			gAutoHostStart = 1;
 			gAutoHostTarget = 2;
 
 			MpBeginHost();
-
-			/* AFTER MpBeginHost: it resets the session, so a city set before it
-			 * is wiped and the match starts in the wrong place (it did -- the host
-			 * launched Chicago while -level said havana). */
-			gMp.city = GameLevel;
 			if (gMp.timeOfDay < 0 && wantedTimeOfDay >= 0)
 				gMp.timeOfDay = wantedTimeOfDay;
 			if (gMp.weather < 0 && wantedWeather >= 0)
 				gMp.weather = wantedWeather;
+		}
+		else if (!strcmp(cl->argv[i], "-mpcar"))
+		{
+			/* Our own vehicle for the match. The engine's -car cannot be used
+			 * here: it is a dependent option that requires -level, and -level
+			 * boots straight into a city -- which must never be given to a
+			 * joining client. */
+			if (i + 1 < cl->argc && cl->argv[i + 1][0] != '-')
+			{
+				gMp.config.car = atoi(cl->argv[++i]);
+
+				if (gMpCtx != NULL)
+					gMpCtx->jer_log(gMpCtx, "[mp] -mpcar %d\n", gMp.config.car);
+			}
 		}
 		else if (!strcmp(cl->argv[i], "-join"))
 		{
