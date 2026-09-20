@@ -213,8 +213,8 @@ def main():
     ap.add_argument("--clean", action="store_true",
                     help="remove the run dirs and exit (never follows a junction)")
     ap.add_argument("--map", action="store_true", help="hold the in-game map open (MP_MAP=1)")
-    ap.add_argument("--level", default="havana",
-                    help="city for the host to host (default havana)")
+    ap.add_argument("--level", default="lasvegas",
+                    help="city for the host to host (default lasvegas)")
     ap.add_argument("--mp-arena", default="0",
                     help="multiplayer map/arena for both sides (default 0)")
     ap.add_argument("--host-car", default="random",

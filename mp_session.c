@@ -1430,10 +1430,23 @@ static void MpHandleCarState(const unsigned char* p, int len)
 			long dx = (long)e.x - (long)cp->hd.where.t[0];
 			long dy = (long)e.y - (long)cp->hd.where.t[1];
 			long dz = (long)e.z - (long)cp->hd.where.t[2];
+			long d2 = dx * dx + dy * dy + dz * dz;
 
-			if (dx * dx + dy * dy + dz * dz <
-				(long)MP_SYNC_SNAP_DIST * (long)MP_SYNC_SNAP_DIST)
+			if (d2 < (long)MP_SYNC_SNAP_DIST * (long)MP_SYNC_SNAP_DIST)
+			{
+				/* Inside tolerance: the engine owns the car. Report the residual
+				 * periodically so the correction's ACCURACY is visible, not just
+				 * that it exists. */
+				if ((gMp.frame % 120) == 0 && gMpCtx != NULL)
+					gMpCtx->jer_log(gMpCtx, "[mp] resync: player %d drift d=(%ld,%ld,%ld) (tol %d)\n",
+						e.playerId, dx, dy, dz, MP_SYNC_SNAP_DIST);
+
 				continue;
+			}
+
+			if (gMpCtx != NULL)
+				gMpCtx->jer_log(gMpCtx, "[mp] resync: player %d SNAP d=(%ld,%ld,%ld)\n",
+					e.playerId, dx, dy, dz);
 		}
 
 		/* keep the remote car placed and alive: the engine spools a

@@ -868,16 +868,16 @@ static int MpBotChase(void)
 	{
 		int dx = tgt->hd.where.t[0] - mine->hd.where.t[0];
 		int dz = tgt->hd.where.t[2] - mine->hd.where.t[2];
-		int want = ratan2(dx, dz) & 0xfff;
+		int flee = MpIsHost();	/* the host runs, the joiner chases: two cars in a line */
+		int want = flee ? ((ratan2(dx, dz) + 2048) & 0xfff) : (ratan2(dx, dz) & 0xfff);
 		int diff = ((want - mine->hd.direction + 2048) & 4095) - 2048;	/* DIFF_ANGLES */
 		int adiff = (diff < 0) ? -diff : diff;
-		int throttle;
+		long dist;
 		int pad;
 
 		/* Only feed it throttle while the peer is roughly ahead: flooring it
 		 * through a big correction just spins the car, and a spin never closes the
 		 * gap. Back off (coast/brake) while it swings round, then go. */
-		throttle = (adiff <= 1400);
 
 		{
 			int spd = mine->hd.speed;
@@ -885,7 +885,10 @@ static int MpBotChase(void)
 			if (spd < 0)
 				spd = -spd;
 
-			if (throttle && spd < 4)
+			/* Wedged counts whether we are trying to go forward or just sitting
+			 * there facing away: a car stopped against a wall with the peer behind
+			 * it never moves, and the throttle-only test missed exactly that. */
+			if (spd < 4)
 			{
 				if (++stuckFrames > 100)
 				{
@@ -903,7 +906,15 @@ static int MpBotChase(void)
 			}
 		}
 
-		if (adiff > 1400)
+		dist = (long)dx * (long)dx + (long)dz * (long)dz;
+
+		if (!flee && dist < 900L * 900L)
+		{
+			/* The chaser is on top of the runner: coast to a stop and just face them,
+			 * so the pair does not ram itself out of sight. */
+			pad = (adiff > 96) ? ((diff > 0) ? CAR_PAD_LEFT : CAR_PAD_RIGHT) : 0;
+		}
+		else if (adiff > 1400)
 			pad = CAR_PAD_BRAKE;
 		else if (adiff > 96)
 			pad = CAR_PAD_ACCEL | ((diff > 0) ? CAR_PAD_LEFT : CAR_PAD_RIGHT);
@@ -911,8 +922,8 @@ static int MpBotChase(void)
 			pad = CAR_PAD_ACCEL;
 
 		if ((gMp.frame % 60) == 0 && gMpCtx != NULL)
-			gMpCtx->jer_log(gMpCtx, "[mp] chase: d=%d,%d want=%d dir=%d diff=%d pad=%#x stuck=%d\n",
-				dx, dz, want, mine->hd.direction, diff, pad, stuckFrames);
+			gMpCtx->jer_log(gMpCtx, "[mp] chase: %s d=%d,%d want=%d dir=%d diff=%d pad=%#x stuck=%d\n",
+				flee ? "flee" : "chase", dx, dz, want, mine->hd.direction, diff, pad, stuckFrames);
 
 		return pad;
 	}
