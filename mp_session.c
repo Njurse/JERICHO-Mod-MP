@@ -599,9 +599,13 @@ void MpSendHello(void)
 	{
 		extern u_char defaultPlayerPalette;
 
+		MP_PLAYER* me = MpLocalPlayer();
+
 		h.car = (uint16_t)((gMp.config.car >= 0) ? gMp.config.car : 0xFFFF);
 		h.reserved[0] = (uint8_t)(gMp.config.carIsSlot ? 1 : 0);
-		h.reserved[1] = (uint8_t)defaultPlayerPalette;
+		h.reserved[1] = (uint8_t)((me != NULL && me->carId >= 0)
+			? (uint8_t)car_data[me->carId].ap.palette
+			: (uint8_t)defaultPlayerPalette);
 	}
 	snprintf(h.playerName, sizeof(h.playerName), "%s", gMp.config.playerName);
 	h.modCount = (uint8_t)n;
@@ -1455,6 +1459,7 @@ static void MpSendOwnCarState(void)
 	memset(&e, 0, sizeof(e));
 	e.playerId = (uint8_t)me->id;
 	e.flags = MP_CARSTATE_HAS_BODY;
+	e.palette = (uint8_t)cp->ap.palette;	/* the colour WE see our car in -- we own it */
 	e.x = cp->hd.where.t[0];
 	e.y = cp->hd.where.t[1];
 	e.z = cp->hd.where.t[2];
@@ -1536,8 +1541,8 @@ static void MpHandleCarState(int connIndex, const unsigned char* p, int len)
 			 * ours -- gating on `frame % 30` silently logged nothing. */
 			if (gMpCtx != NULL)
 				gMpCtx->jer_log(gMpCtx,
-					"[mp] adopt: player %d snap %u |d|=%ld d2=%ld (dx=%ld dy=%ld dz=%ld) dh=%d\n",
-					e.playerId, (unsigned)h.frame, (long)sqrt((double)d2), d2, dx, dy, dz, dh);
+					"[mp] adopt: player %d snap %u |d|=%ld d2=%ld (dx=%ld dy=%ld dz=%ld) dh=%d pal=%d\n",
+					e.playerId, (unsigned)h.frame, (long)sqrt((double)d2), d2, dx, dy, dz, dh, (int)e.palette);
 
 			/* Adopt in full: the owner is the truth for its own car. */
 
@@ -1590,6 +1595,18 @@ static void MpHandleCarState(int connIndex, const unsigned char* p, int len)
 
 		cp->hd.direction = e.heading;
 		pl->lastStateFrame = gMp.frame;	/* the fallback gate in MpOnNetInput reads this */
+
+		/* The OWNER is the colour authority: paint its car the colour the owner
+		 * sees. cp->ap.palette is exactly what the renderer hands to
+		 * DrawCarObject, so this recolours the car on the very next frame. */
+		if (!pl->isLocal && cp->ap.palette != (u_char)e.palette)
+		{
+			if (gMpCtx != NULL)
+				gMpCtx->jer_log(gMpCtx, "[mp] palette: player %d %d -> %d (from owner)\n",
+					pl->id, (int)cp->ap.palette, (int)e.palette);
+
+			cp->ap.palette = (u_char)e.palette;
+		}
 
 		/* Client-side gather: the first time we hear a peer's car, drop our
 		 * own car right next to it so both players start together -- each

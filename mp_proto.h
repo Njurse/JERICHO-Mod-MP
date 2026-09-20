@@ -330,6 +330,7 @@ typedef struct MP_CARSTATE_ENTRY
 {
 	uint8_t  playerId;
 	uint8_t  flags;		/* MP_CARSTATE_HAS_BODY */
+	uint8_t  palette;	/* owner's car colour (cp->ap.palette) -- owner-authoritative */
 	int16_t  orient[4];	/* st.n.orientation */
 	int32_t  x, y, z;	/* world units */
 	int32_t  heading;	/* hd.direction */
@@ -383,7 +384,7 @@ static_assert(sizeof(MP_REJECT) == 68, "MP_REJECT layout");
 static_assert(sizeof(MP_SESSION) == 12, "MP_SESSION layout");
 static_assert(sizeof(MP_PLAYER_INPUT) == 4, "MP_PLAYER_INPUT layout");
 static_assert(sizeof(MP_INPUT) == 8, "MP_INPUT layout");
-static_assert(sizeof(MP_CARSTATE_ENTRY) == 44, "MP_CARSTATE_ENTRY layout");
+static_assert(sizeof(MP_CARSTATE_ENTRY) == 45, "MP_CARSTATE_ENTRY layout");
 static_assert(sizeof(MP_CARSTATE) == 8, "MP_CARSTATE layout");
 static_assert(sizeof(MP_CHANNEL) == 26, "MP_CHANNEL layout");
 #endif
