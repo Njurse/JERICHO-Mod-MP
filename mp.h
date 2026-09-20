@@ -71,6 +71,8 @@ typedef struct MP_STATE
 	int running;			/* a network level is live */
 	int leaving;			/* 1 = we are deliberately leaving (stay quiet) */
 	int localPlayerId;		/* this machine's player id */
+	int  autoSession;		/* -host/-join/MP_AUTOSTART: bring a match up with no menus */
+	int  pendingLaunch;		/* an auto session asked to launch: do it on a frame, not mid-poll */
 
 	/* agreed lobby config */
 	int gamemode;			/* MP_GAMEMODE_* */

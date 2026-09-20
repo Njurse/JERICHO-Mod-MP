@@ -75,11 +75,12 @@ int MpBeginHost(void)
 		return 0;
 	}
 
-	/* Advertise from the moment the lobby exists. A host who is picking a city
-	 * and waiting for people to arrive is exactly what somebody browsing needs
-	 * to see, and the beacon carries inProgress = gMp.running, so a browser can
-	 * still tell a lobby from a match already under way. */
-	MpDiscoveryStart(1);
+	/* NO advertising here. A server is only listed once a match is actually
+	 * running (MpStartMatch does it) -- otherwise a browser sees a host that is
+	 * not ready to be joined, and players are invited to connect to a lobby
+	 * whose host is still picking a city. Joining still works the moment the
+	 * beacon carries a live game.
+	 */
 
 	if (gMpCtx)
 		gMpCtx->jer_log(gMpCtx, "[mp] hosting as '%s' (mod enforcement=%d)\n",
@@ -431,6 +432,13 @@ static void MpSendWelcome(int connIndex, int playerId, int matched)
 	w.weather = (uint8_t)(gMp.weather < 0 ? 0 : gMp.weather);
 	w.seed = gMp.seed;
 
+	/* The roster must be on the wire BEFORE the welcome. A live joiner launches
+	 * the moment it is welcomed, and if it does not yet know who else is in the
+	 * match it spawns no car for them -- leaving the level's own AI car (a cop)
+	 * sitting in that player's slot on that machine, which is exactly the
+	 * one-sided "placeholder cop car". TCP keeps the order for us. */
+	MpHostSendRoster();
+
 	MpSendConn(connIndex, MP_TAG_WELCOME, MP_FLAG_RELIABLE, &w, sizeof(w));
 
 	/* The player on the other end is about to launch a level and will say
@@ -651,7 +659,19 @@ static void MpHandleWelcome(const unsigned char* p, int len)
 		if (gMpCtx)
 			gMpCtx->jer_log(gMpCtx, "[mp] joined a LIVE match - pick a car\n");
 
-		MpUiOpenCarSelect();
+		if (gMp.autoSession)
+		{
+			/* Launched from -join / MP_AUTOSTART: nobody is here to press the
+			 * car select's START. Only ASK for the launch from here -- this runs
+			 * inside the network poll, and changing game state (SetState) from
+			 * inside a hook is re-entrant and took the game down. The launch
+			 * itself happens on the next frame. */
+			gMp.pendingLaunch = 1;
+		}
+		else
+		{
+			MpUiOpenCarSelect();
+		}
 	}
 }
 
@@ -709,6 +729,12 @@ static void MpHandleChannel(int connIndex, const unsigned char* p, int len)
 
 static void MpHandleStart(const unsigned char* p, int len)
 {
+	/* An auto session launches itself here too: the usual case is that the host
+	 * was already waiting in its lobby, so it starts the match AFTER we join and
+	 * no welcome-time launch ever happened. Nothing here is re-entrant -- this
+	 * runs from the poll, so the launch is deferred like the other one. */
+	if (gMp.autoSession && !gMp.running)
+		gMp.pendingLaunch = 1;
 	/* the host is launching: it will be silent for the load */
 	MpMarkBusy(MP_BUSY_LAUNCH_MS);
 

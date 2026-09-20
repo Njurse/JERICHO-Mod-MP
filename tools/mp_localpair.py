@@ -170,6 +170,12 @@ def main():
     ap.add_argument("--clean", action="store_true",
                     help="remove the run dirs and exit (never follows a junction)")
     ap.add_argument("--map", action="store_true", help="hold the in-game map open (MP_MAP=1)")
+    ap.add_argument("--level", default="havana",
+                    help="city for the host to host (default havana)")
+    ap.add_argument("--mp-arena", default="0",
+                    help="multiplayer map/arena for both sides (default 0)")
+    ap.add_argument("--host-car", default="0", help="the host's car (default 0)")
+    ap.add_argument("--client-car", default="12", help="the joining player's car (default 12)")
     args = ap.parse_args()
 
     game_dir = os.path.abspath(args.game_dir)
@@ -211,14 +217,25 @@ def main():
     client_env = dict(env)
     client_env.pop("MP_AUTOSTART", None)
 
-    a = launch(dirs["a"], args.exe, ["-nointro", "-nofmv", "-host", str(args.port)], host_env)
-    log(f"host  pid {a.pid}  (port {args.port})")
+    # -level only on the HOST. It boots the engine straight into a city, frontend
+    # bypassed -- giving it to the client too means the client is already booting
+    # a level while the module drives its own join and launch, and that is a
+    # crash, not a slow start. The client follows the host's session for its level
+    # and only needs -mp (which multiplayer map/arena) as a local boot flag, since
+    # the arena is not in the session config yet.
+    host_args = ["-nointro", "-nofmv", "-level", args.level, "-mp", args.mp_arena]
+    client_args = ["-nointro", "-nofmv", "-mp", args.mp_arena]
+
+    a = launch(dirs["a"], args.exe,
+               host_args + ["-car", args.host_car, "-host", str(args.port)], host_env)
+    log(f"host  pid {a.pid}  (port {args.port}, {args.level} arena {args.mp_arena}, "
+        f"host car {args.host_car}, client car {args.client_car})")
 
     log(f"waiting {args.settle}s for the host to load...")
     time.sleep(args.settle)
 
     b = launch(dirs["b"], args.exe,
-               ["-nointro", "-nofmv", "-join", f"127.0.0.1:{args.port}"], client_env)
+               client_args + ["-car", args.client_car, "-join", f"127.0.0.1:{args.port}"], client_env)
     log(f"client pid {b.pid}")
 
     remaining = max(5, args.seconds - args.settle)

@@ -280,7 +280,23 @@ static int MpOnCmdLine(void* userdata, void* args)
 			if (gMpCtx != NULL)
 				gMpCtx->jer_log(gMpCtx, "[mp] -host on port %d\n", gMp.config.port);
 
+			/* -host means: bring a match up by itself, no frontend walking.
+			 * The level comes from the engine's own -level/-mp (parsed by now)
+			 * and the car from -car. */
+			gMp.autoSession = 1;
+			gAutoHostStart = 1;
+			gAutoHostTarget = 2;
+
 			MpBeginHost();
+
+			/* AFTER MpBeginHost: it resets the session, so a city set before it
+			 * is wiped and the match starts in the wrong place (it did -- the host
+			 * launched Chicago while -level said havana). */
+			gMp.city = GameLevel;
+			if (gMp.timeOfDay < 0 && wantedTimeOfDay >= 0)
+				gMp.timeOfDay = wantedTimeOfDay;
+			if (gMp.weather < 0 && wantedWeather >= 0)
+				gMp.weather = wantedWeather;
 		}
 		else if (!strcmp(cl->argv[i], "-join"))
 		{
@@ -326,6 +342,7 @@ static int MpOnCmdLine(void* userdata, void* args)
 			if (gMpCtx != NULL)
 				gMpCtx->jer_log(gMpCtx, "[mp] -join %s:%d\n", ip, port);
 
+			gMp.autoSession = 1;	/* no menus: launch as soon as we are in */
 			MpBeginJoinAsync(ip, port);
 		}
 	}
@@ -634,6 +651,17 @@ static int MpOnDrawOverlay(void* userdata, void* args)
 
 static int MpOnPreSim(void* userdata, void* args)
 {
+	/* An auto session (-join / MP_AUTOSTART) asked to launch when its welcome
+	 * arrived. Do it HERE, on a frame boundary: the welcome is handled inside
+	 * the network poll, and calling into the state machine from in there is
+	 * re-entrant -- it crashed the client outright. */
+	if (gMp.pendingLaunch)
+	{
+		gMp.pendingLaunch = 0;
+
+		if (gMp.autoSession && MpJoinState() == MP_JOIN_READY)
+			MpClientLaunch();
+	}
 	(void)userdata;
 	(void)args;
 
