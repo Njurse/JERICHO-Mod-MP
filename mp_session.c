@@ -178,9 +178,33 @@ static void MpLaunchLocal(void)
 	/* A chosen vehicle, applied here rather than as a boot argument. The engine
 	 * re-applies wantedCar to PlayerStartInfo immediately before the level runs,
 	 * and it is only cleared on the way back to the frontend, so setting it now
-	 * survives the launch. Slot 0 is this machine's own player. */
+	 * survives the launch. Slot 0 is this machine's own player.
+	 *
+	 * The value is resolved against the SESSION's city: "slotN" is the frontend's
+	 * per-city car slot, so resolving it HERE (GameLevel is the host's city by
+	 * now) is what makes the client's pick come from the host's car list rather
+	 * than from whatever city this machine happened to boot with. A raw number
+	 * the level cannot load is left alone -- InitPlayer clamps it to a resident
+	 * car, so it is no longer a crash. */
 	if (gMp.config.car >= 0)
-		wantedCar[0] = gMp.config.car;
+	{
+		int car = gMp.config.car;
+
+		if (gMp.config.carIsSlot)
+		{
+			extern char carNumLookup[4][10];
+			int lvl = (GameLevel >= 0 && GameLevel < 4) ? GameLevel : 0;
+			int slotNo = (car >= 1 && car <= 10) ? car : 1;
+
+			car = carNumLookup[lvl][slotNo - 1];
+
+			if (gMpCtx != NULL)
+				gMpCtx->jer_log(gMpCtx, "[mp] car slot %d -> model %d (city %d)\n",
+					slotNo, car, GameLevel);
+		}
+
+		wantedCar[0] = car;
+	}
 
 	SetState(STATE_GAMESTART);
 }

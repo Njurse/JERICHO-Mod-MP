@@ -328,10 +328,27 @@ static int MpOnCmdLine(void* userdata, void* args)
 			 * joining client. */
 			if (i + 1 < cl->argc && cl->argv[i + 1][0] != '-')
 			{
-				gMp.config.car = atoi(cl->argv[++i]);
+				const char* v = cl->argv[++i];
+
+				/* Accept either a raw model number or "slotN" (1..10), the
+				 * frontend's own per-city slot. A slot is resolved against the
+				 * session's city at launch (see MpLaunchLocal), because GameLevel is
+				 * still the default here -- reading carNumLookup now would use the
+				 * wrong city, the same trap the -host comment above records. */
+				if (strncmp(v, "slot", 4) == 0)
+				{
+					gMp.config.car = atoi(v + 4);
+					gMp.config.carIsSlot = 1;
+				}
+				else
+				{
+					gMp.config.car = atoi(v);
+					gMp.config.carIsSlot = 0;
+				}
 
 				if (gMpCtx != NULL)
-					gMpCtx->jer_log(gMpCtx, "[mp] -mpcar %d\n", gMp.config.car);
+					gMpCtx->jer_log(gMpCtx, "[mp] -mpcar %s (car=%d slot=%d)\n",
+						v, gMp.config.car, gMp.config.carIsSlot);
 			}
 		}
 		else if (!strcmp(cl->argv[i], "-join"))

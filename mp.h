@@ -38,6 +38,7 @@ typedef struct MP_CONFIG
 	int  modCheck;			/* host lobby setting: MP_MODCHECK_* */
 	int  strictVersion;		/* host lobby setting: also require the same build */
 	int  car;			/* this machine's vehicle for the match, -1 = level default */
+	int  carIsSlot;			/* 1 = `car` is a 1..10 frontend slot, resolved per city */
 	int  firstNameSet;		/* 0 until the player confirms a name once */
 } MP_CONFIG;
 
