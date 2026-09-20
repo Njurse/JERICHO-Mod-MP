@@ -365,8 +365,10 @@ void MpSpawnLateJoiners(void)
 					id, slot, PlayerStartInfo[slot]->model, lvl);
 		}
 
-		/* alongside the host, not at the level's own start point */
-		PlayerStartInfo[slot]->position.vy = 0;
+		/* alongside the host, not at the level's own start point. The HEIGHT is
+		 * the local start record's: forcing it to 0 dropped the remote car in from
+		 * above (the level's datum is not y=0). */
+		PlayerStartInfo[slot]->position.vy = PlayerStartInfo[0]->position.vy;
 		PlayerStartInfo[slot]->position.vx = car_data[0].hd.where.t[0] + (MP_SPAWN_SLOT_DIST * slot);
 		PlayerStartInfo[slot]->position.vz = car_data[0].hd.where.t[2];
 
@@ -1069,7 +1071,9 @@ int MpOnNetSpawn(void* userdata, void* args)
 					i, slot, PlayerStartInfo[slot]->model, lvl, p->car);
 		}
 
-		PlayerStartInfo[slot]->position.vy = 0;
+		/* The HEIGHT is the local start record's -- forcing it to 0 dropped the
+		 * remote car in from above, because the level's datum is not y=0. */
+		PlayerStartInfo[slot]->position.vy = PlayerStartInfo[0]->position.vy;
 		PlayerStartInfo[slot]->position.vx = PlayerStartInfo[0]->position.vx + 900 * slot;
 		PlayerStartInfo[slot]->position.vz = PlayerStartInfo[0]->position.vz;
 		PlayerStartInfo[slot]->rotation = PlayerStartInfo[0]->rotation;
@@ -1513,11 +1517,21 @@ static void MpHandleCarState(int connIndex, const unsigned char* p, int len)
 			if (me != NULL && me->carId >= 0 && me->carId != pl->carId)
 			{
 				CAR_DATA* my = &car_data[me->carId];
+				MATRIX m;
 
+				/* The gather uses the PEER's resolved y (e.y), so it does not lift
+				 * our car -- same trap as the spawn, and it is not hit here. */
 				my->hd.where.t[0] = e.x + 600;
 				my->hd.where.t[1] = e.y;
 				my->hd.where.t[2] = e.z;
 				my->hd.direction = e.heading;
+
+				/* Rebuild the handling matrix too: setting only t[]/direction left the
+				 * collision box at the OLD spot until the engine next recomputed it --
+				 * and this is a teleport, so it matters. */
+				_RotMatrixY(&m, (short)e.heading);
+				memcpy(my->hd.where.m, m.m, sizeof(my->hd.where.m));
+
 				gMp.localPlaced = 1;
 
 				if (gMpCtx)

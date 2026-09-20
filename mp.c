@@ -1024,6 +1024,11 @@ static int MpOnGameStart(void* userdata, void* args)
 			CAR_DATA* cp = &car_data[me->carId];
 			MP_SPAWN s;
 
+			/* The host's RESOLVED car position is the meeting point: by GAME_START
+			 * the engine has already dropped the car onto the road, so cp->hd.where
+			 * is the settled road height. PlayerStartInfo[..]->position.vy is only
+			 * the level DATUM -- it reads 0 in Rio while the road is at y=30 -- so
+			 * using it here put BOTH cars at y=0. */
 			s.x = cp->hd.where.t[0];
 			s.y = cp->hd.where.t[1];
 			s.z = cp->hd.where.t[2];

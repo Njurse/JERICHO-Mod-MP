@@ -245,7 +245,7 @@ def main():
     ap.add_argument("--exe", default="REDRIVER2_dev.exe")
     ap.add_argument("--port", type=int, default=1400)
     ap.add_argument("--seconds", type=int, default=60, help="how long to let them run")
-    ap.add_argument("--settle", type=int, default=12,
+    ap.add_argument("--settle", type=int, default=7,
                     help="seconds to wait before the client joins")
     ap.add_argument("--keep", action="store_true", help="leave the run dirs behind")
     ap.add_argument("--clean", action="store_true",
