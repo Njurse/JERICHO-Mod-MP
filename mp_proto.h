@@ -343,9 +343,12 @@ typedef struct MP_CARSTATE_ENTRY
 	uint8_t  model;		/* the VEHICLE the owner is driving (cp->ap.model);
 				 * MP_CARSTATE_NO_CAR = on foot, so the peers stop
 				 * driving our old car and leave it where it was */
-	uint8_t  carSlot;	/* the CAR_DATA slot the owner drives, or
-				 * MP_CARSTATE_NO_CAR -- lets a peer drive THAT car
-				 * (the same car in both worlds) when it can identify it */
+	uint8_t  carSlot;	/* informational: the CAR_DATA slot the owner drives.
+				 * NOT used to move a player onto another car -- slot
+				 * numbers do not mean the same car on two machines
+				 * (traffic is not replicated), so that warps a player
+				 * into an unrelated car. Models are matched in place
+				 * instead (see MpAdoptRemoteCar). */
 	int16_t  orient[4];	/* st.n.orientation */
 	int32_t  x, y, z;	/* world units */
 	int32_t  heading;	/* hd.direction */

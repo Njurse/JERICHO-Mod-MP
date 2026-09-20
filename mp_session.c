@@ -1268,7 +1268,6 @@ int MpInputForPlayer(int id)
 /* forward: the owner's own-car replication (defined later) */
 static void MpSendOwnCarState(void);
 static void MpTestCarChangeTick(void);
-static int  MpCarIsSomeones(int slot);
 
 /* ------------------------------------------------------------------ */
 /* Input replication                                                   */
@@ -1719,9 +1718,6 @@ static void MpTestCarChangeTick(void)
 		if (i == me->carId || cp->controlType != CONTROL_TYPE_CIV_AI)
 			continue;
 
-		if (MpCarIsSomeones(i))
-			continue;
-
 		/* squared distances are 64 bit: a 32-bit one wraps negative on a far car
 		 * and reads as the NEAREST one */
 		dx = (long)cp->hd.where.t[0] - mine->hd.where.t[0];
@@ -1916,22 +1912,6 @@ static void MpSendOwnCarState(void)
  * (see MpFollowLocalCar). The carstate carries the model now, so we can follow
  * it; these helpers make our copy match. */
 
-/* Is this CAR_DATA slot already spoken for by some OTHER player? */
-static int MpCarIsSomeones(int slot)
-{
-	int i;
-
-	for (i = 0; i < MP_MAX_PLAYERS; i++)
-	{
-		MP_PLAYER* p = MpGetPlayer(i);
-
-		if (p != NULL && p->active && p->carId == slot)
-			return 1;
-	}
-
-	return 0;
-}
-
 /* A remote player got OUT. The car we were driving for them is left exactly as
  * it is, standing where they left it.
  *
@@ -1951,80 +1931,58 @@ static void MpReleaseRemoteCar(MP_PLAYER* p)
 
 	cp = &car_data[p->carId];
 
-	if (cp->controlType == CONTROL_TYPE_PLAYER)
+	if (cp->controlType == CONTROL_TYPE_PLAYER && gMpCtx != NULL)
 	{
-		if (gMpCtx != NULL)
-			gMpCtx->jer_log(gMpCtx,
-				"[mp] player %d got out; car slot %d left standing where it was\n",
-				p->id, p->carId);
+		gMpCtx->jer_log(gMpCtx,
+			"[mp] player %d got out; car slot %d left standing where it was\n",
+			p->id, p->carId);
 	}
 }
 
 /* Make this player's car in OUR world the vehicle their owner just got into.
  *
- * IN PLACE, on the slot we already drive for them -- the safe default: only the
- * cosmetic model and the colour change, so nothing about this world's car slots
- * is disturbed and a wrong guess cannot hijack an unrelated car.
+ * IN PLACE, on the slot we already drive for them -- ONLY the cosmetic model and
+ * the colour change, so nothing about this world's car slots is disturbed.
  *
- * RE-LINK only when it is SAFE: the slot the owner named is a plain traffic car
- * HERE -- same model, CIV_AI, claimed by nobody -- so our copy is literally the
- * same car in both worlds and the pose we adopt lands on the right entity. */
-static void MpAdoptRemoteCar(MP_PLAYER* p, int model, int slot)
+ * Do NOT move the player onto the car the owner NAMED. Slot numbers do not mean
+ * the same car on two machines (traffic is not replicated), so doing that warps
+ * the player into whatever unrelated car happens to sit at that index here --
+ * seen as "the host teleported into the client's old car and the client ended up
+ * warped in as a traffic car". The hijacked car is also owned by the LOCAL traffic
+ * system, which then tries to recycle it and crashes (PingInCivCar / StepSim).
+ * Matching the vehicle is the job here; matching the ENTITY needs replicated
+ * traffic, which the session does not have. */
+static void MpAdoptRemoteCar(MP_PLAYER* p, int model)
 {
-	CAR_DATA* cp = NULL;
+	CAR_DATA* cp;
 
-	if (p == NULL)
+	if (p == NULL || p->carId < 0 || p->carId >= MAX_CARS)
 		return;
 
-	if (slot >= 0 && slot < MAX_CARS && slot != p->carId)
-	{
-		CAR_DATA* other = &car_data[slot];
+	cp = &car_data[p->carId];
 
-		if (other->ap.model == model
-		    && other->controlType == CONTROL_TYPE_CIV_AI
-		    && !MpCarIsSomeones(slot))
-		{
-			MpReleaseRemoteCar(p);		/* what they left goes back */
-
-			p->carId = slot;
-			cp = other;
-
-			if (gMpCtx != NULL)
-				gMpCtx->jer_log(gMpCtx,
-					"[mp] player %d changed car: re-linked to slot %d (model %d)\n",
-					p->id, slot, model);
-		}
-	}
-
-	if (cp == NULL && p->carId >= 0 && p->carId < MAX_CARS)
-		cp = &car_data[p->carId];
-
-	if (cp == NULL)
+	if (cp->ap.model == model)
 		return;
 
-	/* SWAP IN PLACE -- but only to a model the renderer actually HAS. Pointing
-	 * ap.model at a mesh we never loaded is a crash, not a cosmetic glitch, so an
-	 * unavailable model keeps the old one and says so. */
-	if (cp->ap.model != model)
+	/* Only to a model the renderer actually HAS. Pointing ap.model at a mesh we
+	 * never loaded is a crash, not a cosmetic glitch, so an unavailable model
+	 * keeps the old one and says so. */
+	if (model >= 0 && model < MAX_CAR_RESIDENT_MODELS && gCarCleanModelPtr[model] != NULL)
 	{
-		if (model >= 0 && model < MAX_CAR_RESIDENT_MODELS
-		    && gCarCleanModelPtr[model] != NULL)
-		{
-			if (gMpCtx != NULL)
-				gMpCtx->jer_log(gMpCtx,
-					"[mp] player %d changed car: model %d -> %d (slot %d)\n",
-					p->id, cp->ap.model, model, p->carId);
-
-			cp->ap.model = model;
-			p->car = model;
-			p->carIsSlot = 0;
-		}
-		else if (gMpCtx != NULL)
-		{
+		if (gMpCtx != NULL)
 			gMpCtx->jer_log(gMpCtx,
-				"[mp] player %d changed car: model %d is not loaded here; keeping %d\n",
-				p->id, model, cp->ap.model);
-		}
+				"[mp] player %d changed car: model %d -> %d (slot %d)\n",
+				p->id, cp->ap.model, model, p->carId);
+
+		cp->ap.model = model;
+		p->car = model;
+		p->carIsSlot = 0;
+	}
+	else if (gMpCtx != NULL)
+	{
+		gMpCtx->jer_log(gMpCtx,
+			"[mp] player %d changed car: model %d is not loaded here; keeping %d\n",
+			p->id, model, cp->ap.model);
 	}
 }
 
@@ -2080,7 +2038,7 @@ static void MpHandleCarState(int connIndex, const unsigned char* p, int len)
 		 * agreed with the roster while the car on screen stayed the old one. */
 		if (cp->ap.model != (int)e.model)
 		{
-			MpAdoptRemoteCar(pl, (int)e.model, (int)e.carSlot);
+			MpAdoptRemoteCar(pl, (int)e.model);
 
 			if (pl->carId < 0 || pl->carId >= MAX_CARS)
 				continue;
