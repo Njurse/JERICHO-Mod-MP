@@ -80,6 +80,17 @@ extern "C" {
 #define MP_TAG_PONG	"JPPO"
 #define MP_TAG_CHANNEL	"JPCH"	/* addon net bridge payload */
 #define MP_TAG_LEAVE	"JPLV"	/* either side: leaving the session */
+#define MP_TAG_SPAWN	"JPSW"	/* host -> all: where everyone lines up */
+
+/* How far apart the player cars stand at the meeting point: close enough that
+ * everybody is on one screen, far enough not to spawn inside each other. */
+#define MP_SPAWN_SLOT_DIST	260
+
+typedef struct MP_SPAWN
+{
+	int32_t x, y, z;
+	int32_t heading;
+} MP_SPAWN;
 #define MP_TAG_CHAT	"JPCX"	/* either side: a chat line (scaffolding) */
 
 /* Envelope flags */

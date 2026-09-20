@@ -773,7 +773,9 @@ static int MpOnFrame(void* userdata, void* args)
 		}
 	}
 
-	/* diagnostic: where the module thinks every player car is */
+	/* diagnostic: where the module thinks every player car is, and whether the
+	 * engine is actually simulating it (list= is membership of the engine's
+	 * own active_car_list, which StepCars walks) */
 	if (gMp.running && gMpCtx != NULL && (gMp.frame % 60) == 0)
 	{
 		int i;
@@ -785,10 +787,26 @@ static int MpOnFrame(void* userdata, void* args)
 			if (!p->active || p->carId < 0)
 				continue;
 
-			gMpCtx->jer_log(gMpCtx, "[mp] pose: player %d local=%d car %d at %d,%d,%d spd=%d\n",
-				p->id, p->isLocal, p->carId,
-				car_data[p->carId].hd.where.t[0], car_data[p->carId].hd.where.t[1], car_data[p->carId].hd.where.t[2],
-				car_data[p->carId].hd.speed);
+			{
+				CAR_DATA* cd = &car_data[p->carId];
+				int inList = 0, k;
+
+				for (k = 0; k < num_active_cars; k++)
+				{
+					if (active_car_list[k] == cd)
+						inList = 1;
+				}
+
+				gMpCtx->jer_log(gMpCtx, "[mp] pose: player %d local=%d car %d at %d,%d,%d spd=%d ct=%d pad=%d hnd=%d vy=%d list=%d/%d\n",
+					p->id, p->isLocal, p->carId,
+					cd->hd.where.t[0], cd->hd.where.t[1], cd->hd.where.t[2],
+					cd->hd.speed,
+					cd->controlType,
+					cd->ai.padid != NULL ? *cd->ai.padid : -99,
+					cd->hndType,
+					cd->st.n.linearVelocity[1],
+					inList, num_active_cars);
+			}
 		}
 	}
 
@@ -934,6 +952,33 @@ static int MpOnGameStart(void* userdata, void* args)
 		gMpCtx->jer_log(gMpCtx, "[mp] car: player %d slot %d controlType=%d model=%d pos=%d,%d,%d\n",
 			p->id, p->carId, cp->controlType, cp->ap.model,
 			cp->hd.where.t[0], cp->hd.where.t[1], cp->hd.where.t[2]);
+	}
+
+	/* Every car now exists. The host's car is standing on a spawn point the
+	 * level chose, which makes it the one meeting point both machines can
+	 * agree on -- so it hands that spot out and everybody lines up on it.
+	 * Without this each machine keeps its own take-a-ride spawn on opposite
+	 * sides of the map and can never see the others. */
+	if (MpIsHost())
+	{
+		MP_PLAYER* me = MpLocalPlayer();
+
+		if (me != NULL && me->carId >= 0 && me->carId < MAX_CARS)
+		{
+			CAR_DATA* cp = &car_data[me->carId];
+			MP_SPAWN s;
+
+			s.x = cp->hd.where.t[0];
+			s.y = cp->hd.where.t[1];
+			s.z = cp->hd.where.t[2];
+			s.heading = cp->hd.direction;
+
+			MpPlaceSpawns(s.x, s.y, s.z, s.heading);
+			MpHostBroadcast(MP_TAG_SPAWN, 0, &s, sizeof(s));
+
+			gMpCtx->jer_log(gMpCtx, "[mp] meeting point %d,%d,%d heading %d sent\n",
+				s.x, s.y, s.z, s.heading);
+		}
 	}
 
 	return JER_RESULT_CONTINUE;

@@ -239,6 +239,7 @@ void MpChatOpen(void);			/* open the chat prompt (scaffolding) */
 void MpChatSendText(const char* text);	/* send + locally echo a chat line */
 void MpSendChat(const char* text);	/* put a chat line on the wire */
 void MpSendInput(int pad);		/* replicate this frame's input (host relays the set) */
+void MpPlaceSpawns(int x, int y, int z, int heading);	/* line every player car up here */
 int  MpUiDrawOverlay(void* userdata, void* args);	/* JER_EVENT_DRAW_OVERLAY */
 void MpCarPose(int carId, int* x, int* y, int* z, int* heading);	/* car position (mp.c owns car_data) */
 void MpCameraPose(int* x, int* y, int* z, int* yaw);	/* camera position + yaw */

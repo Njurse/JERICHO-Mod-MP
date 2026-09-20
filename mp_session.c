@@ -16,6 +16,7 @@
 #include "replays.h"
 #include "pad.h"
 #include "cars.h"
+#include "convert.h"	/* _RotMatrixY: a car's box is built from its matrix */
 #include "state.h"
 
 #include <string.h>
@@ -794,6 +795,67 @@ static void MpHandleInput(const unsigned char* p, int len)
 	}
 }
 
+/* Line every player car up on one patch of road, spaced out, all facing the
+ * same way.
+ *
+ * The meeting point has to come from ONE machine. If each side simply puts the
+ * other players' cars next to itself, the two placements disagree, the resync
+ * sees a big divergence and drags them apart again -- cars rubber-banding
+ * between spawn points. The host is that machine: it already owns the roster,
+ * and its own car is standing at a spawn the level chose.
+ */
+void MpPlaceSpawns(int x, int y, int z, int heading)
+{
+	int i, placed = 0;
+
+	for (i = 0; i < MP_MAX_PLAYERS; i++)
+	{
+		MP_PLAYER* p = &gMp.players[i];
+		CAR_DATA* cp;
+
+		if (!p->active || p->carId < 0 || p->carId >= MAX_CARS)
+			continue;
+
+		cp = &car_data[p->carId];
+
+		cp->hd.where.t[0] = x + (i % 4) * MP_SPAWN_SLOT_DIST;
+		cp->hd.where.t[1] = y;
+		cp->hd.where.t[2] = z + (i / 4) * MP_SPAWN_SLOT_DIST;
+		cp->hd.direction = heading;
+
+		/* the car must be pointing that way too, or its box -- and so its
+		 * collisions -- stays at the old angle */
+		{
+			MATRIX m;
+
+			_RotMatrixY(&m, (short)heading);
+			memcpy(cp->hd.where.m, m.m, sizeof(cp->hd.where.m));
+		}
+
+		/* drop any momentum from the move so nobody inherits a jump */
+		cp->st.n.linearVelocity[0] = 0;
+		cp->st.n.linearVelocity[1] = 0;
+		cp->st.n.linearVelocity[2] = 0;
+		cp->hd.speed = 0;
+
+		placed++;
+	}
+
+	if (gMpCtx != NULL)
+		gMpCtx->jer_log(gMpCtx, "[mp] lined up %d car(s) at %d,%d,%d\n", placed, x, y, z);
+}
+
+static void MpHandleSpawn(const unsigned char* p, int len)
+{
+	MP_SPAWN s;
+
+	if (len < (int)sizeof(s))
+		return;
+
+	memcpy(&s, p, sizeof(s));
+	MpPlaceSpawns(s.x, s.y, s.z, s.heading);
+}
+
 /* One network tick (per simulation frame). Every machine drives every car from
  * replicated input, so nobody blocks on the network and nobody owns a car it
  * cannot see move. */
@@ -1014,6 +1076,12 @@ void MpHandleMessage(int connIndex, const char* tag, const unsigned char* payloa
 	if (memcmp(tag, MP_TAG_INPUT, 4) == 0)
 	{
 		MpHandleInput(payload, len);
+		return;
+	}
+
+	if (memcmp(tag, MP_TAG_SPAWN, 4) == 0)
+	{
+		MpHandleSpawn(payload, len);
 		return;
 	}
 
