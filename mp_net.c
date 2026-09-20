@@ -449,6 +449,12 @@ static void MpAcceptPeers(void)
 			continue;
 		}
 
+		/* Accepted sockets are BLOCKING for recv, like the client's (see
+		 * MpClientAdopt). The recv loop only calls recv() after select() reports
+		 * the socket readable, so a blocking socket can never stall the frame --
+		 * but that guard is the ONLY thing making it safe, so the mode is set
+		 * explicitly here rather than inherited from the non-blocking listener. */
+		MpSetNonBlocking(s, 0);
 		MpTuneConn(s);
 		gConn[idx].sock = s;
 		gConn[idx].hostSide = 1;
@@ -939,9 +945,17 @@ static void MpProcessConn(int idx)
 			int sel = select(0, &rd, NULL, NULL, &tv);
 			int isset = FD_ISSET(c->sock, &rd);
 
-			if (getenv("MP_DEBUG") != NULL && gMpCtx != NULL)
-
-
+			/* Nothing to read: stop draining, the rest waits for the next poll.
+			 *
+			 * This break is LOAD-BEARING. The session sockets are blocking (the
+			 * client's is set so in MpClientAdopt, the host's in MpAcceptPeers),
+			 * so falling through to recv() would HANG the whole game thread until
+			 * the peer happened to speak. It used to be unconditional. An edit
+			 * that deleted a debug log left its `if (getenv("MP_DEBUG") ...)`
+			 * behind with this break as its body, so the break only fired WITH
+			 * MP_DEBUG set: with it, the pair worked; without it -- i.e. every
+			 * packaged/real launch -- a connection was dropped the instant
+			 * nothing was pending. Keep it unconditional. */
 			if (sel <= 0 || !isset)
 				break;
 		}
@@ -968,6 +982,12 @@ static void MpProcessConn(int idx)
 		if (n < 0)
 		{
 			int err = WSAGetLastError();
+
+			/* "No data right now" is not a failure: on a non-blocking socket it
+			 * is the normal state, and the select() guard above cannot make that
+			 * impossible. Never drop a live peer over it. */
+			if (MpWouldBlock())
+				break;
 
 			/* An orderly close arrives as n == 0 and is handled above. n < 0
 			 * with ECONNRESET means the far end or something in between RST
@@ -1134,16 +1154,17 @@ void MpNetPoll(int waitMs)
 			continue;
 		}
 
-		/* A peer that connects and then says nothing is not a player. The idle
-		 * timeout would eventually catch it, but 10 s of silence is a long time
-		 * to hold a slot -- and on the client side the player is staring at
-		 * "Connecting to ..." with no idea anything is wrong. */
-		if (gConn[i].used && !gConn[i].hsDone &&
+		/* A STRANGER that connects and then says nothing is not a player: this
+		 * deadline is for a peer that connected TO us (hostSide). It must NOT
+		 * apply to our own outbound connection to a host. A host that is loading
+		 * a level is SILENT for seconds, and the client cannot see the host's
+		 * busy flag, so a 5 s deadline here dropped a perfectly good join -- the
+		 * intermittent "Lost the server (HELLO sent, no WELCOME)" that showed only
+		 * when the host was still loading. Our own link is bounded by the idle
+		 * timeout below (which the busy grace stands down during a load). */
+		if (gConn[i].used && gConn[i].hostSide && !gConn[i].hsDone &&
 			(now - gConn[i].acceptedMs) > MP_HANDSHAKE_TIMEOUT_MS)
 		{
-			if (!MpIsHost())
-				jer_error("The server did not answer at %s", gConnectingHost);
-
 			MpDropConn(i, "no handshake reply");
 			continue;
 		}

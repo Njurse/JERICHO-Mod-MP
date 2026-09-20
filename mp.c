@@ -65,6 +65,12 @@ JERICHO_CONTEXT* gMpCtx;
  * frame instead of trusting it. */
 static int gReturnToMenu;
 
+/* mp's own in-game player list. A network session must NOT open the engine
+ * pause: that freezes the whole simulation on THIS machine while everyone else
+ * keeps driving, so the two states disagree the moment play resumes. The START
+ * press opens this instead -- a non-freezing overlay. */
+static int gMpShowPlayers;
+
 /* Leave the whole match: back to the main frontend with a notice. Used when
  * the host ends the game or the server connection is lost. */
 void MpReturnToFrontend(void)
@@ -80,6 +86,7 @@ void MpReturnToFrontend(void)
 	gMp.role = MP_ROLE_NONE;
 	gMp.connected = 0;
 	gMp.running = 0;
+	gMpShowPlayers = 0;	/* the overlay only belongs to a live match */
 
 	/* the ENGINE's own way out of a gameplay session: it tears down the level,
 	 * stops the music/sfx and returns to the frontend (the same path the pause
@@ -542,9 +549,11 @@ static int MpOnFrame(void* userdata, void* args)
 	}
 
 	/* Test lever: hold the in-game map open, so the multiplayer-map blip hook
-	 * can be exercised without a human pressing the map button. */
-	if (getenv("MP_MAP") != NULL && gMp.running)
-	/* MP_MAP used to force the map open -- the same mistake the pause lever made: the engine then draws a map whose state was never set up, and the screen goes red. It only logs now. */
+	 * can be exercised without a human pressing the map button.
+	 *
+	 * MP_MAP used to force the map open -- the same mistake the pause lever made:
+	 * the engine then draws a map whose state was never set up, and the screen
+	 * goes red. It only logs now. */
 	if (getenv("MP_MAP") != NULL && gMp.running)
 		MpLogPlayerList();
 
@@ -765,10 +774,39 @@ static int MpOnDrawOverlay(void* userdata, void* args)
 	if (getenv("MP_PAUSE") != NULL && gMp.running)
 		MpLogPlayerList();
 
-	if (gDrawPauseMenus)
+	if (gDrawPauseMenus || gMpShowPlayers)
 		MpDrawPlayerList();
 
 	return JER_RESULT_CONTINUE;
+}
+
+/* JERICHO-HOOK: the engine pause freezes the simulation -- which in a network
+ * session freezes only THIS machine. Everyone else keeps driving, so the moment
+ * play resumes the two disagree. In a live match the START press must therefore
+ * not open it: claim the press (JER_RESULT_STOP, so the engine pause never
+ * opens and pauseflag is never set) and toggle our own non-freezing player list.
+ * A press while a session is only being set up, and stock single-player, keep
+ * the normal pause. */
+static int MpOnPauseMenu(void* userdata, void* args)
+{
+	JER_ARGS_PAUSE_MENU* pm = (JER_ARGS_PAUSE_MENU*)args;
+
+	(void)userdata;
+
+	if (pm == NULL || pm->action != JER_PAUSE_OPEN)
+		return JER_RESULT_CONTINUE;
+
+	if (!gMp.running)
+		return JER_RESULT_CONTINUE;
+
+	gMpShowPlayers = !gMpShowPlayers;
+
+	if (gMpCtx != NULL)
+		gMpCtx->jer_log(gMpCtx,
+			"[mp] pause claimed: the world keeps running (%s the player list)\n",
+			gMpShowPlayers ? "showing" : "hiding");
+
+	return JER_RESULT_STOP;
 }
 
 static int MpOnPreSim(void* userdata, void* args)
@@ -1004,4 +1042,5 @@ JER_MODULE_ENTRY(jer_module_mp_entry)(JERICHO_CONTEXT* ctx)
 	ctx->jer_register_hook(ctx, JER_EVENT_NET_INPUT, MpOnNetInput, NULL, 0);
 	ctx->jer_register_hook(ctx, JER_EVENT_GAME_START, MpOnGameStart, NULL, 0);
 	ctx->jer_register_hook(ctx, JER_EVENT_DRAW_MAP, MpOnDrawMap, NULL, 0);
-	ctx->jer_register_hook(ctx, JER_EVENT_FRONTEND_IDLE, MpOnFrontendIdle, NULL, 0);}
+	ctx->jer_register_hook(ctx, JER_EVENT_FRONTEND_IDLE, MpOnFrontendIdle, NULL, 0);
+	ctx->jer_register_hook(ctx, JER_EVENT_PAUSE_MENU, MpOnPauseMenu, NULL, 0);}

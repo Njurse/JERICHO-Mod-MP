@@ -267,13 +267,20 @@ stylistic one.
 
 ---
 
-## 8. The pause-menu player list
+## 8. The pause menu, and why a session is never paused
 
-While the pause menu is open, the players are listed down the left: the host first
-and in cyan, then each player's name, index, vehicle (`-1` = on foot: no car slot,
-or a car standing there with nobody driving it) and ping. `MP_PAUSE=1` holds the
-menu open for testing; `MP_DEBUG` logs each row, which is how the content gets
-verified without eyes on the screen.
+In single player the START press opens the engine pause, which freezes the
+simulation. In a network session that freezes only THIS machine while everyone else
+keeps driving, so the two states disagree the moment play resumes. mp therefore
+claims the press in a live match (the `JER_EVENT_PAUSE_MENU` hook, returning
+`JER_RESULT_STOP` -- the same mechanism the sandbox overlay uses), so the engine
+pause never opens and `pauseflag` is never set: the world keeps running.
+
+The press toggles mp's own non-freezing player list instead: the players down the
+left, the host first and in cyan, then each player's name, index, vehicle (`-1` = on
+foot: no car slot, or a car standing there with nobody driving it) and ping.
+`MP_PAUSE=1` holds the list open for testing; `MP_DEBUG` logs each row, which is how
+the content gets verified without eyes on the screen.
 
 ---
 
@@ -342,6 +349,29 @@ These have each cost real time. They are not hypothetical.
 8. **A backslash in a generated file is an escape waiting to happen.** A path
    template containing `\bin` is a *backspace*; it silently corrupted every
    launcher's `EXEDIR`. Generate, then scan for stray control characters.
+9. **A debug switch must never change behaviour.** The only `break` guarding
+   `recv()` in `MpProcessConn` was nested inside a leftover
+   `if (getenv("MP_DEBUG") ...)` whose log line had been deleted, so it fired only
+   WITH `MP_DEBUG`. Without it -- every packaged/real launch -- the game called
+   `recv()` with nothing to read and dropped the peer the instant it connected
+   (`dropped (socket error); 0 byte(s) received`, which the old log blamed on a
+   middlebox -- impossible on loopback). `tools/check_debug_independence.py` now
+   fails if any debug `getenv` guard wraps control flow or state.
+10. **A host loading a level looks dead to a client.** While the host loads it does
+   not poll its socket, so it cannot answer a HELLO for seconds, and the client
+   cannot see the host's busy flag. The 5 s handshake deadline must therefore apply
+   only to a peer that connected TO us (`hostSide`); applying it to our OWN outbound
+   link dropped good joins -- the intermittent "Lost the server (HELLO sent, no
+   WELCOME)". Our link is bounded by the idle timeout, which the busy grace stands
+   down during a load.
+11. **A hand-built wire struct must copy EVERY field.** `MpSendCarState` built the
+   client's `MP_CARSTATE` header but never `memcpy`'d it into the send buffer, so
+   the client transmitted uninitialised stack (0xCC) for `frame`/`count`. The host
+   read `count = 204`, clamped it, failed the length check and silently threw away
+   EVERY one of the client's position snapshots -- so the host never corrected its
+   view of the client's car and the two simulations drifted with no correction at
+   all (the "physics/steering not synced"). The `[mp] sync:` deviation line makes
+   this visible: it must print for BOTH remote cars.
 
 ---
 

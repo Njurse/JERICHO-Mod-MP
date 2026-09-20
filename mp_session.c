@@ -26,6 +26,7 @@ extern int gWantNight;		/* glaunch.c: 1 = the night take-a-ride level variant */
 
 #include <string.h>
 #include <stdio.h>
+#include <math.h>	/* sqrt: the deviation readout below */
 
 /* How long a level load may block our main loop before we assume the peer is
  * gone rather than merely loading. Both sides load at the same time, so both
@@ -1432,19 +1433,26 @@ static void MpHandleCarState(const unsigned char* p, int len)
 			long dy = (long)e.y - (long)cp->hd.where.t[1];
 			long dz = (long)e.z - (long)cp->hd.where.t[2];
 			long d2 = dx * dx + dy * dy + dz * dz;
+			int dh = ((e.heading - cp->hd.direction + 2048) & 4095) - 2048;
 			int hard;
 
-			if (d2 < (long)MP_SYNC_SNAP_DIST * (long)MP_SYNC_SNAP_DIST)
-			{
-				/* Inside tolerance: the engine owns the car. Report the residual
-				 * periodically so the correction's ACCURACY is visible, not just
-				 * that it exists. */
-				if ((gMp.frame % 120) == 0 && gMpCtx != NULL)
-					gMpCtx->jer_log(gMpCtx, "[mp] resync: player %d drift d=(%ld,%ld,%ld) (tol %d)\n",
-						e.playerId, dx, dy, dz, MP_SYNC_SNAP_DIST);
+			/* The HOST<->CLIENT deviation for this REMOTE car: how far our own
+			 * simulation of it is from its owner's snapshot. One line per
+			 * snapshot that arrives, for every remote car. A small steady value is
+			 * input latency; a growing one is the two simulations drifting apart;
+			 * a spiky one is the resync fighting the engine. This is the number to
+			 * watch for "the cars are not where they are on the other machine".
+			 * (|d| is the world-unit distance, dh the heading error in 1/4096
+			 * turns.) Logged on arrival, NOT gated on our own frame counter: the
+			 * peer's snapshot arrives on ITS cadence, which need not line up with
+			 * ours -- gating on `frame % 30` silently logged nothing. */
+			if (gMpCtx != NULL)
+				gMpCtx->jer_log(gMpCtx,
+					"[mp] sync: player %d snap %u |d|=%ld d2=%ld (dx=%ld dy=%ld dz=%ld) dh=%d\n",
+					e.playerId, (unsigned)h.frame, (long)sqrt((double)d2), d2, dx, dy, dz, dh);
 
-				continue;
-			}
+			if (d2 < (long)MP_SYNC_SNAP_DIST * (long)MP_SYNC_SNAP_DIST)
+				continue;	/* inside tolerance: the engine owns the car */
 
 			/* A hard snap TELEPORTS the car, which is the "warped weirdly" the
 			 * player sees. Only a genuine desync gets one. Ordinary drift is eased
@@ -1588,6 +1596,7 @@ static void MpSendCarState(void)
 	e.angVel[0] = (int16_t)cp->st.n.angularVelocity[0];
 	e.angVel[1] = (int16_t)cp->st.n.angularVelocity[1];
 	e.angVel[2] = (int16_t)cp->st.n.angularVelocity[2];
+	memcpy(buf, &h, sizeof(h));	/* the client's own car state reaches the host */
 	memcpy(buf + sizeof(h), &e, sizeof(e));
 
 	MpSendToHost(MP_TAG_CARSTATE, 0, buf, (int)(sizeof(h) + sizeof(e)));
