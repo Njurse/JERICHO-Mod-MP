@@ -1103,9 +1103,8 @@ int MpInputForPlayer(int id)
 }
 
 
-/* forward: the host resync snapshot + client car replication (defined later) */
-static void MpHostSendCarState(void);
-static void MpSendCarState(void);
+/* forward: the owner's own-car replication (defined later) */
+static void MpSendOwnCarState(void);
 
 /* ------------------------------------------------------------------ */
 /* Input replication                                                   */
@@ -1331,69 +1330,72 @@ void MpLockstepFrame(void)
 	if ((gMp.frame % 120) == 0)
 		MpHostSendRoster();
 
-	if ((gMp.frame % MP_SYNC_INTERVAL) == 0)
-	{
-		if (MpIsHost())
-			MpHostSendCarState();		/* every car we know */
-		else
-			MpSendCarState();		/* just our own car */
-	}
+	/* OWNER-AUTHORITATIVE: every machine sends the ONE car it owns, every frame,
+	 * and everyone else adopts that state. The old model had each machine simulate
+	 * every car from input that arrived a round trip late and hoped a coarse resync
+	 * would pull them back together -- which is exactly where the drift came from. */
+	MpSendOwnCarState();
 
 	MpNetPoll(0);
 }
 
 /* ------------------------------------------------------------------ */
-/* Host state resync (the lockstep fallback)                           */
+/* Owner-authoritative car replication                                 */
+/*                                                                     */
+/* Each machine sends the ONE car it owns, every frame. Its owner is   */
+/* the truth for that car and every other machine adopts the state, so */
+/* nobody is guessing where somebody else's car is from delayed input. */
 /* ------------------------------------------------------------------ */
-static void MpHostSendCarState(void)
+static void MpSendOwnCarState(void)
 {
-	unsigned char buf[sizeof(MP_CARSTATE) + MP_MAX_PLAYERS * sizeof(MP_CARSTATE_ENTRY)];
+	unsigned char buf[sizeof(MP_CARSTATE) + sizeof(MP_CARSTATE_ENTRY)];
 	MP_CARSTATE h;
-	int i, k = 0;
+	MP_CARSTATE_ENTRY e;
+	MP_PLAYER* me = MpLocalPlayer();
+	CAR_DATA* cp;
+	int len;
+
+	if (me == NULL || me->carId < 0)
+		return;
+
+	cp = &car_data[me->carId];
 
 	memset(&h, 0, sizeof(h));
 	h.frame = gMp.frame;
+	h.count = 1;
 
-	for (i = 0; i < MP_MAX_PLAYERS; i++)
-	{
-		MP_PLAYER* p = &gMp.players[i];
-		MP_CARSTATE_ENTRY e;
-		CAR_DATA* cp;
+	memset(&e, 0, sizeof(e));
+	e.playerId = (uint8_t)me->id;
+	e.flags = MP_CARSTATE_HAS_BODY;
+	e.x = cp->hd.where.t[0];
+	e.y = cp->hd.where.t[1];
+	e.z = cp->hd.where.t[2];
+	e.heading = cp->hd.direction;
+	e.orient[0] = (int16_t)cp->st.n.orientation[0];
+	e.orient[1] = (int16_t)cp->st.n.orientation[1];
+	e.orient[2] = (int16_t)cp->st.n.orientation[2];
+	e.orient[3] = (int16_t)cp->st.n.orientation[3];
+	e.vel[0] = cp->st.n.linearVelocity[0];
+	e.vel[1] = cp->st.n.linearVelocity[1];
+	e.vel[2] = cp->st.n.linearVelocity[2];
+	e.angVel[0] = (int16_t)cp->st.n.angularVelocity[0];
+	e.angVel[1] = (int16_t)cp->st.n.angularVelocity[1];
+	e.angVel[2] = (int16_t)cp->st.n.angularVelocity[2];
 
-		if (!p->active || p->carId < 0)
-			continue;
-
-		cp = &car_data[p->carId];
-
-		memset(&e, 0, sizeof(e));
-		e.playerId = (uint8_t)p->id;
-		e.flags = MP_CARSTATE_HAS_BODY;
-		e.x = cp->hd.where.t[0];
-		e.y = cp->hd.where.t[1];
-		e.z = cp->hd.where.t[2];
-		e.heading = cp->hd.direction;
-		e.orient[0] = (int16_t)cp->st.n.orientation[0];
-		e.orient[1] = (int16_t)cp->st.n.orientation[1];
-		e.orient[2] = (int16_t)cp->st.n.orientation[2];
-		e.orient[3] = (int16_t)cp->st.n.orientation[3];
-		e.vel[0] = cp->st.n.linearVelocity[0];
-		e.vel[1] = cp->st.n.linearVelocity[1];
-		e.vel[2] = cp->st.n.linearVelocity[2];
-		e.angVel[0] = (int16_t)cp->st.n.angularVelocity[0];
-		e.angVel[1] = (int16_t)cp->st.n.angularVelocity[1];
-		e.angVel[2] = (int16_t)cp->st.n.angularVelocity[2];
-
-		memcpy(buf + sizeof(MP_CARSTATE) + k * sizeof(e), &e, sizeof(e));
-		k++;
-	}
-
-	h.count = (uint8_t)k;
 	memcpy(buf, &h, sizeof(h));
+	memcpy(buf + sizeof(h), &e, sizeof(e));
+	len = (int)(sizeof(h) + sizeof(e));
 
-	MpHostBroadcast(MP_TAG_CARSTATE, 0, buf, (int)(sizeof(h) + k * sizeof(MP_CARSTATE_ENTRY)));
+	/* The host is the hub: it broadcasts its OWN car to every client, and relays
+	 * each client's car on (MpHandleCarState does the relay). A client sends its
+	 * one car to the host. */
+	if (MpIsHost())
+		MpHostBroadcast(MP_TAG_CARSTATE, 0, buf, len);
+	else
+		MpSendToHost(MP_TAG_CARSTATE, 0, buf, len);
 }
 
-static void MpHandleCarState(const unsigned char* p, int len)
+static void MpHandleCarState(int connIndex, const unsigned char* p, int len)
 {
 	MP_CARSTATE h;
 	int i, n;
@@ -1423,18 +1425,16 @@ static void MpHandleCarState(const unsigned char* p, int len)
 
 		cp = &car_data[pl->carId];
 
-		/* MP_CARSTATE is a RESYNC, not the pose. Applying it every frame is
-		 * what kept remote cars puppets, and worse, it erased the collision
-		 * response the engine had just computed -- so a car you hit could never
-		 * be pushed. Snap only when the two simulations have actually drifted
-		 * apart; between snaps the engine owns the car. */
+		/* OWNER-AUTHORITATIVE: this car belongs to another machine, so its owner is
+		 * the truth. Adopt the WHOLE body every snapshot -- no easing, no tolerance.
+		 * (The accepted cost: because our engine's response to a contact is
+		 * overwritten by the owner's next frame, a car we drive into is not pushed.) */
 		{
 			long dx = (long)e.x - (long)cp->hd.where.t[0];
 			long dy = (long)e.y - (long)cp->hd.where.t[1];
 			long dz = (long)e.z - (long)cp->hd.where.t[2];
 			long d2 = dx * dx + dy * dy + dz * dz;
 			int dh = ((e.heading - cp->hd.direction + 2048) & 4095) - 2048;
-			int hard;
 
 			/* The HOST<->CLIENT deviation for this REMOTE car: how far our own
 			 * simulation of it is from its owner's snapshot. One line per
@@ -1448,20 +1448,10 @@ static void MpHandleCarState(const unsigned char* p, int len)
 			 * ours -- gating on `frame % 30` silently logged nothing. */
 			if (gMpCtx != NULL)
 				gMpCtx->jer_log(gMpCtx,
-					"[mp] sync: player %d snap %u |d|=%ld d2=%ld (dx=%ld dy=%ld dz=%ld) dh=%d\n",
+					"[mp] adopt: player %d snap %u |d|=%ld d2=%ld (dx=%ld dy=%ld dz=%ld) dh=%d\n",
 					e.playerId, (unsigned)h.frame, (long)sqrt((double)d2), d2, dx, dy, dz, dh);
 
-			if (d2 < (long)MP_SYNC_SNAP_DIST * (long)MP_SYNC_SNAP_DIST)
-				continue;	/* inside tolerance: the engine owns the car */
-
-			/* A hard snap TELEPORTS the car, which is the "warped weirdly" the
-			 * player sees. Only a genuine desync gets one. Ordinary drift is eased
-			 * across instead -- see below. */
-			hard = (d2 > (long)MP_SYNC_HARD_DIST * (long)MP_SYNC_HARD_DIST);
-
-			if (gMpCtx != NULL)
-				gMpCtx->jer_log(gMpCtx, "[mp] resync: player %d %s d=(%ld,%ld,%ld)\n",
-					e.playerId, hard ? "SNAP" : "ease", dx, dy, dz);
+			/* Adopt in full: the owner is the truth for its own car. */
 
 			/* keep the remote car placed and alive: the engine spools a
 			 * non-local player car out of the world, so re-assert it
@@ -1469,23 +1459,7 @@ static void MpHandleCarState(const unsigned char* p, int len)
 			cp->controlType = CONTROL_TYPE_PLAYER;
 
 			{
-				/* Move the fraction of the gap each snapshot. A quarter closes it in
-				 * a handful of snapshots with no visible jump; a hard snap is saved
-				 * for a real desync, where easing would take seconds to catch up. */
-				int tx, ty, tz;
-
-				if (hard)
-				{
-					tx = e.x;
-					ty = e.y;
-					tz = e.z;
-				}
-				else
-				{
-					tx = cp->hd.where.t[0] + (int)(dx / 4);
-					ty = cp->hd.where.t[1] + (int)(dy / 4);
-					tz = cp->hd.where.t[2] + (int)(dz / 4);
-				}
+				int tx = e.x, ty = e.y, tz = e.z;
 
 				cp->hd.where.t[0] = tx;
 				cp->hd.where.t[1] = ty;
@@ -1502,10 +1476,9 @@ static void MpHandleCarState(const unsigned char* p, int len)
 					LONGQUATERNION q;
 					MATRIX m;
 					int i;
-					int div = hard ? 1 : 4;
 
 					for (i = 0; i < 4; i++)
-						q[i] = (short)(cp->st.n.orientation[i] + (e.orient[i] - cp->st.n.orientation[i]) / div);
+						q[i] = e.orient[i];
 
 					cp->st.n.orientation[0] = q[0];
 					cp->st.n.orientation[1] = q[1];
@@ -1513,11 +1486,9 @@ static void MpHandleCarState(const unsigned char* p, int len)
 					cp->st.n.orientation[3] = q[3];
 
 					for (i = 0; i < 3; i++)
-						cp->st.n.linearVelocity[i] = hard ? e.vel[i]
-							: (cp->st.n.linearVelocity[i] + (e.vel[i] - cp->st.n.linearVelocity[i]) / div);
+						cp->st.n.linearVelocity[i] = e.vel[i];
 					for (i = 0; i < 3; i++)
-						cp->st.n.angularVelocity[i] = hard ? e.angVel[i]
-							: (cp->st.n.angularVelocity[i] + (e.angVel[i] - cp->st.n.angularVelocity[i]) / div);
+						cp->st.n.angularVelocity[i] = e.angVel[i];
 
 					LongQuaternion2Matrix(&q, &m);
 					m.t[0] = tx;
@@ -1526,15 +1497,11 @@ static void MpHandleCarState(const unsigned char* p, int len)
 					memcpy(&cp->hd.where, &m, sizeof(m));
 				}
 
-				{
-					int dd = ((e.heading - cp->hd.direction + 2048) & 4095) - 2048;
-
-					cp->hd.direction = (cp->hd.direction + (hard ? dd : dd / 4)) & 4095;
-				}
 			}
 		}
 
 		cp->hd.direction = e.heading;
+		pl->lastStateFrame = gMp.frame;	/* the fallback gate in MpOnNetInput reads this */
 
 		/* Client-side gather: the first time we hear a peer's car, drop our
 		 * own car right next to it so both players start together -- each
@@ -1557,50 +1524,16 @@ static void MpHandleCarState(const unsigned char* p, int len)
 					gMpCtx->jer_log(gMpCtx, "[mp] gathered next to peer at %d,%d,%d\n", e.x, e.y, e.z);
 			}
 		}
+
+		/* The host is the hub: pass a CLIENT's car on to the other clients, so every
+		 * machine sees every car (each sends only its own). */
+		if (MpIsHost() && connIndex >= 0)
+			MpHostRelay(connIndex, MP_TAG_CARSTATE, 0, p, len);
 	}
 }
 
-/* The client sends its own car's transform every frame (host-authoritative
- * replication keeps the other machines' view of it correct). */
-static void MpSendCarState(void)
-{
-	unsigned char buf[sizeof(MP_CARSTATE) + sizeof(MP_CARSTATE_ENTRY)];
-	MP_CARSTATE h;
-	MP_CARSTATE_ENTRY e;
-	MP_PLAYER* me = MpLocalPlayer();
-	CAR_DATA* cp;
-
-	if (me == NULL || me->carId < 0)
-		return;
-
-	cp = &car_data[me->carId];
-
-	memset(&h, 0, sizeof(h));
-	h.frame = gMp.frame;
-	h.count = 1;
-
-	memset(&e, 0, sizeof(e));
-	e.playerId = (uint8_t)me->id;
-	e.flags = MP_CARSTATE_HAS_BODY;
-	e.x = cp->hd.where.t[0];
-	e.y = cp->hd.where.t[1];
-	e.z = cp->hd.where.t[2];
-	e.heading = cp->hd.direction;
-	e.orient[0] = (int16_t)cp->st.n.orientation[0];
-	e.orient[1] = (int16_t)cp->st.n.orientation[1];
-	e.orient[2] = (int16_t)cp->st.n.orientation[2];
-	e.orient[3] = (int16_t)cp->st.n.orientation[3];
-	e.vel[0] = cp->st.n.linearVelocity[0];
-	e.vel[1] = cp->st.n.linearVelocity[1];
-	e.vel[2] = cp->st.n.linearVelocity[2];
-	e.angVel[0] = (int16_t)cp->st.n.angularVelocity[0];
-	e.angVel[1] = (int16_t)cp->st.n.angularVelocity[1];
-	e.angVel[2] = (int16_t)cp->st.n.angularVelocity[2];
-	memcpy(buf, &h, sizeof(h));	/* the client's own car state reaches the host */
-	memcpy(buf + sizeof(h), &e, sizeof(e));
-
-	MpSendToHost(MP_TAG_CARSTATE, 0, buf, (int)(sizeof(h) + sizeof(e)));
-}
+/* (the old client-only MpSendCarState is folded into MpSendOwnCarState above:
+ * in the owner-authoritative model every machine sends exactly one car) */
 
 /* The transport hands every complete message here. */
 /* 'JPPN' -- liveness. Answer on the SAME connection it arrived on, so the
@@ -1680,7 +1613,7 @@ void MpHandleMessage(int connIndex, const char* tag, const unsigned char* payloa
 
 	if (memcmp(tag, MP_TAG_CARSTATE, 4) == 0)
 	{
-		MpHandleCarState(payload, len);
+		MpHandleCarState(connIndex, payload, len);
 		return;
 	}
 

@@ -805,6 +805,24 @@ int MpHostBroadcast(const char* tag, int flags, const void* payload, int len)
 	return sent;
 }
 
+/* Broadcast to every HOST-side connection EXCEPT one. The host uses this to pass
+ * a client's car state on to the OTHER clients: in the owner-authoritative model
+ * each machine sends only its own car, so the host is the hub that fans them out. */
+int MpHostRelay(int exceptConn, const char* tag, int flags, const void* payload, int len)
+{
+	int i, sent = 0;
+
+	for (i = 0; i < MP_MAX_PLAYERS; i++)
+	{
+		if (i == exceptConn)
+			continue;
+		if (gConn[i].used && gConn[i].hostSide)
+			sent += MpSendConn(i, tag, flags, payload, len);
+	}
+
+	return sent;
+}
+
 int MpSendToHost(const char* tag, int flags, const void* payload, int len)
 {
 	int i;

@@ -59,6 +59,7 @@ typedef struct MP_PLAYER
 	int  isHost;			/* the host's own row (first in the list) */
 	int  pingMs;			/* round trip, measured by the host */
 	unsigned long lastSeenMs;	/* liveness */
+	unsigned long lastStateFrame;	/* sim frame we last adopted this car's owner state */
 } MP_PLAYER;
 
 /* ------------------------------------------------------------------ */
@@ -170,6 +171,7 @@ enum
 
 /* Framed sends (envelope + payload) over the session transport. */
 int  MpHostBroadcast(const char* tag, int flags, const void* payload, int len);
+int  MpHostRelay(int exceptConn, const char* tag, int flags, const void* payload, int len);
 int  MpSendToHost(const char* tag, int flags, const void* payload, int len);
 int  MpSendToPlayer(int playerId, const char* tag, int flags, const void* payload, int len);
 int  MpSendConn(int connIndex, const char* tag, int flags, const void* payload, int len);
@@ -197,6 +199,11 @@ typedef struct MP_PEER_STATS
 } MP_PEER_STATS;
 
 int  MpPeerStats(int playerId, MP_PEER_STATS* out);	/* 0 = no such link */
+
+/* Frames of silence from a remote car's owner before we let the replicated
+ * input drive it again (a snapshot-gap fallback; see MpOnNetInput). ~8 frames is
+ * about a quarter second at 30 fps. */
+#define MP_INPUT_FALLBACK_FRAMES	8
 
 /* Message dispatch: called by the transport for each complete message.
  * Implemented in mp_session.c (handshake, lobby, input, resync, channel). */

@@ -915,17 +915,26 @@ static int MpOnNetInput(void* userdata, void* args)
 		}
 		else if (!p->isLocal)
 		{
-			/* Engine-driven: this car gets the pad its owner sent, and the
-			 * engine simulates it exactly like a local one. That is what makes
-			 * it a real car -- it collides, it takes damage, its wheels turn --
-			 * instead of a transform we paste in every frame. With no input yet
-			 * (a fresh joiner) it coasts, which is harmless. */
-			in->pad = MpInputForPlayer(p->id);
-			in->handled = 1;
+			/* The owner's per-frame state is authoritative and is ADOPTED in
+			 * MpHandleCarState, so the engine must not also drive this car from a
+			 * replicated pad -- the two would fight. Replicated input is kept only
+			 * as a FALLBACK for a snapshot gap: if we have not adopted this car for
+			 * a while, let the engine carry it on the input we last had, so a brief
+			 * stall coasts instead of freezing. */
+			if (gMp.frame - p->lastStateFrame > MP_INPUT_FALLBACK_FRAMES)
+			{
+				in->pad = MpInputForPlayer(p->id);
+				in->handled = 1;
 
-			if ((gMp.frame % 60) == 0 && gMpCtx != NULL)
-				gMpCtx->jer_log(gMpCtx, "[mp] netinput: car %d <- player %d pad %#x\n",
-					carId, p->id, in->pad);
+				if ((gMp.frame % 60) == 0 && gMpCtx != NULL)
+					gMpCtx->jer_log(gMpCtx, "[mp] netinput: car %d <- player %d pad %#x (fallback)\n",
+						carId, p->id, in->pad);
+			}
+			else
+			{
+				in->pad = 0;	/* adopted this frame: hands off, let the owner win */
+				in->handled = 1;
+			}
 		}
 		/* local car, no bot: leave the stock pad (handled stays 0) */
 	}
