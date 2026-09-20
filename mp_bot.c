@@ -248,36 +248,55 @@ static int MpBotChase(int fight)
 #define MPBOT_PROBE	1300	/* how far ahead the pathfinder looks */
 #define MPBOT_NEAR	520	/* ... and the near probe that stops it nosing into a wall */
 
-/* The bot's pathfinding, such as it is: from `desired`, walk outwards in
- * half-steps (desired, +30, -30, +60, ...) and take the first heading whose path
- * is CLEAR at BOTH a near and a far probe. The near probe stops the car driving
- * into a wall the far probe is already past; the far probe stops it committing
- * to a gap that closes. Uses the engine's own CellEmpty -- the same test the
- * civilian AI uses to know a spot is free. Returns `desired` when nothing is
- * clear (the stuck-recovery then takes over and reverses). */
+/* Is a heading's path clear at both the near and the far probe? */
+static int MpBotHeadingClear(CAR_DATA* mine, int a)
+{
+	VECTOR p;
+
+	p.vx = mine->hd.where.t[0] + (int)(((long)rsin(a) * MPBOT_NEAR) >> 12);
+	p.vy = mine->hd.where.t[1];
+	p.vz = mine->hd.where.t[2] + (int)(((long)rcos(a) * MPBOT_NEAR) >> 12);
+	if (!CellEmpty(&p, 350))
+		return 0;
+
+	p.vx = mine->hd.where.t[0] + (int)(((long)rsin(a) * MPBOT_PROBE) >> 12);
+	p.vz = mine->hd.where.t[2] + (int)(((long)rcos(a) * MPBOT_PROBE) >> 12);
+
+	return CellEmpty(&p, 350);
+}
+
 static int MpBotClearHeading(CAR_DATA* mine, int desired)
 {
-	static const int STEP = 0x1000 / 12;	/* 30 degrees */
+	const int STEP = 0x1000 / 12;	/* 30 degrees */
+	/* HYSTERESIS. Deciding the heading from scratch every frame made the steering
+	 * FLAP: as `desired` drifted, the first clear candidate flipped between +30
+	 * and -30 and the car twitched left/right. Once we have a heading, KEEP it
+	 * while it is still clear and still points roughly the way we want; re-decide
+	 * only when it is blocked or the goal has moved a long way off it. */
+	static int held = -1;
 	int i;
+
+	if (held >= 0 && MpBotHeadingClear(mine, held))
+	{
+		int off = ((held - desired + 2048) & 4095) - 2048;
+
+		if (off < 0)
+			off = -off;
+
+		if (off < 900)		/* still within ~80 degrees of the goal */
+			return held;
+	}
 
 	for (i = 0; i < 12; i++)
 	{
 		int k = (i + 1) / 2;
 		int a = (i == 0) ? desired : ((desired + ((i & 1) ? (k * STEP) : (-k * STEP))) & 0xfff);
-		VECTOR p;
 
-		p.vx = mine->hd.where.t[0] + (int)(((long)rsin(a) * MPBOT_NEAR) >> 12);
-		p.vy = mine->hd.where.t[1];
-		p.vz = mine->hd.where.t[2] + (int)(((long)rcos(a) * MPBOT_NEAR) >> 12);
-		if (!CellEmpty(&p, 350))
-			continue;
-
-		p.vx = mine->hd.where.t[0] + (int)(((long)rsin(a) * MPBOT_PROBE) >> 12);
-		p.vz = mine->hd.where.t[2] + (int)(((long)rcos(a) * MPBOT_PROBE) >> 12);
-		if (!CellEmpty(&p, 350))
-			continue;
-
-		return a;
+		if (MpBotHeadingClear(mine, a))
+		{
+			held = a;
+			return a;
+		}
 	}
 
 	return desired;
