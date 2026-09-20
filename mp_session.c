@@ -173,7 +173,11 @@ int MpBeginJoinAsync(const char* host, int port)
 void MpLeaveSession(void)
 {
 	if (gMpCtx != NULL)
+	{
+		MpConnEvent("leaving the session", -1, "deliberate");
+
 		gMpCtx->jer_log(gMpCtx, "[mp] MpLeaveSession (role=%d running=%d)\n", (int)gMp.role, gMp.running);
+	}
 
 	gMp.leaving = 1;
 
@@ -231,6 +235,8 @@ static void MpLaunchLocal(void)
 	if (gMpCtx)
 		gMpCtx->jer_log(gMpCtx, "[mp] launching: city %d mode %d (1=TAKEADRIVE, 0=MISSION!) subgame %d time %d weather %d players %d\n",
 			GameLevel, GameType, gSubGameNumber, wantedTimeOfDay, wantedWeather, NumPlayers);
+
+	MpConnMatchStarted();	/* the stage stops lying here: we are IN the match now */
 
 	MpMarkBusy(MP_BUSY_LAUNCH_MS);	/* the load is about to block us */
 	/* A chosen vehicle, applied here rather than as a boot argument. The engine
@@ -621,6 +627,8 @@ int MpStartMatch(void)
 		gMpCtx->jer_log(gMpCtx, "[mp] start match: mode %d city %d time %d weather %d -> %d client(s)\n",
 			gMp.gamemode, gMp.city, gMp.timeOfDay, gMp.weather, MpPeerCount());
 
+	MpConnMatchStarted();	/* the stage stops lying here: we are IN the match now */
+
 	MpLaunchLocal();
 
 	return 1;
@@ -957,6 +965,9 @@ static void MpHandleLeave(const unsigned char* p, int len)
 		return;			/* a client asked to leave; its row is dropped anyway */
 
 	jer_error("The host ended the match");
+
+	MpConnEvent("host ended the match", -1, "the session is over");
+
 	MpReturnToFrontend();
 }
 

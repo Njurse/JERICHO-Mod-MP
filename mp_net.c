@@ -472,6 +472,8 @@ static void MpAcceptPeers(void)
 
 		if (gMpCtx) gMpCtx->jer_log(gMpCtx, "[mp] peer %s connected (awaiting handshake)\n",
 			gConn[idx].peer);
+
+		MpConnEvent("accepted a peer", idx, "they connected to us");
 	}
 }
 
@@ -525,7 +527,11 @@ void MpClientDisconnect(void)
 	int i;
 
 	if (gMpCtx != NULL)
+	{
+		MpConnEvent("disconnecting (client side)", -1, "deliberate");
+
 		gMpCtx->jer_log(gMpCtx, "[mp] MpClientDisconnect (closing our link)\n");
+	}
 
 	MpClientConnectCancel();	/* abandon an in-flight connect too */
 
@@ -614,8 +620,12 @@ static int MpClientAdopt(SOCKET s, const char* host, int port)
 
 	if (gMpCtx) gMpCtx->jer_log(gMpCtx, "[mp] connected to %s:%d\n", host, port);
 
+	MpConnEvent("connected (outbound)", idx, "TCP established");
+
 	MpSendHello();
 	gConn[idx].hsStage = MP_HS_HELLO_SENT;
+
+	MpConnEvent("sent HELLO", idx, "awaiting WELCOME");
 
 	if (gMpCtx) gMpCtx->jer_log(gMpCtx, "[mp] HELLO sent to %s, awaiting WELCOME\n",
 		gConn[idx].peer[0] ? gConn[idx].peer : host);
@@ -635,6 +645,8 @@ static void MpJoinFail(const char* why)
 		gMp.role = MP_ROLE_NONE;
 
 	jer_error("Could not join the server at %s:%d", gConnectingHost, gConnectingPort);
+
+	MpConnEvent("join FAILED", -1, why);
 
 	if (gMpCtx)
 		gMpCtx->jer_log(gMpCtx, "[mp] join FAILED: could not reach %s:%d (%s)\n",
@@ -897,6 +909,43 @@ int MpPeerCount(void)
 /* ------------------------------------------------------------------ */
 /* Framed recv + dispatch                                              */
 /* ------------------------------------------------------------------ */
+
+/* ONE PLACE THAT SAYS WHAT HAPPENED TO A CONNECTION, AND WHY.
+ *
+ * Deliberately UNCONDITIONAL -- not behind MP_DEBUG. A two-machine problem is
+ * diagnosed from these two logs alone, and a missing event costs a whole
+ * iteration, so a plain PLAY_HOST.bat / PLAY_JOIN.bat run has to produce them.
+ * The events are rare (a handful per session), so the volume is nothing.
+ *
+ * Every origin calls this -- connect, accept, hello, welcome, refuse, leave,
+ * drop, queue overflow, the deadlines -- and every close logs too, so the ORDER
+ * of the lines names whoever closed the socket. A close with no origin line in
+ * front of it is the one thing that must never happen again. */
+void MpConnEvent(const char* ev, int idx, const char* why)
+{
+	char peer[80];
+
+	if (gMpCtx == NULL)
+		return;
+
+	peer[0] = 0;
+
+	if (idx >= 0 && idx < MP_MAX_PLAYERS && gConn[idx].used && gConn[idx].peer[0] != 0)
+		snprintf(peer, sizeof(peer), "%s", gConn[idx].peer);
+	else if (gConnectingHost[0] != 0)
+		snprintf(peer, sizeof(peer), "%s", gConnectingHost);
+	else
+		snprintf(peer, sizeof(peer), "(none)");
+
+	gMpCtx->jer_log(gMpCtx, "[mp] conn: %s | peer %s | role %s | stage %s%s%s\n",
+		ev != NULL ? ev : "?",
+		peer,
+		gMp.role == MP_ROLE_HOST ? "host" : (gMp.role == MP_ROLE_CLIENT ? "client" : "none"),
+		(idx >= 0 && idx < MP_MAX_PLAYERS) ? MpStageName(gConn[idx].hsStage) : "n/a",
+		(why != NULL && why[0] != 0) ? " | why: " : "",
+		why != NULL ? why : "");
+}
+
 static void MpDropConn(int idx, const char* why)
 {
 	/* on a client, losing the server connection is worth telling the player
@@ -921,6 +970,8 @@ static void MpDropConn(int idx, const char* why)
 
 	if (gMpCtx)
 	{
+		MpConnEvent("DROPPED", idx, why);
+
 		gMpCtx->jer_log(gMpCtx, "[mp] peer %s dropped (%s); %lu byte(s) received\n",
 			gConn[idx].peer[0] ? gConn[idx].peer : "?", why, gConn[idx].rxBytes);
 
@@ -979,6 +1030,27 @@ void MpConnHandshakeDone(int connIndex)
 	{
 		gConn[connIndex].hsDone = 1;
 		gConn[connIndex].hsStage = MP_HS_WELCOME;
+
+		MpConnEvent("handshake done", connIndex, "HELLO or WELCOME seen");
+	}
+}
+
+/* The match is RUNNING now. Say so, so every later log line and every toast
+ * reports the truth: the stage used to stop at WELCOME forever, which is why a
+ * 67-second-old live match still printed "Lost the server (... WELCOME received,
+ * awaiting the level)" and sent the diagnosis after a join problem that was not
+ * there. */
+void MpConnMatchStarted(void)
+{
+	int i;
+
+	for (i = 0; i < MP_MAX_PLAYERS; i++)
+	{
+		if (gConn[i].used)
+		{
+			gConn[i].hsStage = MP_HS_PLAYING;
+			MpConnEvent("match started", i, "the level is up");
+		}
 	}
 }
 

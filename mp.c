@@ -75,6 +75,11 @@ static int gMpShowPlayers;
  * the host ends the game or the server connection is lost. */
 void MpReturnToFrontend(void)
 {
+	/* The single choke point for "the session is over, go back to the frontend":
+	 * log it here as well as at the callers, so any future path that returns to
+	 * the frontend is visible in the log without having to remember to add one. */
+	MpConnEvent("returning to the frontend", -1, "the session is over");
+
 	MpSessionReset();
 	MpResetPlayers();
 

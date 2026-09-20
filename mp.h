@@ -185,6 +185,8 @@ void MpConnShutdownGraceful(int connIndex);
 void MpConnSetPing(int connIndex, unsigned long ms);
 int  MpPingForPlayer(int playerId);	/* half-close: flush the refusal, then drain */
 void MpConnHandshakeDone(int connIndex);	/* this connection has seen a HELLO/WELCOME */
+void MpConnEvent(const char* ev, int idx, const char* why);	/* the connection log */
+void MpConnMatchStarted(void);			/* the level is up: every stage says so */
 int  MpConnPlayerId(int connIndex);	/* peer's assigned player id, -1 until hello */
 int  MpPeerCount(void);
 
