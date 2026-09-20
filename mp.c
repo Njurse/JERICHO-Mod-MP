@@ -693,8 +693,26 @@ static void MpLogPlayerList(void)
 		}
 
 		if (gMpCtx != NULL)
-			gMpCtx->jer_log(gMpCtx, "[mp] list: %s #%d  car %d  slot %d  %d ms%s",
-				p->name, p->id, veh, p->carId, p->pingMs, p->isHost ? "  (host)" : "");
+		{
+			MP_PEER_STATS st;
+			char net[72];
+
+			if (!p->isLocal && MpPeerStats(p->id, &st) && st.linkMs > 0)
+			{
+				unsigned long rxS = st.rxBytes * 1000UL / st.linkMs;
+				unsigned long txS = st.txBytes * 1000UL / st.linkMs;
+
+				snprintf(net, sizeof(net), "%d ms  rx %luB/s  tx %luB/s  loss %s",
+					st.pingMs, rxS, txS, st.lossPct < 0 ? "n/a" : "0%");
+			}
+			else
+			{
+				snprintf(net, sizeof(net), "%d ms", p->pingMs);
+			}
+
+			gMpCtx->jer_log(gMpCtx, "[mp] list: %s #%d  car %d  slot %d  %s%s\n",
+				p->name, p->id, veh, p->carId, net, p->isHost ? "  (host)" : "");
+		}
 	}
 }
 
@@ -709,7 +727,7 @@ static void MpDrawPlayerList(void)
 	{
 		MP_PLAYER* p = MpGetPlayer(id);
 		CAR_DATA* cp;
-		char line[80];
+		char line[128];
 		int veh = -1;
 		int y;
 
@@ -726,8 +744,25 @@ static void MpDrawPlayerList(void)
 				veh = cp->ap.model;
 		}
 
-		snprintf(line, sizeof(line), "%s #%d  car %d  %d ms",
-			p->name, p->id, veh, p->pingMs);
+		{
+			MP_PEER_STATS st;
+			char net[72];
+
+			if (!p->isLocal && MpPeerStats(p->id, &st) && st.linkMs > 0)
+			{
+				unsigned long rxS = st.rxBytes * 1000UL / st.linkMs;
+				unsigned long txS = st.txBytes * 1000UL / st.linkMs;
+
+				snprintf(net, sizeof(net), "  %d ms  rx %luB/s  tx %luB/s  loss %s",
+					st.pingMs, rxS, txS, st.lossPct < 0 ? "n/a" : "0%");
+			}
+			else
+			{
+				snprintf(net, sizeof(net), "  %d ms  (local)", p->pingMs);
+			}
+
+			snprintf(line, sizeof(line), "%s #%d  car %d%s", p->name, p->id, veh, net);
+		}
 
 		y = 68 + row * 10;
 		row++;
@@ -776,6 +811,22 @@ static int MpOnDrawOverlay(void* userdata, void* args)
 
 	if (gDrawPauseMenus || gMpShowPlayers)
 		MpDrawPlayerList();
+
+	/* Bottom-left HOST / CLIENT tag, always on while a session exists: with two
+	 * windows side by side on one machine (or two machines) there is otherwise no
+	 * way to tell which is which -- and the test is precisely about the two roles
+	 * behaving differently. */
+	{
+		const char* who = MpIsHost() ? "HOST" :
+			(gMp.role == MP_ROLE_CLIENT ? "CLIENT" : "MP");
+
+		if (MpIsHost())
+			SetTextColour(0, 255, 255);
+		else
+			SetTextColour(255, 200, 0);
+
+		PrintString((char*)who, 8, 226);
+	}
 
 	return JER_RESULT_CONTINUE;
 }

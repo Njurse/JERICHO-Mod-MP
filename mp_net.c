@@ -92,6 +92,7 @@ typedef struct MP_CONN
 							 * spoke" and "the peer spoke, then died" are
 							 * different problems with different causes, and a
 							 * bare "closed" cannot tell them apart. */
+	unsigned long txBytes;	/* bytes handed to this peer, for the on-screen rate */
 	char          peer[32];	/* "ip:port" of the far end, for the log */
 	int           hsStage;	/* client: how far the join got (MP_HS_*) */
 	unsigned long pingMs;	/* round trip, from the PING/PONG tick */
@@ -290,6 +291,7 @@ static int MpSendRaw(int idx, const void* data, int len)
 	{
 		memcpy(c->sbuf + c->sbufLen, data, (size_t)len);
 		c->sbufLen += len;
+		c->txBytes += (unsigned long)len;
 	}
 
 	MpFlushConn(idx);
@@ -734,6 +736,35 @@ void MpConnSetPing(int idx, unsigned long ms)
 {
 	if (idx >= 0 && idx < MP_MAX_PLAYERS && gConn[idx].used)
 		gConn[idx].pingMs = ms;
+}
+
+/* Everything the on-screen readout needs about one peer's link, or 0 if we hold
+ * no connection for that player id. */
+int MpPeerStats(int playerId, MP_PEER_STATS* out)
+{
+	int i;
+	unsigned long now = MpClockMs();
+
+	if (out == NULL)
+		return 0;
+
+	memset(out, 0, sizeof(*out));
+
+	for (i = 0; i < MP_MAX_PLAYERS; i++)
+	{
+		if (!gConn[i].used || gConn[i].playerId != playerId)
+			continue;
+
+		out->rxBytes = gConn[i].rxBytes;
+		out->txBytes = gConn[i].txBytes;
+		out->pingMs = (int)gConn[i].pingMs;
+		out->linkMs = (now > gConn[i].acceptedMs) ? (now - gConn[i].acceptedMs) : 1;
+		out->lossPct = -1;	/* TCP: nothing to report */
+
+		return 1;
+	}
+
+	return 0;
 }
 
 int MpSendConn(int idx, const char* tag, int flags, const void* payload, int len)

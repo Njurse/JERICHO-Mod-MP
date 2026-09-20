@@ -32,11 +32,11 @@ int MpOnDrawMap(void* userdata, void* args)
 		return JER_RESULT_CONTINUE;
 
 
-	/* Take the player blips over. NumPlayers is held at 1 in a multiplayer
-	 * session, so without this the engine draws one blip -- ours -- and we can
-	 * only add to it, leaving the local player with an arrow stuck on them. The
-	 * map is now ours: every OTHER player gets a marker below, and none for us. */
-	m->suppressStockBlip = 1;
+	/* Keep the engine's own blip for OUR car. It used to be suppressed ("the
+	 * local player was left with an arrow stuck on them"), but without it the
+	 * local player has NO marker at all on the map -- which is worse. The remote
+	 * players are added by the loop below; ours is the engine's. */
+	m->suppressStockBlip = 0;
 
 	if (getenv("MP_DEBUG") != NULL && gMpCtx != NULL)
 	{

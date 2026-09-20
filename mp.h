@@ -183,6 +183,21 @@ void MpConnHandshakeDone(int connIndex);	/* this connection has seen a HELLO/WEL
 int  MpConnPlayerId(int connIndex);	/* peer's assigned player id, -1 until hello */
 int  MpPeerCount(void);
 
+/* Per-peer link stats for the on-screen readout. Everything here is measured, not
+ * guessed: ping from the PING/PONG tick, rx/tx from the transport's byte counters.
+ * lossPct is -1 ("n/a") because the session is TCP, which does not lose datagrams
+ * -- a real figure would have to come from a UDP-carried channel we don't have. */
+typedef struct MP_PEER_STATS
+{
+	unsigned long rxBytes;
+	unsigned long txBytes;
+	unsigned long linkMs;	/* how long the link has been up */
+	int           pingMs;	/* round trip, from the PING/PONG tick */
+	int           lossPct;	/* -1 = n/a (TCP) */
+} MP_PEER_STATS;
+
+int  MpPeerStats(int playerId, MP_PEER_STATS* out);	/* 0 = no such link */
+
 /* Message dispatch: called by the transport for each complete message.
  * Implemented in mp_session.c (handshake, lobby, input, resync, channel). */
 void MpHandleMessage(int connIndex, const char* tag,
