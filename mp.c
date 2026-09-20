@@ -632,6 +632,35 @@ extern int  gDrawPauseMenus;
  * car slots are handed out in, so the list reads the way the match is built. Each
  * row is the player's name and index, the vehicle they are in (-1 = on foot) and
  * their round trip as the host measures it. */
+/* The same rows the pause menu draws, without drawing anything: enough to check
+ * names, slots and ping from a log, and safe to call from anywhere. */
+static void MpLogPlayerList(void)
+{
+	int id;
+
+	for (id = 0; id < MP_MAX_PLAYERS; id++)
+	{
+		MP_PLAYER* p = MpGetPlayer(id);
+		CAR_DATA* cp;
+		int veh = -1;
+
+		if (p == NULL)
+			continue;
+
+		if (p->carId >= 0 && p->carId < MAX_CARS)
+		{
+			cp = &car_data[p->carId];
+
+			if (cp->controlType != CONTROL_TYPE_NONE)
+				veh = cp->ap.model;
+		}
+
+		if (gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx, "[mp] list: %s #%d  car %d  slot %d  %d ms%s",
+				p->name, p->id, veh, p->carId, p->pingMs, p->isHost ? "  (host)" : "");
+	}
+}
+
 static void MpDrawPlayerList(void)
 {
 	int id, row = 0;
@@ -697,9 +726,16 @@ static int MpOnDrawOverlay(void* userdata, void* args)
 
 	MpNetPoll(0);
 
-	/* a test lever: hold the pause menu open so the list can be exercised */
+	/* MP_PAUSE logs the list for a test, and deliberately does NOT force the
+	 * engine's pause flag. It used to set gDrawPauseMenus = 1 every frame, which
+	 * makes the engine draw pause menus whose state was never set up -- a wild
+	 * pointer, and an access violation. Forcing another subsystem's state from a
+	 * test lever is not a shortcut, it is a new bug.
+	 *
+	 *     draw  = what the player sees (needs the pause menu actually open)
+	 *     log   = the rows, which is what the test is checking anyway */
 	if (getenv("MP_PAUSE") != NULL && gMp.running)
-		gDrawPauseMenus = 1;
+		MpLogPlayerList();
 
 	if (gDrawPauseMenus)
 		MpDrawPlayerList();
