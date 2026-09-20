@@ -241,6 +241,7 @@ void MpSendChat(const char* text);	/* put a chat line on the wire */
 void MpSendInput(int pad);		/* replicate this frame's input (host relays the set) */
 void MpPlaceSpawns(int x, int y, int z, int heading);	/* line every player car up here */
 int  MpUiDrawOverlay(void* userdata, void* args);	/* JER_EVENT_DRAW_OVERLAY */
+int  MpOnDrawMap(void* userdata, void* args);	/* JER_EVENT_DRAW_MAP */
 void MpCarPose(int carId, int* x, int* y, int* z, int* heading);	/* car position (mp.c owns car_data) */
 void MpCameraPose(int* x, int* y, int* z, int* yaw);	/* camera position + yaw */
 int  MpGetGameLevel(void);		/* the frontend's current city (GameLevel) */

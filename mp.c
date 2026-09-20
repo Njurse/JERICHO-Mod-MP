@@ -26,6 +26,7 @@
 #include "players.h"
 #include "cars.h"
 #include "camera.h"
+#include "overmap.h"	/* gMapXOffset/gMapYOffset for the multiplayer map */
 #include "glaunch.h"
 #include "state.h"
 
@@ -42,152 +43,21 @@ JERICHO_CONTEXT* gMpCtx;
 /* Default player name                                                 */
 /* ------------------------------------------------------------------ */
 
-const char* MpDefaultPlayerName(void)
-{
-	static char name[MP_NAME_MAX];
-	const char* env = getenv("USERNAME");
-
-	if (env == NULL || env[0] == '\0')
-		env = getenv("USER");
-
-	if (env != NULL && env[0] != '\0')
-		snprintf(name, sizeof(name), "%s", env);
-	else
-		snprintf(name, sizeof(name), "Player");
-
-	return name;
-}
 
 /* ------------------------------------------------------------------ */
 /* Config                                                              */
 /* ------------------------------------------------------------------ */
 
-void MpConfigLoad(void)
-{
-	const char* s;
 
-	memset(&gMp.config, 0, sizeof(gMp.config));
-
-	gMp.config.port = jer_config_get_int("mp", "port", MP_DEFAULT_PORT);
-	if (gMp.config.port < 1024 || gMp.config.port > 65535)
-		gMp.config.port = MP_DEFAULT_PORT;
-
-	gMp.config.beaconMs = jer_config_get_int("mp", "beacon_ms", MP_BEACON_INTERVAL_MS);
-	if (gMp.config.beaconMs < 250 || gMp.config.beaconMs > 10000)
-		gMp.config.beaconMs = MP_BEACON_INTERVAL_MS;
-
-	gMp.config.keepaliveMs = jer_config_get_int("mp", "keepalive_ms", MP_KEEPALIVE_INTERVAL_MS);
-	if (gMp.config.keepaliveMs < MP_KEEPALIVE_MIN_MS || gMp.config.keepaliveMs > 30000)
-		gMp.config.keepaliveMs = MP_KEEPALIVE_INTERVAL_MS;
-
-	gMp.config.modCheck = jer_config_get_int("mp", "mod_check", MP_MODCHECK_OFF);
-	if (gMp.config.modCheck < 0 || gMp.config.modCheck > MP_MODCHECK_EXACT)
-		gMp.config.modCheck = MP_MODCHECK_OFF;
-
-	gMp.config.strictVersion = jer_config_get_int("mp", "strict_version", 0);
-	if (gMp.config.strictVersion < 0 || gMp.config.strictVersion > 1)
-		gMp.config.strictVersion = 0;
-
-	/* An empty default means "not set yet" -> first run: prompt for a name. */
-	s = jer_config_get_str("mp", "player_name", "");
-	if (s != NULL && s[0] != '\0')
-	{
-		snprintf(gMp.config.playerName, sizeof(gMp.config.playerName), "%s", s);
-		gMp.config.firstNameSet = 1;
-	}
-	else
-	{
-		snprintf(gMp.config.playerName, sizeof(gMp.config.playerName), "%s", MpDefaultPlayerName());
-		gMp.config.firstNameSet = 0;
-	}
-
-	s = jer_config_get_str("mp", "host_name", "");
-	if (s != NULL && s[0] != '\0')
-		snprintf(gMp.config.hostName, sizeof(gMp.config.hostName), "%s", s);
-	else
-		snprintf(gMp.config.hostName, sizeof(gMp.config.hostName), "%s's game", gMp.config.playerName);
-}
-
-void MpConfigSave(void)
-{
-	jer_config_set_int("mp", "port", gMp.config.port);
-	jer_config_set_int("mp", "beacon_ms", gMp.config.beaconMs);
-	jer_config_set_int("mp", "keepalive_ms", gMp.config.keepaliveMs);
-	jer_config_set_int("mp", "mod_check", gMp.config.modCheck);
-	jer_config_set_int("mp", "strict_version", gMp.config.strictVersion);
-	jer_config_set_str("mp", "player_name", gMp.config.playerName);
-	jer_config_set_str("mp", "host_name", gMp.config.hostName);
-}
 
 /* ------------------------------------------------------------------ */
 /* Player registry                                                     */
 /* ------------------------------------------------------------------ */
 
-MP_PLAYER* MpLocalPlayer(void)
-{
-	int i;
 
-	for (i = 0; i < MP_MAX_PLAYERS; i++)
-	{
-		if (gMp.players[i].active && gMp.players[i].isLocal)
-			return &gMp.players[i];
-	}
 
-	return NULL;
-}
 
-MP_PLAYER* MpGetPlayer(int id)
-{
-	int i;
 
-	for (i = 0; i < MP_MAX_PLAYERS; i++)
-	{
-		if (gMp.players[i].active && gMp.players[i].id == id)
-			return &gMp.players[i];
-	}
-
-	return NULL;
-}
-
-MP_PLAYER* MpGetPlayerByCar(int carId)
-{
-	int i;
-
-	if (carId < 0)
-		return NULL;
-
-	for (i = 0; i < MP_MAX_PLAYERS; i++)
-	{
-		if (gMp.players[i].active && gMp.players[i].carId == carId)
-			return &gMp.players[i];
-	}
-
-	return NULL;
-}
-
-int MpIsPlayerCar(int carId)
-{
-	return MpGetPlayerByCar(carId) != NULL;
-}
-
-/* The overlay needs a car's pose, but only mp.c pulls in cars.h -- expose a
- * tiny accessor rather than leaking CAR_DATA into the UI file. */
-void MpCarPose(int carId, int* x, int* y, int* z, int* heading)
-{
-	if (carId < 0 || carId >= MAX_CARS)
-	{
-		if (x != NULL) *x = 0;
-		if (y != NULL) *y = 0;
-		if (z != NULL) *z = 0;
-		if (heading != NULL) *heading = 0;
-		return;
-	}
-
-	if (x != NULL) *x = car_data[carId].hd.where.t[0];
-	if (y != NULL) *y = car_data[carId].hd.where.t[1];
-	if (z != NULL) *z = car_data[carId].hd.where.t[2];
-	if (heading != NULL) *heading = car_data[carId].hd.direction;
-}
 
 /* Set when a lost connection must land the player on the main menu; the
  * engine decides where its own exit goes, so we jump on the next frontend
@@ -324,181 +194,17 @@ static int MpOnMpFrontend(void* userdata, void* args)
 	return JER_RESULT_CONTINUE;
 }
 
-MP_PLAYER* MpAddPlayer(int id, const char* name, int isLocal)
-{
-	int i;
-	MP_PLAYER* p = NULL;
 
-	/* reuse the row with this id if present */
-	for (i = 0; i < MP_MAX_PLAYERS; i++)
-	{
-		if (gMp.players[i].active && gMp.players[i].id == id)
-		{
-			p = &gMp.players[i];
-			break;
-		}
-	}
 
-	if (p == NULL)
-	{
-		for (i = 0; i < MP_MAX_PLAYERS; i++)
-		{
-			if (!gMp.players[i].active)
-			{
-				p = &gMp.players[i];
-				memset(p, 0, sizeof(*p));
-				p->active = 1;
-				p->carId = -1;
-				p->padId = -1;
-				p->id = id;
-				gMp.playerCount++;
-				break;
-			}
-		}
-	}
-
-	if (p == NULL)
-		return NULL;	/* registry full */
-
-	snprintf(p->name, sizeof(p->name), "%s", name != NULL ? name : "Player");
-	p->isLocal = isLocal;
-	p->connected = 1;
-
-	return p;
-}
-
-void MpRemovePlayer(int id)
-{
-	MP_PLAYER* p = MpGetPlayer(id);
-
-	if (p == NULL)
-		return;
-
-	/* let the player know who left (never ourselves) */
-	if (!p->isLocal)
-		MpNotifyf("%s left", p->name);
-
-	/* take their car out of the world so it does not sit there parked with
-	 * nobody driving it; the slot is recycled by the engine */
-	if (!p->isLocal && p->carId >= 0 && p->carId < MAX_CARS)
-	{
-		car_data[p->carId].controlType = CONTROL_TYPE_NONE;
-
-		if (gMpCtx != NULL)
-			gMpCtx->jer_log(gMpCtx, "[mp] removed player %d's car (slot %d)\n", p->id, p->carId);
-	}
-
-	memset(p, 0, sizeof(*p));
-	p->carId = -1;
-	p->padId = -1;
-
-	if (gMp.playerCount > 0)
-		gMp.playerCount--;
-}
-
-void MpResetPlayers(void)
-{
-	int i;
-
-	for (i = 0; i < MP_MAX_PLAYERS; i++)
-	{
-		memset(&gMp.players[i], 0, sizeof(gMp.players[i]));
-		gMp.players[i].carId = -1;
-		gMp.players[i].padId = -1;
-	}
-
-	gMp.playerCount = 0;
-}
 
 /* ------------------------------------------------------------------ */
 /* Queries                                                             */
 /* ------------------------------------------------------------------ */
 
-int MpIsActive(void)
-{
-	return gMp.role != MP_ROLE_NONE;
-}
 
-int MpIsHost(void)
-{
-	return gMp.role == MP_ROLE_HOST;
-}
 
-/* A short digest of the enabled-module manifest (id + version), used in
- * beacons and the handshake so mismatched lobbies are visible up front. */
-unsigned short MpModHash(void)
-{
-	JER_MODULE_INFO info[32];
-	int n = jer_module_list(info, 32);
-	int i;
-	unsigned int h = 2166136261u;	/* FNV-1a */
 
-	for (i = 0; i < n; i++)
-	{
-		const char* s;
 
-		if (!info[i].enabled)
-			continue;
-
-		for (s = info[i].id; s != NULL && *s != '\0'; s++)
-		{
-			h ^= (unsigned char)*s;
-			h *= 16777619u;
-		}
-
-		h ^= '@';
-		h *= 16777619u;
-
-		for (s = info[i].version; s != NULL && *s != '\0'; s++)
-		{
-			h ^= (unsigned char)*s;
-			h *= 16777619u;
-		}
-
-		h ^= ';';
-		h *= 16777619u;
-	}
-
-	return (unsigned short)((h ^ (h >> 16)) & 0xFFFF);
-}
-
-/* The enabled-module manifest (id + version) exchanged in the handshake. */
-int MpBuildManifest(MP_MOD_INFO* out, int max)
-{
-	JER_MODULE_INFO info[32];
-	int n = jer_module_list(info, 32);
-	int i, count = 0;
-
-	for (i = 0; i < n && count < max; i++)
-	{
-		if (!info[i].enabled)
-			continue;
-
-		memset(&out[count], 0, sizeof(out[count]));
-		snprintf(out[count].id, MP_MOD_ID_MAX, "%s", info[i].id != NULL ? info[i].id : "");
-		snprintf(out[count].version, MP_MOD_VER_MAX, "%s", info[i].version != NULL ? info[i].version : "");
-		out[count].enabled = 1;
-		count++;
-	}
-
-	return count;
-}
-
-/* Digest of the game build (JERICHO_BUILD_VERSION) so peers on different
- * exes are refused before anything else happens. */
-unsigned short MpBuildHash(void)
-{
-	const char* s = JERICHO_BUILD_VERSION;
-	unsigned int h = 2166136261u;
-
-	for (; s != NULL && *s != '\0'; s++)
-	{
-		h ^= (unsigned char)*s;
-		h *= 16777619u;
-	}
-
-	return (unsigned short)((h ^ (h >> 16)) & 0xFFFF);
-}
 
 /* ------------------------------------------------------------------ */
 /* Lifecycle hooks                                                     */
@@ -716,6 +422,15 @@ static int MpOnFrame(void* userdata, void* args)
 	MpNetPoll(0);
 	MpUiTick();
 
+	/* Test lever: hold the in-game map open, so the multiplayer-map blip hook
+	 * can be exercised without a human pressing the map button. */
+	if (getenv("MP_MAP") != NULL && gMp.running)
+	{
+		extern int gShowMap;
+
+		gShowMap = 1;
+	}
+
 	/* A connection loss asked for the main menu: take it as soon as the engine
 	 * is back in the frontend, so the player cannot be left in the middle of
 	 * the menu chain that started the match. */
@@ -930,6 +645,20 @@ static int MpOnNetInput(void* userdata, void* args)
 }
 
 /* After a level starts, log the player cars so the spawn is verifiable. */
+/* JERICHO-HOOK: the multiplayer map.
+ *
+ * The stock drawer loops `for (i = 0; i < NumPlayers; i++)` and calls
+ * DrawPlayerDot(pos, -dir, ...) -- a blip carrying BOTH position and facing.
+ * We hold NumPlayers at 1 so the renderer stays single-view, so that loop only
+ * ever draws our own blip and nobody else appears on the map at all.
+ *
+ * Draw the same blip for every other player here, in the engine's own walk of
+ * colours, so a full-screen player can see where everyone is and which way
+ * they are pointing. */
+extern void WorldToMultiplayerMap(VECTOR* in, VECTOR* out);
+extern void DrawPlayerDot(VECTOR* pos, short rot, u_char r, u_char g, u_char b, int flags);
+
+
 static int MpOnGameStart(void* userdata, void* args)
 {
 	int i;
@@ -1045,4 +774,5 @@ JER_MODULE_ENTRY(jer_module_mp_entry)(JERICHO_CONTEXT* ctx)
 	ctx->jer_register_hook(ctx, JER_EVENT_NET_SPAWN, MpOnNetSpawn, NULL, 0);
 	ctx->jer_register_hook(ctx, JER_EVENT_NET_INPUT, MpOnNetInput, NULL, 0);
 	ctx->jer_register_hook(ctx, JER_EVENT_GAME_START, MpOnGameStart, NULL, 0);
+	ctx->jer_register_hook(ctx, JER_EVENT_DRAW_MAP, MpOnDrawMap, NULL, 0);
 }
