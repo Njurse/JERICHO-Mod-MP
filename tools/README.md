@@ -1,0 +1,112 @@
+# mp testing tools
+
+Everything for driving a multiplayer session lives here — launchers and harnesses
+together, so there is one place to look instead of a scatter of ad-hoc command
+lines. The `.bat` files are thin wrappers; the real work is in the Python.
+
+Path handling: the launchers find the game relative to themselves
+(`tools/` → repo root → `src_rebuild/bin/Release_dev`), so they work from a
+checkout anywhere. Set `MP_EXEDIR` to point them somewhere else.
+
+## Which one do I want?
+
+| I want to… | Use |
+| --- | --- |
+| test anything, on one PC | **`mp_pair.bat`** |
+| host on this machine, by hand, two machines | `mp_host.bat` |
+| join, by hand, two machines | `mp_join.bat` |
+| drive the real game as a client with no second machine | `mp_mock_host.bat` |
+| leave a session running with no game window | `mp_dedi.bat` |
+
+## `mp_pair.bat` — two real instances, one PC
+
+**Start here.** It runs a real host and a real client side by side and prints both
+logs. Nearly every multiplayer bug so far showed up here, and the mock could never
+have found them: it only ever puts *one* real engine in the room.
+
+```
+mp_pair.bat                       host + join, report, clean up
+mp_pair.bat --keep                leave the run dirs so you can read the logs
+mp_pair.bat --settle 30 --seconds 80
+mp_pair.bat --clean               remove the run dirs again
+mp_pair.bat --help                everything else
+```
+
+It builds two throwaway run directories beside the game from directory junctions,
+so the big trees are shared and nothing is copied. **Separate working directories
+are the whole trick** — they are what stop the two `REDRIVER2.log` files and the
+two `mp.ini` files fighting each other, which is why two instances could not be
+tested before this existed.
+
+Both executables are launched **directly**, so the PIDs are real and the cleanup
+stops exactly what it started. That is the one caveat on the other launchers:
+they use `start`, which detaches, so **there is no PID to kill afterwards** — close
+the game window instead of hunting for a process.
+
+The host instance gets `MP_AUTOSTART=host` (it has to start the match itself now
+that the attract demo is suppressed) and the client deliberately does not.
+
+## `mp_host.bat` / `mp_join.bat` — two machines, by hand
+
+```
+mp_host.bat                 host on 1400
+mp_host.bat 1500            ... on another port
+mp_host.bat lobby           stay in the lobby instead of auto-starting
+mp_host.bat dry 1500        print what would run, launch nothing
+
+mp_join.bat 192.168.1.42    join a host by LAN address
+mp_join.bat 192.168.1.42:1400
+mp_join.bat                 host and client on this one machine
+mp_join.bat dry 10.0.0.5    print what would run, launch nothing
+```
+
+Joining by address skips LAN discovery and needs only the host's session port
+open, so it is the path to trust on a LAN with a firewall. `mp_join.bat` clears
+`MP_AUTOSTART` — a client launches when the host's start arrives, and must never
+be told to host as well — while `mp_host.bat` sets it, and leaves an
+`MP_AUTOSTART` you set yourself alone.
+
+## `mp_mock_host.bat` — a headless host
+
+```
+mp_mock_host.bat --start                   accept, then run a match
+mp_mock_host.bat --start --peer-pad 0x40   and drive the "host" car
+mp_mock_host.bat --reject mods             refuse the join, with a reason
+mp_mock_host.bat --port 1400 --city 1 --start
+```
+
+Then point the game at it with `mp_join.bat 127.0.0.1:<port>`. It is one-sided by
+nature — one real engine — so it can prove the wire format and the client's own
+behaviour, never what two engines do to each other.
+
+## `mp_dedi.bat` — a headless dedicated server
+
+A real session with no game window, so a client has something to join and the
+server can be left up while the client side restarts. It logs joins and leaves,
+which is the fastest way to tell a client that never connected from one that
+connected and was then dropped. Ctrl-C stops it.
+
+## The Python underneath
+
+| File | What it is |
+| --- | --- |
+| `mp_localpair.py` | the two-instance harness `mp_pair.bat` wraps |
+| `mp_test.py` | mock host / client / beacon, plus the protocol checks |
+| `mp_dediserver.py` | the dedicated server `mp_dedi.bat` wraps |
+
+`mp_test.py` is also the reference for the wire format — it packs every message by
+hand, so when a field changes there is exactly one other place to update.
+
+## Reading a run
+
+The logs are chatty at `MP_DEBUG=1`; `JPPN`, `JPPO`, `pose:`, `JPIN` and `JPCS`
+flood them. Filter those out:
+
+```sh
+grep -a "\[mp\]\|\[error\]" REDRIVER2.log | grep -av "JPPN\|JPPO\|pose:\|JPIN\|JPCS"
+```
+
+Useful markers: `launching: city N mode M (1=TAKEADRIVE, 0=MISSION!)` — mode 0
+means the mission ladder, i.e. the launch went wrong — `car: player N slot S`,
+`added N remote player car(s)`, `map: drew N remote blip(s)`, `list:` (the pause
+menu rows), and `peer dropped (<why>)`.

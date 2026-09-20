@@ -100,6 +100,11 @@ reached by address.
 
 ## Testing
 
+`tools/README.md` documents the whole launcher/harness set in `tools/` and says
+which one to reach for; the short version is `tools/mp_pair.bat` (two real
+instances on one PC), `mp_host.bat` / `mp_join.bat` (two machines), and
+`mp_mock_host.bat` / `mp_dedi.bat` (no second engine).
+
 `tools/mp_localpair.py` runs **two real instances on one PC** — one hosting, one
 joining — and prints both sides' logs. Each instance gets its own working
 directory (built from junctions, so nothing is copied) which is what keeps the
