@@ -19,6 +19,7 @@
 #include "convert.h"	/* _RotMatrixY: a car's box is built from its matrix */
 extern int gBootMpLevel;	/* main.c: 1 = the small multiplayer map, 0 = the full city */
 extern int gBootMpArena;	/* main.c: which multiplayer map (0/1) */
+extern int gWantNight;		/* glaunch.c: 1 = the night take-a-ride level variant */
 #include "players.h"	/* InitPlayer: a late joiner needs a car the same way the engine makes one */
 #include "handling.h"	/* LongQuaternion2Matrix: rebuild a car's matrix from its body */
 #include "state.h"
@@ -40,10 +41,19 @@ extern int gBootMpArena;	/* main.c: which multiplayer map (0/1) */
  * the match appears to restart the moment the joiner arrives. Cleared by
  * MpSessionReset, so a new session can launch again. */
 static int gMpLaunched;
+static int gMpLocalAppliedPad = -1;	/* the pad that drove OUR car, -1 = none seen yet */
+
+/* mp.c calls this from the NET_INPUT hook for our own car, so we replicate the
+ * pad the engine is actually driving us with. */
+void MpNoteLocalPad(int pad)
+{
+	gMpLocalAppliedPad = pad;
+}
 
 void MpSessionReset(void)
 {
 	gMpLaunched = 0;
+	gMpLocalAppliedPad = -1;
 	gMp.gamemode = MP_GAMEMODE_TAKEADRIDE;
 	gMp.city = 0;
 	gMp.timeOfDay = -1;
@@ -188,7 +198,15 @@ static void MpLaunchLocal(void)
 	gSubGameNumber = gBootMpLevel ? gBootMpArena : 0;
 
 	if (gMp.timeOfDay >= 0)
+	{
 		wantedTimeOfDay = gMp.timeOfDay;
+
+		/* want-night picks WHICH take-a-ride LEVEL VARIANT is loaded: glaunch
+		 * offsets the mission number by it, so a machine that left it at 1 from an
+		 * earlier night run loads the night map while the session says day. Take it
+		 * from the session, the same way main.c's -time boot does. */
+		gWantNight = (gMp.timeOfDay == TIME_DUSK || gMp.timeOfDay == TIME_NIGHT) ? 1 : 0;
+	}
 	if (gMp.weather >= 0)
 		wantedWeather = gMp.weather;
 
@@ -459,7 +477,7 @@ int MpStartMatch(void)
 	if (gMp.city < 0)
 		gMp.city = 0;
 	if (gMp.timeOfDay < 0)
-		gMp.timeOfDay = 0;
+		gMp.timeOfDay = TIME_DAY;	/* a session with no time is a DAY match (0 = DAWN) */
 	if (gMp.weather < 0)
 		gMp.weather = 0;
 
@@ -1105,23 +1123,32 @@ static void MpSendCarState(void);
  * bit space (what ProcessCarPad would read for a local car). */
 static int MpLocalPad(void)
 {
-	int id = gMp.localPlayerId;
-	int padId = 0;
+	/* The pad that actually drove OUR car last frame, whatever produced it. Reading
+	 * Pads[] alone missed the test bot, which injects its pad in the NET_INPUT hook
+	 * rather than into the pad state, so a bot run replicated 0 and the peer's copy
+	 * of our car only ever moved when a resync snapped it there. */
+	if (gMpLocalAppliedPad >= 0)
+		return gMpLocalAppliedPad;
 
-	if (id >= 0 && id < MP_MAX_PLAYERS)
 	{
-		MP_PLAYER* me = &gMp.players[id];
+		int id = gMp.localPlayerId;
+		int padId = 0;
 
-		if (me->carId >= 0 && me->carId < MAX_CARS && car_data[me->carId].ai.padid != NULL)
+		if (id >= 0 && id < MP_MAX_PLAYERS)
 		{
-			int p = *car_data[me->carId].ai.padid;
+			MP_PLAYER* me = &gMp.players[id];
 
-			if (p >= 0 && p < 2)
-				padId = p;
+			if (me->carId >= 0 && me->carId < MAX_CARS && car_data[me->carId].ai.padid != NULL)
+			{
+				int p = *car_data[me->carId].ai.padid;
+
+				if (p >= 0 && p < 2)
+					padId = p;
+			}
 		}
-	}
 
-	return (int)Pads[padId].mapped;
+		return (int)Pads[padId].mapped;
+	}
 }
 
 /* A launch means the level is about to load, and a load blocks our own main loop

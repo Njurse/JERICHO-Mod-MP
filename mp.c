@@ -231,6 +231,7 @@ static int gAutoHostSettle;	/* frames the target has been met for */
 static int gHostInWorld;	/* the host actually reached the running level */
 
 extern int gBootSuppressLevel;	/* main.c: a module takes the level launch over */
+extern void MpNoteLocalPad(int pad);	/* mp_session.c: the pad driving our own car */
 
 /* The host quit the match? Only once it has really BEEN in the world: at the
  * start of a match `running` is set a frame or two before gInFrontend clears,
@@ -821,6 +822,102 @@ static int MpBotPad(void)
 	return cur;
 }
 
+/* MP_BOTCHASE: instead of the canned manoeuvre, drive the LOCAL car straight at
+ * the nearest other player's car. Two instances that both chase each other close
+ * the gap on their own, which is how car-to-car collision and the two players
+ * actually meeting gets exercised without two humans at two machines. Returns 0
+ * (coast) when there is nobody else to drive at. */
+static int MpBotChase(void)
+{
+	MP_PLAYER* me = MpLocalPlayer();
+	CAR_DATA* mine;
+	CAR_DATA* tgt = NULL;
+	static int stuckFrames, recoverFrames, recoverDir;
+	int k;
+
+	if (me == NULL || me->carId < 0)
+		return 0;
+
+	for (k = 0; k < MP_MAX_PLAYERS; k++)
+	{
+		MP_PLAYER* p = &gMp.players[k];
+
+		if (p->active && p->carId >= 0 && p->carId != me->carId)
+		{
+			tgt = &car_data[p->carId];
+			break;
+		}
+	}
+
+	if (tgt == NULL)
+		return 0;
+
+	mine = &car_data[me->carId];
+
+	/* The very primitive "pathfinder": a straight line at the peer is enough on an
+	 * open map, but the cars wedge on the first building and never meet again.
+	 * So if we are feeding it throttle and the car is still not moving, back out
+	 * and turn the other way for a moment, then carry on -- a wall-follow that is
+	 * a few lines and gets two bots around Havana's blocks to each other. */
+	if (recoverFrames > 0)
+	{
+		recoverFrames--;
+		return (recoverDir ? CAR_PAD_LEFT : CAR_PAD_RIGHT) | CAR_PAD_BRAKE;
+	}
+
+	{
+		int dx = tgt->hd.where.t[0] - mine->hd.where.t[0];
+		int dz = tgt->hd.where.t[2] - mine->hd.where.t[2];
+		int want = ratan2(dx, dz) & 0xfff;
+		int diff = ((want - mine->hd.direction + 2048) & 4095) - 2048;	/* DIFF_ANGLES */
+		int adiff = (diff < 0) ? -diff : diff;
+		int throttle;
+		int pad;
+
+		/* Only feed it throttle while the peer is roughly ahead: flooring it
+		 * through a big correction just spins the car, and a spin never closes the
+		 * gap. Back off (coast/brake) while it swings round, then go. */
+		throttle = (adiff <= 1400);
+
+		{
+			int spd = mine->hd.speed;
+
+			if (spd < 0)
+				spd = -spd;
+
+			if (throttle && spd < 4)
+			{
+				if (++stuckFrames > 100)
+				{
+					recoverFrames = 55;
+					recoverDir ^= 1;
+					stuckFrames = 0;
+
+					if (gMpCtx != NULL)
+						gMpCtx->jer_log(gMpCtx, "[mp] chase: stuck, backing out (dir %d)\n", recoverDir);
+				}
+			}
+			else
+			{
+				stuckFrames = 0;
+			}
+		}
+
+		if (adiff > 1400)
+			pad = CAR_PAD_BRAKE;
+		else if (adiff > 96)
+			pad = CAR_PAD_ACCEL | ((diff > 0) ? CAR_PAD_LEFT : CAR_PAD_RIGHT);
+		else
+			pad = CAR_PAD_ACCEL;
+
+		if ((gMp.frame % 60) == 0 && gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx, "[mp] chase: d=%d,%d want=%d dir=%d diff=%d pad=%#x stuck=%d\n",
+				dx, dz, want, mine->hd.direction, diff, pad, stuckFrames);
+
+		return pad;
+	}
+}
+
 static int MpOnNetInput(void* userdata, void* args)
 {
 	JER_ARGS_NET_INPUT* in = (JER_ARGS_NET_INPUT*)args;
@@ -837,19 +934,26 @@ static int MpOnNetInput(void* userdata, void* args)
 
 	if (p != NULL)
 	{
-		if (getenv("MP_TESTDRIVE") != NULL && p->isLocal)
+		if (p->isLocal)
 		{
-			if ((gMp.frame % 60) == 0 && gMpCtx != NULL)
+			if (getenv("MP_TESTDRIVE") != NULL)
 			{
-				CAR_DATA* me = &car_data[carId];
-				gMpCtx->jer_log(gMpCtx,
-					"[mp] both: local %d,%d,%d spd=%d | remote(1) %d,%d,%d spd=%d\n",
-					me->hd.where.t[0], me->hd.where.t[1], me->hd.where.t[2], me->hd.speed,
-					car_data[1].hd.where.t[0], car_data[1].hd.where.t[1], car_data[1].hd.where.t[2], car_data[1].hd.speed);
+				if ((gMp.frame % 60) == 0 && gMpCtx != NULL)
+				{
+					CAR_DATA* me = &car_data[carId];
+					gMpCtx->jer_log(gMpCtx,
+						"[mp] both: local %d,%d,%d spd=%d | remote(1) %d,%d,%d spd=%d\n",
+						me->hd.where.t[0], me->hd.where.t[1], me->hd.where.t[2], me->hd.speed,
+						car_data[1].hd.where.t[0], car_data[1].hd.where.t[1], car_data[1].hd.where.t[2], car_data[1].hd.speed);
+				}
+
+				in->pad = (getenv("MP_BOTCHASE") != NULL) ? MpBotChase() : MpBotPad();		/* the test AI drives OUR car */
+				in->handled = 1;
 			}
 
-			in->pad = MpBotPad();		/* the test AI drives OUR car */
-			in->handled = 1;
+			/* Whatever is driving our car -- the player's pad or the test bot's --
+			 * is what we replicate. See MpLocalPad. */
+			MpNoteLocalPad(in->pad);
 		}
 		else if (!p->isLocal)
 		{
@@ -860,6 +964,10 @@ static int MpOnNetInput(void* userdata, void* args)
 			 * (a fresh joiner) it coasts, which is harmless. */
 			in->pad = MpInputForPlayer(p->id);
 			in->handled = 1;
+
+			if ((gMp.frame % 60) == 0 && gMpCtx != NULL)
+				gMpCtx->jer_log(gMpCtx, "[mp] netinput: car %d <- player %d pad %#x\n",
+					carId, p->id, in->pad);
 		}
 		/* local car, no bot: leave the stock pad (handled stays 0) */
 	}

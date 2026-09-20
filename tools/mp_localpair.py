@@ -25,6 +25,7 @@ and the cleanup kills exactly what it started -- nothing else.
 import argparse
 import atexit
 import os
+import random
 import shutil
 import subprocess
 import sys
@@ -216,9 +217,20 @@ def main():
                     help="city for the host to host (default havana)")
     ap.add_argument("--mp-arena", default="0",
                     help="multiplayer map/arena for both sides (default 0)")
-    ap.add_argument("--host-car", default="0", help="the host's car (default 0)")
-    ap.add_argument("--client-car", default="12", help="the joining player's car (default 12)")
+    ap.add_argument("--host-car", default="random",
+                    help="the host's car: a model number, slotN, or 'random' (default)")
+    ap.add_argument("--client-car", default="random",
+                    help="the joining player's car: a model number, slotN, or 'random' (default)")
     args = ap.parse_args()
+
+    # A random car each, from the level's own domestic set (models 0..4), so a run
+    # actually exercises per-player vehicle choice instead of always the same two.
+    # A RAW model number, not slotN: the client's slot cannot be resolved until it
+    # knows the host's city, and it is the raw value that travels in the HELLO.
+    if args.host_car == "random":
+        args.host_car = str(random.choice([0, 1, 2, 3, 4]))
+    if args.client_car == "random":
+        args.client_car = str(random.choice([0, 1, 2, 3, 4]))
 
     game_dir = os.path.abspath(args.game_dir)
     if not os.path.isfile(os.path.join(game_dir, args.exe)):
