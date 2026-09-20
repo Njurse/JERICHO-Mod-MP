@@ -57,7 +57,7 @@ static int MpBotCanned(void)
 
 /* Which bot, if any. OFF unless MP_BOT says otherwise -- these levers drive a
  * real player's car, so nothing here may be on by default. Returns 0 (none),
- * 1 (random), 2 (chase) or 3 (fight). */
+ * 1 (random), 2 (chase), 3 (fight) or 4 (pursuit: host hunts, joiner runs). */
 static int MpBotMode(void)
 {
 	const char* m = getenv("MP_BOT");
@@ -69,6 +69,8 @@ static int MpBotMode(void)
 		return 2;
 	if (strcmp(m, "fight") == 0)
 		return 3;
+	if (strcmp(m, "pursuit") == 0)
+		return 4;
 	if (strcmp(m, "off") == 0 || strcmp(m, "0") == 0)
 		return 0;
 
@@ -234,6 +236,153 @@ static int MpBotChase(int fight)
 	}
 }
 
+/* ------------------------------------------------------------------ */
+/* pursuit / evade: SMART pathfinding test                              */
+/*                                                                      */
+/* The HOST hunts, the JOINER runs -- the opposite of `chase` (where    */
+/* the host flees). The point is to make the pair actually drive a long */
+/* distance around scenery, so the network layer is exercised under real*/
+/* motion: a pursuer that has to keep line of sight, and a runner that  */
+/* has to get away.                                                     */
+/* ------------------------------------------------------------------ */
+#define MPBOT_PROBE	1300	/* how far ahead the pathfinder looks */
+#define MPBOT_NEAR	520	/* ... and the near probe that stops it nosing into a wall */
+
+/* The bot's pathfinding, such as it is: from `desired`, walk outwards in
+ * half-steps (desired, +30, -30, +60, ...) and take the first heading whose path
+ * is CLEAR at BOTH a near and a far probe. The near probe stops the car driving
+ * into a wall the far probe is already past; the far probe stops it committing
+ * to a gap that closes. Uses the engine's own CellEmpty -- the same test the
+ * civilian AI uses to know a spot is free. Returns `desired` when nothing is
+ * clear (the stuck-recovery then takes over and reverses). */
+static int MpBotClearHeading(CAR_DATA* mine, int desired)
+{
+	static const int STEP = 0x1000 / 12;	/* 30 degrees */
+	int i;
+
+	for (i = 0; i < 12; i++)
+	{
+		int k = (i + 1) / 2;
+		int a = (i == 0) ? desired : ((desired + ((i & 1) ? (k * STEP) : (-k * STEP))) & 0xfff);
+		VECTOR p;
+
+		p.vx = mine->hd.where.t[0] + (int)(((long)rsin(a) * MPBOT_NEAR) >> 12);
+		p.vy = mine->hd.where.t[1];
+		p.vz = mine->hd.where.t[2] + (int)(((long)rcos(a) * MPBOT_NEAR) >> 12);
+		if (!CellEmpty(&p, 350))
+			continue;
+
+		p.vx = mine->hd.where.t[0] + (int)(((long)rsin(a) * MPBOT_PROBE) >> 12);
+		p.vz = mine->hd.where.t[2] + (int)(((long)rcos(a) * MPBOT_PROBE) >> 12);
+		if (!CellEmpty(&p, 350))
+			continue;
+
+		return a;
+	}
+
+	return desired;
+}
+
+/* Returns 0 (coast) when there is nobody else to chase. */
+static int MpBotPursuit(void)
+{
+	MP_PLAYER* me = MpLocalPlayer();
+	CAR_DATA* mine;
+	CAR_DATA* tgt = NULL;
+	static int stuckFrames, recoverFrames, recoverDir, recoverReverse;
+	int k;
+
+	if (me == NULL || me->carId < 0)
+		return 0;
+
+	for (k = 0; k < MP_MAX_PLAYERS; k++)
+	{
+		MP_PLAYER* p = &gMp.players[k];
+
+		if (p->active && p->carId >= 0 && p->carId != me->carId)
+		{
+			tgt = &car_data[p->carId];
+			break;
+		}
+	}
+
+	if (tgt == NULL)
+		return 0;
+
+	mine = &car_data[me->carId];
+
+	if (recoverFrames > 0)
+	{
+		recoverFrames--;
+
+		if (recoverReverse)
+			return CAR_PAD_BRAKE | (recoverDir ? CAR_PAD_LEFT : CAR_PAD_RIGHT);
+
+		return (recoverDir ? CAR_PAD_LEFT : CAR_PAD_RIGHT);
+	}
+
+	{
+		int dx = tgt->hd.where.t[0] - mine->hd.where.t[0];
+		int dz = tgt->hd.where.t[2] - mine->hd.where.t[2];
+		int evade = !MpIsHost();	/* the HOST hunts, the JOINER runs */
+		int desired = evade ? ((ratan2(dx, dz) + 2048) & 0xfff) : (ratan2(dx, dz) & 0xfff);
+		int want = MpBotClearHeading(mine, desired);
+		int diff = ((want - mine->hd.direction + 2048) & 4095) - 2048;
+		int adiff = (diff < 0) ? -diff : diff;
+		long dist = (long)dx * (long)dx + (long)dz * (long)dz;
+		int spd = mine->hd.speed;
+		int pad;
+
+		if (spd < 0)
+			spd = -spd;
+
+		/* same wedge detection as chase: a car stopped against scenery has to be
+		 * backed out; the runner wedges at least as often as the pursuer */
+		if (spd < 4)
+		{
+			if (++stuckFrames > 90)
+			{
+				recoverFrames = recoverReverse ? 45 : 70;
+				recoverDir ^= 1;
+				recoverReverse ^= 1;
+				stuckFrames = 0;
+
+				if (gMpCtx != NULL)
+					gMpCtx->jer_log(gMpCtx, "[mp] bot: %s stuck, %s\n",
+						evade ? "evade" : "pursue", recoverReverse ? "backing out" : "turning round");
+			}
+		}
+		else
+		{
+			stuckFrames = 0;
+		}
+
+		if (adiff > 1500)
+			/* the target is straight behind: reversing round is the coherent move */
+			pad = CAR_PAD_BRAKE | ((diff > 0) ? CAR_PAD_LEFT : CAR_PAD_RIGHT);
+		else if (adiff > 700)
+			/* badly off line: keep the power on and steer. Coasting into a
+			 * correction just stops the car and it wedges -- the accelerator is
+			 * what completes the turn. */
+			pad = CAR_PAD_ACCEL | ((diff > 0) ? CAR_PAD_LEFT : CAR_PAD_RIGHT);
+		else if (adiff > 120)
+			pad = CAR_PAD_ACCEL | ((diff > 0) ? CAR_PAD_LEFT : CAR_PAD_RIGHT);
+		else
+			pad = CAR_PAD_ACCEL;
+
+		/* the pursuer keeps the power on when it is closing, so the collision is
+		 * actually tested; the runner never relents either */
+		if (!evade && dist < 400L * 400L)
+			pad |= CAR_PAD_ACCEL;
+
+		if ((gMp.frame % 60) == 0 && gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx, "[mp] bot: %s d=%d,%d want=%d dir=%d diff=%d pad=%#x stuck=%d\n",
+				evade ? "evade" : "pursue", dx, dz, want, mine->hd.direction, diff, pad, stuckFrames);
+
+		return pad;
+	}
+}
+
 int MpBotEnabled(void)
 {
 	return MpBotMode() != 0;
@@ -243,6 +392,7 @@ int MpBotPadForLocalCar(void)
 {
 	switch (MpBotMode())
 	{
+	case 4:  return MpBotPursuit();
 	case 3:  return MpBotChase(1);
 	case 2:  return MpBotChase(0);
 	case 1:  return MpBotCanned();

@@ -256,7 +256,7 @@ def main():
                          "(PLAY_HOST.bat / PLAY_JOIN.bat) do, so it is the only way to test "
                          "what a player actually runs -- a bug that only appears without "
                          "MP_DEBUG is invisible otherwise.")
-    ap.add_argument("--bot", default="off", choices=["off", "random", "chase", "fight"],
+    ap.add_argument("--bot", default="off", choices=["off", "random", "chase", "fight", "pursuit"],
                     help="drive the player cars with the mp test bot: random / chase (host flees, "
                          "joiner chases) / fight (both charge). OFF by default -- this drives a "
                          "real player's car.")

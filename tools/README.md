@@ -111,6 +111,27 @@ actually runs (a bug that appears only without `MP_DEBUG` is invisible otherwise
 `mp_test.py` is also the reference for the wire format — it packs every message by
 hand, so when a field changes there is exactly one other place to update.
 
+## The test bot (`MP_BOT`, off by default)
+
+Drives a real player's car so a pair can be exercised without two humans. It is a
+testing component: nothing in the session/network path may depend on it, and it is
+inert unless `MP_BOT` asks for it.
+
+| `MP_BOT` | what it does |
+| --- | --- |
+| `random` (also `MP_TESTDRIVE=1`) | the canned manoeuvre: a pad that changes every 0.5–4 s |
+| `chase` | the HOST flees, the joiner chases |
+| `fight` | both charge each other |
+| `pursuit` | the HOST hunts, the JOINER runs -- with probe-based obstacle avoidance |
+
+`mp_localpair.py --bot <mode>` sets it on both instances. `pursuit` is the one to
+reach for when you want the pair actually driving a distance around scenery (so the
+network layer is exercised under real motion): the bots pick a clear heading with
+the engine's own `CellEmpty` out of a fan of 30° steps, looking both near (so they
+do not nose into a wall) and far (so they do not commit to a gap that closes), and
+back out when they wedge. Their progress and the resulting host<->client deviation
+are in the `[mp] bot:` and `[mp] sync:` lines.
+
 ## Reading a run
 
 The logs are chatty at `MP_DEBUG=1`; `JPPN`, `JPPO`, `pose:`, `JPIN` and `JPCS`
