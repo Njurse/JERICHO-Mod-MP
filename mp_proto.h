@@ -38,7 +38,7 @@
 extern "C" {
 #endif
 
-#define MP_PROTO_VERSION	1
+#define MP_PROTO_VERSION	2
 
 /* Default UDP+TCP port. 1318 is IANA-unassigned (the neighbour 1319 is
  * amx-icsp), so it is a safe, non-reserved choice for a game. Configurable
@@ -331,11 +331,21 @@ typedef struct MP_CARSTATE
  * and velocities come straight from st.n (the handling state). */
 #define MP_CARSTATE_HAS_BODY	1
 
+/* entry.model when the owner is on foot: no vehicle to drive, so the peers
+ * release the car they were driving for them (it stays in the world). */
+#define MP_CARSTATE_NO_CAR	0xFF
+
 typedef struct MP_CARSTATE_ENTRY
 {
 	uint8_t  playerId;
 	uint8_t  flags;		/* MP_CARSTATE_HAS_BODY */
 	uint8_t  palette;	/* owner's car colour (cp->ap.palette) -- owner-authoritative */
+	uint8_t  model;		/* the VEHICLE the owner is driving (cp->ap.model);
+				 * MP_CARSTATE_NO_CAR = on foot, so the peers stop
+				 * driving our old car and leave it where it was */
+	uint8_t  carSlot;	/* the CAR_DATA slot the owner drives, or
+				 * MP_CARSTATE_NO_CAR -- lets a peer drive THAT car
+				 * (the same car in both worlds) when it can identify it */
 	int16_t  orient[4];	/* st.n.orientation */
 	int32_t  x, y, z;	/* world units */
 	int32_t  heading;	/* hd.direction */
@@ -399,7 +409,7 @@ static_assert(sizeof(MP_REJECT) == 68, "MP_REJECT layout");
 static_assert(sizeof(MP_SESSION) == 12, "MP_SESSION layout");
 static_assert(sizeof(MP_PLAYER_INPUT) == 4, "MP_PLAYER_INPUT layout");
 static_assert(sizeof(MP_INPUT) == 8, "MP_INPUT layout");
-static_assert(sizeof(MP_CARSTATE_ENTRY) == 45, "MP_CARSTATE_ENTRY layout");
+static_assert(sizeof(MP_CARSTATE_ENTRY) == 47, "MP_CARSTATE_ENTRY layout");
 static_assert(sizeof(MP_HIT) == 16, "MP_HIT layout");
 static_assert(sizeof(MP_CARSTATE) == 8, "MP_CARSTATE layout");
 static_assert(sizeof(MP_CHANNEL) == 26, "MP_CHANNEL layout");

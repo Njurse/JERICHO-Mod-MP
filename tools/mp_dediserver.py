@@ -30,7 +30,7 @@ import mp_test as m
 
 LOCK = threading.Lock()
 CLIENTS = {}        # conn -> {"id": int, "name": str, "addr": str}
-CARS = {}           # playerId -> 18-byte MP_CARSTATE_ENTRY
+CARS = {}           # playerId -> one MP_CARSTATE_ENTRY (m.CARSTATE_ENTRY.size bytes)
 CHAT = {}
 STARTED = time.time()
 

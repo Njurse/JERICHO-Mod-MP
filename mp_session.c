@@ -1267,6 +1267,7 @@ int MpInputForPlayer(int id)
 
 /* forward: the owner's own-car replication (defined later) */
 static void MpSendOwnCarState(void);
+static void MpTestCarChangeTick(void);
 
 /* ------------------------------------------------------------------ */
 /* Input replication                                                   */
@@ -1606,6 +1607,9 @@ void MpLockstepFrame(void)
 
 	++gMp.frame;
 
+	/* test lever: a scripted mid-session car change (inert unless MP_TEST_CARCHANGE) */
+	MpTestCarChangeTick();
+
 	/* tell everyone where our wheel is pointing before anything is simulated */
 	MpSendInput(MpLocalPad());
 
@@ -1636,6 +1640,135 @@ void MpLockstepFrame(void)
 /* the truth for that car and every other machine adopts the state, so */
 /* nobody is guessing where somebody else's car is from delayed input. */
 /* ------------------------------------------------------------------ */
+/* ------------------------------------------------------------------ */
+/* MP_TEST_CARCHANGE=<seconds> -- test lever for a MID-SESSION CAR CHANGE.
+ *
+ * N seconds into a live match, get out of our car and into the nearest civilian
+ * one, which is exactly what a player does in Take a Ride. It calls the ENGINE's
+ * own ChangePedPlayerToCar -- the function the ped mechanic calls -- so the path
+ * under test is the real one and the mod does not poke player[] itself.
+ * Inert unless the env var is set. */
+static void MpTestCarChangeTick(void)
+{
+	static int done;
+	static unsigned long startMs;
+	const char* s;
+	int secs, i, best = -1;
+	long bestD = 0;
+	MP_PLAYER* me;
+	CAR_DATA* mine;
+
+	if (done)
+		return;
+
+	s = getenv("MP_TEST_CARCHANGE");
+
+	if (s == NULL || !gMp.running)
+		return;
+
+	secs = atoi(s);
+
+	if (startMs == 0)
+		startMs = MpNowMs();
+
+	if ((int)((MpNowMs() - startMs) / 1000) < secs)
+		return;
+
+	me = MpLocalPlayer();
+
+	if (me == NULL || me->carId < 0)
+		return;
+
+	mine = &car_data[me->carId];
+
+	for (i = 0; i < MAX_CARS; i++)
+	{
+		CAR_DATA* cp = &car_data[i];
+		long dx, dy, dz, d;
+
+		if (i == me->carId || cp->controlType != CONTROL_TYPE_CIV_AI)
+			continue;
+
+		/* squared distances are 64 bit: a 32-bit one wraps negative on a far car
+		 * and reads as the NEAREST one */
+		dx = (long)cp->hd.where.t[0] - mine->hd.where.t[0];
+		dy = (long)cp->hd.where.t[1] - mine->hd.where.t[1];
+		dz = (long)cp->hd.where.t[2] - mine->hd.where.t[2];
+		d = dx * dx + dy * dy + dz * dz;
+
+		if (best < 0 || d < bestD)
+		{
+			best = i;
+			bestD = d;
+		}
+	}
+
+	if (best < 0)
+		return;		/* no traffic nearby yet -- try again next frame */
+
+	done = 1;
+
+	if (gMpCtx != NULL)
+		gMpCtx->jer_log(gMpCtx,
+			"[mp] TEST car change: taking over slot %d (model %d), %ld away\n",
+			best, car_data[best].ap.model, bestD);
+
+	ChangePedPlayerToCar(0, &car_data[best]);
+}
+
+/* ------------------------------------------------------------------ */
+/* FOLLOWING THE CAR THE PLAYER IS ACTUALLY DRIVING.
+ *
+ * Getting out of a car and into another is the ENGINE's own Take a Ride
+ * mechanic -- ChangePedPlayerToCar / ChangeCarPlayerToPed (players.c) mutate
+ * player[] and the car's pad link IN PLACE and never call InitPlayer, so no spawn
+ * path sees it. Nothing tells us either (there is no enter/exit event), so we
+ * watch the engine's own player[0].playerCarId (a char; -1 = on foot) and adopt
+ * whatever it says.
+ *
+ * player[0] is always US: every machine runs its one local player in engine slot
+ * 0, and the REMOTE players live in the higher slots the mod inits itself. */
+static void MpFollowLocalCar(void)
+{
+	MP_PLAYER* me = MpLocalPlayer();
+	int driven;
+
+	if (me == NULL || !me->isLocal || !gMp.running)
+		return;
+
+	driven = (int)player[0].playerCarId;	/* -1 = on foot */
+
+	if (driven == me->carId)
+		return;
+
+	if (driven >= 0 && driven < MAX_CARS)
+	{
+		CAR_DATA* cp = &car_data[driven];
+
+		if (gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx,
+				"[mp] car change: now driving slot %d model %d (was slot %d)\n",
+				driven, cp->ap.model, me->carId);
+
+		me->carId = driven;
+		me->car = cp->ap.model;
+		me->carIsSlot = 0;		/* 'car' is a real model now, not a slot */
+		me->palette = cp->ap.palette;
+	}
+	else if (me->carId >= 0)
+	{
+		/* ON FOOT. The car we left is the ENGINE's to keep: it has already been
+		 * handed back to CIV_AI and stays in the world where it was. We only
+		 * report "no car" (model 0xFF) so the peers let theirs go too. */
+		if (gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx, "[mp] car change: on foot (left slot %d)\n",
+				me->carId);
+
+		me->carId = -1;
+		me->car = -1;
+	}
+}
+
 static void MpSendOwnCarState(void)
 {
 	unsigned char buf[sizeof(MP_CARSTATE) + sizeof(MP_CARSTATE_ENTRY)];
@@ -1645,10 +1778,13 @@ static void MpSendOwnCarState(void)
 	CAR_DATA* cp;
 	int len;
 
-	if (me == NULL || me->carId < 0)
+	if (me == NULL)
 		return;
 
-	cp = &car_data[me->carId];
+	/* The engine may have moved us into another car (or out of one) since the
+	 * last frame -- adopt it BEFORE reading the pose, so this very frame already
+	 * carries the change and the peers never see the old vehicle again. */
+	MpFollowLocalCar();
 
 	memset(&h, 0, sizeof(h));
 	h.frame = gMp.frame;
@@ -1657,21 +1793,35 @@ static void MpSendOwnCarState(void)
 	memset(&e, 0, sizeof(e));
 	e.playerId = (uint8_t)me->id;
 	e.flags = MP_CARSTATE_HAS_BODY;
-	e.palette = (uint8_t)cp->ap.palette;	/* the colour WE see our car in -- we own it */
-	e.x = cp->hd.where.t[0];
-	e.y = cp->hd.where.t[1];
-	e.z = cp->hd.where.t[2];
-	e.heading = cp->hd.direction;
-	e.orient[0] = (int16_t)cp->st.n.orientation[0];
-	e.orient[1] = (int16_t)cp->st.n.orientation[1];
-	e.orient[2] = (int16_t)cp->st.n.orientation[2];
-	e.orient[3] = (int16_t)cp->st.n.orientation[3];
-	e.vel[0] = cp->st.n.linearVelocity[0];
-	e.vel[1] = cp->st.n.linearVelocity[1];
-	e.vel[2] = cp->st.n.linearVelocity[2];
-	e.angVel[0] = (int16_t)cp->st.n.angularVelocity[0];
-	e.angVel[1] = (int16_t)cp->st.n.angularVelocity[1];
-	e.angVel[2] = (int16_t)cp->st.n.angularVelocity[2];
+
+	/* NO CAR (on foot): model 0xFF and NO pose. The peer must not adopt the zero
+	 * position -- that would drag the car it was driving to the origin -- it
+	 * releases that car instead. */
+	e.model = MP_CARSTATE_NO_CAR;
+	e.carSlot = MP_CARSTATE_NO_CAR;
+
+	if (me->carId >= 0 && me->carId < MAX_CARS)
+	{
+		cp = &car_data[me->carId];
+
+		e.palette = (uint8_t)cp->ap.palette;	/* the colour WE see our car in -- we own it */
+		e.model = (uint8_t)cp->ap.model;	/* ...and WHAT we are driving */
+		e.carSlot = (uint8_t)me->carId;		/* so a peer can drive the same car */
+		e.x = cp->hd.where.t[0];
+		e.y = cp->hd.where.t[1];
+		e.z = cp->hd.where.t[2];
+		e.heading = cp->hd.direction;
+		e.orient[0] = (int16_t)cp->st.n.orientation[0];
+		e.orient[1] = (int16_t)cp->st.n.orientation[1];
+		e.orient[2] = (int16_t)cp->st.n.orientation[2];
+		e.orient[3] = (int16_t)cp->st.n.orientation[3];
+		e.vel[0] = cp->st.n.linearVelocity[0];
+		e.vel[1] = cp->st.n.linearVelocity[1];
+		e.vel[2] = cp->st.n.linearVelocity[2];
+		e.angVel[0] = (int16_t)cp->st.n.angularVelocity[0];
+		e.angVel[1] = (int16_t)cp->st.n.angularVelocity[1];
+		e.angVel[2] = (int16_t)cp->st.n.angularVelocity[2];
+	}
 
 	memcpy(buf, &h, sizeof(h));
 	memcpy(buf + sizeof(h), &e, sizeof(e));
