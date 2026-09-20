@@ -247,7 +247,7 @@ typedef struct MP_WELCOME
 	uint8_t  running;	/* 1 = the host's match is already live (join in progress) */
 	uint8_t  subGame;	/* the multiplayer sub-level (gSubGameNumber) */
 	uint8_t  mpLevel;	/* 1 = the host is on a multiplayer map, 0 = the full city */
-	uint8_t  reserved;	/* unused; keeps the struct 16 bytes (static_assert'd) */
+	uint8_t  arena;		/* which multiplayer map, 0/1 (gBootMpArena) - keeps the struct 16 bytes */
 	uint8_t  gamemode;
 	uint8_t  city;
 	uint8_t  timeOfDay;

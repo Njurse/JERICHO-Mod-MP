@@ -18,6 +18,7 @@
 #include "cars.h"
 #include "convert.h"	/* _RotMatrixY: a car's box is built from its matrix */
 extern int gBootMpLevel;	/* main.c: 1 = the small multiplayer map, 0 = the full city */
+extern int gBootMpArena;	/* main.c: which multiplayer map (0/1) */
 #include "players.h"	/* InitPlayer: a late joiner needs a car the same way the engine makes one */
 #include "state.h"
 
@@ -163,7 +164,12 @@ static void MpLaunchLocal(void)
 	GameLevel = gMp.city;
 	GameType = GAME_TAKEADRIVE;
 	NumPlayers = 1;
-	gSubGameNumber = 0;
+	/* The arena is part of the session now, not a local boot flag: gSubGameNumber
+	 * (offset by 440 in glaunch to reach the M58/M498 multiplayer levels) is taken
+	 * from the shape the host published, so the host and a client that booted with
+	 * a different -mp still load the SAME map. It used to be hardcoded 0, which
+	 * silently ignored the arena on every machine. */
+	gSubGameNumber = gBootMpLevel ? gBootMpArena : 0;
 
 	if (gMp.timeOfDay >= 0)
 		wantedTimeOfDay = gMp.timeOfDay;
@@ -304,6 +310,21 @@ void MpSpawnLateJoiners(void)
 		PlayerStartInfo[slot]->type = 1;
 		PlayerStartInfo[slot]->controlType = CONTROL_TYPE_PLAYER;
 		PlayerStartInfo[slot]->flags = 0;
+
+		/* Same pool-checked per-player vehicle as the level-init spawn
+		 * (MpOnNetSpawn): the host's own model is NOT this player's, and copying it
+		 * made the joiner's car identical to the host's on the host's screen. */
+		{
+			extern char carNumLookup[4][10];
+			int lvl = (GameLevel >= 0 && GameLevel < 4) ? GameLevel : 0;
+
+			PlayerStartInfo[slot]->model = (u_char)carNumLookup[lvl][id % 4];
+			PlayerStartInfo[slot]->palette = 0;
+
+			if (gMpCtx != NULL)
+				gMpCtx->jer_log(gMpCtx, "[mp] late joiner: player %d -> slot %d model %d (city %d)\n",
+					id, slot, PlayerStartInfo[slot]->model, lvl);
+		}
 
 		/* alongside the host, not at the level's own start point */
 		PlayerStartInfo[slot]->position.vy = 0;
@@ -564,6 +585,7 @@ static void MpSendWelcome(int connIndex, int playerId, int matched)
 	w.running = (uint8_t)(gMp.running ? 1 : 0);
 	w.subGame = (uint8_t)(gSubGameNumber & 0xff);
 	w.mpLevel = (uint8_t)(gBootMpLevel ? 1 : 0);	/* the map SHAPE, not the arena */
+	w.arena = (uint8_t)(gBootMpArena & 0x01);	/* which shape: the arena belongs in the session, not a local -mp */
 	w.gamemode = (uint8_t)gMp.gamemode;
 	w.city = (uint8_t)gMp.city;
 	w.timeOfDay = (uint8_t)(gMp.timeOfDay < 0 ? 0 : gMp.timeOfDay);
@@ -772,6 +794,7 @@ static void MpHandleWelcome(const unsigned char* p, int len)
 	 * which shape the level is and the client loads that, whatever its own
 	 * arguments said. */
 	gBootMpLevel = w.mpLevel ? 1 : 0;
+	gBootMpArena = (int)w.arena;
 	/* NOT MpSetSubGame(w.subGame): glaunch.c multiplies gSubGameNumber by 440 when it derives the mission number, so pushing the host's raw internal value through it lands on a mission number hundreds out of range -- a level that does not exist, and then a car with no data reaching ComputeCarLightingLevels. That is an access violation, and it was mine. */
 
 	MpAddPlayer(0, "Host", 0);
@@ -964,6 +987,10 @@ int MpOnNetSpawn(void* userdata, void* args)
 
 			PlayerStartInfo[slot]->model = (u_char)carNumLookup[lvl][i % 4];
 			PlayerStartInfo[slot]->palette = 0;
+
+			if (gMpCtx != NULL)
+				gMpCtx->jer_log(gMpCtx, "[mp] netspawn: player %d -> slot %d model %d (city %d)\n",
+					i, slot, PlayerStartInfo[slot]->model, lvl);
 		}
 
 		PlayerStartInfo[slot]->position.vy = 0;

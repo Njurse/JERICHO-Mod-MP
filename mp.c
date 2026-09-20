@@ -230,6 +230,8 @@ static int gAutoHostTarget = 2;	/* players (incl. us) to wait for before startin
 static int gAutoHostSettle;	/* frames the target has been met for */
 static int gHostInWorld;	/* the host actually reached the running level */
 
+extern int gBootSuppressLevel;	/* main.c: a module takes the level launch over */
+
 /* The host quit the match? Only once it has really BEEN in the world: at the
  * start of a match `running` is set a frame or two before gInFrontend clears,
  * and keying on `running && gInFrontend` alone would tear the fresh session
@@ -313,6 +315,13 @@ static int MpOnCmdLine(void* userdata, void* args)
 			gMp.autoSession = 1;
 			gAutoHostStart = 1;
 			gAutoHostTarget = 2;
+
+			/* Take the level launch over: the session loads the level when the
+			 * match starts, so the engine's own -level entry must not fire. Booting
+			 * one here and another at the start is what made a match "restart with
+			 * different weather" the moment a client joined -- and let the
+			 * frontend's city win over the session's. */
+			gBootSuppressLevel = 1;
 
 			MpBeginHost();
 			if (gMp.timeOfDay < 0 && wantedTimeOfDay >= 0)
