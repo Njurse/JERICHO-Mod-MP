@@ -481,6 +481,8 @@ static int MpOnShutdown(void* userdata, void* args)
 
 /* Service the sockets every frame (frontend and in-game both fire FRAME),
  * and again at the top of the world step for the lockstep hand-off. */
+static void MpLogPlayerList(void);
+
 static int MpOnFrame(void* userdata, void* args)
 {
 	(void)userdata;
@@ -514,11 +516,9 @@ static int MpOnFrame(void* userdata, void* args)
 	/* Test lever: hold the in-game map open, so the multiplayer-map blip hook
 	 * can be exercised without a human pressing the map button. */
 	if (getenv("MP_MAP") != NULL && gMp.running)
-	{
-		extern int gShowMap;
-
-		gShowMap = 1;
-	}
+	/* MP_MAP used to force the map open -- the same mistake the pause lever made: the engine then draws a map whose state was never set up, and the screen goes red. It only logs now. */
+	if (getenv("MP_MAP") != NULL && gMp.running)
+		MpLogPlayerList();
 
 	/* A connection loss asked for the main menu: take it as soon as the engine
 	 * is back in the frontend, so the player cannot be left in the middle of

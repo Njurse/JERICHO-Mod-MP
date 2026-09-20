@@ -748,7 +748,7 @@ static void MpHandleWelcome(const unsigned char* p, int len)
 	 * which shape the level is and the client loads that, whatever its own
 	 * arguments said. */
 	gBootMpLevel = w.mpLevel ? 1 : 0;
-	MpSetSubGame(w.subGame);	/* the arena within that shape */
+	/* NOT MpSetSubGame(w.subGame): glaunch.c multiplies gSubGameNumber by 440 when it derives the mission number, so pushing the host's raw internal value through it lands on a mission number hundreds out of range -- a level that does not exist, and then a car with no data reaching ComputeCarLightingLevels. That is an access violation, and it was mine. */
 
 	MpAddPlayer(0, "Host", 0);
 
