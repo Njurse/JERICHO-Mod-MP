@@ -51,6 +51,7 @@ typedef struct MP_PLAYER
 	int  id;			/* 0 = host, 1..MP_MAX_PLAYERS-1 = clients */
 	char name[MP_NAME_MAX];
 	int  carId;			/* CAR_DATA slot it drives, -1 = none yet */
+	int  car;			/* vehicle (car id) it asked for, -1 = unknown */
 	int  padId;			/* engine pad id bound to it, -1 = none */
 	int  isLocal;			/* 1 = this machine's own player */
 	int  connected;			/* peer link still alive */

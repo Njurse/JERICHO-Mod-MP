@@ -44,7 +44,7 @@ UDP_MAGIC = 0x31504D4A
 ENV = struct.Struct("<I4sBBH")
 HELLO = struct.Struct("<HHHH32s4B")      # 44 bytes
 MODI = struct.Struct("<24s16sBB")        # 42 bytes
-WELCOME = struct.Struct("<12BI")         # 16 bytes
+WELCOME = struct.Struct("<13BI")          # 17 bytes
 REJECT = struct.Struct("<4B64s")         # 68 bytes
 BEACON = struct.Struct("<IHH32s6BHH")    # 50 bytes
 SPAWN = struct.Struct("<4i")             # 16 bytes: x, y, z, headingCHANNEL = struct.Struct("<16sHIBB2B")    # 26 bytes
@@ -53,7 +53,7 @@ SESSION = struct.Struct("<4BIBBH")       # 12 bytes (gamemode,city,tod,weather,s
 INPUT = struct.Struct("<IB3B")           # frame, count, reserved[3] = 8
 PLAYER_INPUT = struct.Struct("<BHB")     # playerId, pad, spare = 4
 CARSTATE = struct.Struct("<IB3B")        # frame, count, reserved[3] = 8
-CARSTATE_ENTRY = struct.Struct("<BB4i")  # playerId, spare, x, y, z, heading = 18
+CARSTATE_ENTRY = struct.Struct("<BB4h3iih3h3i")  # pid, flags, orient[4], x,y,z, heading, angVel[3], vel[3] = 44
 
 REJECT_NAMES = {0: "NONE", 1: "FULL", 2: "VERSION", 3: "MODS", 4: "INPROGRESS", 5: "CUSTOM"}
 REJECT_IDS = {v.lower(): k for k, v in REJECT_NAMES.items() if k != 0}
@@ -156,7 +156,7 @@ def mode_host(args):
                 pass
         conn.close()
         return 0
-    welcome = WELCOME.pack(1, 8, 0, 1, 1 if args.start else 0, 0, 0, 0, 0, args.city, 1, 0, 1234)
+    welcome = WELCOME.pack(1, 8, 0, 1, 1 if args.start else 0, 0, 0, 0, 0, args.city, 1, 0, 1234, 0xFF)
     send_frame(conn, TAG["welcome"], welcome)
     print("[mock-host] sent WELCOME (playerId=1) -- PASS")
 
@@ -189,7 +189,7 @@ def mode_host(args):
             elif tag == TAG["carstate"] and not args.no_carstate:
                 frame, count, _a, _b, _c = CARSTATE.unpack_from(payload, 0)
                 if count >= 1:
-                    pid, _sp, x, y, z, hd = CARSTATE_ENTRY.unpack_from(payload, CARSTATE.size)
+                    pid, _fl, _o0, _o1, _o2, _o3, x, y, z, hd, _a0, _a1, _a2, _v0, _v1, _v2 = CARSTATE_ENTRY.unpack_from(payload, CARSTATE.size)
                     last = (x, y, z, hd)
                     if not hasattr(args, "_fixed") or args._fixed is None:
                         args._fixed = (x + args.peer_dist, y, z)
@@ -203,7 +203,7 @@ def mode_host(args):
                     fx, fy, fz = args._fixed
                     # static "host" car: it must NOT follow the client's car
                     cs = CARSTATE.pack(frame, 1, 0, 0, 0)
-                    cs += CARSTATE_ENTRY.pack(0, 0, fx, fy, fz, 0)
+                    cs += CARSTATE_ENTRY.pack(0, 1, 0, 0, 0, 0, fx, fy, fz, 0, 0, 0, 0, 0, 0, 0)
                     send_frame(conn, TAG["carstate"], cs)
                     carstate += 1
         print(f"[mock-host] served {seen} input / {carstate} car-state frame(s); last client car {last}")
@@ -264,7 +264,7 @@ def mode_client(args):
             break
 
     if tag == TAG["welcome"]:
-        pid, maxp, enforce, matched, running, subgame, _r1, _r2, gm, city, tod, wx, seed = WELCOME.unpack_from(payload, 0)
+        pid, maxp, enforce, matched, running, subgame, _r1, _r2, gm, city, tod, wx, seed, hostcar = WELCOME.unpack_from(payload, 0)
         print(f"[mock-client] WELCOME: playerId={pid} max={maxp} enforced={enforce} "
               f"matched={matched} running={running} subgame={subgame} gamemode={gm} city={city} tod={tod} weather={wx} seed={seed}")
         if args.channel:
@@ -302,7 +302,7 @@ def mode_client(args):
                     if t == TAG["carstate"]:
                         _fr, _cnt, _a, _b, _c = CARSTATE.unpack_from(pl, 0)
                         for k in range(_cnt):
-                            pk, _sp, xk, yk, zk, hk = CARSTATE_ENTRY.unpack_from(
+                            pk, _fl, _o0, _o1, _o2, _o3, xk, yk, zk, hk, _a0, _a1, _a2, _v0, _v1, _v2 = CARSTATE_ENTRY.unpack_from(
                                 pl, CARSTATE.size + k * CARSTATE_ENTRY.size)
                             if pk == 0:
                                 hx, hz, hy = xk, zk, yk
@@ -320,7 +320,7 @@ def mode_client(args):
                 for f in range(900):
                     x += dxs
                     cs = CARSTATE.pack(f, 1, 0, 0, 0)
-                    cs += CARSTATE_ENTRY.pack(pid, 0, x, hy, lane, 0)   # pid = us, at the host's ground height
+                    cs += CARSTATE_ENTRY.pack(pid, 1, 0, 0, 0, 0, x, hy, lane, 0, 0, 0, 0, 0, 0, 0)   # pid = us, at the host's ground height
                     send_frame(s, TAG["carstate"], cs)
                     lane += dzs
                     try:

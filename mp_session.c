@@ -20,6 +20,7 @@
 extern int gBootMpLevel;	/* main.c: 1 = the small multiplayer map, 0 = the full city */
 extern int gBootMpArena;	/* main.c: which multiplayer map (0/1) */
 #include "players.h"	/* InitPlayer: a late joiner needs a car the same way the engine makes one */
+#include "handling.h"	/* LongQuaternion2Matrix: rebuild a car's matrix from its body */
 #include "state.h"
 
 #include <string.h>
@@ -317,9 +318,13 @@ void MpSpawnLateJoiners(void)
 		{
 			extern char carNumLookup[4][10];
 			int lvl = (GameLevel >= 0 && GameLevel < 4) ? GameLevel : 0;
+			int cid = (p->car >= 0) ? p->car : carNumLookup[lvl][id % 4];
 
-			PlayerStartInfo[slot]->model = (u_char)carNumLookup[lvl][id % 4];
+			PlayerStartInfo[slot]->model = (u_char)cid;
 			PlayerStartInfo[slot]->palette = 0;
+
+			if (slot >= 0 && slot < 2)
+				wantedCar[slot] = cid;
 
 			if (gMpCtx != NULL)
 				gMpCtx->jer_log(gMpCtx, "[mp] late joiner: player %d -> slot %d model %d (city %d)\n",
@@ -490,6 +495,12 @@ void MpSendHello(void)
 	h.protoVersion = (uint16_t)MP_PROTO_VERSION;
 	h.sdkVersion = (uint16_t)JERICHO_SDK_VERSION;
 	h.gameBuild = MpBuildHash();
+	/* Tell the host which vehicle we want, so it spawns OUR car for us rather than
+	 * guessing: without this each machine substituted its own idea of a player's
+	 * car and the two disagreed (the joiner's car looked like the host's). A slot
+	 * (-mpcar slotN) cannot be resolved yet -- GameLevel is the host's, unknown
+	 * here -- so only a plain car id travels; the rest falls back. */
+	h.car = (uint16_t)((gMp.config.car >= 0 && !gMp.config.carIsSlot) ? gMp.config.car : 0xFFFF);
 	snprintf(h.playerName, sizeof(h.playerName), "%s", gMp.config.playerName);
 	h.modCount = (uint8_t)n;
 
@@ -591,6 +602,11 @@ static void MpSendWelcome(int connIndex, int playerId, int matched)
 	w.timeOfDay = (uint8_t)(gMp.timeOfDay < 0 ? 0 : gMp.timeOfDay);
 	w.weather = (uint8_t)(gMp.weather < 0 ? 0 : gMp.weather);
 	w.seed = gMp.seed;
+	/* OUR vehicle, so the joiner spawns the car we actually drive instead of
+	 * guessing a different one from the level table -- that guess is how the two
+	 * machines ended up disagreeing about the host's car. 0xFF = "I have not
+	 * chosen one", and the joiner falls back to the deterministic pick. */
+	w.hostCar = (uint8_t)((gMp.config.car >= 0 && !gMp.config.carIsSlot) ? gMp.config.car : 0xFF);
 
 	/* The roster must be on the wire BEFORE the welcome. A live joiner launches
 	 * the moment it is welcomed, and if it does not yet know who else is in the
@@ -694,7 +710,13 @@ static void MpHandleHello(int connIndex, const unsigned char* p, int len)
 		MP_PLAYER* pl = MpAddPlayer(id, h.playerName, 0);
 
 		if (pl != NULL)
+		{
 			pl->modsMatched = matched;
+			pl->car = (h.car == 0xFFFF) ? -1 : (int)h.car;
+
+			if (gMpCtx)
+				gMpCtx->jer_log(gMpCtx, "[mp] hello from player %d: vehicle %d\n", id, pl->car);
+		}
 	}
 
 	/* A match that is already running has no car for this player: the engine
@@ -798,6 +820,16 @@ static void MpHandleWelcome(const unsigned char* p, int len)
 	/* NOT MpSetSubGame(w.subGame): glaunch.c multiplies gSubGameNumber by 440 when it derives the mission number, so pushing the host's raw internal value through it lands on a mission number hundreds out of range -- a level that does not exist, and then a car with no data reaching ComputeCarLightingLevels. That is an access violation, and it was mine. */
 
 	MpAddPlayer(0, "Host", 0);
+
+	/* The host told us which car it drives; without it we guessed from the level
+	 * table and showed the host in a different car than the host's own screen. */
+	if (w.hostCar != 0xFF)
+	{
+		MP_PLAYER* host = MpGetPlayer(0);
+
+		if (host != NULL)
+			host->car = (int)w.hostCar;
+	}
 
 	{
 		MP_PLAYER* me = MpAddPlayer(w.playerId, gMp.config.playerName, 1);
@@ -984,13 +1016,23 @@ int MpOnNetSpawn(void* userdata, void* args)
 		{
 			extern char carNumLookup[4][10];
 			int lvl = (GameLevel >= 0 && GameLevel < 4) ? GameLevel : 0;
+			/* the player's OWN car if they told us (HELLO), else the level table */
+			int cid = (p->car >= 0) ? p->car : carNumLookup[lvl][i % 4];
 
-			PlayerStartInfo[slot]->model = (u_char)carNumLookup[lvl][i % 4];
+			PlayerStartInfo[slot]->model = (u_char)cid;
 			PlayerStartInfo[slot]->palette = 0;
 
+			/* Also put it in wantedCar, which the engine re-applies to
+			 * PlayerStartInfo[] as its LAST word before the level runs (main.c).
+			 * Something between here and the spawn loop resets the remote slot's model
+			 * to the level default, and wantedCar is the one channel that survives it.
+			 * wantedCar is 2 entries -- for the local players -- so only slot 1 fits. */
+			if (slot >= 0 && slot < 2)
+				wantedCar[slot] = cid;
+
 			if (gMpCtx != NULL)
-				gMpCtx->jer_log(gMpCtx, "[mp] netspawn: player %d -> slot %d model %d (city %d)\n",
-					i, slot, PlayerStartInfo[slot]->model, lvl);
+				gMpCtx->jer_log(gMpCtx, "[mp] netspawn: player %d -> slot %d model %d (city %d, asked %d)\n",
+					i, slot, PlayerStartInfo[slot]->model, lvl, p->car);
 		}
 
 		PlayerStartInfo[slot]->position.vy = 0;
@@ -1281,10 +1323,21 @@ static void MpHostSendCarState(void)
 
 		memset(&e, 0, sizeof(e));
 		e.playerId = (uint8_t)p->id;
+		e.flags = MP_CARSTATE_HAS_BODY;
 		e.x = cp->hd.where.t[0];
 		e.y = cp->hd.where.t[1];
 		e.z = cp->hd.where.t[2];
 		e.heading = cp->hd.direction;
+		e.orient[0] = (int16_t)cp->st.n.orientation[0];
+		e.orient[1] = (int16_t)cp->st.n.orientation[1];
+		e.orient[2] = (int16_t)cp->st.n.orientation[2];
+		e.orient[3] = (int16_t)cp->st.n.orientation[3];
+		e.vel[0] = cp->st.n.linearVelocity[0];
+		e.vel[1] = cp->st.n.linearVelocity[1];
+		e.vel[2] = cp->st.n.linearVelocity[2];
+		e.angVel[0] = (int16_t)cp->st.n.angularVelocity[0];
+		e.angVel[1] = (int16_t)cp->st.n.angularVelocity[1];
+		e.angVel[2] = (int16_t)cp->st.n.angularVelocity[2];
 
 		memcpy(buf + sizeof(MP_CARSTATE) + k * sizeof(e), &e, sizeof(e));
 		k++;
@@ -1348,6 +1401,42 @@ static void MpHandleCarState(const unsigned char* p, int len)
 		cp->hd.where.t[0] = e.x;
 		cp->hd.where.t[1] = e.y;
 		cp->hd.where.t[2] = e.z;
+
+		/* Write the WHOLE body, not a position and a heading. hd.direction is an
+		 * output the engine re-derives from st.n.orientation, so a snap that set
+		 * only the heading left the car's ATTITUDE unsynced -- the remote car sat
+		 * at whatever roll/pitch its own simulation had drifted to, i.e. driving
+		 * around upside down on the other machine. Rebuild the handling matrix with
+		 * the engine's own quaternion helper rather than poking hd.where. */
+		if (e.flags & MP_CARSTATE_HAS_BODY)
+		{
+			LONGQUATERNION q;
+			MATRIX m;
+
+			q[0] = e.orient[0];
+			q[1] = e.orient[1];
+			q[2] = e.orient[2];
+			q[3] = e.orient[3];
+
+			cp->st.n.orientation[0] = q[0];
+			cp->st.n.orientation[1] = q[1];
+			cp->st.n.orientation[2] = q[2];
+			cp->st.n.orientation[3] = q[3];
+
+			cp->st.n.linearVelocity[0] = e.vel[0];
+			cp->st.n.linearVelocity[1] = e.vel[1];
+			cp->st.n.linearVelocity[2] = e.vel[2];
+			cp->st.n.angularVelocity[0] = e.angVel[0];
+			cp->st.n.angularVelocity[1] = e.angVel[1];
+			cp->st.n.angularVelocity[2] = e.angVel[2];
+
+			LongQuaternion2Matrix(&q, &m);
+			m.t[0] = e.x;
+			m.t[1] = e.y;
+			m.t[2] = e.z;
+			memcpy(&cp->hd.where, &m, sizeof(m));
+		}
+
 		cp->hd.direction = e.heading;
 
 		/* Client-side gather: the first time we hear a peer's car, drop our
@@ -1395,12 +1484,21 @@ static void MpSendCarState(void)
 
 	memset(&e, 0, sizeof(e));
 	e.playerId = (uint8_t)me->id;
+	e.flags = MP_CARSTATE_HAS_BODY;
 	e.x = cp->hd.where.t[0];
 	e.y = cp->hd.where.t[1];
 	e.z = cp->hd.where.t[2];
 	e.heading = cp->hd.direction;
-
-	memcpy(buf, &h, sizeof(h));
+	e.orient[0] = (int16_t)cp->st.n.orientation[0];
+	e.orient[1] = (int16_t)cp->st.n.orientation[1];
+	e.orient[2] = (int16_t)cp->st.n.orientation[2];
+	e.orient[3] = (int16_t)cp->st.n.orientation[3];
+	e.vel[0] = cp->st.n.linearVelocity[0];
+	e.vel[1] = cp->st.n.linearVelocity[1];
+	e.vel[2] = cp->st.n.linearVelocity[2];
+	e.angVel[0] = (int16_t)cp->st.n.angularVelocity[0];
+	e.angVel[1] = (int16_t)cp->st.n.angularVelocity[1];
+	e.angVel[2] = (int16_t)cp->st.n.angularVelocity[2];
 	memcpy(buf + sizeof(h), &e, sizeof(e));
 
 	MpSendToHost(MP_TAG_CARSTATE, 0, buf, (int)(sizeof(h) + sizeof(e)));

@@ -927,8 +927,11 @@ static int MpOnGameStart(void* userdata, void* args)
 			continue;
 
 		cp = &car_data[p->carId];
-		gMpCtx->jer_log(gMpCtx, "[mp] car: player %d slot %d controlType=%d model=%d pos=%d,%d,%d\n",
+		gMpCtx->jer_log(gMpCtx, "[mp] car: player %d slot %d controlType=%d apmodel=%d carmodel=%d want=%d loaded=%d pos=%d,%d,%d\n",
 			p->id, p->carId, cp->controlType, cp->ap.model,
+			(cp->ap.model >= 0 && cp->ap.model < MAX_CAR_RESIDENT_MODELS) ? residentCarModels[cp->ap.model] : -1,
+			(PlayerStartInfo[p->carId] != NULL) ? PlayerStartInfo[p->carId]->model : -9,
+			(cp->ap.model >= 0 && cp->ap.model < MAX_CAR_RESIDENT_MODELS && gCarCleanModelPtr[cp->ap.model] != NULL) ? 1 : 0,
 			cp->hd.where.t[0], cp->hd.where.t[1], cp->hd.where.t[2]);
 	}
 

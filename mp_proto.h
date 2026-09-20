@@ -231,7 +231,7 @@ typedef struct MP_HELLO
 	uint16_t protoVersion;
 	uint16_t sdkVersion;
 	uint16_t gameBuild;	/* hash of JERICHO_BUILD_VERSION */
-	uint16_t spare;
+	uint16_t car;		/* this machine's vehicle (car id), 0xFFFF = unset */
 	char     playerName[MP_NAME_MAX];
 	uint8_t  modCount;
 	uint8_t  reserved[3];
@@ -253,6 +253,7 @@ typedef struct MP_WELCOME
 	uint8_t  timeOfDay;
 	uint8_t  weather;
 	uint32_t seed;
+	uint8_t  hostCar;	/* the host's own vehicle (car id), 0xFF = unset */
 } MP_WELCOME;
 
 /* 'JPRJ' -- host -> client, refused. */
@@ -310,14 +311,6 @@ typedef struct MP_INPUT
 /* ------------------------------------------------------------------ */
 /* State resync (fallback when lockstep diverges)                      */
 /* ------------------------------------------------------------------ */
-typedef struct MP_CARSTATE_ENTRY
-{
-	uint8_t  playerId;
-	uint8_t  spare;
-	int32_t  x, y, z;	/* world units */
-	int32_t  heading;	/* 0..4095 */
-} MP_CARSTATE_ENTRY;
-
 /* 'JPCS' -- host -> client periodic snapshot. Header + count rows. */
 typedef struct MP_CARSTATE
 {
@@ -325,6 +318,24 @@ typedef struct MP_CARSTATE
 	uint8_t  count;
 	uint8_t  reserved[3];
 } MP_CARSTATE;
+
+/* A snapshot row carries the car's WHOLE rigid body, not just a position and a
+ * heading: hd.direction is an OUTPUT the engine re-derives from the orientation,
+ * so a snap that writes only that leaves the receiver's car at the wrong ATTITUDE
+ * -- which is how a remote car ends up driving around upside down. Orientation
+ * and velocities come straight from st.n (the handling state). */
+#define MP_CARSTATE_HAS_BODY	1
+
+typedef struct MP_CARSTATE_ENTRY
+{
+	uint8_t  playerId;
+	uint8_t  flags;		/* MP_CARSTATE_HAS_BODY */
+	int16_t  orient[4];	/* st.n.orientation */
+	int32_t  x, y, z;	/* world units */
+	int32_t  heading;	/* hd.direction */
+	int16_t  angVel[3];	/* st.n.angularVelocity */
+	int32_t  vel[3];	/* st.n.linearVelocity */
+} MP_CARSTATE_ENTRY;
 
 /* ------------------------------------------------------------------ */
 /* Addon network bridge ('JPCH')                                       */
@@ -367,12 +378,12 @@ static_assert(sizeof(MP_ENVELOPE) == 12, "MP_ENVELOPE layout");
 static_assert(sizeof(MP_BEACON) == 50, "MP_BEACON layout");
 static_assert(sizeof(MP_MOD_INFO) == 42, "MP_MOD_INFO layout");
 static_assert(sizeof(MP_HELLO) == 44, "MP_HELLO layout");
-static_assert(sizeof(MP_WELCOME) == 16, "MP_WELCOME layout");
+static_assert(sizeof(MP_WELCOME) == 17, "MP_WELCOME layout");
 static_assert(sizeof(MP_REJECT) == 68, "MP_REJECT layout");
 static_assert(sizeof(MP_SESSION) == 12, "MP_SESSION layout");
 static_assert(sizeof(MP_PLAYER_INPUT) == 4, "MP_PLAYER_INPUT layout");
 static_assert(sizeof(MP_INPUT) == 8, "MP_INPUT layout");
-static_assert(sizeof(MP_CARSTATE_ENTRY) == 18, "MP_CARSTATE_ENTRY layout");
+static_assert(sizeof(MP_CARSTATE_ENTRY) == 44, "MP_CARSTATE_ENTRY layout");
 static_assert(sizeof(MP_CARSTATE) == 8, "MP_CARSTATE layout");
 static_assert(sizeof(MP_CHANNEL) == 26, "MP_CHANNEL layout");
 #endif

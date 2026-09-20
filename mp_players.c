@@ -104,6 +104,7 @@ MP_PLAYER* MpAddPlayer(int id, const char* name, int isLocal)
 				p->active = 1;
 				p->carId = -1;
 				p->padId = -1;
+				p->car = -1;
 				p->id = id;
 				gMp.playerCount++;
 				break;

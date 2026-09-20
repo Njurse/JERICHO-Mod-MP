@@ -92,7 +92,7 @@ def serve(conn, addr, args):
     with LOCK:
         pid = free_id()
         if pid is None:
-            welcome = m.WELCOME.pack(0, MAX_PLAYERS, 0, 0, 1, 0, 0, 0, 0, args.city, 1, 0, 0)
+            welcome = m.WELCOME.pack(0, MAX_PLAYERS, 0, 0, 1, 0, 0, 0, 0, args.city, 1, 0, 0, 0xFF)
             try:
                 m.send_frame(conn, m.TAG["welcome"], welcome)
                 m.send_frame(conn, m.TAG["reject"], m.REJECT.pack(1, 0, 0, 0, b"server is full"))
@@ -105,7 +105,7 @@ def serve(conn, addr, args):
 
     log(f"player {pid} '{name}' joined from {who} (mods={modc})")
 
-    welcome = m.WELCOME.pack(pid, MAX_PLAYERS, 0, 1, 1, 0, 0, 0, 0, args.city, 1, 0, int(time.time()) & 0xFFFFFFFF)
+    welcome = m.WELCOME.pack(pid, MAX_PLAYERS, 0, 1, 1, 0, 0, 0, 0, args.city, 1, 0, int(time.time()) & 0xFFFFFFFF, 0xFF)
     sess = m.SESSION.pack(0, args.city, 1, 0, 1234, max(2, len(CLIENTS) + 1), 1, 0)
     try:
         m.send_frame(conn, m.TAG["welcome"], welcome)
