@@ -19,6 +19,8 @@
 #include "jer_config.h"
 #include "jer_frontend.h"
 #include "jer_pause_menu.h"
+#include "jer_ped_palette.h"	/* a player's own Tanner in their own colour */
+#include "jer_npc.h"		/* JerNpc: the stand-in we drew for a remote player */
 
 #include "driver2.h"
 #include "main.h"
@@ -979,14 +981,146 @@ static int MpMenuWriteDiag(void* userdata, int direction)
 	return JER_PAUSE_QUIT_NONE;
 }
 
-static const JER_PAUSE_MENU_ITEM mpPauseItems[] =
+/* ------------------------------------------------------------------ */
+/* A player's character, in that player's colour                       */
+/*                                                                    */
+/* The engine recolours the CLUT rows for ONE ped at a time, and its   */
+/* selection PERSISTS until it is changed -- so this has to speak for   */
+/* every ped it is asked about, including saying "stock colours" for   */
+/* one that is not ours. Getting that wrong is how a mod ends up       */
+/* painting a civilian.                                                */
+/*                                                                    */
+/* `on` is off by default: off means the character keeps exactly the    */
+/* colours the game gave it, which is also what a ped we do not own     */
+/* gets.                                                               */
+static int MpOnPedDraw(void* userdata, void* args)
+{
+	JER_ARGS_PED_DRAW* a = (JER_ARGS_PED_DRAW*)args;
+	int i, on = 0, r = 0, g = 0, b = 0;
+
+	(void)userdata;
+
+	if (a == NULL)
+		return JER_RESULT_CONTINUE;
+
+	/* No ped at all: clear, because the last selection sticks. */
+	if (a->ped == NULL)
+	{
+		jer_ped_palette_select(-1);
+		return JER_RESULT_CONTINUE;
+	}
+
+	if ((void*)a->ped == MpLocalPedPtr())
+	{
+		/* ours: the config is the truth, not the network table */
+		on = gMp.config.colorOn;
+		r = gMp.config.colorR;
+		g = gMp.config.colorG;
+		b = gMp.config.colorB;
+	}
+	else
+	{
+		for (i = 0; i < MP_MAX_PLAYERS; i++)
+		{
+			MP_PLAYER* p = &gMp.players[i];
+
+			if (!p->active || p->ped == NULL)
+				continue;
+
+			if ((void*)((JerNpc*)p->ped)->ped == a->ped)
+			{
+				on = p->colorOn;
+				r = p->colorR;
+				g = p->colorG;
+				b = p->colorB;
+				break;
+			}
+		}
+	}
+
+	if (!on)
+	{
+		jer_ped_palette_select(-1);
+		return JER_RESULT_CONTINUE;
+	}
+
+	jer_ped_palette_select(jer_ped_palette_team(r, g, b, MP_COLOR_STRENGTH));
+
+	return JER_RESULT_CONTINUE;
+}
+
+/* ------------------------------------------------------------------ */
+/* Player options: the colour editor                                   */
+/*                                                                    */
+/* One toggle and three sliders. The toggle comes first because it is  */
+/* the important one: OFF (the default) keeps the game's own colours,  */
+/* and a player who never touches any of this sees nothing change.     */
+#define MP_COLOR_STEP 16
+
+static void MpColorLabelOn(void* ud, char* out, int max)
+{
+	(void)ud;
+	snprintf(out, max, "Custom colour: %s", gMp.config.colorOn ? "ON" : "OFF (original)");
+}
+
+static int MpColorToggleOn(void* ud, int dir)
+{
+	(void)ud;
+	(void)dir;
+
+	gMp.config.colorOn = gMp.config.colorOn ? 0 : 1;
+	MpConfigSave();
+
+	return 0;
+}
+
+static void MpColorLabelR(void* ud, char* out, int max)
+{
+	(void)ud;
+	snprintf(out, max, "Red: %d", gMp.config.colorR);
+}
+
+static void MpColorLabelG(void* ud, char* out, int max)
+{
+	(void)ud;
+	snprintf(out, max, "Green: %d", gMp.config.colorG);
+}
+
+static void MpColorLabelB(void* ud, char* out, int max)
+{
+	(void)ud;
+	snprintf(out, max, "Blue: %d", gMp.config.colorB);
+}
+
+static int MpColorAdjust(int* which, int dir)
+{
+	*which += dir * MP_COLOR_STEP;
+
+	if (*which < 0)
+		*which = 0;
+	if (*which > 255)
+		*which = 255;
+
+	MpConfigSave();
+
+	return 0;
+}
+
+static int MpColorAdjustR(void* ud, int dir) { (void)ud; return MpColorAdjust(&gMp.config.colorR, dir); }
+static int MpColorAdjustG(void* ud, int dir) { (void)ud; return MpColorAdjust(&gMp.config.colorG, dir); }
+static int MpColorAdjustB(void* ud, int dir) { (void)ud; return MpColorAdjust(&gMp.config.colorB, dir); }
+
+static const JER_PAUSE_MENU_ITEM mpColorItems[] =
 {
 	/* label, get_label, on_activate, userdata, submenu, adjust */
-	{ "Write diagnostics now", NULL, MpMenuWriteDiag, NULL, NULL, 0 },
+	{ NULL, MpColorLabelOn, MpColorToggleOn, NULL, NULL, 0 },
+	{ NULL, MpColorLabelR, NULL, MpColorAdjustR, NULL, 1 },
+	{ NULL, MpColorLabelG, NULL, MpColorAdjustG, NULL, 1 },
+	{ NULL, MpColorLabelB, NULL, MpColorAdjustB, NULL, 1 },
 };
 
-static const JER_PAUSE_MENU mpPauseMenu =
-{ "Multiplayer", mpPauseItems, 1 };
+static const JER_PAUSE_MENU mpColorMenu =
+{ "My colour", mpColorItems, 4 };
 
 static int MpOnPauseMenu(void* userdata, void* args)
 {
@@ -1233,6 +1367,16 @@ static int MpOnLevelLaunch(void* userdata, void* args)
 	return JER_RESULT_CONTINUE;
 }
 
+static const JER_PAUSE_MENU_ITEM mpPauseItems[] =
+{
+	/* label, get_label, on_activate, userdata, submenu, adjust */
+	{ "My colour", NULL, NULL, NULL, &mpColorMenu, 0 },
+	{ "Write diagnostics now", NULL, MpMenuWriteDiag, NULL, NULL, 0 },
+};
+
+static const JER_PAUSE_MENU mpPauseMenu =
+{ "Multiplayer", mpPauseItems, 2 };
+
 JER_MODULE_ENTRY(jer_module_mp_entry)(JERICHO_CONTEXT* ctx)
 {
 	gMpCtx = ctx;
@@ -1277,6 +1421,10 @@ JER_MODULE_ENTRY(jer_module_mp_entry)(JERICHO_CONTEXT* ctx)
 	ctx->jer_register_hook(ctx, JER_EVENT_DRAW_MAP, MpOnDrawMap, NULL, 0);
 	ctx->jer_register_hook(ctx, JER_EVENT_FRONTEND_IDLE, MpOnFrontendIdle, NULL, 0);
 	ctx->jer_register_hook(ctx, JER_EVENT_PAUSE_MENU, MpOnPauseMenu, NULL, 0);
+
+	/* A player's own character, in their own colour. Priority 20 puts us after the
+	 * other consumers, who may want the ped for themselves. */
+	ctx->jer_register_hook(ctx, JER_EVENT_PED_DRAW, MpOnPedDraw, NULL, 20);
 
 	/* Our own page in the pause screen ("Modules" -> "Multiplayer"). NOTE: the
 	 * declared item_count must equal the array length -- the engine builds the

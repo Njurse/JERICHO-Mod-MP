@@ -1316,6 +1316,7 @@ static void MpSendOwnCarState(void);
 static void MpSendOwnPedState(void);
 static void MpDriveRemotePed(MP_PLAYER* p);
 static void MpKeepOurCarsFromTrafficAi(void);
+static void MpSendColors(int whole);
 static void MpTestCarChangeTick(void);
 static void MpTestLeaveTick(void);
 static void MpTestOnFootTick(void);
@@ -1681,6 +1682,27 @@ void MpLockstepFrame(void)
 	 * player joining a match already in progress learns the roster */
 	if ((gMp.frame % 120) == 0)
 		MpHostSendRoster();
+
+	/* the same cadence, and for the same reason: a machine that joins late or
+	 * misses one still ends up with everybody's colour */
+	if (MpIsHost() && (gMp.frame % 120) == 0)
+		MpSendColors(1);
+
+	{
+		/* our own colour, whenever it stops matching what we last sent */
+		static int lastOn = -1, lastR = -1, lastG = -1, lastB = -1;
+
+		if (gMp.config.colorOn != lastOn || gMp.config.colorR != lastR ||
+		    gMp.config.colorG != lastG || gMp.config.colorB != lastB)
+		{
+			lastOn = gMp.config.colorOn;
+			lastR = gMp.config.colorR;
+			lastG = gMp.config.colorG;
+			lastB = gMp.config.colorB;
+
+			MpSendColors(0);
+		}
+	}
 
 	/* OWNER-AUTHORITATIVE: every machine sends the ONE car it owns, every frame,
 	 * and everyone else adopts that state. The old model had each machine simulate
@@ -2382,6 +2404,137 @@ static void MpKeepOurCarsFromTrafficAi(void)
 	}
 }
 
+/* ------------------------------------------------------------------ */
+/* COLOUR                                                              */
+/*                                                                    */
+/* Only a player may say what their character looks like, so a colour  */
+/* is sent by its OWNER and by nobody else. The one exception is the   */
+/* host fanning out a whole table when somebody joins, or on a slow    */
+/* timer, so a machine that missed one still ends up right.            */
+/*                                                                    */
+/* `on` is the feature's whole switch, and it DEFAULTS OFF: with it off */
+/* a character keeps the colours the game gave it. That default matters */
+/* -- it means a match looks stock until someone asks for otherwise.    */
+
+/* The pedestrian the ENGINE is driving for our own player, as a raw pointer,
+ * for the draw hook (which cannot include pedest.h). NULL in a car. */
+void* MpLocalPedPtr(void)
+{
+	return (void*)MpLocalPed();
+}
+
+static int MpColorLen(int count)
+{
+	return (int)(sizeof(MP_COLOR) + (size_t)count * sizeof(MP_COLOR_ENTRY));
+}
+
+/* whole = 1: the host's table of everyone. whole = 0: just us. */
+static void MpSendColors(int whole)
+{
+	unsigned char buf[sizeof(MP_COLOR) + MP_MAX_PLAYERS * sizeof(MP_COLOR_ENTRY)];
+	MP_COLOR h;
+	int i, n = 0;
+
+	memset(&h, 0, sizeof(h));
+	h.frame = gMp.frame;
+
+	if (whole)
+	{
+		for (i = 0; i < MP_MAX_PLAYERS; i++)
+		{
+			MP_PLAYER* p = &gMp.players[i];
+			MP_COLOR_ENTRY e;
+
+			if (!p->active)
+				continue;
+
+			memset(&e, 0, sizeof(e));
+			e.playerId = (uint8_t)p->id;
+			e.on = (uint8_t)(p->colorOn ? 1 : 0);
+			e.r = (uint8_t)p->colorR;
+			e.g = (uint8_t)p->colorG;
+			e.b = (uint8_t)p->colorB;
+
+			memcpy(buf + sizeof(h) + n * sizeof(e), &e, sizeof(e));
+			n++;
+		}
+	}
+	else
+	{
+		MP_PLAYER* me = MpLocalPlayer();
+		MP_COLOR_ENTRY e;
+
+		if (me == NULL)
+			return;
+
+		memset(&e, 0, sizeof(e));
+		e.playerId = (uint8_t)me->id;
+		e.on = (uint8_t)(gMp.config.colorOn ? 1 : 0);
+		e.r = (uint8_t)gMp.config.colorR;
+		e.g = (uint8_t)gMp.config.colorG;
+		e.b = (uint8_t)gMp.config.colorB;
+
+		memcpy(buf + sizeof(h), &e, sizeof(e));
+		n = 1;
+	}
+
+	if (n <= 0)
+		return;
+
+	h.count = (uint8_t)n;
+	memcpy(buf, &h, sizeof(h));
+
+	if (MpIsHost())
+		MpHostBroadcast(MP_TAG_COLOR, 0, buf, MpColorLen(n));
+	else
+		MpSendToHost(MP_TAG_COLOR, 0, buf, MpColorLen(n));
+}
+
+static void MpHandleColor(int connIndex, const unsigned char* p, int len)
+{
+	MP_COLOR h;
+	int i, n;
+
+	(void)connIndex;
+
+	if (len < (int)sizeof(MP_COLOR))
+		return;
+
+	memcpy(&h, p, sizeof(h));
+
+	n = h.count;
+
+	if (n > MP_MAX_PLAYERS)
+		n = MP_MAX_PLAYERS;
+
+	if (len < MpColorLen(n))
+		return;
+
+	for (i = 0; i < n; i++)
+	{
+		MP_COLOR_ENTRY e;
+		MP_PLAYER* pl;
+
+		memcpy(&e, p + sizeof(MP_COLOR) + i * sizeof(e), sizeof(e));
+
+		pl = MpGetPlayer(e.playerId);
+
+		if (pl == NULL)
+			continue;
+
+		/* A colour is applied to its OWNER's character. The local player's own
+		 * colour lives in the config (that is what the menu edits); for everyone
+		 * else it is this table. */
+		if (!pl->isLocal)
+		{
+			pl->colorOn = e.on ? 1 : 0;
+			pl->colorR = e.r;
+			pl->colorG = e.g;
+			pl->colorB = e.b;
+		}
+	}
+}
+
 static void MpSendOwnCarState(void)
 {
 	unsigned char buf[sizeof(MP_CARSTATE) + sizeof(MP_CARSTATE_ENTRY)];
@@ -2836,6 +2989,12 @@ void MpHandleMessage(int connIndex, const char* tag, const unsigned char* payloa
 	if (memcmp(tag, MP_TAG_PED, 4) == 0)
 	{
 		MpHandlePedState(connIndex, payload, len);
+		return;
+	}
+
+	if (memcmp(tag, MP_TAG_COLOR, 4) == 0)
+	{
+		MpHandleColor(connIndex, payload, len);
 		return;
 	}
 

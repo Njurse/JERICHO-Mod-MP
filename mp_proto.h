@@ -38,7 +38,7 @@
 extern "C" {
 #endif
 
-#define MP_PROTO_VERSION	4	/* 4: on-foot pose (MP_TAG_PED) */
+#define MP_PROTO_VERSION	5	/* 5: per-player colour (MP_TAG_COLOR) */
 
 /* Default UDP+TCP port. 1318 is IANA-unassigned (the neighbour 1319 is
  * amx-icsp), so it is a safe, non-reserved choice for a game. Configurable
@@ -88,6 +88,7 @@ extern "C" {
 #define MP_TAG_ROSTER	"JPRS"	/* host -> all: who is in the match */
 #define MP_TAG_HIT	"JPHI"	/* either side: "my car bumped yours, you push yourself" */
 #define MP_TAG_PED	"JPPD"	/* owner -> peers: an ON-FOOT player's pose */
+#define MP_TAG_COLOR	"JPCL"	/* either side: a player's chosen colour */
 
 /* How far apart the player cars stand at the meeting point: close enough that
  * everybody is on one screen, far enough not to spawn inside each other. */
@@ -358,6 +359,29 @@ typedef struct MP_PEDSTATE
 	uint8_t  count;
 	uint8_t  reserved[3];
 } MP_PEDSTATE;	/* header only, like MP_CARSTATE: the entries follow */
+
+/* A player's chosen colour.
+ *
+ * `on` is the whole feature: with it 0 the player keeps the colours the game gave
+ * their character, which is the DEFAULT and stays the default. r/g/b are 0..255.
+ * Sent by the owner (only the owner may say what they look like) and by the host
+ * as a whole table when somebody joins, so a late joiner learns everyone. */
+typedef struct MP_COLOR_ENTRY
+{
+	uint8_t playerId;
+	uint8_t on;
+	uint8_t r, g, b;
+	uint8_t spare[3];
+} MP_COLOR_ENTRY;		/* 8 bytes */
+
+static_assert(sizeof(MP_COLOR_ENTRY) == 8, "MP_COLOR_ENTRY layout");
+
+typedef struct MP_COLOR
+{
+	uint32_t frame;
+	uint8_t  count;
+	uint8_t  reserved[3];
+} MP_COLOR;	/* header only: the entries follow */
 
 /* A snapshot row carries the car's WHOLE rigid body, not just a position and a
  * heading: hd.direction is an OUTPUT the engine re-derives from the orientation,

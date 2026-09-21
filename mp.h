@@ -40,6 +40,13 @@ typedef struct MP_CONFIG
 	int  car;			/* this machine's vehicle for the match, -1 = level default */
 	int  carIsSlot;			/* 1 = `car` is a 1..10 frontend slot, resolved per city */
 	int  firstNameSet;		/* 0 until the player confirms a name once */
+
+	/* MY COLOUR. Off by default, and the default is the point: with it off a
+	 * player's character looks exactly as the game made it, and nothing about
+	 * their appearance is being invented by us. Turned on, it tints their own
+	 * Tanner, and every other machine sees that colour too. */
+	int  colorOn;			/* 0 = keep the original colours (default) */
+	int  colorR, colorG, colorB;	/* 0..255 */
 } MP_CONFIG;
 
 /* ------------------------------------------------------------------ */
@@ -74,6 +81,11 @@ typedef struct MP_PLAYER
 	int   pedHeading;
 	int   pedSpeed;
 	unsigned long pedLastMs;	/* when we last heard a pose for it */
+
+	/* That player's chosen colour, as THEIR machine reported it. Off means their
+	 * character keeps the colours the game gave it. */
+	int   colorOn;
+	int   colorR, colorG, colorB;
 } MP_PLAYER;
 
 /* ------------------------------------------------------------------ */
@@ -161,7 +173,12 @@ int  MpNetStart(void);			/* platform socket init; 1 = ok */
 void MpNetShutdown(void);		/* close every socket (SHUTDOWN hook) */
 void MpNetPoll(int waitMs);		/* service sockets (PRE_SIM/FRAME) */
 unsigned long MpNowMs(void);		/* monotonic milliseconds */
-void MpSuppressCrashDialogs(void);	/* no modal crash box: the dump is the report */
+void MpSuppressCrashDialogs(void);
+void* MpLocalPedPtr(void);		/* our own player's pedestrian, or NULL in a car */
+
+/* How hard a custom colour is pushed onto a character's palette rows. Strong
+ * enough to be unmistakable, short of repainting the whole model flat. */
+#define MP_COLOR_STRENGTH 160	/* no modal crash box: the dump is the report */
 
 int  MpHostBegin(void);			/* open listener + start beaconing */
 void MpHostEnd(void);

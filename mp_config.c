@@ -4,6 +4,9 @@
  * grown into a grab-bag of everything the module owns. */
 #include "jericho.h"
 #include "jer_config.h"
+
+/* A stored colour must survive being hand-edited: 0..255 or it is not a colour. */
+#define MP_CLAMP_CONFIG_COLOR(v) do { if ((v) < 0) (v) = 0; if ((v) > 255) (v) = 255; } while (0)
 #include "mp.h"
 
 #include <string.h>
@@ -53,6 +56,17 @@ void MpConfigLoad(void)
 		gMp.config.modCheck = MP_MODCHECK_OFF;
 
 	gMp.config.strictVersion = jer_config_get_int("mp", "strict_version", 0);
+
+	/* COLOUR. Off by default, and that default is deliberate: see MP_CONFIG. */
+	gMp.config.colorOn = jer_config_get_int("mp", "custom_color", 0);
+	gMp.config.colorR = jer_config_get_int("mp", "color_r", 255);
+	gMp.config.colorG = jer_config_get_int("mp", "color_g", 255);
+	gMp.config.colorB = jer_config_get_int("mp", "color_b", 255);
+
+	gMp.config.colorOn = gMp.config.colorOn ? 1 : 0;
+	MP_CLAMP_CONFIG_COLOR(gMp.config.colorR);
+	MP_CLAMP_CONFIG_COLOR(gMp.config.colorG);
+	MP_CLAMP_CONFIG_COLOR(gMp.config.colorB);
 	if (gMp.config.strictVersion < 0 || gMp.config.strictVersion > 1)
 		gMp.config.strictVersion = 0;
 
@@ -84,6 +98,11 @@ void MpConfigSave(void)
 	jer_config_set_int("mp", "mod_check", gMp.config.modCheck);
 	jer_config_set_int("mp", "car", gMp.config.car);
 	jer_config_set_int("mp", "strict_version", gMp.config.strictVersion);
+
+	jer_config_set_int("mp", "custom_color", gMp.config.colorOn);
+	jer_config_set_int("mp", "color_r", gMp.config.colorR);
+	jer_config_set_int("mp", "color_g", gMp.config.colorG);
+	jer_config_set_int("mp", "color_b", gMp.config.colorB);
 	jer_config_set_str("mp", "player_name", gMp.config.playerName);
 	jer_config_set_str("mp", "host_name", gMp.config.hostName);
 }
