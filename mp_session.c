@@ -31,6 +31,22 @@ extern int gWantNight;		/* glaunch.c: 1 = the night take-a-ride level variant */
 #include <stdio.h>
 #include <math.h>	/* sqrt: the deviation readout below */
 
+/* WHICH CAR SLOTS ARE OURS.
+ *
+ * Sticky: once the module has put a player in a car, that slot is a module car for
+ * the rest of the session, even after the player gets out of it. It matters
+ * because a car you have left is still in the world with nobody driving it, and
+ * the engine's traffic AI treats such a car as fair game.
+ *
+ * Cleared when the session ends: a stale mark would make us take a STOCK traffic
+ * car for one of ours on the next match, which would break the traffic instead. */
+static unsigned char gMpOurCars[MAX_CARS];
+
+/* A pad nobody writes, for cars that must sit still. Pad 1 is free because a match
+ * keeps NumPlayers at 1 -- each machine drives the whole screen. Not -1 and not
+ * NULL: the engine indexes Pads[] with it and some sites do not check. */
+static char gMpQuietPad = 1;
+
 /* defined below, needed by the launch path above them */
 static int MpAssignedCarModel(int playerId);
 
@@ -198,6 +214,11 @@ void MpLeaveSession(void)
 	gMp.role = MP_ROLE_NONE;
 	gMp.connected = 0;
 	gMp.running = 0;
+
+	/* The cars stay in the world, but they stop being ours the moment the session
+	 * does: a stale mark would make the next match take a STOCK traffic car for
+	 * one of ours and break the traffic instead of protecting it. */
+	memset(gMpOurCars, 0, sizeof(gMpOurCars));
 }
 
 /* Launch the agreed level locally: set the pending globals from the session
@@ -1294,9 +1315,11 @@ int MpInputForPlayer(int id)
 static void MpSendOwnCarState(void);
 static void MpSendOwnPedState(void);
 static void MpDriveRemotePed(MP_PLAYER* p);
+static void MpKeepOurCarsFromTrafficAi(void);
 static void MpTestCarChangeTick(void);
 static void MpTestLeaveTick(void);
 static void MpTestOnFootTick(void);
+
 
 /* ------------------------------------------------------------------ */
 /* Input replication                                                   */
@@ -1678,6 +1701,10 @@ void MpLockstepFrame(void)
 			MpDriveRemotePed(&gMp.players[pi]);
 	}
 
+	/* ...and make sure no car of ours has been handed to the traffic AI behind our
+	 * back, which it cannot survive (see the function). */
+	MpKeepOurCarsFromTrafficAi();
+
 	/* owner-authoritative contacts: push ourselves, tell the peer's owner */
 	MpHitFrame();
 
@@ -2029,8 +2056,42 @@ static void MpFollowLocalCar(void)
 		/* ON FOOT. The car we left is the ENGINE's to keep: it has already been
 		 * handed back to CIV_AI and stays in the world where it was. We only
 		 * report "no car" (model 0xFF) so the peers let theirs go too. */
+		CAR_DATA* left = &car_data[me->carId];
+
+		/* ...except it must NOT be handed to CIV_AI.
+		 *
+		 * players.c's ChangeCarPlayerToPed sets controlType = CONTROL_TYPE_CIV_AI
+		 * on the car it takes the player out of. Our cars come from InitPlayer and
+		 * have no AI data, so the very next civ-AI pass -- main.c's PingInCivCar,
+		 * which scans for a slot whose controlType is free -- walks into whatever
+		 * is in those fields. An access violation on BOTH machines, caught from a
+		 * dump: EXCEPTION_ACCESS_VIOLATION at rva 0xFFA5 -> PingInCivCar+0x105.
+		 *
+		 * Take the car straight back. CONTROL_TYPE_PLAYER with playerCarId = -1 is
+		 * exactly what an unowned remote car already is: nothing drives it, it sits
+		 * where it was left, and the civ AI ignores it because it is not a free
+		 * slot. This runs from PRE_SIM, which is BEFORE that civ-AI pass in the same
+		 * frame, so the car never reaches the AI at all. */
+		left->controlType = CONTROL_TYPE_PLAYER;
+		left->wheel_angle = 0;
+
+		/* ...and take its PAD away, or it keeps driving.
+		 *
+		 * CONTROL_TYPE_PLAYER means "driven from the pad this car points at", and
+		 * that pad is still the one the player's own hands are on. So a car you
+		 * stepped out of carried on driving around under your inputs -- reported
+		 * exactly that way: "each client's car still drives around with their
+		 * inputs after they exit the vehicle".
+		 *
+		 * Point it at pad 1 instead. In a match NumPlayers stays 1 (each machine
+		 * drives the whole screen), so pad 1 is never written and the car coasts to
+		 * a stop and stays where it was left. It cannot be NULL: some engine sites
+		 * dereference ai.padid without checking. */
+		left->ai.padid = &gMpQuietPad;
+
 		if (gMpCtx != NULL)
-			gMpCtx->jer_log(gMpCtx, "[mp] car change: on foot (left slot %d)\n",
+			gMpCtx->jer_log(gMpCtx,
+				"[mp] car change: on foot (left slot %d, kept from the traffic AI)\n",
 				me->carId);
 
 		me->carId = -1;
@@ -2255,6 +2316,69 @@ static void MpDriveRemotePed(MP_PLAYER* p)
 	{
 		jer_npc_stop(n);
 		jer_npc_face(n, p->pedHeading);
+	}
+}
+
+/* WHICH CAR SLOTS ARE OURS.
+ *
+ * Sticky: once the module has put a player in a car, that slot is a module car for
+ * the rest of the session, even after the player gets out of it. That matters
+ * because the car is then still in the world with nobody driving it, and the
+ * engine's traffic AI treats such a car as fair game (see the top of the file). */
+
+/* OUR CARS ARE NEVER THE TRAFFIC AI'S -- and never a free slot either.
+ *
+ * Our cars are built by InitPlayer, so they have no traffic-AI data. The civ-AI
+ * pass (main.c: PingInCivCar, which scans for a slot whose controlType is free)
+ * will take one and then walk into those fields: an access violation at
+ * PingInCivCar+0x105, on both machines, part-way into an ordinary match with
+ * nobody asking for anything.
+ *
+ * Two ways a car of ours stops being ours in the AI's eyes: players.c hands it to
+ * CONTROL_TYPE_CIV_AI when a player gets out, and a car can end up
+ * CONTROL_TYPE_NONE (abandoned, wrecked, a mission reset). Both make it available,
+ * so both are taken back. CONTROL_TYPE_PLAYER with nobody driving it is exactly
+ * what an unowned remote car already is: it sits where it was left, and the AI
+ * ignores it.
+ *
+ * Every frame, in PRE_SIM -- which is BEFORE the civ-AI pass in the same frame, so
+ * a car handed over this frame never reaches the AI at all. */
+static void MpKeepOurCarsFromTrafficAi(void)
+{
+	int i;
+
+	/* First, mark what is ours right now (and keep the mark: see gMpOurCars). */
+	for (i = 0; i < MP_MAX_PLAYERS; i++)
+	{
+		MP_PLAYER* p = &gMp.players[i];
+		int slot = p->carId;
+
+		if (p->active && slot >= 0 && slot < MAX_CARS)
+			gMpOurCars[slot] = 1;
+	}
+
+	for (i = 0; i < MAX_CARS; i++)
+	{
+		if (!gMpOurCars[i])
+			continue;
+
+		if (car_data[i].controlType == CONTROL_TYPE_CIV_AI ||
+		    car_data[i].controlType == CONTROL_TYPE_NONE)
+		{
+			int was = car_data[i].controlType;
+
+			car_data[i].controlType = CONTROL_TYPE_PLAYER;
+			car_data[i].wheel_angle = 0;
+
+			/* Same as the get-out path: an unowned car must not keep reading
+			 * somebody's pad, or it drives off on its own. */
+			car_data[i].ai.padid = &gMpQuietPad;
+
+			if (gMpCtx != NULL)
+				gMpCtx->jer_log(gMpCtx,
+					"[mp] car: our slot %d was controlType %d (traffic AI / free); "
+					"taken back so the AI cannot reach it\n", i, was);
+		}
 	}
 }
 
