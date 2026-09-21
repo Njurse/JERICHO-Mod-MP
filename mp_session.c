@@ -2173,7 +2173,23 @@ static void MpSendOwnPedState(void)
 	p = MpLocalPed();
 
 	if (p == NULL)
-		return;			/* the engine has not stood us up yet */
+	{
+		/* We are on foot but the engine has no pedestrian we can find for our own
+		 * player, so there is nothing to send and the other machines see nobody.
+		 * That is the whole reason "I can't see other players' Tanners" can happen
+		 * even when everything else is healthy, so say it (throttled) rather than
+		 * returning in silence.
+		 *
+		 * The lookup is by padId: there is no playerPedId, and pedest.c only ties
+		 * a ped to a player slot that way. */
+		if (gMpCtx != NULL && (gMp.frame % 120) == 0)
+			gMpCtx->jer_log(gMpCtx,
+				"[mp] ped: on foot but found no pedestrian for our own player "
+				"(padid %d, carId %d) -- peers will see nobody\n",
+				(int)player[0].padid, me->carId);
+
+		return;
+	}
 
 	memset(&h, 0, sizeof(h));
 	memset(&e, 0, sizeof(e));
