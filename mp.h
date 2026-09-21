@@ -63,6 +63,17 @@ typedef struct MP_PLAYER
 	unsigned long lastSeenMs;	/* liveness */
 	unsigned long lastStateFrame;	/* sim frame we last adopted this car's owner state */
 	unsigned long lastHitFrame;	/* sim frame we last reported a contact with this player */
+
+	/* ON FOOT. When the owner has no car we stand a pedestrian in for them, and
+	 * hold it here rather than in the engine's ped table: it is ours, and the only
+	 * thing that knows how to undo it is us. void* so this header does not need
+	 * pedest.h. */
+	void* ped;			/* JerNpc* we spawned for this player, or NULL */
+	int   pedMoving;
+	int   pedX, pedY, pedZ;		/* where the owner says it is */
+	int   pedHeading;
+	int   pedSpeed;
+	unsigned long pedLastMs;	/* when we last heard a pose for it */
 } MP_PLAYER;
 
 /* ------------------------------------------------------------------ */
@@ -150,6 +161,7 @@ int  MpNetStart(void);			/* platform socket init; 1 = ok */
 void MpNetShutdown(void);		/* close every socket (SHUTDOWN hook) */
 void MpNetPoll(int waitMs);		/* service sockets (PRE_SIM/FRAME) */
 unsigned long MpNowMs(void);		/* monotonic milliseconds */
+void MpSuppressCrashDialogs(void);	/* no modal crash box: the dump is the report */
 
 int  MpHostBegin(void);			/* open listener + start beaconing */
 void MpHostEnd(void);

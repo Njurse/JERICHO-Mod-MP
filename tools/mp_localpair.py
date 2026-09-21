@@ -213,8 +213,67 @@ def read_log(run_dir):
     return ""
 
 
+def _repo_tools():
+    """<repo>/tools, where dmp_fault.py and map_lookup.py live."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    return os.path.abspath(os.path.join(here, "..", "..", "..", "..", "tools"))
+
+
+def crash_dumps(dirs):
+    """JERICHO.dmp beside the exe means an ACCESS VIOLATION.
+
+    A clean exit -- an Alt+F4, a menu quit, the harness terminating it -- leaves
+    none. This is the one thing that must never be silent: a crash part-way
+    through makes everything after it in the log meaningless, and without this
+    check the run could still be reported as a PASS.
+    """
+    return {side: os.path.join(d, "JERICHO.dmp")
+            for side, d in dirs.items()
+            if os.path.isfile(os.path.join(d, "JERICHO.dmp"))}
+
+
+def triage_crash(dump, mapfile):
+    """Say WHERE it died, not only that it did.
+
+    "It crashed" is not a finding; "PingInCivCar+0x105" is. dmp_fault gives the
+    module and the RVA, map_lookup turns an RVA in our own exe into a symbol.
+    """
+    lines = []
+    fault = os.path.join(_repo_tools(), "dmp_fault.py")
+    lookup = os.path.join(_repo_tools(), "map_lookup.py")
+
+    rva = None
+
+    if os.path.isfile(fault):
+        try:
+            r = subprocess.run([sys.executable, fault, dump],
+                               capture_output=True, text=True, timeout=60)
+            for line in (r.stdout or "").splitlines():
+                s = line.strip()
+                if s.startswith("exception") or s.startswith("in module"):
+                    lines.append(s)
+                if "at rva" in s:
+                    parts = s.split("at rva")
+                    if len(parts) == 2:
+                        rva = parts[1].strip().split()[0]
+        except Exception as e:
+            lines.append(f"(dmp_fault failed: {e})")
+
+    if rva and os.path.isfile(lookup) and os.path.isfile(mapfile):
+        try:
+            r = subprocess.run([sys.executable, lookup, mapfile, rva],
+                               capture_output=True, text=True, timeout=60)
+            for line in (r.stdout or "").splitlines():
+                if "->" in line:
+                    lines.append(line.strip())
+        except Exception as e:
+            lines.append(f"(map_lookup failed: {e})")
+
+    return lines
+
+
 def verdict(dirs):
-    """Pass/fail for the run: the pair must connect AND must not drop.
+    """Pass/fail for the run: the pair must connect, must not drop, must not crash.
 
     This is what turns the harness from a log dump into a regression test.
     "The client dropped instantly" was invisible in a wall of logs, so the two
@@ -222,19 +281,31 @@ def verdict(dirs):
     side reporting a peer that spoke 0 bytes (the signature of the receive-guard
     bug) -- are asserted here. A benign end-of-run close ('dropped (closed)')
     is not counted.
+
+    A crash is checked FIRST and reported with its function, because a run that
+    died at the halfway point can still show every marker of a healthy one.
     """
     host = read_log(dirs["a"])
     client = read_log(dirs["b"])
+
+    dumps = crash_dumps(dirs)
+
+    for side, dump in sorted(dumps.items()):
+        mapfile = os.path.join(os.path.dirname(dump), "REDRIVER2_dev.map")
+        log(f"*** {side.upper()} CRASHED -- an access violation, not a clean exit ***")
+        for line in triage_crash(dump, mapfile):
+            log(f"    {line}")
 
     host_join = "joined (" in host
     client_ok = "accepted as player" in client
     client_lost = client.count("Lost the server")
     zero_byte = (host + client).count("0 byte(s) received")
 
-    ok = host_join and client_ok and client_lost == 0 and zero_byte == 0
+    ok = (host_join and client_ok and client_lost == 0 and zero_byte == 0
+          and not dumps)
     log(f"verdict: host_join={host_join} client_accepted={client_ok} "
-        f"client_lost={client_lost} zero_byte_peers={zero_byte} -> "
-        f"{'PASS' if ok else 'FAIL'}")
+        f"client_lost={client_lost} zero_byte_peers={zero_byte} "
+        f"dumps={len(dumps)} -> {'PASS' if ok else 'FAIL'}")
     return 0 if ok else 1
 
 
@@ -380,7 +451,21 @@ def main():
 
     remaining = max(5, args.seconds - args.settle)
     log(f"running for {remaining}s...")
-    time.sleep(remaining)
+
+    # Watch for a crash WHILE it runs, not after. An access violation ends the
+    # interesting part of the run, so there is no point sitting out the rest of
+    # the window with both machines dead -- and a crash needs to be impossible to
+    # miss, because everything the log says after it is meaningless.
+    deadline = time.time() + remaining
+
+    while time.time() < deadline:
+        hit = crash_dumps(dirs)
+
+        if hit:
+            log(f"!! CRASH on {', '.join(sorted(hit))} -- stopping the run now")
+            break
+
+        time.sleep(0.5)
 
     patterns = ("[mp]", "[error]", "[jericho]")
     report(dirs["a"], "HOST", patterns)
@@ -392,10 +477,24 @@ def main():
     for p, label in ((b, "client"), (a, "host")):
         if p.poll() is None:
             p.terminate()
+
         try:
             p.wait(timeout=8)
         except subprocess.TimeoutExpired:
+            # A crash dialog used to hold the process open here, and this is
+            # exactly how a run "hangs": nothing is wrong, it is simply waiting
+            # for someone to click OK. Terminate, then kill, then kill it by PID.
+            # A process that will not die is a finding, not a reason to wait.
             p.kill()
+
+            try:
+                p.wait(timeout=8)
+            except subprocess.TimeoutExpired:
+                subprocess.run(["taskkill", "/PID", str(p.pid), "/F", "/T"],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                log(f"!! {label} (pid {p.pid}) would not die -- killed it by PID. "
+                    f"A modal crash dialog is the usual reason.")
+
         log(f"stopped {label} (pid {p.pid}, exit {p.returncode})")
 
     if not args.keep:

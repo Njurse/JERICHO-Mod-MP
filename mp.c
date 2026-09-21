@@ -532,6 +532,18 @@ static int MpOnFrame(void* userdata, void* args)
 	MpNetPoll(0);
 	MpUiTick();
 
+	/* MP_DEBUG: this hook runs whether or not the world is stepping, so its own
+	 * counter can tell "the sim stopped" from "the module stopped". gMp.frame is
+	 * incremented by the lockstep, which is exactly what is in question. */
+	{
+		static unsigned long ticks;
+
+		if (getenv("MP_DEBUG") != NULL && gMpCtx != NULL && (++ticks % 120) == 0)
+			gMpCtx->jer_log(gMpCtx,
+				"[mp] framehook: tick %lu mpframe %lu running %d connected %d frontend %d\n",
+				ticks, gMp.frame, gMp.running, gMp.connected, gInFrontend);
+	}
+
 	/* MP_DEBUG: echo the engine's notice ROWS, so the WRAP can be checked from
 	 * the log without eyes on the screen -- a wrapped message is several
 	 * entries, one per drawn line. Log-only, so it cannot change behaviour. */
@@ -1003,6 +1015,14 @@ static int MpOnPreSim(void* userdata, void* args)
 	(void)userdata;
 	(void)args;
 
+	/* MP_DEBUG: is this hook still being called at all? A session whose sim silently
+	 * stops here looks alive (polls continue on the FRAME hook, remote cars keep
+	 * being adopted) while nothing owns a car any more. */
+	if (getenv("MP_DEBUG") != NULL && gMpCtx != NULL && (gMp.frame % 120) == 0)
+		gMpCtx->jer_log(gMpCtx,
+			"[mp] presim: frame %lu running %d connected %d frontend %d\n",
+			gMp.frame, gMp.running, gMp.connected, gInFrontend);
+
 	if (gMp.running)
 		MpLockstepFrame();
 	else if (gMp.listenersUp || gMp.connected)
@@ -1216,6 +1236,16 @@ static int MpOnLevelLaunch(void* userdata, void* args)
 JER_MODULE_ENTRY(jer_module_mp_entry)(JERICHO_CONTEXT* ctx)
 {
 	gMpCtx = ctx;
+
+	/* No crash DIALOGS, process-wide.
+	 *
+	 * The engine already writes JERICHO.dmp when it faults, which is the useful
+	 * part. What it also does is let Windows raise a modal "has stopped working"
+	 * box -- and that box blocks the process from exiting. On a machine testing
+	 * over the network that is worse than useless: the crash looks like a hang,
+	 * anything waiting on the process waits forever, and a run that was supposed
+	 * to be unattended needs a human to click OK. Same dump, no dialog. */
+	MpSuppressCrashDialogs();
 
 	ctx->jer_register_module(ctx, "mp", "Multiplayer", "0.1.0", "JERICHO",
 		"LAN multiplayer: host/join, UDP discovery, JERICHO addon net bridge, "

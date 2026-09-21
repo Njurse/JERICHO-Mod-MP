@@ -24,6 +24,8 @@ extern int gWantNight;		/* glaunch.c: 1 = the night take-a-ride level variant */
 #include "handling.h"	/* LongQuaternion2Matrix: rebuild a car's matrix from its body */
 #include "state.h"
 #include "dr2roads.h"	/* FindSurfaceD2: the real ground height at a point */
+#include "pedest.h"	/* pUsedPeds: our player's own pedestrian, when on foot */
+#include "jer_npc.h"	/* jer_npc_*: the pedestrian we stand in for a REMOTE one */
 
 #include <string.h>
 #include <stdio.h>
@@ -1290,8 +1292,11 @@ int MpInputForPlayer(int id)
 
 /* forward: the owner's own-car replication (defined later) */
 static void MpSendOwnCarState(void);
+static void MpSendOwnPedState(void);
+static void MpDriveRemotePed(MP_PLAYER* p);
 static void MpTestCarChangeTick(void);
 static void MpTestLeaveTick(void);
+static void MpTestOnFootTick(void);
 
 /* ------------------------------------------------------------------ */
 /* Input replication                                                   */
@@ -1639,6 +1644,10 @@ void MpLockstepFrame(void)
 	 * log without a human sitting at the menu. */
 	MpTestLeaveTick();
 
+	/* test lever: get out of the car part-way through (inert unless MP_TEST_ONFOOT),
+	 * so the on-foot path has a way to be exercised at all. */
+	MpTestOnFootTick();
+
 	/* tell everyone where our wheel is pointing before anything is simulated */
 	MpSendInput(MpLocalPad());
 
@@ -1655,6 +1664,19 @@ void MpLockstepFrame(void)
 	 * every car from input that arrived a round trip late and hoped a coarse resync
 	 * would pull them back together -- which is exactly where the drift came from. */
 	MpSendOwnCarState();
+
+	/* ...and the pedestrian, if we are not in a car: the same owner-authoritative
+	 * rule, for a thing that has a heading and a speed instead of a body. */
+	MpSendOwnPedState();
+
+	/* Keep any remote player's stand-in pedestrian in step with its owner. On a sim
+	 * frame, because this touches the ped table and the network callbacks must not. */
+	{
+		int pi;
+
+		for (pi = 0; pi < MP_MAX_PLAYERS; pi++)
+			MpDriveRemotePed(&gMp.players[pi]);
+	}
 
 	/* owner-authoritative contacts: push ourselves, tell the peer's owner */
 	MpHitFrame();
@@ -1721,6 +1743,74 @@ static void MpTestLeaveTick(void)
 
 	MpLeaveSession();
 	MpReturnToFrontend();
+}
+
+/* MP_TEST_ONFOOT=<secs> -- get the local player OUT of their car that many
+ * seconds in, so the on-foot path can be exercised without a human at the wheel.
+ *
+ * Uses the engine's own way out (ChangeCarPlayerToPed), the same call the
+ * car-change lever makes. The car we leave stays exactly where it is: that is the
+ * designed behaviour (see MpReleaseRemoteCar -- handing a module-made car to the
+ * traffic AI is a crash, not a feature).
+ *
+ * Separate from MP_TEST_CARCHANGE on purpose: that lever has to find a civilian
+ * car of a different model before it will do anything, which makes it useless as
+ * a way to test THIS. */
+static void MpTestOnFootTick(void)
+{
+	static int done;
+	static int noted;
+	static unsigned long startMs;
+	const char* s;
+	unsigned long now = MpNowMs();
+	MP_PLAYER* me;
+
+	if (done || !gMp.running)
+		return;
+
+	s = getenv("MP_TEST_ONFOOT");
+
+	if (s == NULL)
+		return;
+
+	/* Say ONCE that the lever was seen. Without it, a run that does not fire is
+	 * ambiguous: never called, called before the match, or called and not yet due
+	 * all look identical in the log. */
+	if (!noted)
+	{
+		noted = 1;
+
+		if (gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx, "[mp] test: MP_TEST_ONFOOT=%s armed (frame %lu)\n",
+				s, gMp.frame);
+	}
+
+	if (startMs == 0)
+		startMs = MpNowMs();
+
+	me = MpLocalPlayer();
+
+	/* MP_DEBUG: name the wait and the car state, so "it did not fire" can be read
+	 * rather than guessed at. Same inline-condition form as MpLinkTick, so nothing
+	 * is conditional on the flag. */
+	if (getenv("MP_DEBUG") != NULL && gMpCtx != NULL && (gMp.frame % 60) == 0)
+		gMpCtx->jer_log(gMpCtx,
+			"[mp] test: onfoot waited %lums of %d000ms, carId %d, running %d\n",
+			now - startMs, atoi(s), me != NULL ? me->carId : -99, gMp.running);
+
+	if ((now - startMs) < (unsigned long)(atoi(s) * 1000))
+		return;
+
+	if (me == NULL || me->carId < 0)
+		return;			/* not in a car (yet): nothing to get out of */
+
+	done = 1;
+
+	if (gMpCtx != NULL)
+		gMpCtx->jer_log(gMpCtx,
+			"[mp] test: getting OUT now, %ss in (MP_TEST_ONFOOT)\n", s);
+
+	ChangeCarPlayerToPed(0);
 }
 
 static void MpTestCarChangeTick(void)
@@ -1945,6 +2035,226 @@ static void MpFollowLocalCar(void)
 
 		me->carId = -1;
 		me->car = -1;
+	}
+}
+
+/* ------------------------------------------------------------------ */
+/* ON FOOT                                                            */
+/*                                                                    */
+/* A player who is not in a car has to look like a PERSON to everyone  */
+/* else, not a gap where a car used to be. The engine cannot hand us a */
+/* remote machine's character -- only the machine that owns it has it  */
+/* -- so we stand a pedestrian in for it: a stock NPC of the Tanner    */
+/* model (jer_npc model 0, which the ambient system will NOT recycle   */
+/* the way it recycles civilians), and tell it where to stand and how  */
+/* fast to move.                                                       */
+/*                                                                    */
+/* Driving it by SPEED rather than posing it by hand is the point: the */
+/* engine then animates the walk, the run and the stand for us, so the */
+/* legs are always right and there is no per-frame pose to invent.     */
+
+/* The pedestrian the engine is driving for OUR player, or NULL while we are in a
+ * car. pUsedPeds is a linked list and a ped is tied to a player slot only by
+ * padId -- there is no playerPedId field -- so this is a search. */
+static LPPEDESTRIAN MpLocalPed(void)
+{
+	LPPEDESTRIAN p;
+
+	for (p = pUsedPeds; p != NULL; p = p->pNext)
+	{
+		if (p->pedType == TANNER_MODEL && p->padId >= 0 && p->padId == player[0].padid)
+			return p;
+	}
+
+	return NULL;
+}
+
+/* Owner -> peers: where our on-foot player is and how fast they are moving.
+ * Sent only while on foot; the car state already says "no car" (model 0xFF), so a
+ * peer knows to look for this rather than guessing from a paused car. */
+static void MpSendOwnPedState(void)
+{
+	unsigned char buf[sizeof(MP_PEDSTATE) + sizeof(MP_PEDSTATE_ENTRY)];
+	MP_PEDSTATE h;
+	MP_PEDSTATE_ENTRY e;
+	MP_PLAYER* me = MpLocalPlayer();
+	LPPEDESTRIAN p;
+	int len;
+
+	if (me == NULL || !gMp.running)
+		return;
+
+	if (me->carId >= 0)
+		return;			/* in a car: the car state is the whole story */
+
+	p = MpLocalPed();
+
+	if (p == NULL)
+		return;			/* the engine has not stood us up yet */
+
+	memset(&h, 0, sizeof(h));
+	memset(&e, 0, sizeof(e));
+
+	h.frame = gMp.frame;
+	h.count = 1;
+
+	e.playerId = (uint8_t)me->id;
+	e.flags = (uint8_t)(p->speed != 0 ? MP_PED_MOVING : 0);
+	e.x = p->position.vx;
+	e.y = p->position.vy;
+	e.z = p->position.vz;
+	e.heading = p->dir.vy & 0xFFF;
+	e.speed = p->speed;
+
+	memcpy(buf, &h, sizeof(h));
+	memcpy(buf + sizeof(h), &e, sizeof(e));
+	len = (int)(sizeof(h) + sizeof(e));
+
+	if (MpIsHost())
+		MpHostBroadcast(MP_TAG_PED, 0, buf, len);
+	else
+		MpSendToHost(MP_TAG_PED, 0, buf, len);
+}
+
+/* The owner's idea of where their on-foot player is. Anything we DO about it
+ * happens in MpDriveRemotePed, on a sim frame, where the ped table is safe to
+ * touch. */
+static void MpHandlePedState(int connIndex, const unsigned char* p, int len)
+{
+	MP_PEDSTATE h;
+	int i, n;
+
+	(void)connIndex;
+
+	if (len < (int)sizeof(MP_PEDSTATE))
+		return;
+
+	memcpy(&h, p, sizeof(h));
+
+	n = h.count;
+
+	if (n > MP_MAX_PLAYERS)
+		n = MP_MAX_PLAYERS;
+
+	if (len < (int)(sizeof(MP_PEDSTATE) + (size_t)n * sizeof(MP_PEDSTATE_ENTRY)))
+		return;
+
+	for (i = 0; i < n; i++)
+	{
+		MP_PEDSTATE_ENTRY e;
+		MP_PLAYER* pl;
+
+		memcpy(&e, p + sizeof(MP_PEDSTATE) + i * sizeof(e), sizeof(e));
+
+		pl = MpGetPlayer(e.playerId);
+
+		if (pl == NULL || pl->isLocal)
+			continue;
+
+		pl->pedX = e.x;
+		pl->pedY = e.y;
+		pl->pedZ = e.z;
+		pl->pedHeading = (int)(e.heading & 0xFFF);
+		pl->pedSpeed = e.speed;
+		pl->pedMoving = (e.flags & MP_PED_MOVING) ? 1 : 0;
+		pl->pedLastMs = MpNowMs();
+	}
+}
+
+/* Keep the pedestrian we are standing in for a REMOTE on-foot player in step,
+ * spawning and despawning it as that player gets in and out. Every sim frame,
+ * every player: building peds from a network callback would do it mid-poll. */
+static void MpDriveRemotePed(MP_PLAYER* p)
+{
+	JerNpc* n;
+	LPPEDESTRIAN ped;
+	int dx, dz, err;
+
+	if (p == NULL || !p->active || p->isLocal)
+		return;
+
+	n = (JerNpc*)p->ped;
+
+	/* Not on foot any more -- back in a car, gone, or never heard from: take the
+	 * stand-in away. A pedestrian left standing would read as a third player. */
+	if (p->carId >= 0 || !p->connected || p->pedLastMs == 0)
+	{
+		if (n != NULL)
+		{
+			jer_npc_despawn(n);
+			p->ped = NULL;
+
+			if (gMpCtx != NULL)
+				gMpCtx->jer_log(gMpCtx,
+					"[mp] ped: player %d is back in a car; stand-in removed\n", p->id);
+		}
+
+		return;
+	}
+
+	if (n == NULL)
+	{
+		n = jer_npc_spawn_model(TANNER_MODEL, p->pedX, p->pedZ);
+
+		if (n == NULL)
+		{
+			/* The ped pool can refuse. Say so (throttled): silently having no
+			 * character for a player is the confusing half of this feature. */
+			if (gMpCtx != NULL && (gMp.frame % 120) == 0)
+				gMpCtx->jer_log(gMpCtx,
+					"[mp] ped: no free pedestrian for player %d (pool full?)\n", p->id);
+
+			return;
+		}
+
+		p->ped = n;
+
+		if (gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx,
+				"[mp] ped: standing in for player %d at %d,%d,%d heading %d speed %d\n",
+				p->id, p->pedX, p->pedY, p->pedZ, p->pedHeading, p->pedSpeed);
+	}
+
+	ped = (LPPEDESTRIAN)n->ped;
+
+	if (ped == NULL)
+	{
+		p->ped = NULL;
+		return;
+	}
+
+	/* Let the ENGINE walk it, and correct only when it has actually drifted.
+	 * Pinning it every frame would stop the walk animation from ever showing --
+	 * the animation is the whole reason for driving it this way -- while never
+	 * correcting it would let it wander. 120 units is about a car length: large
+	 * enough that a correction is unmistakable when it happens, small enough that
+	 * it is rare. */
+	dx = p->pedX - ped->position.vx;
+	dz = p->pedZ - ped->position.vz;
+	err = (int)sqrt((double)dx * (double)dx + (double)dz * (double)dz);
+
+	if (err > 120)
+	{
+		jer_npc_set_world(n, p->pedX, p->pedY, p->pedZ, p->pedHeading);
+
+		if (gMpCtx != NULL && getenv("MP_DEBUG") != NULL)
+			gMpCtx->jer_log(gMpCtx, "[mp] ped: player %d corrected %d units\n", p->id, err);
+	}
+
+	if (p->pedSpeed != 0)
+	{
+		/* move_to takes a POINT, so aim a little way along the owner's heading:
+		 * that is the same thing as "walk forward at this speed", and it keeps the
+		 * engine turning and animating as it goes. */
+		int tx = p->pedX + (int)(((long)rsin(p->pedHeading) * 300) >> 12);
+		int tz = p->pedZ + (int)(((long)rcos(p->pedHeading) * 300) >> 12);
+
+		jer_npc_move_to(n, tx, tz, p->pedSpeed);
+	}
+	else
+	{
+		jer_npc_stop(n);
+		jer_npc_face(n, p->pedHeading);
 	}
 }
 
@@ -2396,6 +2706,12 @@ void MpHandleMessage(int connIndex, const char* tag, const unsigned char* payloa
 	if (memcmp(tag, MP_TAG_HIT, 4) == 0)
 	{
 		MpHandleHit(connIndex, payload, len);
+		return;
+	}
+
+	if (memcmp(tag, MP_TAG_PED, 4) == 0)
+	{
+		MpHandlePedState(connIndex, payload, len);
 		return;
 	}
 

@@ -38,7 +38,7 @@
 extern "C" {
 #endif
 
-#define MP_PROTO_VERSION	3
+#define MP_PROTO_VERSION	4	/* 4: on-foot pose (MP_TAG_PED) */
 
 /* Default UDP+TCP port. 1318 is IANA-unassigned (the neighbour 1319 is
  * amx-icsp), so it is a safe, non-reserved choice for a game. Configurable
@@ -87,6 +87,7 @@ extern "C" {
 #define MP_TAG_SPAWN	"JPSW"	/* host -> all: where everyone lines up */
 #define MP_TAG_ROSTER	"JPRS"	/* host -> all: who is in the match */
 #define MP_TAG_HIT	"JPHI"	/* either side: "my car bumped yours, you push yourself" */
+#define MP_TAG_PED	"JPPD"	/* owner -> peers: an ON-FOOT player's pose */
 
 /* How far apart the player cars stand at the meeting point: close enough that
  * everybody is on one screen, far enough not to spawn inside each other. */
@@ -323,6 +324,40 @@ typedef struct MP_CARSTATE
 	uint8_t  count;
 	uint8_t  reserved[3];
 } MP_CARSTATE;
+
+/* ------------------------------------------------------------------ */
+/* An ON-FOOT player's pose.
+ *
+ * Deliberately NOT bolted onto MP_CARSTATE_ENTRY. A car and a walking person
+ * share no fields that matter -- a car has a body orientation and linear and
+ * angular velocities, a person has a heading and a speed -- and mixing them
+ * would mean every reader of a car state has to remember that half the fields
+ * mean something else when one byte says "on foot".
+ *
+ * There is no animation frame on the wire either: the engine picks the walk, run
+ * or idle animation from the SPEED, so carrying the speed carries the animation.
+ * The receiving end does the same thing the owning end does -- tell the ped how
+ * fast to move -- rather than trying to replay poses. */
+typedef struct MP_PEDSTATE_ENTRY
+{
+	uint8_t  playerId;
+	uint8_t  flags;		/* MP_PED_MOVING etc. */
+	uint16_t spare;
+	int32_t  x, y, z;	/* the ped's own position, engine units */
+	int32_t  heading;	/* 0..4095 */
+	int32_t  speed;		/* signed: > 0 forward, < 0 backpedal, 0 standing */
+} MP_PEDSTATE_ENTRY;		/* 24 bytes */
+
+static_assert(sizeof(MP_PEDSTATE_ENTRY) == 24, "MP_PEDSTATE_ENTRY layout");
+
+#define MP_PED_MOVING	0x01	/* wheels... rather, legs in motion */
+
+typedef struct MP_PEDSTATE
+{
+	uint32_t frame;
+	uint8_t  count;
+	uint8_t  reserved[3];
+} MP_PEDSTATE;	/* header only, like MP_CARSTATE: the entries follow */
 
 /* A snapshot row carries the car's WHOLE rigid body, not just a position and a
  * heading: hd.direction is an OUTPUT the engine re-derives from the orientation,

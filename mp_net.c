@@ -173,6 +173,19 @@ unsigned long MpNowMs(void)
 	return MpClockMs();
 }
 
+/* No crash DIALOGS, process-wide. See the module entry for why.
+ *
+ * It lives HERE because this file already includes the Windows headers in the
+ * right order (winsock2 before windows.h -- see the top of the file); mp.c
+ * deliberately includes none of that, and pulling windows.h into it risks the
+ * clashes the include order exists to avoid. */
+void MpSuppressCrashDialogs(void)
+{
+#ifdef _WIN32
+	SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX);
+#endif
+}
+
 static int MpPendingBytes(SOCKET s)
 {
 #ifdef _WIN32
