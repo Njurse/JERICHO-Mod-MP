@@ -302,6 +302,7 @@ void MpUiOpenCarSelect(void);		/* open the stock car select (joining player pick
 void MpClientLaunch(void);		/* launch a client into the host's level */
 void MpReturnToFrontend(void);		/* end the match, back to the main frontend */
 void MpHostByeAll(void);		/* tell every client the match is ending */
+void MpClientBye(void);		/* tell the host WE are ending (a deliberate quit) */
 
 #ifdef __cplusplus
 }

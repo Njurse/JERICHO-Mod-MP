@@ -373,7 +373,72 @@ void MpHostByeAll(void)
 	for (i = 0; i < MP_MAX_PLAYERS; i++)
 	{
 		if (gConn[i].used && gConn[i].hostSide)
+		{
 			MpSendConn(i, MP_TAG_LEAVE, MP_FLAG_RELIABLE, NULL, 0);
+
+			/* Flush it: a queued goodbye that is never written is the same as no
+			 * goodbye at all, and the socket is about to close. */
+			MpFlushConn(i);
+		}
+	}
+}
+
+/* Client: tell the host we are going, before the socket closes -- and do it in a
+ * way that actually ARRIVES.
+ *
+ * Sending the LEAVE is not enough on its own. Closing a socket that still has
+ * unread inbound data makes the OS send RST, and an RST makes the RECEIVER throw
+ * away data it had already received but not yet read -- so the goodbye was
+ * discarded and the host reported a player who pressed Exit as "connection reset
+ * (WSAECONNRESET)". A deliberate quit and a crash were literally indistinguishable
+ * from the far end.
+ *
+ * The fix is a proper half-close: send, push a FIN with shutdown(SD_SEND), then
+ * read whatever is already in flight for a moment so the host gets the chance to
+ * see it before the socket goes away. Only the host had a goodbye (MpHostByeAll);
+ * this is the other half. */
+void MpClientBye(void)
+{
+	int i;
+
+	for (i = 0; i < MP_MAX_PLAYERS; i++)
+	{
+		char drain[1024];
+		unsigned long until;
+
+		if (!gConn[i].used || gConn[i].hostSide)
+			continue;
+
+		MpSendConn(i, MP_TAG_LEAVE, MP_FLAG_RELIABLE, NULL, 0);
+		MpFlushConn(i);
+
+		if (gConn[i].sock == INVALID_SOCKET)
+			continue;
+
+		shutdown(gConn[i].sock, SD_SEND);
+
+		/* Bounded: this runs while leaving, so a long stall here would look like
+		 * a freeze. 150 ms is several round trips on a LAN. */
+		until = MpNowMs() + 150;
+
+		while (MpNowMs() < until)
+		{
+			int n = recv(gConn[i].sock, drain, (int)sizeof(drain), 0);
+
+			if (n > 0)
+				continue;
+
+			if (n == 0)
+				break;			/* the far end said goodbye as well */
+
+			if (MpWouldBlock())
+			{
+				Sleep(5);
+				continue;
+			}
+
+			break;
+		}
 	}
 }
 
@@ -1162,6 +1227,11 @@ static void MpDropConn(int idx, const char* why)
 	 * drop funnels through this function, so this one call covers them all. */
 	MpDiagDump(why);
 
+	/* Report it BEFORE the teardown below clears the connection, otherwise the
+	 * most important line in the log is the one that cannot say who it was about. */
+	if (gMpCtx != NULL)
+		MpConnEvent("DROPPED", idx, why);
+
 	/* on a client, losing the server connection is worth telling the player
 	 * about -- and it means the match is over, so go back to the frontend.
 	 * `gMp.leaving` marks a deliberate leave, which must stay quiet.
@@ -1184,8 +1254,6 @@ static void MpDropConn(int idx, const char* why)
 
 	if (gMpCtx)
 	{
-		MpConnEvent("DROPPED", idx, why);
-
 		gMpCtx->jer_log(gMpCtx, "[mp] peer %s dropped (%s); %lu byte(s) received\n",
 			gConn[idx].peer[0] ? gConn[idx].peer : "?", why, gConn[idx].rxBytes);
 

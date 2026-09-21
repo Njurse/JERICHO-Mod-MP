@@ -185,6 +185,8 @@ void MpLeaveSession(void)
 	 * to their frontend with a notice rather than a bare connection loss */
 	if (gMp.role == MP_ROLE_HOST)
 		MpHostByeAll();
+	else
+		MpClientBye();	/* and if we are the client, tell the host WE are going */
 
 	MpClientDisconnect();
 	MpHostEnd();
@@ -1289,6 +1291,7 @@ int MpInputForPlayer(int id)
 /* forward: the owner's own-car replication (defined later) */
 static void MpSendOwnCarState(void);
 static void MpTestCarChangeTick(void);
+static void MpTestLeaveTick(void);
 
 /* ------------------------------------------------------------------ */
 /* Input replication                                                   */
@@ -1631,6 +1634,11 @@ void MpLockstepFrame(void)
 	/* test lever: a scripted mid-session car change (inert unless MP_TEST_CARCHANGE) */
 	MpTestCarChangeTick();
 
+	/* test lever: a clean leave part-way through (inert unless MP_TEST_LEAVE), so
+	 * that "a deliberate quit" and "a connection died" can be told apart in a
+	 * log without a human sitting at the menu. */
+	MpTestLeaveTick();
+
 	/* tell everyone where our wheel is pointing before anything is simulated */
 	MpSendInput(MpLocalPad());
 
@@ -1669,6 +1677,52 @@ void MpLockstepFrame(void)
  * own ChangePedPlayerToCar -- the function the ped mechanic calls -- so the path
  * under test is the real one and the mod does not poke player[] itself.
  * Inert unless the env var is set. */
+/* MP_TEST_LEAVE=<secs> -- leave the session cleanly that many seconds after the
+ * match starts, then drop to the frontend, exactly as the pause menu's Exit
+ * does. The point is the CONTRAST: a deliberate quit must read completely
+ * differently in the log from a connection that died, on BOTH machines, and
+ * that is not something a human can be asked to reproduce on demand.
+ *
+ * Reads the env into a variable rather than testing getenv() inline, like the
+ * other test levers, so it cannot look like a debug switch to
+ * tools/check_debug_independence.py. */
+static void MpTestLeaveTick(void)
+{
+	static int done;
+	static unsigned long startMs;
+	const char* s;
+	unsigned long now = MpNowMs();
+
+	if (done || !gMp.running)
+		return;
+
+	/* Client only: the interesting case is the HOST watching a client say
+	 * goodbye, and running it on both machines at once would make the two logs
+	 * ambiguous about who actually left. */
+	if (gMp.role != MP_ROLE_CLIENT)
+		return;
+
+	s = getenv("MP_TEST_LEAVE");
+
+	if (s == NULL)
+		return;
+
+	if (startMs == 0)
+		startMs = now;
+
+	if ((now - startMs) < (unsigned long)(atoi(s) * 1000))
+		return;
+
+	done = 1;
+
+	if (gMpCtx != NULL)
+		gMpCtx->jer_log(gMpCtx,
+			"[mp] test: leaving the session cleanly %ss in (MP_TEST_LEAVE)\n", s);
+
+	MpLeaveSession();
+	MpReturnToFrontend();
+}
+
 static void MpTestCarChangeTick(void)
 {
 	static int stage;
