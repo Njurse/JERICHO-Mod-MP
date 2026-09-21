@@ -18,6 +18,7 @@
 #include "jer_events.h"
 #include "jer_config.h"
 #include "jer_frontend.h"
+#include "jer_pause_menu.h"
 
 #include "driver2.h"
 #include "main.h"
@@ -947,6 +948,34 @@ static int MpOnDrawOverlay(void* userdata, void* args)
  * opens and pauseflag is never set) and toggle our own non-freezing player list.
  * A press while a session is only being set up, and stock single-player, keep
  * the normal pause. */
+/* ------------------------------------------------------------------ */
+/* The MP pause menu.                                                  */
+/*                                                                     */
+/* Small on purpose for now: it exists so the one thing you always      */
+/* want when something goes wrong -- a written-down account of what the */
+/* connection was doing -- is one button away, and so the per-player    */
+/* options later have a home that is not bolted onto the engine's own   */
+/* menu. jer_pause_menu_register collects this under "Modules".         */
+static int MpMenuWriteDiag(void* userdata, int direction)
+{
+	(void)userdata;
+	(void)direction;
+
+	MpDiagDump("asked for from the pause menu");
+	MpNotify("...mp_diag.txt written next to the game");
+
+	return JER_PAUSE_QUIT_NONE;
+}
+
+static const JER_PAUSE_MENU_ITEM mpPauseItems[] =
+{
+	/* label, get_label, on_activate, userdata, submenu, adjust */
+	{ "Write diagnostics now", NULL, MpMenuWriteDiag, NULL, NULL, 0 },
+};
+
+static const JER_PAUSE_MENU mpPauseMenu =
+{ "Multiplayer", mpPauseItems, 1 };
+
 static int MpOnPauseMenu(void* userdata, void* args)
 {
 	JER_ARGS_PAUSE_MENU* pm = (JER_ARGS_PAUSE_MENU*)args;
@@ -1217,4 +1246,10 @@ JER_MODULE_ENTRY(jer_module_mp_entry)(JERICHO_CONTEXT* ctx)
 	ctx->jer_register_hook(ctx, JER_EVENT_GAME_START, MpOnGameStart, NULL, 0);
 	ctx->jer_register_hook(ctx, JER_EVENT_DRAW_MAP, MpOnDrawMap, NULL, 0);
 	ctx->jer_register_hook(ctx, JER_EVENT_FRONTEND_IDLE, MpOnFrontendIdle, NULL, 0);
-	ctx->jer_register_hook(ctx, JER_EVENT_PAUSE_MENU, MpOnPauseMenu, NULL, 0);}
+	ctx->jer_register_hook(ctx, JER_EVENT_PAUSE_MENU, MpOnPauseMenu, NULL, 0);
+
+	/* Our own page in the pause screen ("Modules" -> "Multiplayer"). NOTE: the
+	 * declared item_count must equal the array length -- the engine builds the
+	 * submenu eagerly, so a count that is too large reads past the end. */
+	jer_pause_menu_register(&mpPauseMenu);
+}

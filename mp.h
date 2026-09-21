@@ -187,6 +187,7 @@ int  MpPingForPlayer(int playerId);	/* half-close: flush the refusal, then drain
 void MpConnHandshakeDone(int connIndex);	/* this connection has seen a HELLO/WELCOME */
 void MpConnEvent(const char* ev, int idx, const char* why);	/* the connection log */
 void MpConnLineText(char* out, int cap, int part);	/* the on-screen one (part 0 / 1) */
+void MpDiagDump(const char* reason);	/* everything we know -> mp_diag.txt */
 void MpConnMatchStarted(void);			/* the level is up: every stage says so */
 void MpConnDrop(int idx, const char* why);	/* close a connection, with the real reason */
 int  MpConnPlayerId(int connIndex);	/* peer's assigned player id, -1 until hello */

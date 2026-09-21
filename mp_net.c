@@ -927,6 +927,126 @@ int MpPeerCount(void)
  * drop, queue overflow, the deadlines -- and every close logs too, so the ORDER
  * of the lines names whoever closed the socket. A close with no origin line in
  * front of it is the one thing that must never happen again. */
+/* ------------------------------------------------------------------ */
+/* Diagnostics: capture, do not reconstruct                            */
+/*                                                                    */
+/* A two-machine failure is a reconstruction problem -- by the time    */
+/* anyone looks, the connection that failed is gone and the state that */
+/* explains it no longer exists. So it is CAPTURED: a ring of the last */
+/* events, and a dump written automatically at every drop (the moment  */
+/* that matters) and on demand from the pause menu.                    */
+#define MP_DIAG_EVENTS 32
+
+typedef struct MP_DIAG_EVENT
+{
+	unsigned long ms;
+	char text[80];
+} MP_DIAG_EVENT;
+
+static MP_DIAG_EVENT gDiagEvents[MP_DIAG_EVENTS];
+static int           gDiagNext;
+static int           gDiagCount;
+
+static void MpDiagNote(const char* text)
+{
+	MP_DIAG_EVENT* e = &gDiagEvents[gDiagNext];
+
+	e->ms = MpNowMs();
+	snprintf(e->text, sizeof(e->text), "%s", text != NULL ? text : "?");
+
+	gDiagNext = (gDiagNext + 1) % MP_DIAG_EVENTS;
+
+	if (gDiagCount < MP_DIAG_EVENTS)
+		gDiagCount++;
+}
+
+/* Everything we know, to mp_diag.txt next to the exe (the game runs from its own
+ * directory, so that is where a person will look and where it can be attached).
+ * Called automatically by MpDropConn -- every drop funnels through there -- and by
+ * hand from the MP pause menu. */
+void MpDiagDump(const char* reason)
+{
+	FILE* f;
+	int i;
+	unsigned long now = MpNowMs();
+
+	f = fopen("mp_diag.txt", "w");
+
+	if (f == NULL)
+	{
+		if (gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx, "[mp] diag: cannot write mp_diag.txt (%s)\n", reason);
+		return;
+	}
+
+	fprintf(f, "jericho mp diagnostics\n");
+	fprintf(f, "reason  : %s\n", reason != NULL ? reason : "?");
+	fprintf(f, "build   : %04x   mods %04x\n", MpBuildHash(), MpModHash());
+	fprintf(f, "role    : %s   running %d   frame %lu\n",
+		gMp.role == MP_ROLE_HOST ? "host" : (gMp.role == MP_ROLE_CLIENT ? "client" : "none"),
+		gMp.running, gMp.frame);
+	fprintf(f, "local id: %d   players %d   listeners %d   connected %d\n",
+		gMp.localPlayerId, gMp.playerCount, gMp.listenersUp, gMp.connected);
+	fprintf(f, "city    : %d   subgame %d   mode %d   seed %u\n",
+		gMp.city, gMp.subGame, gMp.gamemode, gMp.seed);
+
+	fprintf(f, "\n-- connections --\n");
+	for (i = 0; i < MP_MAX_PLAYERS; i++)
+	{
+		MP_CONN* c = &gConn[i];
+
+		if (!c->used)
+			continue;
+
+		fprintf(f, "  conn %d  peer %-22s stage %-38s age %lums\n",
+			i, c->peer[0] ? c->peer : "(none)", MpStageName(c->hsStage),
+			now - c->acceptedMs);
+		fprintf(f, "           heard %lums ago  rx %lu  tx %lu  queued %d  ping %lums  loss %d%%  hostSide %d  playerId %d\n",
+			now - c->lastRecvMs, c->rxBytes, c->txBytes,
+			c->sbufLen - c->sbufOff, c->pingMs, c->lossPct, c->hostSide, c->playerId);
+		fprintf(f, "           last event: %s (%lums ago)\n",
+			c->lastEvent[0] ? c->lastEvent : "-", now - c->lastEventMs);
+	}
+	if (i == 0 || !gConn[0].used)
+	{
+		int any = 0;
+
+		for (i = 0; i < MP_MAX_PLAYERS; i++)
+			if (gConn[i].used) any = 1;
+
+		if (!any)
+			fprintf(f, "  (none)\n");
+	}
+
+	fprintf(f, "\n-- players --\n");
+	for (i = 0; i < MP_MAX_PLAYERS; i++)
+	{
+		MP_PLAYER* p = &gMp.players[i];
+
+		if (!p->active)
+			continue;
+
+		fprintf(f, "  id %d  %-16s %s%s  carId %d  car %d (slot %d)  palette %d  pad %d\n",
+			p->id, p->name[0] ? p->name : "(unnamed)",
+			p->connected ? "connected" : "gone",
+			p->isLocal ? " LOCAL" : "",
+			p->carId, p->car, p->carIsSlot, p->palette, p->padId);
+	}
+
+	fprintf(f, "\n-- last %d event(s), oldest first --\n", gDiagCount);
+	for (i = 0; i < gDiagCount; i++)
+	{
+		int k = (gDiagNext - gDiagCount + i + MP_DIAG_EVENTS) % MP_DIAG_EVENTS;
+
+		fprintf(f, "  +%6lums  %s\n", now - gDiagEvents[k].ms, gDiagEvents[k].text);
+	}
+
+	fclose(f);
+
+	if (gMpCtx != NULL)
+		gMpCtx->jer_log(gMpCtx, "[mp] diag: wrote mp_diag.txt (%s)\n", reason);
+}
+
 /* The on-screen connection readout. Two SHORT lines rather than one long one:
  * the screen is 320 px wide, so peer + stage + time + last event on a single
  * line runs off the edge and becomes unreadable exactly when it matters.
@@ -1003,6 +1123,8 @@ void MpConnEvent(const char* ev, int idx, const char* why)
 		gConn[idx].lastEventMs = MpNowMs();
 	}
 
+	MpDiagNote(ev);
+
 	peer[0] = 0;
 
 	if (idx >= 0 && idx < MP_MAX_PLAYERS && gConn[idx].used && gConn[idx].peer[0] != 0)
@@ -1035,6 +1157,11 @@ void MpConnEvent(const char* ev, int idx, const char* why)
 
 static void MpDropConn(int idx, const char* why)
 {
+	/* Capture the state NOW, before any of it is torn down: this is the moment the
+	 * interesting information exists, and it is gone by the time anyone looks. Every
+	 * drop funnels through this function, so this one call covers them all. */
+	MpDiagDump(why);
+
 	/* on a client, losing the server connection is worth telling the player
 	 * about -- and it means the match is over, so go back to the frontend.
 	 * `gMp.leaving` marks a deliberate leave, which must stay quiet.
