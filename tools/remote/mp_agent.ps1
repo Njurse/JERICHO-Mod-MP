@@ -35,6 +35,12 @@ Set-StrictMode -Version Latest
 if ([string]::IsNullOrWhiteSpace($Root)) {
     $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 }
+
+# Tolerate a trailing separator or a stray quote. %~dp0 (what the launcher passes)
+# ends in a backslash, and a trailing backslash before the closing quote makes
+# PowerShell treat the quote as escaped -- so the path arrives as
+# C:\...\Release_dev" and Resolve-Path fails with "Illegal characters in path".
+$Root = $Root.TrimEnd('\', '/', '"')
 $Root = (Resolve-Path -LiteralPath $Root).Path
 
 $Exe     = Join-Path $Root 'REDRIVER2_dev.exe'

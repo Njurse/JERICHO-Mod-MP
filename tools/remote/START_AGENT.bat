@@ -24,10 +24,36 @@ if not exist "%HERE%REDRIVER2_dev.exe" (
 
 echo.
 echo   mp agent: this window must stay OPEN. Ctrl+C or closing it stops the agent.
-echo   Allowing it through the firewall (TCP 1401) is what lets the other PC talk.
 echo.
 
-powershell -NoProfile -ExecutionPolicy Bypass -File "%HERE%mp_agent.ps1" -Root "%HERE%" %*
+rem Open the two ports, but only if we are ALREADY elevated -- adding a rule needs
+rem administrator, and failing quietly here would surface later as "the other PC
+rem cannot connect". Without this, Windows raises a prompt on the first listen,
+rem which is easy to miss on a machine nobody is sitting at.
+rem   * the agent's control port (1401), which is what a deploy talks to
+rem   * the GAME port (1400), which is what carries the match itself
+set "APORT=1401"
+
+net session >nul 2>&1
+if %errorlevel%==0 (
+    netsh advfirewall firewall show rule name="JERICHO mp agent" >nul 2>&1
+    if errorlevel 1 (
+        netsh advfirewall firewall add rule name="JERICHO mp agent" dir=in action=allow protocol=TCP localport=%APORT% >nul 2>&1
+        echo   firewall: allowed TCP %APORT% ^(the deploy agent^)
+    )
+    netsh advfirewall firewall show rule name="JERICHO mp game" >nul 2>&1
+    if errorlevel 1 (
+        netsh advfirewall firewall add rule name="JERICHO mp game" dir=in action=allow protocol=TCP localport=1400 >nul 2>&1
+        echo   firewall: allowed TCP 1400 ^(the match itself^)
+    )
+) else (
+    echo   note: not running as administrator, so firewall rules were NOT added.
+    echo         If the other PC cannot reach this one, right-click this file and
+    echo         Run as administrator once, then leave the window open.
+)
+echo.
+
+powershell -NoProfile -ExecutionPolicy Bypass -File "%HERE%mp_agent.ps1" -Root "%HERE%." %*
 echo.
 echo   agent stopped.
 pause
