@@ -2757,6 +2757,23 @@ static void MpHandleCarState(int connIndex, const unsigned char* p, int len)
 		if (e.model == MP_CARSTATE_NO_CAR)
 		{
 			MpReleaseRemoteCar(pl);
+
+			/* ...AND mark the PLAYER as on foot.
+			 *
+			 * Releasing the car was not enough, and this is why neither machine
+			 * could see the other on foot. Everything downstream keys off pl->carId
+			 * -- not least MpDriveRemotePed, which refuses to stand a pedestrian in
+			 * for a player while pl->carId >= 0. So the car went back to the world,
+			 * the pedestrian was never created, and since BOTH ends made the same
+			 * mistake it failed symmetrically rather than one way.
+			 *
+			 * carId is otherwise only assigned in the spawn paths and for our OWN
+			 * player, so a peer who got out kept pointing at the car they had just
+			 * left. The pose adopt below already skips a player with carId < 0,
+			 * which is exactly right for someone who is on foot. */
+			pl->carId = -1;
+			pl->car = -1;
+
 			continue;
 		}
 
