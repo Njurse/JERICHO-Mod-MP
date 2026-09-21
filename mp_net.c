@@ -428,7 +428,7 @@ void MpClientBye(void)
 		if (gConn[i].sock == INVALID_SOCKET)
 			continue;
 
-		shutdown(gConn[i].sock, SD_SEND);
+		shutdown(gConn[i].sock, MP_SHUT_WR);
 
 		/* Bounded: this runs while leaving, so a long stall here would look like
 		 * a freeze. 150 ms is several round trips on a LAN. */
@@ -446,7 +446,11 @@ void MpClientBye(void)
 
 			if (MpWouldBlock())
 			{
-				Sleep(5);
+				#ifdef _WIN32
+		Sleep(5);
+#else
+		usleep(5000);	/* POSIX: Sleep() takes ms, usleep() takes us */
+#endif
 				continue;
 			}
 
@@ -1380,7 +1384,7 @@ static void MpProcessConn(int idx)
 		tv.tv_usec = 0;
 
 		{
-			int sel = select(0, &rd, NULL, NULL, &tv);
+			int sel = select((int)c->sock + 1, &rd, NULL, NULL, &tv);
 			int isset = FD_ISSET(c->sock, &rd);
 
 			/* Nothing to read: stop draining, the rest waits for the next poll.

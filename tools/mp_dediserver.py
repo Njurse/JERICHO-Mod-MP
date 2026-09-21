@@ -182,7 +182,7 @@ def beacon(args, stop):
     while not stop.is_set():
         with LOCK:
             n = len(CLIENTS)
-        pkt = m.BEACON.pack(m.UDP_MAGIC, 1, args.port, host, n, MAX_PLAYERS,
+        pkt = m.BEACON.pack(m.UDP_MAGIC, m.PROTO, args.port, host, n, MAX_PLAYERS,
                             0, 0, args.city, 1, 0, 0)
         try:
             s.sendto(pkt, ("255.255.255.255", args.port))

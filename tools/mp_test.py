@@ -27,8 +27,8 @@ import sys
 import threading
 import time
 
-PROTO = 1
-SDK = 1                       # JERICHO_SDK_VERSION
+PROTO = 5                     # must match mp_proto.h MP_PROTO_VERSION -- the game drops any frame whose envelope version differs
+SDK = 2                       # JERICHO_SDK_VERSION
 MP_VER = "0.1.0"              # JERICHO/MODS/mp/mod.toml version -- always advertised
 NUL = bytes([0])
 
@@ -47,7 +47,8 @@ MODI = struct.Struct("<24s16sBB")        # 42 bytes
 WELCOME = struct.Struct("<12BIB")        # 17 bytes: 12xu8, u32 seed, u8 hostCar (matches mp_proto.h; NOT <13BI, which shifts seed/hostCar by one)
 REJECT = struct.Struct("<4B64s")         # 68 bytes
 BEACON = struct.Struct("<IHH32s6BHH")    # 50 bytes
-SPAWN = struct.Struct("<4i")             # 16 bytes: x, y, z, headingCHANNEL = struct.Struct("<16sHIBB2B")    # 26 bytes
+SPAWN = struct.Struct("<4i")             # 16 bytes: x, y, z, heading
+CHANNEL = struct.Struct("<16sHIBB2B")    # 26 bytes
 CHAT = struct.Struct("<B3B96s")          # 100 bytes: playerId, reserved[3], text[96]
 SESSION = struct.Struct("<4BIBBH")       # 12 bytes (gamemode,city,tod,weather,seed,numPlayers,state,spare)
 INPUT = struct.Struct("<IB3B")           # frame, count, reserved[3] = 8

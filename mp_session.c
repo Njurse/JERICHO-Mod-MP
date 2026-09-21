@@ -47,6 +47,13 @@ static unsigned char gMpOurCars[MAX_CARS];
  * NULL: the engine indexes Pads[] with it and some sites do not check. */
 static char gMpQuietPad = 1;
 
+/* Frame at which car-to-car contacts start counting, for THIS match. Session
+ * state rather than a function-local: MpSessionReset zeroes gMp.frame between
+ * matches, and a function-local would survive holding the PREVIOUS match's
+ * value, silently disabling collisions until the frame counter climbed back up
+ * to it -- minutes into a second match if the first one ran long. */
+static unsigned long gMpHitArmFrame;
+
 /* defined below, needed by the launch path above them */
 static int MpAssignedCarModel(int playerId);
 
@@ -85,6 +92,7 @@ void MpSessionReset(void)
 	gMp.weather = -1;
 	gMp.seed = 0;
 	gMp.frame = 0;
+	gMpHitArmFrame = 0;	/* collisions arm afresh in every match */
 	gMp.running = 0;
 	gMp.leaving = 0;
 	gMp.modsMatched = 1;
@@ -1533,14 +1541,13 @@ static void MpHitFrame(void)
 	MP_PLAYER* me = MpLocalPlayer();
 	CAR_DATA* mine;
 	int i;
-	static unsigned long armFrame;   /* contacts only count after the spawn settles */
 
 	if (me == NULL || me->carId < 0)
 		return;
 
-	if (armFrame == 0)
-		armFrame = gMp.frame + MP_HIT_ARM_FRAMES;
-	if (gMp.frame < armFrame)
+	if (gMpHitArmFrame == 0)
+		gMpHitArmFrame = gMp.frame + MP_HIT_ARM_FRAMES;
+	if (gMp.frame < gMpHitArmFrame)
 		return;
 
 	mine = &car_data[me->carId];
