@@ -320,6 +320,15 @@ def cmd_stop(a):
         print("local: no recorded pid (start it with deploy/run so it is known)")
 
 
+def verdict_dirs(a, dirs):
+    """mp_localpair.verdict() speaks {"a": host, "b": client}; we know which seat
+    THIS machine took, so map onto that rather than passing our own key names
+    through (which raised KeyError('a') the first time it was actually run)."""
+    if a.seat == "host":
+        return {"a": dirs["local"], "b": dirs["peer"]}
+    return {"a": dirs["peer"], "b": dirs["local"]}
+
+
 def pull_logs(a):
     agent = Agent(a.peer, a.port, a.token)
     os.makedirs(os.path.join(WORK, "local"), exist_ok=True)
@@ -351,7 +360,7 @@ def cmd_logs(a):
     print("pulling both logs")
     dirs = pull_logs(a)
     if lp is not None:
-        print(f"  verdict: {lp.verdict(dirs)}")
+        print(f"  verdict: {lp.verdict(verdict_dirs(a, dirs))}")
     else:
         print("  (mp_localpair not importable -- logs are in .mp-remote/)")
 
@@ -374,7 +383,7 @@ def cmd_run(a):
         try:
             dirs = pull_logs(a)
             if lp is not None:
-                print(f"  verdict: {lp.verdict(dirs)}")
+                print(f"  verdict: {lp.verdict(verdict_dirs(a, dirs))}")
         except AgentError as e:
             print(f"  could not pull the peer's log: {e}")
 
