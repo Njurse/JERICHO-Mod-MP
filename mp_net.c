@@ -101,6 +101,10 @@ typedef struct MP_CONN
 	unsigned char sbuf[MP_SEND_QUEUE];	/* frames waiting for the socket */
 	int           sbufLen;
 	int           sbufOff;	/* bytes already written out */
+	int           stageSeen;	/* the stage the timer is measuring */
+	unsigned long stageSinceMs;	/* when the current stage began ("time in state") */
+	char          lastEvent[40];	/* what happened last, for the on-screen line */
+	unsigned long lastEventMs;	/* when it happened */
 } MP_CONN;
 
 static MP_CONN gConn[MP_MAX_PLAYERS];
@@ -433,6 +437,8 @@ static int MpAllocConn(void)
 			gConn[i].used = 1;
 			gConn[i].playerId = -1;
 			gConn[i].acceptedMs = MpClockMs();
+			gConn[i].stageSinceMs = gConn[i].acceptedMs;
+			gConn[i].stageSeen = -1;	/* so the first event starts the clock */
 			return i;
 		}
 	}
@@ -921,12 +927,81 @@ int MpPeerCount(void)
  * drop, queue overflow, the deadlines -- and every close logs too, so the ORDER
  * of the lines names whoever closed the socket. A close with no origin line in
  * front of it is the one thing that must never happen again. */
+/* The on-screen connection readout. Two SHORT lines rather than one long one:
+ * the screen is 320 px wide, so peer + stage + time + last event on a single
+ * line runs off the edge and becomes unreadable exactly when it matters.
+ *
+ *      part 0:  "<peer>  <stage> <n>s"   e.g. "192.168.50.244:55497  in match 67s"
+ *      part 1:  "last: <event> (<n>s ago)"
+ *
+ * The same text is written to the log by MpConnEvent, deliberately: whatever is
+ * on screen can then be grepped for, so "read me out what you see" becomes a
+ * one-line search instead of a description. */
+void MpConnLineText(char* out, int cap, int part)
+{
+	int idx = -1;
+	int i;
+	unsigned long now;
+
+	if (out == NULL || cap <= 0)
+		return;
+
+	out[0] = 0;
+
+	if (gMp.role != MP_ROLE_HOST && gMp.role != MP_ROLE_CLIENT)
+	{
+		if (part == 0)
+			snprintf(out, cap, "not in a session");
+		return;
+	}
+
+	for (i = 0; i < MP_MAX_PLAYERS; i++)
+		if (gConn[i].used) { idx = i; break; }
+
+	if (idx < 0)
+	{
+		/* In a session but with no live connection: the useful fact is that we are
+		 * not connected -- a blank line reads like the overlay is broken. */
+		if (part == 0)
+			snprintf(out, cap, "no connection%s", gMp.running ? " (in a match)" : "");
+		else
+			snprintf(out, cap, "last: %s", gConnectingHost[0] ? gConnectingHost : "-");
+		return;
+	}
+
+	now = MpNowMs();
+
+	if (part == 0)
+		snprintf(out, cap, "%s  %s %lus",
+			gConn[idx].peer[0] ? gConn[idx].peer : "(peer)",
+			MpStageName(gConn[idx].hsStage),
+			(now - gConn[idx].stageSinceMs) / 1000UL);
+	else
+		snprintf(out, cap, "last: %s  (%lus ago)",
+			gConn[idx].lastEvent[0] ? gConn[idx].lastEvent : "-",
+			(now - gConn[idx].lastEventMs) / 1000UL);
+}
+
 void MpConnEvent(const char* ev, int idx, const char* why)
 {
 	char peer[80];
 
 	if (gMpCtx == NULL)
 		return;
+
+	/* Keep the stage timer and the last-event string current: those are what the
+	 * on-screen line reads, and a stage that changed without moving its clock
+	 * would look as if nothing had happened for minutes. */
+	if (idx >= 0 && idx < MP_MAX_PLAYERS)
+	{
+		if (gConn[idx].stageSeen != gConn[idx].hsStage)
+		{
+			gConn[idx].stageSeen = gConn[idx].hsStage;
+			gConn[idx].stageSinceMs = MpNowMs();
+		}
+		snprintf(gConn[idx].lastEvent, sizeof(gConn[idx].lastEvent), "%s", ev != NULL ? ev : "?");
+		gConn[idx].lastEventMs = MpNowMs();
+	}
 
 	peer[0] = 0;
 
@@ -944,6 +1019,18 @@ void MpConnEvent(const char* ev, int idx, const char* why)
 		(idx >= 0 && idx < MP_MAX_PLAYERS) ? MpStageName(gConn[idx].hsStage) : "n/a",
 		(why != NULL && why[0] != 0) ? " | why: " : "",
 		why != NULL ? why : "");
+
+	/* Mirror the on-screen line into the log, so whatever is on screen is
+	 * searchable from here without anyone having to read it out loud. */
+	{
+		char l0[120];
+		char l1[120];
+
+		MpConnLineText(l0, sizeof(l0), 0);
+		MpConnLineText(l1, sizeof(l1), 1);
+
+		gMpCtx->jer_log(gMpCtx, "[mp] on screen: %s | %s\n", l0, l1);
+	}
 }
 
 static void MpDropConn(int idx, const char* why)
@@ -1417,6 +1504,18 @@ static void MpLinkTick(void)
 				"[mp] link: conn %d frame %lu heard %lums ago queued %d tx=%lu\n",
 				i, gMp.frame, now - c->lastRecvMs,
 				c->sbufLen - c->sbufOff, c->txBytes);
+		}
+
+		/* The same text the overlay is drawing, so "time in state" can be watched
+		 * in a log as well as read off the screen. */
+		{
+			char l0[120];
+			char l1[120];
+
+			MpConnLineText(l0, sizeof(l0), 0);
+			MpConnLineText(l1, sizeof(l1), 1);
+
+			gMpCtx->jer_log(gMpCtx, "[mp] screen: %s | %s\n", l0, l1);
 		}
 	}
 }

@@ -909,6 +909,8 @@ static int MpOnDrawOverlay(void* userdata, void* args)
 	{
 		const char* who = MpIsHost() ? "HOST" :
 			(gMp.role == MP_ROLE_CLIENT ? "CLIENT" : "MP");
+		char conn0[120];
+		char conn1[120];
 
 		if (MpIsHost())
 			SetTextColour(0, 255, 255);
@@ -916,6 +918,23 @@ static int MpOnDrawOverlay(void* userdata, void* args)
 			SetTextColour(255, 200, 0);
 
 		PrintString((char*)who, 8, 226);
+
+		/* What the connection is DOING, right here on screen -- the line to read
+		 * out when something looks wrong on one machine only: which peer, how
+		 * long it has been in its current stage, and what happened last. Two
+		 * short lines because one long one runs off a 320 px screen. MpConnEvent
+		 * logs this same text, so it can also simply be grepped for. */
+		MpConnLineText(conn0, sizeof(conn0), 0);
+		MpConnLineText(conn1, sizeof(conn1), 1);
+
+		if (conn0[0] != 0)
+		{
+			SetTextColour(190, 190, 190);
+			PrintString(conn0, 8, 208);
+
+			if (conn1[0] != 0)
+				PrintString(conn1, 8, 217);
+		}
 	}
 
 	return JER_RESULT_CONTINUE;
