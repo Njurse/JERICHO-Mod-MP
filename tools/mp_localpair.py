@@ -19,6 +19,16 @@ fighting each other.
     python mp_localpair.py --seconds 90     # watch for longer
     python mp_localpair.py --keep           # leave the run dirs for poking at
 
+It also ends a run as soon as it can -- which is the difference between iterating
+and sitting out a window:
+
+    --until "getting OUT"    stop the moment that line appears (repeatable)
+    --forbid "Lost the server"  stop the moment that line appears: a FAIL
+    --stall 10               no new log bytes on EITHER side for 10s -> STALLED
+
+and it prints the running tail of both logs while it waits, so a bad run is
+obvious immediately instead of at the end.
+
 Both instances are launched directly (not via a .bat), so the PIDs here are real
 and the cleanup kills exactly what it started -- nothing else.
 """
@@ -26,6 +36,7 @@ import argparse
 import atexit
 import os
 import random
+import re
 import shutil
 import subprocess
 import sys
@@ -213,6 +224,35 @@ def read_log(run_dir):
     return ""
 
 
+HEARTBEAT = re.compile(r"\[mp\] heartbeat: frame (\d+) ")
+
+
+def read_logs(dirs):
+    """Both sides' live log text, plus the total length.
+
+    One read per poll, because the same text answers two different questions: has
+    the line under test appeared (--until/--forbid), and is anything still
+    happening at all (--stall).
+    """
+    out = {}
+    total = 0
+
+    for side in sorted(dirs):
+        out[side] = read_log(dirs[side])
+        total += len(out[side])
+
+    return out, total
+
+
+def heartbeat_frames(text):
+    """The sim frames a side has reported through MP_HEARTBEAT.
+
+    That is the module's own tick counter, which is the point: a heartbeat that
+    stops advancing means the SIMULATION stopped, not that the game went quiet.
+    """
+    return [int(m.group(1)) for m in HEARTBEAT.finditer(text)]
+
+
 def _repo_tools():
     """<repo>/tools, where dmp_fault.py and map_lookup.py live."""
     here = os.path.dirname(os.path.abspath(__file__))
@@ -272,7 +312,7 @@ def triage_crash(dump, mapfile):
     return lines
 
 
-def verdict(dirs):
+def verdict(dirs, stopped=None):
     """Pass/fail for the run: the pair must connect, must not drop, must not crash.
 
     This is what turns the harness from a log dump into a regression test.
@@ -284,6 +324,16 @@ def verdict(dirs):
 
     A crash is checked FIRST and reported with its function, because a run that
     died at the halfway point can still show every marker of a healthy one.
+
+    `stopped` is what ended the run early, and two of its values are FAILURES even
+    though every marker above may hold:
+
+      "stall"  -- nothing was logged on EITHER side for --stall seconds. Every
+                  connection marker was satisfied in the first seconds of the run,
+                  so a game that froze at 6s used to be reported PASS; that is how
+                  "the window that previously killed the client is now survived"
+                  got recorded as good news. A frozen run is not a passing run.
+      "forbid" -- a line the caller declared fatal (--forbid) turned up.
     """
     host = read_log(dirs["a"])
     client = read_log(dirs["b"])
@@ -301,11 +351,23 @@ def verdict(dirs):
     client_lost = client.count("Lost the server")
     zero_byte = (host + client).count("0 byte(s) received")
 
+    stalled = stopped == "stall"
+    forbidden = stopped == "forbid"
+
     ok = (host_join and client_ok and client_lost == 0 and zero_byte == 0
-          and not dumps)
+          and not dumps and not stalled and not forbidden)
+
+    why = ""
+    if stalled:
+        why = " -> STALLED (not a pass: a frozen game logs nothing)"
+    elif forbidden:
+        why = " -> FAIL (a --forbid line appeared)"
+    else:
+        why = f" -> {'PASS' if ok else 'FAIL'}"
+
     log(f"verdict: host_join={host_join} client_accepted={client_ok} "
         f"client_lost={client_lost} zero_byte_peers={zero_byte} "
-        f"dumps={len(dumps)} -> {'PASS' if ok else 'FAIL'}")
+        f"dumps={len(dumps)} stopped={stopped or 'no'}{why}")
     return 0 if ok else 1
 
 
@@ -344,6 +406,22 @@ def main():
     ap.add_argument("--client-car", default="slot3",
                     help="the joining player's car: a model number, slotN, 'random', or 'default' "
                          "(= pass NO -mpcar; default slot3)")
+    ap.add_argument("--until", action="append", default=[], metavar="REGEX",
+                    help="end the run the moment this appears in EITHER log (repeatable). "
+                         "Use it to stop as soon as the thing under test has happened instead "
+                         "of sitting out --seconds: mp_localpair.py --until 'getting OUT'")
+    ap.add_argument("--forbid", action="append", default=[], metavar="REGEX",
+                    help="end the run AND fail the moment this appears -- a marker that must "
+                         "never turn up (repeatable)")
+    ap.add_argument("--stall", type=int, default=10, metavar="SECS",
+                    help="if a side's sim tick stops advancing (or, without heartbeats, "
+                         "NEITHER log grows) for this many seconds, stop and report STALLED. "
+                         "STALLED is not a pass: a frozen game logs nothing, and that used to "
+                         "be indistinguishable from a healthy run whose markers were all "
+                         "logged early. 0 disables.")
+    ap.add_argument("--tail", type=int, default=3, metavar="SECS",
+                    help="print the running tail of both logs this often while waiting, so a "
+                         "bad run is obvious as it happens (0 = never)")
     args = ap.parse_args()
 
     # A random car each, from the level's own domestic set (models 0..4), so a run
@@ -392,6 +470,28 @@ def main():
     # "discovery unavailable" and simply does not browse. The join below uses the
     # address directly, which is the path that must work anyway.
     env = {} if args.no_debug else {"MP_DEBUG": "1"}
+
+    # This harness reads both logs WHILE the games are still running (verdict()
+    # runs before anything is killed), and the engine's log is a buffered FILE*
+    # that is only flushed when a LOADING SCREEN goes up -- not per frame, and
+    # never at all on the way out of a killed process. So the file on disk can
+    # lose its tail, and a line written just before the game hangs inside a hook
+    # is lost for good -- which reads exactly like "that code never ran" (it is
+    # how "the eject lever never fired" was recorded). Flush per line instead, so
+    # what is judged is what actually happened.
+    #
+    # Not forced: `JERICHO_LOG_FLUSH=0 python mp_localpair.py ...` keeps the old
+    # buffered behaviour, which is what proves the lever is doing anything.
+    if "JERICHO_LOG_FLUSH" not in os.environ:
+        env["JERICHO_LOG_FLUSH"] = "1"
+
+    # ...and a heartbeat once a second, so this harness can tell a FROZEN game
+    # from a quiet one. Every periodic line in the module is MP_DEBUG-gated, and
+    # --no-debug is exactly the case worth testing, so without this the two are
+    # indistinguishable (see --stall).
+    if "MP_HEARTBEAT" not in os.environ:
+        env["MP_HEARTBEAT"] = "1"
+
     if args.map:
         env["MP_MAP"] = "1"
 
@@ -456,7 +556,18 @@ def main():
     # interesting part of the run, so there is no point sitting out the rest of
     # the window with both machines dead -- and a crash needs to be impossible to
     # miss, because everything the log says after it is meaningless.
+    #
+    # A crash is not the only way a run stops being interesting, so the same loop
+    # also ends the run the moment the line under test appears (--until), the
+    # moment a marker that must never appear does (--forbid), and the moment
+    # nothing is happening any more (--stall).
     deadline = time.time() + remaining
+    stopped = None
+    seen_bytes = -1
+    last_growth = time.time()
+    next_tail = time.time()
+    labels = {"a": "host", "b": "client"}
+    hb = {s: {"seen": False, "frame": -1, "time": 0.0} for s in ("a", "b")}
 
     while time.time() < deadline:
         hit = crash_dumps(dirs)
@@ -465,6 +576,73 @@ def main():
             log(f"!! CRASH on {', '.join(sorted(hit))} -- stopping the run now")
             break
 
+        texts, total = read_logs(dirs)
+        now = time.time()
+
+        if total != seen_bytes:
+            seen_bytes = total
+            last_growth = now
+
+        # The thing we came for has happened. Repeatable, so a test can name both
+        # sides -- and it is only worth anything because both logs are flushed
+        # live (JERICHO_LOG_FLUSH), otherwise the line could still be in the
+        # engine's buffer and the run would sit here waiting for a thing that
+        # already happened.
+        m = next((p for p in args.until if re.search(p, texts["a"] + texts["b"])), None)
+
+        if m:
+            log(f"== --until '{m}' appeared -- stopping the run now")
+            stopped = "until"
+            break
+
+        # ...or a marker that must never turn up.
+        m = next((p for p in args.forbid if re.search(p, texts["a"] + texts["b"])), None)
+
+        if m:
+            log(f"!! --forbid '{m}' appeared -- stopping the run now")
+            stopped = "forbid"
+            break
+
+        # Liveness. Watching for a crash dump is not enough: a game that FREEZES
+        # leaves no dump, has already logged every pass/fail marker, and reads as
+        # a PASS -- which is exactly how a run that died at 6 s was recorded as a
+        # healthier one than the run before it. So watch the module's own tick:
+        # a heartbeat that stops advancing while the link is up means the
+        # simulation stopped.
+        for side in ("a", "b"):
+            frames = heartbeat_frames(texts[side])
+
+            if frames and (not hb[side]["seen"] or frames[-1] != hb[side]["frame"]):
+                hb[side]["seen"] = True
+                hb[side]["frame"] = frames[-1]
+                hb[side]["time"] = now
+
+        if args.stall > 0:
+            stuck = [f"{labels[s]} (last heartbeat frame {hb[s]['frame']})"
+                     for s in ("a", "b")
+                     if hb[s]["seen"] and (now - hb[s]["time"]) >= args.stall]
+
+            # No heartbeats to watch (the run was started without the lever):
+            # fall back to "neither log grew at all".
+            if (not stuck and not any(hb[s]["seen"] for s in ("a", "b"))
+                    and (now - last_growth) >= args.stall):
+                stuck = ["both logs (no growth)"]
+
+            if stuck:
+                log(f"!! STALLED -- nothing for {args.stall}s: {', '.join(stuck)}. "
+                    f"A frozen game logs nothing, and this is NOT a pass")
+                stopped = "stall"
+                break
+
+        # Say what is happening while it happens, so a bad run is obvious in
+        # seconds instead of at the end of the window.
+        if args.tail > 0 and now >= next_tail:
+            next_tail = now + args.tail
+
+            for side in ("a", "b"):
+                lines = [l for l in texts[side].splitlines() if l.strip()]
+                log(f"  [{labels[side]}] {lines[-1] if lines else '<nothing logged yet>'}")
+
         time.sleep(0.5)
 
     patterns = ("[mp]", "[error]", "[jericho]")
@@ -472,7 +650,7 @@ def main():
     report(dirs["b"], "CLIENT", patterns)
 
     # Pass/fail BEFORE the run dirs (and their logs) are removed.
-    passes = verdict(dirs)
+    passes = verdict(dirs, stopped)
 
     for p, label in ((b, "client"), (a, "host")):
         if p.poll() is None:

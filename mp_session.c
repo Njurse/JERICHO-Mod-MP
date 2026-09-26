@@ -1657,6 +1657,46 @@ static void MpHandleHit(int connIndex, const unsigned char* p, int len)
 	}
 }
 
+/* MP_HEARTBEAT=<secs> -- once every N seconds, say that our sim tick is still
+ * alive, with the frame the module has reached.
+ *
+ * This is the liveness signal a harness cannot otherwise get. EVERY other
+ * periodic line in this module is MP_DEBUG-gated, so a --no-debug run (which is
+ * what a player actually runs) is silent -- and silence from a frozen game is
+ * indistinguishable from silence from a quiet one. A frozen run has already been
+ * recorded here as a GOOD run, because every pass/fail marker a harness can see
+ * is logged in the first seconds of a match:
+ *
+ *     [pair] verdict: ... dumps=0 -> PASS      <- the game froze at 6 s
+ *
+ * A line per second is nothing next to MP_DEBUG, and it is unconditional on
+ * purpose: this is a testing lever, not debug spam. */
+static void MpHeartbeatTick(void)
+{
+	static unsigned long lastMs;
+	const char* s = getenv("MP_HEARTBEAT");
+	unsigned long now;
+	int secs;
+
+	if (s == NULL || gMpCtx == NULL)
+		return;
+
+	secs = atoi(s);
+
+	if (secs <= 0)
+		return;
+
+	now = MpNowMs();
+
+	if (lastMs != 0 && (now - lastMs) < (unsigned long)(secs * 1000))
+		return;
+
+	lastMs = now;
+
+	gMpCtx->jer_log(gMpCtx, "[mp] heartbeat: frame %lu running %d role %d\n",
+		gMp.frame, gMp.running, gMp.role);
+}
+
 /* One network tick (per simulation frame). Each machine owns ITS OWN car and
  * broadcasts that; everyone else adopts it, so nobody blocks on the network and
  * every car you see is the truth of the machine driving it. */
@@ -1666,6 +1706,9 @@ void MpLockstepFrame(void)
 		return;
 
 	++gMp.frame;
+
+	/* test lever: prove the sim tick is still running (MP_HEARTBEAT) */
+	MpHeartbeatTick();
 
 	/* test lever: a scripted mid-session car change (inert unless MP_TEST_CARCHANGE) */
 	MpTestCarChangeTick();
