@@ -43,7 +43,11 @@ import sys
 import time
 
 DEFAULT_GAME_DIR = os.path.join("src_rebuild", "bin", "Release_dev")
-INSTANCE_DIR_NAMES = ("a", "b")
+# Seat names, the host first. A run uses the first --players of these. The module
+# itself seats up to MP_MAX_PLAYERS (8); the extra names exist because a 4-seat run
+# needs somewhere to put its LATE JOINERS, and a late join is a different spawn
+# path from the one a pair exercises.
+SEAT_NAMES = ("a", "b", "c", "d", "e", "f", "g", "h")
 # The game writes its log as JERICHO.log -- the LOADER owns the file. REDRIVER2.log
 # is kept as a fallback for a build that writes that name instead. Reporting the
 # wrong one made every run print "no REDRIVER2.log" even when the game logged fine.
@@ -312,8 +316,8 @@ def triage_crash(dump, mapfile):
     return lines
 
 
-def verdict(dirs, stopped=None):
-    """Pass/fail for the run: the pair must connect, must not drop, must not crash.
+def verdict(names, dirs, stopped=None):
+    """Pass/fail for the run: EVERY seat must connect, none may drop, none may crash.
 
     This is what turns the harness from a log dump into a regression test.
     "The client dropped instantly" was invisible in a wall of logs, so the two
@@ -336,7 +340,8 @@ def verdict(dirs, stopped=None):
       "forbid" -- a line the caller declared fatal (--forbid) turned up.
     """
     host = read_log(dirs["a"])
-    client = read_log(dirs["b"])
+    others = {n: read_log(dirs[n]) for n in names if n != "a"}
+    everything = [host] + list(others.values())
 
     dumps = crash_dumps(dirs)
 
@@ -346,10 +351,16 @@ def verdict(dirs, stopped=None):
         for line in triage_crash(dump, mapfile):
             log(f"    {line}")
 
-    host_join = "joined (" in host
-    client_ok = "accepted as player" in client
-    client_lost = client.count("Lost the server")
-    zero_byte = (host + client).count("0 byte(s) received")
+    # One "joined" line per joiner on the host, and every joiner's own acceptance
+    # line in its own log: with more than two seats it is not enough that SOMEBODY
+    # connected, so both are counted rather than tested for presence.
+    joins = host.count("joined (")
+    want_joins = len(names) - 1
+    host_join = joins >= want_joins
+    missing = [n for n, text in sorted(others.items()) if "accepted as player" not in text]
+    client_ok = not missing
+    client_lost = sum(t.count("Lost the server") for t in everything)
+    zero_byte = sum(t.count("0 byte(s) received") for t in everything)
 
     stalled = stopped == "stall"
     forbidden = stopped == "forbid"
@@ -365,9 +376,14 @@ def verdict(dirs, stopped=None):
     else:
         why = f" -> {'PASS' if ok else 'FAIL'}"
 
-    log(f"verdict: host_join={host_join} client_accepted={client_ok} "
-        f"client_lost={client_lost} zero_byte_peers={zero_byte} "
+    log(f"verdict: host_joins={joins}/{want_joins} "
+        f"joiners_accepted={len(others) - len(missing)}/{len(others)} "
+        f"lost={client_lost} zero_byte_peers={zero_byte} "
         f"dumps={len(dumps)} stopped={stopped or 'no'}{why}")
+
+    if missing:
+        log(f"    never accepted: {', '.join(missing)}")
+
     return 0 if ok else 1
 
 
@@ -398,6 +414,14 @@ def main():
                     help="city for the host to host (default rio)")
     ap.add_argument("--mp-arena", default="1",
                     help="multiplayer map/arena for both sides (default 1)")
+    ap.add_argument("--players", type=int, default=2, metavar="N",
+                    help="how many seats to run: one host plus N-1 joiners (2..8). The FIRST "
+                         "joiner arrives before the match starts, so the ones after it join a "
+                         "LIVE match -- which is the only way the late-join spawn path and the "
+                         "host's relay get exercised at all (default 2).")
+    ap.add_argument("--stagger", type=int, default=14, metavar="SECS",
+                    help="gap between the late joiners, so each one really does join a match "
+                         "that is already running (default 14; a level takes ~10s to load).")
     ap.add_argument("--host-car", default="slot1",
                     help="the host's car: a model number, slotN, 'random', or 'default' "
                          "(= pass NO -mpcar, so the level chooses -- what a player who just "
@@ -423,6 +447,21 @@ def main():
                     help="print the running tail of both logs this often while waiting, so a "
                          "bad run is obvious as it happens (0 = never)")
     args = ap.parse_args()
+
+    if args.players < 2 or args.players > len(SEAT_NAMES):
+        log(f"--players must be 2..{len(SEAT_NAMES)}")
+        return 2
+
+    names = SEAT_NAMES[:args.players]
+
+    # A 4-seat run costs the level load plus a stagger per late joiner, and the
+    # commonest way to waste one is to give it less window than that.
+    needed = args.settle + args.stagger * (args.players - 2) + 25
+
+    if args.seconds < needed:
+        log(f"note: --seconds {args.seconds} is shorter than this run needs ({needed}s for "
+            f"{args.players} seats); raising it to {needed}")
+        args.seconds = needed
 
     # A random car each, from the level's own domestic set (models 0..4), so a run
     # actually exercises per-player vehicle choice instead of always the same two.
@@ -450,11 +489,13 @@ def main():
         time.sleep(1)
 
     pair_root = os.path.join(game_dir, ".mp-pair")
-    dirs = {n: os.path.join(pair_root, n) for n in INSTANCE_DIR_NAMES}
+    dirs = {n: os.path.join(pair_root, n) for n in names}
 
     if args.clean:
-        for name in INSTANCE_DIR_NAMES:
-            safe_remove(dirs[name])
+        # every seat name, not just this run's: a leftover from a longer run is
+        # exactly what --clean is for.
+        for name in SEAT_NAMES:
+            safe_remove(os.path.join(pair_root, name))
         try:
             os.rmdir(pair_root)
         except OSError:
@@ -462,7 +503,7 @@ def main():
         log(f"removed {pair_root}")
         return 0
 
-    for name in INSTANCE_DIR_NAMES:
+    for name in names:
         build_run_dir(game_dir, dirs[name], f"Local{name.upper()}", args.port)
     log(f"run dirs ready under {pair_root}")
 
@@ -502,6 +543,12 @@ def main():
     # to host as well.
     host_env = dict(env)
     host_env["MP_AUTOSTART"] = "host"
+
+    # ...and start the match as soon as ONE joiner is in. That is what makes every
+    # joiner after it a LATE one: the match is already running when they arrive, so
+    # the module takes its late-join spawn path rather than the level-init one.
+    if args.players > 2:
+        host_env["MP_AUTOJOIN_START"] = "2"
     client_env = dict(env)
     client_env.pop("MP_AUTOSTART", None)
 
@@ -532,22 +579,34 @@ def main():
         host_argv = host_args + ["-host", str(args.port)]
     else:
         host_argv = host_args + ["-mpcar", args.host_car, "-host", str(args.port)]
-    a = launch(dirs["a"], args.exe, host_argv, host_env)
-    log(f"host  pid {a.pid}  (port {args.port}, {args.level} arena {args.mp_arena}, "
-        f"host car {args.host_car}, client car {args.client_car})")
+
+    procs = {}
+    procs["a"] = launch(dirs["a"], args.exe, host_argv, host_env)
+    log(f"host pid {procs['a'].pid} args: {' '.join(host_argv)}")
+    log(f"host  (port {args.port}, {args.level} arena {args.mp_arena}, "
+        f"host car {args.host_car}, first joiner car {args.client_car})")
 
     log(f"waiting {args.settle}s for the host to load...")
     time.sleep(args.settle)
 
-    if args.client_car == "default":
-        client_argv = client_args + ["-join", f"127.0.0.1:{args.port}"]
-    else:
-        client_argv = client_args + ["-mpcar", args.client_car, "-join", f"127.0.0.1:{args.port}"]
-    b = launch(dirs["b"], args.exe, client_argv, client_env)
+    # The FIRST joiner arrives before the match starts (it is what starts it, with
+    # MP_AUTOJOIN_START=2); every one after it is staggered, so it joins a match that
+    # is already live and takes the late-join spawn path -- the path a pair never
+    # exercises, and the one a late joiner has been seen to spawn above the host on.
+    for i, name in enumerate(names[1:]):
+        argv = list(client_args)
 
-    for label, argv in (("host", host_argv), ("client", client_argv)):
-        log(f"{label} args: {' '.join(argv)}")
-    log(f"client pid {b.pid}")
+        if i == 0 and args.client_car != "default":
+            argv += ["-mpcar", args.client_car]
+
+        argv += ["-join", f"127.0.0.1:{args.port}"]
+
+        procs[name] = launch(dirs[name], args.exe, argv, client_env)
+        log(f"joiner {i + 1} pid {procs[name].pid} args: {' '.join(argv)}")
+
+        if i + 1 < len(names) - 1:
+            log(f"waiting {args.stagger}s so the next joiner joins a LIVE match...")
+            time.sleep(args.stagger)
 
     remaining = max(5, args.seconds - args.settle)
     log(f"running for {remaining}s...")
@@ -566,8 +625,8 @@ def main():
     seen_bytes = -1
     last_growth = time.time()
     next_tail = time.time()
-    labels = {"a": "host", "b": "client"}
-    hb = {s: {"seen": False, "frame": -1, "time": 0.0} for s in ("a", "b")}
+    labels = {n: ("host" if n == "a" else f"joiner{n}") for n in names}
+    hb = {s: {"seen": False, "frame": -1, "time": 0.0} for s in names}
 
     while time.time() < deadline:
         hit = crash_dumps(dirs)
@@ -588,7 +647,8 @@ def main():
         # live (JERICHO_LOG_FLUSH), otherwise the line could still be in the
         # engine's buffer and the run would sit here waiting for a thing that
         # already happened.
-        m = next((p for p in args.until if re.search(p, texts["a"] + texts["b"])), None)
+        every = "".join(texts[s] for s in names)
+        m = next((p for p in args.until if re.search(p, every)), None)
 
         if m:
             log(f"== --until '{m}' appeared -- stopping the run now")
@@ -596,7 +656,7 @@ def main():
             break
 
         # ...or a marker that must never turn up.
-        m = next((p for p in args.forbid if re.search(p, texts["a"] + texts["b"])), None)
+        m = next((p for p in args.forbid if re.search(p, every)), None)
 
         if m:
             log(f"!! --forbid '{m}' appeared -- stopping the run now")
@@ -609,7 +669,7 @@ def main():
         # healthier one than the run before it. So watch the module's own tick:
         # a heartbeat that stops advancing while the link is up means the
         # simulation stopped.
-        for side in ("a", "b"):
+        for side in names:
             frames = heartbeat_frames(texts[side])
 
             if frames and (not hb[side]["seen"] or frames[-1] != hb[side]["frame"]):
@@ -619,12 +679,12 @@ def main():
 
         if args.stall > 0:
             stuck = [f"{labels[s]} (last heartbeat frame {hb[s]['frame']})"
-                     for s in ("a", "b")
+                     for s in names
                      if hb[s]["seen"] and (now - hb[s]["time"]) >= args.stall]
 
             # No heartbeats to watch (the run was started without the lever):
             # fall back to "neither log grew at all".
-            if (not stuck and not any(hb[s]["seen"] for s in ("a", "b"))
+            if (not stuck and not any(hb[s]["seen"] for s in names)
                     and (now - last_growth) >= args.stall):
                 stuck = ["both logs (no growth)"]
 
@@ -639,20 +699,23 @@ def main():
         if args.tail > 0 and now >= next_tail:
             next_tail = now + args.tail
 
-            for side in ("a", "b"):
+            for side in names:
                 lines = [l for l in texts[side].splitlines() if l.strip()]
                 log(f"  [{labels[side]}] {lines[-1] if lines else '<nothing logged yet>'}")
 
         time.sleep(0.5)
 
     patterns = ("[mp]", "[error]", "[jericho]")
-    report(dirs["a"], "HOST", patterns)
-    report(dirs["b"], "CLIENT", patterns)
+
+    for name in names:
+        report(dirs[name], "HOST" if name == "a" else f"JOINER {name.upper()}", patterns)
 
     # Pass/fail BEFORE the run dirs (and their logs) are removed.
-    passes = verdict(dirs, stopped)
+    passes = verdict(names, dirs, stopped)
 
-    for p, label in ((b, "client"), (a, "host")):
+    for name in reversed(names):
+        p = procs[name]
+        label = labels[name]
         if p.poll() is None:
             p.terminate()
 
@@ -676,7 +739,7 @@ def main():
         log(f"stopped {label} (pid {p.pid}, exit {p.returncode})")
 
     if not args.keep:
-        for name in INSTANCE_DIR_NAMES:
+        for name in names:
             safe_remove(dirs[name])
         try:
             os.rmdir(pair_root)
