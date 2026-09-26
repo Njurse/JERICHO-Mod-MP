@@ -688,14 +688,44 @@ void MpSpawnLateJoiners(void)
 		if (slot < 1 || slot >= MAX_CARS)
 			continue;
 
-		/* copy the local player's start record, then overwrite what is ours to
-			 * choose (see MpOnNetSpawn for the same construction at level init) */
+		/* THE LEVEL'S OWN START, one lane per player -- NOT a copy of player 0's record.
+		 *
+		 * The engine builds every player's start itself: slot 0 from the mission or
+		 * levelstartpos, and slot 1 at +600 in x beside it (main.c:3401-3405), with
+		 * ONLY x and z set (main.c:3384 leaves vy = 0) so that placement resolves the
+		 * height later (main.c:641-642). A LIVE join has no engine record for this
+		 * slot -- the level was built for one player and the start table was filled
+		 * then -- so build the same shape here: the local record's start point, offset
+		 * one 600-unit lane per player id, the level's own heading, and no y.
+		 *
+		 * Copying slot 0's whole record (what this did) put every late joiner on the
+		 * MISSION START POINT OF PLAYER 0 -- the player who is already in the match --
+		 * and the placement below then forced the local car's LIVE y on top of it. A y
+		 * from one x/z applied at another is the "late joiners spawn above the host"
+		 * report, and the engine has to pull the car down afterwards. */
 		PlayerStartInfo[slot] = &ReplayStreams[slot].SourceType;
-		memcpy((u_char*)PlayerStartInfo[slot], (u_char*)PlayerStartInfo[0], sizeof(STREAM_SOURCE));
+
+		memset((char*)PlayerStartInfo[slot], 0, sizeof(STREAM_SOURCE));
 
 		PlayerStartInfo[slot]->type = 1;
 		PlayerStartInfo[slot]->controlType = CONTROL_TYPE_PLAYER;
 		PlayerStartInfo[slot]->flags = 0;
+
+		{
+			int lane = 600 * id;		/* the engine's own step for player 2 */
+
+			PlayerStartInfo[slot]->position.vx = PlayerStartInfo[0]->position.vx + lane;
+			PlayerStartInfo[slot]->position.vz = PlayerStartInfo[0]->position.vz;
+			/* vy stays 0 -- the engine's convention, not an oversight: placement
+			 * resolves the ground under the car. */
+			PlayerStartInfo[slot]->rotation = PlayerStartInfo[0]->rotation;
+
+			if (gMpCtx != NULL)
+				gMpCtx->jer_log(gMpCtx,
+					"[mp] spawn: player %d -> slot %d at the level's own start %d,%d (+%d lane), no y\n",
+					id, slot, PlayerStartInfo[slot]->position.vx,
+					PlayerStartInfo[slot]->position.vz, lane);
+		}
 
 		/* Same pool-checked per-player vehicle as the level-init spawn
 		 * (MpOnNetSpawn): the host's own model is NOT this player's, and copying it
@@ -719,15 +749,12 @@ void MpSpawnLateJoiners(void)
 					id, slot, PlayerStartInfo[slot]->model, lvl);
 		}
 
-		/* NOTHING ELSE TOUCHES THE POSITION. The engine's own spawn for this slot is
-		 * already the SAME on both machines (verified: the second car lands at the
-		 * same x/z/y whether we look from the host or the client), and it is already
-		 * on the ground. The old code moved the slot alongside the host's live car
-		 * and forced the local start record's vy -- which reads 0 -- so the car
-		 * started in the air and fell in. */
-
-		rot = car_data[0].hd.direction;
-		PlayerStartInfo[slot]->rotation = rot;
+		/* The car keeps the height InitPlayer took from the record (0, the engine's own
+		 * convention) and the engine's placement resolves the ground under it, exactly
+		 * as it does for a car created at level init. There is deliberately NO y
+		 * override from the local car: a y from one x/z applied at another is what put
+		 * late joiners above the host and then dropped them in. */
+		rot = PlayerStartInfo[slot]->rotation;
 
 		padid = (char)-slot;
 
@@ -741,9 +768,14 @@ void MpSpawnLateJoiners(void)
 		/* InitPlayer resolves the start record, so place the car after it and
 			 * rebuild the matrix (the collision box is built from the matrix) */
 		car_data[slot].hd.where.t[0] = PlayerStartInfo[slot]->position.vx;
-		car_data[slot].hd.where.t[1] = car_data[0].hd.where.t[1];
 		car_data[slot].hd.where.t[2] = PlayerStartInfo[slot]->position.vz;
 		car_data[slot].hd.direction = rot;
+
+		if (getenv("MP_DEBUG") != NULL && gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx,
+				"[mp] spawn: player %d placed at %d,%d,%d (y is the record's, not the local car's)\n",
+				id, car_data[slot].hd.where.t[0], car_data[slot].hd.where.t[1],
+				car_data[slot].hd.where.t[2]);
 		{
 			MATRIX m;
 
@@ -2971,9 +3003,25 @@ static void MpAdoptRemoteCar(MP_PLAYER* p, int model)
 	if (model >= 0 && model < MAX_CAR_RESIDENT_MODELS && gCarCleanModelPtr[model] != NULL)
 	{
 		if (gMpCtx != NULL)
+		{
+			int was = cp->ap.model;
+
 			gMpCtx->jer_log(gMpCtx,
 				"[mp] player %d changed car: model %d -> %d (slot %d)\n",
-				p->id, cp->ap.model, model, p->carId);
+				p->id, was, model, p->carId);
+
+			/* MP_DEBUG: what the renderer will actually draw WITH. ap.model indexes
+			 * the resident table, and DrawCar draws that model's poly/UV list against
+			 * gTempCarVertDump[carId] -- which only CreateDentableCar ever fills. Writing
+			 * ap.model without that is how a remote car comes out garbled, so name the
+			 * resident model, whether this machine has its mesh, and say plainly that
+			 * the vertex dump was NOT rebuilt. */
+			if (getenv("MP_DEBUG") != NULL)
+				gMpCtx->jer_log(gMpCtx,
+					"[mp] adopt: slot %d -> model %d, residentCarModels[%d]=%d, mesh %s, vertex dump NOT rebuilt\n",
+					model, model, model, residentCarModels[model],
+					gCarCleanModelPtr[model] != NULL ? "present" : "NULL");
+		}
 
 		cp->ap.model = model;
 		p->car = model;
@@ -3056,6 +3104,20 @@ static void MpHandleCarState(int connIndex, const unsigned char* p, int len)
 		 * agreed with the roster while the car on screen stayed the old one. */
 		if (cp->ap.model != (int)e.model)
 		{
+			/* MP_DEBUG: the wire value against what we render, with the resident model
+			 * behind it and whether our mesh for it exists. A model that is not the same
+			 * NUMBER on both machines makes this fire every frame, and every firing
+			 * re-points the mesh without rebuilding the vertices -- the garbled geometry.
+			 * Throttled to once a second, because the repetition IS the signature. */
+			if (getenv("MP_DEBUG") != NULL && gMpCtx != NULL && (gMp.frame % 30) == 0)
+				gMpCtx->jer_log(gMpCtx,
+					"[mp] MODEL: player %d says %d on the wire; we render %d (resident %d, mesh %s) slot %d\n",
+					pl->id, (int)e.model, cp->ap.model,
+					(cp->ap.model >= 0 && cp->ap.model < MAX_CAR_RESIDENT_MODELS)
+						? residentCarModels[cp->ap.model] : -9,
+					(cp->ap.model >= 0 && cp->ap.model < MAX_CAR_RESIDENT_MODELS &&
+					 gCarCleanModelPtr[cp->ap.model] != NULL) ? "present" : "NULL", pl->carId);
+
 			MpAdoptRemoteCar(pl, (int)e.model);
 
 			if (pl->carId < 0 || pl->carId >= MAX_CARS)
