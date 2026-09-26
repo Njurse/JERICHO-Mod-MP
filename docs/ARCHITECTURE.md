@@ -217,6 +217,27 @@ in the canonical order.
 The roster also carries each player's name, host flag, vehicle and ping, which is
 what the pause-menu list reads.
 
+### The spawn contract: the level's own start, and never a y
+
+The engine places a player car from a per-slot start record, built at level init:
+slot 0 from the mission (or `levelstartpos`), slot 1 beside it at +600 in x
+(`main.c:3401-3405`) -- and **only x/z are set**. `position.vy` stays 0 and
+placement resolves the height later (`main.c:3384`, `main.c:641-642`).
+
+A LIVE join has no engine record for its slot -- the level was loaded for the
+players who were there -- so `MpSpawnLateJoiners` builds one in that same shape:
+the start point, one 600-unit lane per player id, the level's own heading, no y.
+Two rules follow, both learned the hard way:
+
+- **Do not copy `PlayerStartInfo[0]`.** Its position is the start point of the
+  player who is ALREADY in the match, so a late joiner used to appear on the host's
+  start point instead of its own.
+- **Never carry a y across cars.** The old code forced
+  `hd.where.t[1] = car_data[0].hd.where.t[1]` -- the local car's LIVE y -- onto the
+  joiner. A y from one x/z applied at another is the "late joiner spawns above the
+  host" report, and the engine then has to pull the car down. Move a car in x/z
+  and let placement find the ground under it.
+
 ---
 
 ## 5. Input replication
@@ -521,6 +542,26 @@ collision actually pushing both cars.
 
 **Known broken:** the frontend-driven second start (Chicago); a snap does not write
 a rigid body; damage is not synced.
+
+**Open, from the 2026-09 four-seat run (and NOT trusted yet -- those runs had
+cainescrossfire enabled by accident, which rewrites car handling, so re-take them
+with a clean modlist before believing any of it):**
+
+- **A third joiner is never welcomed.** Seat `d` connected, sent HELLO (98 bytes)
+  and sat at "HELLO sent, no WELCOME" until the run ended, while the host's module
+  went silent (its last line was a PONG; its heartbeat stopped at frame 1050) with
+  the engine still ticking. Two joiners work; the third does not.
+- **`PlayerStartInfo[0]->position` may not be stable mid-match.** The late-join
+  spawn takes its base point from it, and in a 3-seat run it read `-17249,-60129`
+  where the map's own start had been logged as `173686,1712` earlier in the
+  session. `PlayerStartInfo[0]` points INTO `ReplayStreams[0]`, so the cut recorder
+  is the first suspect. The fix is to capture the start once at level launch.
+- **A model change does not rebuild the mesh.** `MpAdoptRemoteCar` writes
+  `ap.model` and nothing else: no `ap.carCos`, no `CreateDentableCar` -- and that
+  is the only writer of the drawn vertex dump. The wire also carries
+  `cp->ap.model` (a resident SLOT) into a field read as a model NUMBER, which
+  lands right today only because both machines' resident tables agree.
+
 
 ## 14. Version identity, and shipping one build to both machines
 

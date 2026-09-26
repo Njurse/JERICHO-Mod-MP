@@ -90,7 +90,8 @@ connected and was then dropped. Ctrl-C stops it.
 
 | File | What it is |
 | --- | --- |
-| `mp_localpair.py` | the two-instance harness `mp_pair.bat` wraps; prints a PASS/FAIL verdict and reads `JERICHO.log` |
+| `mp_localpair.py` | the two-instance harness `mp_pair.bat` wraps; prints a PASS/FAIL verdict and reads `JERICHO.log` (also runs 3..8 seats -- see `--players`) |
+| `mp_crashrate.py` | repeat `mp_localpair.py` N times and report the CRASH RATE, plus the free car-slot count the `PingInCivCar` breadcrumbs print. Exits non-zero if any run crashed |
 | `mp_test.py` | mock host / client / beacon, plus the protocol checks |
 | `mp_dediserver.py` | the dedicated server `mp_dedi.bat` wraps |
 | `check_debug_independence.py` | fails if any debug `getenv` guard wraps control flow or state (see the traps doc) |
@@ -150,6 +151,23 @@ good run.
 
 `mp_test.py` is also the reference for the wire format — it packs every message by
 hand, so when a field changes there is exactly one other place to update.
+
+## More than two seats
+
+    python mp_localpair.py --players 3                  # host + 2 joiners
+    python mp_localpair.py --players 4 --stagger 20     # host + 3, staggered
+
+`--players N` (2..8) runs the host plus N-1 joiners, each in its own run dir. The
+FIRST joiner arrives before the match starts -- it is what starts it, via
+`MP_AUTOJOIN_START=2` -- and every later one is staggered by `--stagger` seconds so
+it joins a match that is ALREADY LIVE. That is the only way the late-join spawn
+path and the host's relay (`MpHostRelay`) get exercised at all: with a pair, both
+machines build their cars at level init and neither path runs.
+
+The verdict is per seat rather than per pair: the host must log one join per joiner,
+every joiner its own "accepted as player", and `never accepted: <seat>` names
+whoever did not get in. A run whose window is too short for its seats says so and
+raises `--seconds` itself.
 
 ## The test bot (`MP_BOT`, off by default)
 
