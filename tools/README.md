@@ -108,6 +108,46 @@ update it there (e.g. `WELCOME` is `<12BIB`, 12xu8 + u32 seed + u8 hostCar; a
 launchers (PLAY_HOST/JOIN) never set it, so it is the only way to test what a player
 actually runs (a bug that appears only without `MP_DEBUG` is invisible otherwise).
 
+### Ending a run early, and trusting the tail
+
+`mp_localpair.py` judges a RUNNING game -- `verdict()` reads both logs before anything
+is killed -- so what it can see is decided by what the game has actually written to
+disk. Two levers make that reliable, and the harness sets both unless you override
+them:
+
+* `JERICHO_LOG_FLUSH=1` flushes the engine's log per line. Without it the log is a
+  buffered `FILE*` that is flushed only when a loading screen goes up
+  (`PsyX_BeginScene`, which the engine calls from exactly two places), so the file
+  silently loses its tail -- and a line written just before the game hangs never
+  reaches it at all, which reads exactly like "that code never ran". It has already
+  cost a session: an unflushed on-foot line was recorded as "the eject lever never
+  fires", when the lever fires every time.
+* `MP_HEARTBEAT=<secs>` has the module log its own tick once per N seconds. Every
+  other periodic line in the module is `MP_DEBUG`-gated and `--no-debug` is exactly
+  the case worth testing, so without this a FROZEN game and a quiet one look identical
+  -- and a frozen game has already been recorded here as a healthier run than a
+  working one.
+
+Run `JERICHO_LOG_FLUSH=0` once to see the difference for yourself: the same test loses
+its own evidence and still reports PASS.
+
+The levers the harness then gives you:
+
+```
+python mp_localpair.py --until "getting OUT"       # stop the moment it appears
+python mp_localpair.py --forbid "Lost the server"  # stop AND fail on this marker
+python mp_localpair.py --stall 10                  # no tick for 10s -> STALLED
+python mp_localpair.py --tail 3                    # print both tails while waiting
+```
+
+`--until` and `--forbid` are repeatable regexes matched against EITHER log, so a run
+ends when the thing under test has happened instead of sitting out `--seconds`.
+`--stall` watches the heartbeat: **a heartbeat that stops advancing means the
+SIMULATION stopped, not that the game went quiet.** **STALLED is not a PASS**, and a
+`--forbid` match is not one either. A frozen game leaves no crash dump and has already
+logged every connection marker in its first seconds, which is why it used to read as a
+good run.
+
 `mp_test.py` is also the reference for the wire format — it packs every message by
 hand, so when a field changes there is exactly one other place to update.
 
@@ -218,9 +258,10 @@ exit — leaves none, and the log simply stops. So:
 
 `dmp_fault.py` prints `in module REDRIVER2_dev.exe at rva 0x....`; give that RVA to
 `map_lookup.py` together with the `.map` beside the exe and it names the function.
-Correlate with the log's own tail: the last `[mp]` lines are what it was doing —
-though a buffered log can lose the final line or two, so read it as "around here",
-not "exactly here".
+Correlate with the log's own tail: the last `[mp]` lines are what it was doing. A log
+written without `JERICHO_LOG_FLUSH=1` can lose its tail, which turns the last line
+into an "around here" -- the harness sets the flush for you, so read a run you
+launched by hand with that in mind.
 
 **Give a run enough time.** `--settle` is the wait before the client joins and
 `--seconds` is the TOTAL run, so a large `--settle` with a short `--seconds` leaves
@@ -253,3 +294,8 @@ Useful markers: `launching: city N mode M (1=TAKEADRIVE, 0=MISSION!)` — mode 0
 means the mission ladder, i.e. the launch went wrong — `car: player N slot S`,
 `added N remote player car(s)`, `map: drew N remote blip(s)`, `list:` (the pause
 menu rows), and `peer dropped (<why>)`.
+
+A run is judged as well as read: `mp_localpair.py` ends with a verdict, and two of its
+values are findings rather than quiet windows -- **STALLED** (the module's own tick
+stopped advancing, so the simulation stopped) and a `--forbid` match. See "Ending a run
+early, and trusting the tail" above.
