@@ -128,8 +128,8 @@ them:
   -- and a frozen game has already been recorded here as a healthier run than a
   working one.
 
-Run `JERICHO_LOG_FLUSH=0` once to see the difference for yourself: the same test loses
-its own evidence and still reports PASS.
+Run `JERICHO_LOG_FLUSH=0` once and the line is simply absent -- the same test loses its
+own evidence, and a lost tail has already been read here as a PASS.
 
 The levers the harness then gives you:
 
