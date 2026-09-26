@@ -327,6 +327,25 @@ static void MpLaunchLocal(void)
 			gMp.config.car, gMp.config.carIsSlot, wantedCar[0],
 			(PlayerStartInfo[0] != NULL) ? PlayerStartInfo[0]->model : -9);
 
+	/* ...and the whole assignment table for every player id, once per level. This
+	 * is what makes "every player has a DISTINCT car, and every machine agrees on
+	 * which" a line to read instead of something to infer from an N-seat run --
+	 * and it is unconditional, because the N-seat harness runs --no-debug. */
+	if (gMpCtx != NULL)
+	{
+		char line[256];
+		size_t n;
+		int id;
+
+		n = (size_t)snprintf(line, sizeof(line), "[mp] assigned cars (city %d):", GameLevel);
+
+		for (id = 0; id < MP_MAX_PLAYERS && n + 12 < sizeof(line); id++)
+			n += (size_t)snprintf(line + n, sizeof(line) - n, " %d:%d",
+				id, MpAssignedCarModel(id));
+
+		gMpCtx->jer_log(gMpCtx, "%s\n", line);
+	}
+
 	SetState(STATE_GAMESTART);
 }
 
@@ -362,11 +381,192 @@ static int MpPlayerCarModel(int car, int isSlot)
 	return car;
 }
 
+/* ------------------------------------------------------------------ */
+/* Seating every player: the level's cars, and its two spare slots      */
+/* ------------------------------------------------------------------ */
+
+/* The car model each city keeps in its SPECIAL slot (slot 7). MEASURED, by booting
+ * each level and reading the residents the engine prints:
+ *
+ *     chicago   1 2 3 0 4 -1 -1 10
+ *     havana    1 2 3 0 4 -1 -1 11
+ *     lasvegas  1 3 4 0 2 -1 -1 9
+ *     rio       1 2 3 0 4 -1 -1 8
+ *
+ * So EVERY level seats five usable car models (slots 0..4 -- the set {0,1,2,3,4},
+ * in a different order per city), leaves slots 5 and 6 EMPTY (mission.c defaults
+ * them to -1 and says they exist for modules to fill), and keeps its own special in
+ * slot 7. Five cars is fewer than MP_MAX_PLAYERS, which is exactly what made "every
+ * player drives their own car" impossible past the fifth player: the assignment
+ * wrapped and handed two players the same model. */
+static const int MP_CITY_SPECIAL[4] = { 10, 11, 9, 8 };	/* chicago, havana, lasvegas, rio */
+
+#define MP_EXTRA_SLOTS	2		/* the level's spare resident slots: 5 and 6 */
+
+/* Which extra models mp puts in those slots, per session city -- MEASURED against
+ * the level's own car-model table, not guessed (see MP_EXTRA_SLOTS below for how).
+ *
+ * They are read from the level's OWN file (modelSource = -1), which is the only
+ * thing that works: the engine's importer holds ONE source city per level
+ * (models.c:446 picks the first slot that names one), so asking for a different
+ * city per slot silently looks the model up in the FIRST city's table -- a
+ * havana-coded spare slot was read against chicago's file and reported "which has
+ * no such model". Reading the level's own table by model index has no such trap.
+ *
+ * The numbers stay distinct from the five domestic ones and from the session
+ * city's own special, so no two player ids can be handed the same car. */
+static const int MP_CITY_EXTRA[4][MP_EXTRA_SLOTS] = {
+	{ 9, 11 },	/* chicago  (its special is 10) */
+	{ 9, 10 },	/* havana   (its special is 11) */
+	{ 8, 10 },	/* lasvegas (its special is 9)  */
+	{ 9, 10 },	/* rio      (its special is 8)  */
+};
+
+static int MpExtraModel(int lvl, int which)
+{
+	return MP_CITY_EXTRA[lvl & 3][which];
+}
+
+/* What the spare slots HOLD this level, as mp left them. The assignment below has
+ * to name models that are really resident: naming one a level does not have is not
+ * a cosmetic failure, because the car keeps the model it had and the machines then
+ * disagree about who drives what. */
+static int gMpExtraModel[MP_EXTRA_SLOTS];
+static int gMpExtraSet;
+
+/* JER_EVENT_CAR_DATA_SOURCE: fired once per level, before any CARMODEL_* file is
+ * read, with the resident model table and a per-slot source city in hand. A match
+ * uses it to ask the level for enough distinct cars to seat every player. */
+int MpOnCarDataSource(void* userdata, void* args)
+{
+	JER_ARGS_CAR_DATA_SOURCE* a = (JER_ARGS_CAR_DATA_SOURCE*)args;
+	int lvl = (GameLevel >= 0 && GameLevel < 4) ? GameLevel : 0;
+	int i;
+
+	(void)userdata;
+
+	gMpExtraSet = 0;
+
+	for (i = 0; i < MP_EXTRA_SLOTS; i++)
+		gMpExtraModel[i] = -1;
+
+	if (a == NULL)
+		return JER_RESULT_CONTINUE;
+
+	/* MP_EXTRA_SLOTS="slot:model[,slot:model]" chooses the match's spare cars by hand
+	 * -- and does it WITHOUT a live session, which is what made the table above
+	 * measurable: one `-level <city>` boot per candidate says whether that level's
+	 * own table has the model (or takes the game down trying it, which is an answer
+	 * too). Inert unless set. */
+	{
+		const char* over = getenv("MP_EXTRA_SLOTS");
+		const char* p = over;
+
+		while (p != NULL && *p != '\0')
+		{
+			int slot = 0, model = 0;
+
+			while (*p >= '0' && *p <= '9')
+				slot = slot * 10 + (*p++ - '0');
+
+			if (*p == ':')
+				p++;
+
+			while (*p >= '0' && *p <= '9')
+				model = model * 10 + (*p++ - '0');
+
+			if (slot >= 5 && slot < 5 + MP_EXTRA_SLOTS && model > 0)
+				gMpExtraModel[slot - 5] = model;
+
+			while (*p != '\0' && *p != ',')
+				p++;
+
+			if (*p == ',')
+				p++;
+		}
+	}
+
+	/* Only in a live session (or when asked by hand): a single-player level must not
+	 * load cars nobody is going to drive. */
+	if (!gMp.running && getenv("MP_EXTRA_SLOTS") == NULL)
+		return JER_RESULT_CONTINUE;
+
+	if (a->models == NULL || a->modelSource == NULL ||
+	    a->count < 5 + MP_EXTRA_SLOTS)
+		return JER_RESULT_CONTINUE;
+
+	for (i = 0; i < MP_EXTRA_SLOTS; i++)
+	{
+		int slot = 5 + i;
+		int model = (gMpExtraModel[i] > 0) ? gMpExtraModel[i] : MpExtraModel(lvl, i);
+
+		/* A spare slot another module already claimed is ITS business -- keep what
+		 * it put there and let the assignment name it. */
+		if (a->models[slot] > 0)
+		{
+			gMpExtraModel[i] = a->models[slot];
+
+			if (gMpCtx != NULL)
+				gMpCtx->jer_log(gMpCtx,
+					"[mp] resident slot %d already holds model %d (not ours) -- player %d will drive it\n",
+					slot, a->models[slot], 5 + i);
+			continue;
+		}
+
+		a->models[slot] = model;
+		a->modelSource[slot] = -1;	/* the level's OWN table: the one source that works */
+		gMpExtraModel[i] = model;
+
+		if (gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx,
+				"[mp] resident slot %d = model %d (the level's own), so player %d has a car of their own\n",
+				slot, model, 5 + i);
+	}
+
+	gMpExtraSet = 1;
+
+	/* The local player's car was decided before the level loaded, when the spare
+	 * slots were not set yet (the launch happens before LoadMission). If this player
+	 * is one of the players those slots exist for, name the model that is ACTUALLY
+	 * in the slot -- and only when they made no explicit pick, so -mpcar keeps the
+	 * last word. */
+	if (gMp.localPlayerId >= 5 && gMp.localPlayerId < 5 + MP_EXTRA_SLOTS &&
+	    gMp.config.car < 0)
+	{
+		int i2 = gMp.localPlayerId - 5;
+
+		if (gMpExtraModel[i2] > 0)
+		{
+			wantedCar[0] = gMpExtraModel[i2];
+
+			if (gMpCtx != NULL)
+				gMpCtx->jer_log(gMpCtx,
+					"[mp] player %d: our own car is the spare slot's model %d\n",
+					gMp.localPlayerId, wantedCar[0]);
+		}
+	}
+
+	return JER_RESULT_CONTINUE;
+}
+
 /* The car EVERY machine assigns a player who did not choose one (no -mpcar). It
- * must be the SAME number on both machines AND different per player, so the two
- * cars are both distinguishable and agreed on. The level's own car table
- * (carNumLookup, indexed by player id) is exactly that: bounded by the level's
- * pool, and both machines compute it from the same city.
+ * must be the SAME number on every machine AND different per player, so the cars
+ * are both distinguishable and agreed on. The level's own car table
+ * (carNumLookup, indexed by player id) is exactly that: the same for every city,
+ * and READABLE at level init -- unlike the resident models, which the engine has
+ * not filled yet at this point (the diag prints residents= 0 0 0 0 ...).
+ *
+ * Indexed by PLAYER ID, with no modulo. `playerId % 4` wrapped ids 4..7 back onto
+ * ids 0..3, so from the FIFTH player two players were handed the same car -- and
+ * with the palette owner-authoritative the two machines then showed two cars
+ * nobody could tell apart. Eight ids, eight distinct models:
+ *
+ *   ids 0..4  the level's five domestic cars (carNumLookup's own first five, which
+ *             are the five models every level has resident)
+ *   ids 5..6  the spare resident slots mp fills (see MpOnCarDataSource)
+ *   id 7      the level's special (slot 7)
+ *
+ * Ids 0..3 keep the models they had before, so a pair behaves exactly as it did.
  *
  * The old code applied this to REMOTE players only and left the LOCAL player on
  * the level's default, so the machines disagreed about the local player's car
@@ -378,9 +578,24 @@ static int MpAssignedCarModel(int playerId)
 {
 	extern char carNumLookup[4][10];
 	int lvl = (GameLevel >= 0 && GameLevel < 4) ? GameLevel : 0;
-	int k = (playerId >= 0) ? (playerId % 4) : 0;
 
-	return carNumLookup[lvl][k];
+	if (playerId <= 0)
+		return carNumLookup[lvl][0];		/* the host */
+
+	if (playerId < 5)
+		return carNumLookup[lvl][playerId];	/* the level's own five cars */
+
+	if (playerId < 5 + MP_EXTRA_SLOTS)
+	{
+		int i = playerId - 5;
+
+		if (gMpExtraSet && gMpExtraModel[i] > 0)
+			return gMpExtraModel[i];	/* what the slot really holds */
+
+		return MpExtraModel(lvl, i);
+	}
+
+	return MP_CITY_SPECIAL[lvl];			/* the 8th player: the special */
 }
 
 void MpHostSendRoster(void)

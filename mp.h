@@ -314,6 +314,7 @@ void MpSendInput(int pad);		/* replicate this frame's input (host relays the set
 void MpPlaceSpawns(int x, int y, int z, int heading);	/* line every player car up here */
 void MpSpawnLateJoiners(void);	/* give a car to a player who joined a live match */
 void MpHostSendRoster(void);		/* host: publish who is in the match */
+int MpOnCarDataSource(void* userdata, void* args);	/* resident car models: seat every player */
 
 /* While a level is loading the other side has nothing to say for the whole load,
  * which is longer than the idle timeout. Every machine that orders a launch
