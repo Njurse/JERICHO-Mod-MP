@@ -138,6 +138,30 @@ class Agent:
         s.close()
         return data, header
 
+    def dump(self):
+        """The peer's JERICHO.dmp, or (b"", "ERR ...") when there is none.
+
+        The `log` command only MENTIONS a dump in its header ("+ JERICHO.dmp
+        present"); it does not send it, so a crash on the other PC used to be
+        unattributable without walking over to that machine. A dump is a pure
+        file read -- nothing about the game -- so it is safe to pull at any time.
+        """
+        s, header = self._command("dump", keep_open=True)
+
+        if header.startswith("ERR") or header.split()[0] == "ERR":
+            s.close()
+            return b"", header
+
+        want = int(header.split()[0])
+        data = b""
+        while len(data) < want:
+            chunk = s.recv(min(65536, want - len(data)))
+            if not chunk:
+                break
+            data += chunk
+        s.close()
+        return data, header
+
 
 # ------------------------------------------------------------------ delta sync
 
@@ -320,13 +344,20 @@ def cmd_stop(a):
         print("local: no recorded pid (start it with deploy/run so it is known)")
 
 
-def verdict_dirs(a, dirs):
-    """mp_localpair.verdict() speaks {"a": host, "b": client}; we know which seat
-    THIS machine took, so map onto that rather than passing our own key names
-    through (which raised KeyError('a') the first time it was actually run)."""
+def verdict_args(a, dirs):
+    """The arguments mp_localpair.verdict() now takes: the seat NAMES, and the logs
+    keyed by them. Two seats here -- "a" is the host and "b" the joiner -- mapped
+    onto whichever machine this is, rather than passing our own key names through
+    (which raised KeyError('a') the first time it was actually run).
+
+    (It takes the names because a local run can be 2..8 seats; a remote pair is
+    always two, so the names are ours to choose.)"""
+    names = ("a", "b")
+
     if a.seat == "host":
-        return {"a": dirs["local"], "b": dirs["peer"]}
-    return {"a": dirs["peer"], "b": dirs["local"]}
+        return names, {"a": dirs["local"], "b": dirs["peer"]}
+
+    return names, {"a": dirs["peer"], "b": dirs["local"]}
 
 
 def pull_logs(a):
@@ -338,6 +369,19 @@ def pull_logs(a):
     with open(os.path.join(WORK, "peer", "JERICHO.log"), "wb") as f:
         f.write(data)
     print(f"  peer  log: {len(data)} bytes  ({header})")
+
+    # The peer's DUMP has to be asked for; the log header only says it exists.
+    # Pulled before the local one so a crash on the other PC is always in hand --
+    # and so a later run starting on that PC cannot overwrite it first.
+    if "JERICHO.dmp" in header:
+        blob, dheader = agent.dump()
+
+        if blob:
+            with open(os.path.join(WORK, "peer", "JERICHO.dmp"), "wb") as f:
+                f.write(blob)
+            print(f"  peer  DUMP: {len(blob)} bytes ({dheader})")
+        else:
+            print(f"  peer  dump: asked for it, got nothing ({dheader})")
 
     src = os.path.join(GAME_DIR, "JERICHO.log")
     if os.path.isfile(src):
@@ -360,7 +404,8 @@ def cmd_logs(a):
     print("pulling both logs")
     dirs = pull_logs(a)
     if lp is not None:
-        print(f"  verdict: {lp.verdict(verdict_dirs(a, dirs))}")
+        names, vdirs = verdict_args(a, dirs)
+        print(f"  verdict: {lp.verdict(names, vdirs)}")
     else:
         print("  (mp_localpair not importable -- logs are in .mp-remote/)")
 

@@ -9,7 +9,8 @@
 #            running, stop it, update, and start it again with the SAME arguments.
 #   start -> launch the game (host or join) on the current build
 #   stop  -> close the game
-#   log   -> send its log back (and its crash dump, if there is one)
+#   log   -> send its log back (and say whether a crash dump exists)
+#   dump  -> send its crash dump back, if there is one
 #   status-> build stamp, whether the game is up, log/dump presence
 #   ping  -> are you there
 #   quit  -> stop being resident
@@ -282,6 +283,20 @@ function Invoke-Log {
     Write-Own ("log: sent {0:N0} bytes (of {1:N0})" -f $bytes.Length, $total)
 }
 
+function Invoke-Dump {
+    param([System.IO.Stream] $S)
+
+    # A dump is a plain file read -- the game is not involved -- but it is the only
+    # way a crash on THIS machine is attributable without walking over to it. The
+    # log command can only say that one exists.
+    if (-not (Test-Path -LiteralPath $DmpFile)) { Send-Line $S 'ERR no dump'; return }
+
+    $bytes = [System.IO.File]::ReadAllBytes($DmpFile)
+    Send-Line $S ("OK {0}" -f $bytes.Length)
+    Send-Bytes $S $bytes
+    Write-Own ("dump: sent {0:N0} bytes" -f $bytes.Length)
+}
+
 function Invoke-Status {
     $h = Get-Hashes
     $obj = [ordered]@{
@@ -312,6 +327,7 @@ function Invoke-Command {
         'start'  { Send-Line $S (Invoke-Start $rest) }
         'stop'   { Send-Line $S (Invoke-Stop) }
         'log'    { Invoke-Log $S }
+        'dump'   { Invoke-Dump $S }
         'quit'   { Send-Line $S 'OK bye'; $script:WantQuit = $true }
         default  { Send-Line $S ("ERR unknown command '$cmd'") }
     }
