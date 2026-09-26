@@ -543,24 +543,36 @@ collision actually pushing both cars.
 **Known broken:** the frontend-driven second start (Chicago); a snap does not write
 a rigid body; damage is not synced.
 
-**Open, from the 2026-09 four-seat run (and NOT trusted yet -- those runs had
-cainescrossfire enabled by accident, which rewrites car handling, so re-take them
-with a clean modlist before believing any of it):**
+**Open, from the 2026-09 four-seat runs (re-taken with a clean modlist — the first
+attempt had cainescrossfire enabled by accident, which rewrites car handling):**
 
-- **A third joiner is never welcomed.** Seat `d` connected, sent HELLO (98 bytes)
-  and sat at "HELLO sent, no WELCOME" until the run ended, while the host's module
-  went silent (its last line was a PONG; its heartbeat stopped at frame 1050) with
-  the engine still ticking. Two joiners work; the third does not.
-- **`PlayerStartInfo[0]->position` may not be stable mid-match.** The late-join
-  spawn takes its base point from it, and in a 3-seat run it read `-17249,-60129`
-  where the map's own start had been logged as `173686,1712` earlier in the
-  session. `PlayerStartInfo[0]` points INTO `ReplayStreams[0]`, so the cut recorder
-  is the first suspect. The fix is to capture the start once at level launch.
-- **A model change does not rebuild the mesh.** `MpAdoptRemoteCar` writes
-  `ap.model` and nothing else: no `ap.carCos`, no `CreateDentableCar` -- and that
-  is the only writer of the drawn vertex dump. The wire also carries
-  `cp->ap.model` (a resident SLOT) into a field read as a model NUMBER, which
-  lands right today only because both machines' resident tables agree.
+- **The third joiner was cainescrossfire.** With it off, all four seats join:
+  `host_joins=3/3 joiners_accepted=3/3`. Do not trust a 3+ seat result with another
+  module enabled; check the boot log's module inventory first.
+- **Late joiners now start where the level starts.** On the host:
+  `player 2 -> slot 2 at the level's own start 174886,1712 (+1200 lane), no y` and
+  `player 3 -> slot 3 at the level's own start 175486,1712 (+1800 lane), no y` — i.e.
+  the map's own start (173686) plus the lane, with the height the engine placed. The
+  earlier `-17249,-60129` reading (which looked like `PlayerStartInfo[0]` being
+  rewritten) did not recur, so it is most likely another symptom of the same accident
+  rather than a real hazard — but capturing the start once at level launch is still
+  the belt-and-braces answer.
+- **The remaining blocker: a late joiner is dropped for `timeout` while it loads.**
+  The dropped peer's stage was `WELCOME received, awaiting the level`; the client's
+  own log says `dropped (timeout)`; the host then sees the socket go invalid
+  (`recv error 6`, then `send failed`) and drops its side. The shape of this is a
+  load, not a dead peer: the idle check counts wall-clock time since the last packet,
+  and a machine inside a long blocking level load is not polling — so it returns from
+  the load, sees that it "has not heard from the host" for the whole load, and tears
+  the session down. `MP_BUSY_LAUNCH_MS` already exempts the launch that both sides
+  order together; the late joiner's own load needs the same treatment (or the timeout
+  must be measured against the time the module actually polled).
+- **A model change does not rebuild the mesh.** `MpAdoptRemoteCar` writes `ap.model`
+  and nothing else: no `ap.carCos`, no `CreateDentableCar` -- and that is the only
+  writer of the drawn vertex dump. The wire also carries `cp->ap.model` (a resident
+  SLOT) into a field read as a model NUMBER, which lands right today only because
+  both machines' resident tables agree.
+
 
 
 ## 14. Version identity, and shipping one build to both machines

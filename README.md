@@ -1,5 +1,9 @@
 # Multiplayer (mp)
 
+**New here? Start with [`docs/JERICHO-MP.md`](docs/JERICHO-MP.md)** — what a match
+is, who owns which car, how a player joins, and the things that cost days, in plain
+language. [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) is the deep version.
+
 LAN multiplayer for REDRIVER2, built as a JERICHO deep mod (compiled into the
 game like `levelhacks`, so it can read/write game globals). Host on TCP/UDP
 **1318** (configurable), join over LAN with UDP discovery, and play a shared
