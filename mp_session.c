@@ -2434,17 +2434,14 @@ static void MpFollowLocalCar(void)
 /* legs are always right and there is no per-frame pose to invent.     */
 
 /* The pedestrian the engine is driving for OUR player, or NULL while we are in a
- * car. pUsedPeds is a linked list and a ped is tied to a player slot only by
- * padId -- there is no playerPedId field -- so this is a search. */
+ * car. The engine ties the ped to us in player[0].pPed when it puts us on foot,
+ * so take it straight from there: deriving it from a padId scan used to misfire,
+ * because a spawned stand-in's padId is never set and could inherit whatever the
+ * pooled slot last held. */
 static LPPEDESTRIAN MpLocalPed(void)
 {
-	LPPEDESTRIAN p;
-
-	for (p = pUsedPeds; p != NULL; p = p->pNext)
-	{
-		if (p->pedType == TANNER_MODEL && p->padId >= 0 && p->padId == player[0].padid)
-			return p;
-	}
+	if (player[0].playerCarId < 0)
+		return player[0].pPed;
 
 	return NULL;
 }
@@ -2605,13 +2602,20 @@ static void MpDriveRemotePed(MP_PLAYER* p)
 
 		p->ped = n;
 
+		/* A stand-in is NOT a local player's ped: mark it so a padId-keyed scan (or
+		 * anything else that treats padId >= 0 as "someone's character") can never
+		 * mistake it for ours. The spawn path leaves padId untouched, so a pooled
+		 * slot keeps whatever the previous occupant held -- which is how a remote
+		 * Tanner could inherit the local player's colour. */
+		((LPPEDESTRIAN)n)->padId = -1;
+
 		if (gMpCtx != NULL)
 			gMpCtx->jer_log(gMpCtx,
 				"[mp] ped: standing in for player %d at %d,%d,%d heading %d speed %d\n",
 				p->id, p->pedX, p->pedY, p->pedZ, p->pedHeading, p->pedSpeed);
 	}
 
-	ped = (LPPEDESTRIAN)n->ped;
+	ped = (LPPEDESTRIAN)n;
 
 	if (ped == NULL)
 	{
@@ -2763,10 +2767,24 @@ static void MpSendColors(int whole)
 
 			memset(&e, 0, sizeof(e));
 			e.playerId = (uint8_t)p->id;
-			e.on = (uint8_t)(p->colorOn ? 1 : 0);
-			e.r = (uint8_t)p->colorR;
-			e.g = (uint8_t)p->colorG;
-			e.b = (uint8_t)p->colorB;
+			/* The local player's own colour lives in the config, not the registry row
+			 * (which is only ever filled from the wire, and is zeroed for the host).
+			 * Both send paths must agree on this or the host's colour is broadcast as
+			 * black while the just-us path sends the real one. */
+			if (p->isLocal)
+			{
+				e.on = (uint8_t)(gMp.config.colorOn ? 1 : 0);
+				e.r = (uint8_t)gMp.config.colorR;
+				e.g = (uint8_t)gMp.config.colorG;
+				e.b = (uint8_t)gMp.config.colorB;
+			}
+			else
+			{
+				e.on = (uint8_t)(p->colorOn ? 1 : 0);
+				e.r = (uint8_t)p->colorR;
+				e.g = (uint8_t)p->colorG;
+				e.b = (uint8_t)p->colorB;
+			}
 
 			memcpy(buf + sizeof(h) + n * sizeof(e), &e, sizeof(e));
 			n++;

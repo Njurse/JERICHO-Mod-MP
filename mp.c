@@ -1027,7 +1027,7 @@ static int MpOnPedDraw(void* userdata, void* args)
 			if (!p->active || p->ped == NULL)
 				continue;
 
-			if ((void*)((JerNpc*)p->ped)->ped == a->ped)
+			if ((void*)p->ped == a->ped)
 			{
 				on = p->colorOn;
 				r = p->colorR;
@@ -1426,9 +1426,12 @@ JER_MODULE_ENTRY(jer_module_mp_entry)(JERICHO_CONTEXT* ctx)
 	ctx->jer_register_hook(ctx, JER_EVENT_FRONTEND_IDLE, MpOnFrontendIdle, NULL, 0);
 	ctx->jer_register_hook(ctx, JER_EVENT_PAUSE_MENU, MpOnPauseMenu, NULL, 0);
 
-	/* A player's own character, in their own colour. Priority 20 puts us after the
-	 * other consumers, who may want the ped for themselves. */
-	ctx->jer_register_hook(ctx, JER_EVENT_PED_DRAW, MpOnPedDraw, NULL, 20);
+	/* A player's own character, in their own colour -- as a DEFAULT. Priority
+	 * -1000 makes us run FIRST among the ped-palette consumers, so mp selects a
+	 * player's preferred colour and any mod that selects afterwards (at a normal
+	 * priority) wins for the characters it claims. mp carries a preference, not a
+	 * last word. */
+	ctx->jer_register_hook(ctx, JER_EVENT_PED_DRAW, MpOnPedDraw, NULL, -1000);
 
 	/* Our own page in the pause screen ("Modules" -> "Multiplayer"). NOTE: the
 	 * declared item_count must equal the array length -- the engine builds the
