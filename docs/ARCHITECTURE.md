@@ -546,6 +546,22 @@ a rigid body; damage is not synced.
 **Open, from the 2026-09 four-seat runs (re-taken with a clean modlist — the first
 attempt had cainescrossfire enabled by accident, which rewrites car handling):**
 
+- **`PingInCivCar` faults again, and it is not the `possibleLanes` overflow this
+  time.** A two-seat run with `MP_TEST_ONFOOT=7` (get out at 7s) crashed BOTH seats
+  with `EXCEPTION_ACCESS_VIOLATION`, both at `REDRIVER2_dev.exe+0x102A0` =
+  `?PingInCivCar@@YAHH@Z (+0x100)` — dumps in `.mp-pair/a/` and `.mp-pair/b/`, no
+  stall, so the world was running. `possibleLanes` is already 32, so 0..30 lanes fit
+  and this is a different fault at (or very near) the old address.
+
+  Candidates, none yet verified: the vacated car (`ChangeCarPlayerToPed` sets the car
+  we left to `CONTROL_TYPE_CIV_AI`, and `PingInCivCar` reads AI data a car that was
+  never traffic never had — though the guard `MpKeepOurCarsFromTrafficAi` is supposed
+  to undo that, and it logged nothing here); or something the stand-in pedestrian
+  changes in the ping's neighbourhood. Note this run had the on-foot lever on, which
+  the older "4/4 at level start" crash did not — so a fresh triage is warranted, not
+  a reread of the old one.
+
+
 - **The third joiner was cainescrossfire.** With it off, all four seats join:
   `host_joins=3/3 joiners_accepted=3/3`. Do not trust a 3+ seat result with another
   module enabled; check the boot log's module inventory first.
