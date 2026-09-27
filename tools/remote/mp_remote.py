@@ -139,14 +139,21 @@ class Agent:
         return data, header
 
     def dump(self):
-        """The peer's JERICHO.dmp, or (b"", "ERR ...") when there is none.
+        """The peer's JERICHO.dmp, or (b"", reason) when there is none.
 
         The `log` command only MENTIONS a dump in its header ("+ JERICHO.dmp
         present"); it does not send it, so a crash on the other PC used to be
         unattributable without walking over to that machine. A dump is a pure
         file read -- nothing about the game -- so it is safe to pull at any time.
+
+        Tolerant on purpose: an OLDER agent (one started before this command
+        existed) answers "ERR unknown command 'dump'", and that must cost the
+        caller its dump, not the whole log pull.
         """
-        s, header = self._command("dump", keep_open=True)
+        try:
+            s, header = self._command("dump", keep_open=True)
+        except RuntimeError as e:
+            return b"", str(e)
 
         if header.startswith("ERR") or header.split()[0] == "ERR":
             s.close()
