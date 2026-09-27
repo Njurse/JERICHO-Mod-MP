@@ -310,6 +310,15 @@ follow-up if pushes are wanted back.
 
 ## 8. The pause menu, and why a session is never paused
 
+**A match's pause menu keeps the addons.** The engine picks the in-game pause layout
+with `if (NumPlayers == 1 && gMultiplayerLevels == 0)` (pause.c:1176) — and
+`gMultiplayerLevels` is set from `MissionHeader->region`, so a match on the `-mp`
+multiplayer map takes the OTHER branch. That branch used to hand back a static
+`MultiplayerPauseHeader` that never went through `JerPauseRootOr`, so the whole
+"JERICHO Addons" tree (every module's pause page, including this mod's own "My
+colour") was missing *exactly* in multiplayer and present in single player. Both
+branches now splice it. A two-player split-screen match had the same hole.
+
 In single player the START press opens the engine pause, which freezes the
 simulation. In a network session that freezes only THIS machine while everyone else
 keeps driving, so the two states disagree the moment play resumes. mp therefore
