@@ -108,7 +108,11 @@ and its own special in slot 7 — which is why a ninth player does not exist and
 the assignment names a model, never a "slot 3".
 
 **Colour** rides the same per-frame car state, so the owner is the authority on its
-own car's paint.
+own car's paint. Each player's **character** (the on-foot Tanner) is the same idea:
+a player's preferred colour travels per player and their stand-in is painted with
+it. mp paints it as a *default* — a mod that sets a character's colour (factions,
+teams, whatever claims the ped) overrides it, because mp's ped hook runs first and
+only fills in what no mod coloured.
 
 **Getting out** is a separate (and younger) path: the car is left standing where it
 was and a pedestrian stands in for the player. It is the least finished part of the
@@ -146,6 +150,14 @@ mod.
   only flushed on specific events, and a live reader (the harness) sees whatever
   reached the disk. `JERICHO_LOG_FLUSH=1` flushes per line; without it a line written
   just before a hang is invisible, and a frozen run looks like a quiet one.
+- **`JerNpc*` is a `PEDESTRIAN*` in disguise.** `jer_npc_spawn_model` returns the
+  pedestrian cast to a one-field phantom struct (`{ void* ped; }`); dereferencing it
+  reads the ped's `pNext`, not the ped. Compare the stored pointer directly.
+- **A spawned ped's `padId` is uninitialised.** A pooled slot keeps whatever the
+  previous occupant held, so "is this ped mine?" must not be answered by a `padId`
+  scan — a stand-in can match a real player's id and take their colour (or refuse to
+  stand in at all). Stamp stand-ins `padId = -1` and identify the local ped by
+  `player[0].pPed`.
 
 ---
 
