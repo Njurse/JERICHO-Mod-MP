@@ -17,6 +17,8 @@
 #include "pad.h"
 #include "cars.h"
 #include "convert.h"	/* _RotMatrixY: a car's box is built from its matrix */
+#include "cosmetic.h"	/* car_cosmetics[slot]: the box a rebuilt car needs */
+#include "denting.h"	/* CreateDentableCar: the only writer of the drawn vertex dump */
 extern int gBootMpLevel;	/* main.c: 1 = the small multiplayer map, 0 = the full city */
 extern int gBootMpArena;	/* main.c: which multiplayer map (0/1) */
 extern int gWantNight;		/* glaunch.c: 1 = the night take-a-ride level variant */
@@ -3003,53 +3005,66 @@ static void MpReleaseRemoteCar(MP_PLAYER* p)
  * system, which then tries to recycle it and crashes (PingInCivCar / StepSim).
  * Matching the vehicle is the job here; matching the ENTITY needs replicated
  * traffic, which the session does not have. */
-static void MpAdoptRemoteCar(MP_PLAYER* p, int model)
+static void MpAdoptRemoteCar(MP_PLAYER* p, int slot)
 {
 	CAR_DATA* cp;
+	int model;
 
 	if (p == NULL || p->carId < 0 || p->carId >= MAX_CARS)
 		return;
 
 	cp = &car_data[p->carId];
 
-	if (cp->ap.model == model)
+	if (cp->ap.model == slot)
 		return;
 
-	/* Only to a model the renderer actually HAS. Pointing ap.model at a mesh we
-	 * never loaded is a crash, not a cosmetic glitch, so an unavailable model
+	/* What the wire carries is cp->ap.model, and that is a RESIDENT SLOT index,
+	 * not a model number (mp_proto.h's field is named `model` but holds ap.model).
+	 * A slot means the same car on two machines only when their residentCarModels[]
+	 * agree, so this resolves and logs instead of assuming. */
+	model = (slot >= 0 && slot < MAX_CAR_RESIDENT_MODELS) ? residentCarModels[slot] : -1;
+
+	/* Only to a slot the renderer actually HAS. Pointing ap.model at a mesh we
+	 * never loaded is a crash, not a cosmetic glitch, so an unavailable slot
 	 * keeps the old one and says so. */
-	if (model >= 0 && model < MAX_CAR_RESIDENT_MODELS && gCarCleanModelPtr[model] != NULL)
+	if (slot >= 0 && slot < MAX_CAR_RESIDENT_MODELS && gCarCleanModelPtr[slot] != NULL)
 	{
-		if (gMpCtx != NULL)
-		{
-			int was = cp->ap.model;
+		int was = cp->ap.model;
 
-			gMpCtx->jer_log(gMpCtx,
-				"[mp] player %d changed car: model %d -> %d (slot %d)\n",
-				p->id, was, model, p->carId);
+		cp->ap.model = slot;
 
-			/* MP_DEBUG: what the renderer will actually draw WITH. ap.model indexes
-			 * the resident table, and DrawCar draws that model's poly/UV list against
-			 * gTempCarVertDump[carId] -- which only CreateDentableCar ever fills. Writing
-			 * ap.model without that is how a remote car comes out garbled, so name the
-			 * resident model, whether this machine has its mesh, and say plainly that
-			 * the vertex dump was NOT rebuilt. */
-			if (getenv("MP_DEBUG") != NULL)
-				gMpCtx->jer_log(gMpCtx,
-					"[mp] adopt: slot %d -> model %d, residentCarModels[%d]=%d, mesh %s, vertex dump NOT rebuilt\n",
-					model, model, model, residentCarModels[model],
-					gCarCleanModelPtr[model] != NULL ? "present" : "NULL");
-		}
+		/* REBUILD THE MESH. DrawCar draws the slot's poly/UV list against
+		 * gTempCarVertDump[carId], and CreateDentableCar is the ONLY thing that fills
+		 * that dump. Writing ap.model and stopping there draws one car's polygons
+		 * over another car's vertices - that is what a garbled remote car IS.
+		 *
+		 * This mirrors how the engine makes a car: InitCar sets ap.carCos from the
+		 * slot and finishes with CreateDentableCar (civ_ai.c:108-112, :164).
+		 * ap.carCos is not cosmetic only - the collision box and the chase camera
+		 * read it (bcollide.c, camera.c), so leaving it stale would follow a car with
+		 * the wrong box. lowDetail = -1 matches a freshly made car.
+		 *
+		 * CreateDentableCar also zeroes this car's LOCAL damage (denting.c), which is
+		 * expected: the session does not replicate damage. DentCar is NOT called - it
+		 * applies the spawn-time "used car" look, which a model swap should not add. */
+		cp->ap.carCos = &car_cosmetics[slot];
+		cp->lowDetail = -1;
 
-		cp->ap.model = model;
-		p->car = model;
+		CreateDentableCar(cp);
+
+		p->car = slot;
 		p->carIsSlot = 0;
+
+		if (gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx,
+				"[mp] player %d changed car: slot %d -> %d (that slot is model %d here), mesh rebuilt\n",
+				p->id, was, slot, model);
 	}
 	else if (gMpCtx != NULL)
 	{
 		gMpCtx->jer_log(gMpCtx,
-			"[mp] player %d changed car: model %d is not loaded here; keeping %d\n",
-			p->id, model, cp->ap.model);
+			"[mp] player %d changed car: slot %d is not loaded here (model %d); keeping %d\n",
+			p->id, slot, model, cp->ap.model);
 	}
 }
 
