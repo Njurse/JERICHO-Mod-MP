@@ -3239,14 +3239,53 @@ static void MpHandleCarState(int connIndex, const unsigned char* p, int len)
 
 		/* The OWNER is the colour authority: paint its car the colour the owner
 		 * sees. cp->ap.palette is exactly what the renderer hands to
-		 * DrawCarObject, so this recolours the car on the very next frame. */
-		if (!pl->isLocal && cp->ap.palette != (u_char)e.palette)
+		 * DrawCarObject, so this recolours the car on the very next frame.
+		 *
+		 * A palette index only means something on a car that IS the owner's vehicle,
+		 * and this wire carries a resident SLOT, not a (city, model) - so let the
+		 * modules answer whether this machine really holds this player's car. A car
+		 * that only looks like the owner's gets the palette it can actually support,
+		 * instead of colours that belong to a vehicle that is not here */
+		if (!pl->isLocal)
 		{
-			if (gMpCtx != NULL)
-				gMpCtx->jer_log(gMpCtx, "[mp] palette: player %d %d -> %d (from owner)\n",
-					pl->id, (int)cp->ap.palette, (int)e.palette);
+			int pal = (int)e.palette;
+			int corrected;
+			JER_ARGS_CAR_PEER_DRAW draw;
 
-			cp->ap.palette = (u_char)e.palette;
+			memset(&draw, 0, sizeof(draw));
+			draw.player = pl->id;
+			draw.car = cp;
+			draw.model = cp->ap.model;
+			draw.sourceCity = GetCarModelSourceCity(cp->ap.model);
+			draw.paletteIn = (int)e.palette;
+			draw.paletteOut = pal;
+
+			jer_fire(JER_EVENT_CAR_PEER_DRAW, &draw);
+
+			if (draw.handled && draw.paletteOut >= 0)
+				pal = draw.paletteOut;
+
+			/* Log a correction when the car's palette actually changes, and once per
+			 * reported value when it does not (the state stream is continuous, so an
+			 * unthrottled line here would repeat every packet). */
+			corrected = draw.handled && (pal != (int)e.palette);
+
+			if (corrected || cp->ap.palette != (u_char)pal)
+			{
+				static signed char logged[16];		/* last reported palette logged, per player */
+				int fresh = corrected && pl->id >= 0 && pl->id < 16 &&
+					(logged[pl->id] != (signed char)e.palette);
+
+				if (fresh)
+					logged[pl->id] = (signed char)e.palette;
+
+				if ((cp->ap.palette != (u_char)pal || fresh) && gMpCtx != NULL)
+					gMpCtx->jer_log(gMpCtx, "[mp] palette: player %d reports %d, drawn as %d%s\n",
+						pl->id, (int)e.palette, pal,
+						corrected ? " (corrected: not their car here)" : "");
+
+				cp->ap.palette = (u_char)pal;
+			}
 		}
 
 		/* Client-side gather: the first time we hear a peer's car, drop our
