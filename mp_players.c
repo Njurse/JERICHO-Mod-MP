@@ -105,6 +105,7 @@ MP_PLAYER* MpAddPlayer(int id, const char* name, int isLocal)
 				p->carId = -1;
 				p->padId = -1;
 				p->car = -1;
+				p->carCity = -1;
 				p->id = id;
 				gMp.playerCount++;
 				break;
@@ -146,6 +147,7 @@ void MpRemovePlayer(int id)
 	memset(p, 0, sizeof(*p));
 	p->carId = -1;
 	p->padId = -1;
+	p->carCity = -1;
 
 	if (gMp.playerCount > 0)
 		gMp.playerCount--;

@@ -355,26 +355,52 @@ static int MpOnCmdLine(void* userdata, void* args)
 			if (i + 1 < cl->argc && cl->argv[i + 1][0] != '-')
 			{
 				const char* v = cl->argv[++i];
+				const char* sel = v;
+				int city = -1;
+
+				/* Optional CITY prefix: `-mpcar 1:9` is HAVANA's model 9 (a
+				 * cross-city car -- the point of the prefix, since the same number
+				 * is a different vehicle in another city). Without it the pick is
+				 * the session's own city. */
+				{
+					const char* q = v;
+
+					while (*q >= '0' && *q <= '9')
+						q++;
+
+					if (*q == ':' && q > v)
+					{
+						city = atoi(v);
+
+						if (city < 0 || city > 3)
+							city = -1;
+
+						sel = q + 1;
+					}
+				}
 
 				/* Accept either a raw model number or "slotN" (1..10), the
 				 * frontend's own per-city slot. A slot is resolved against the
 				 * session's city at launch (see MpLaunchLocal), because GameLevel is
 				 * still the default here -- reading carNumLookup now would use the
 				 * wrong city, the same trap the -host comment above records. */
-				if (strncmp(v, "slot", 4) == 0)
+				if (strncmp(sel, "slot", 4) == 0)
 				{
-					gMp.config.car = atoi(v + 4);
+					gMp.config.car = atoi(sel + 4);
 					gMp.config.carIsSlot = 1;
+					city = -1;	/* a slot is always the session's city */
 				}
 				else
 				{
-					gMp.config.car = atoi(v);
+					gMp.config.car = atoi(sel);
 					gMp.config.carIsSlot = 0;
 				}
 
+				gMp.config.carCity = city;
+
 				if (gMpCtx != NULL)
-					gMpCtx->jer_log(gMpCtx, "[mp] -mpcar %s (car=%d slot=%d)\n",
-						v, gMp.config.car, gMp.config.carIsSlot);
+					gMpCtx->jer_log(gMpCtx, "[mp] -mpcar %s (car=%d slot=%d city=%d)\n",
+						v, gMp.config.car, gMp.config.carIsSlot, gMp.config.carCity);
 			}
 		}
 		else if (!strcmp(cl->argv[i], "-join"))

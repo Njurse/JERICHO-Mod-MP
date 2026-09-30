@@ -100,10 +100,11 @@ players are therefore not "player 2" to the engine — they are extra cars with
 negative pad ids, the same trick the engine already uses for cars nobody drives.
 
 **Each player gets a car of their own, and every machine agrees which.** A chosen
-car (`-mpcar`, or the frontend's picker) travels in the handshake. A player who chose
-nothing gets the model its **player id** is assigned, computed identically on every
-machine from the same table, so no two players get the same car. That table is
-bounded by the level: each city has five domestic models resident, two spare slots,
+car (`-mpcar`, or the frontend's picker) travels in the handshake as a city AND a
+model number (`-mpcar [city:]model`, so a cross-city car is expressible). A player
+who chose nothing gets the model its **player id** is assigned, computed identically
+on every machine from the same table, so no two players get the same car. That table
+is bounded by the level: each city has five domestic models resident, two spare slots,
 and its own special in slot 7 — which is why a ninth player does not exist and why
 the assignment names a model, never a "slot 3".
 
@@ -136,11 +137,14 @@ mod.
 
 - **A model number and a resident slot index are not the same thing.** `cp->ap.model`
   is a *slot* (0..7) into the level's table; the car's *model number* is what the
-  table holds (`residentCarModels[slot]`). Mixing them up lands the right car only by
-  luck, and breaks as soon as two machines' tables differ.
+  table holds (`residentCarModels[slot]`). The wire therefore carries a (city, model)
+  pair and never a slot -- a slot means a different car on another machine. The
+  receiver resolves it with `MpResidentSlotForCar` (model + `GetCarModelSourceCity`),
+  and a car it cannot hold is kept as-is and reported once.
 - **A runtime model change needs the engine's car setup**, not just `ap.model = m`.
   `CreateDentableCar` is the only writer of the vertex array the renderer draws with,
   so a bare model write draws one car's polygons against another car's vertices.
+  `MpAdoptRemoteCar` now does both.
 - **Sockets must be non-blocking.** A blocking `send()` inside the game loop freezes
   the match for as long as it blocks, and the peer then times you out.
 - **A blocked frame is not silence.** Counting wall-clock time since the last packet
@@ -167,7 +171,7 @@ mod.
 | --- | --- |
 | the mod | `JERICHO/MODS/mp/` — `mp.c` (hooks/registry), `mp_net.c` (transport), `mp_session.c` (session + sync), `mp_ui.c` (frontend), `mp_players.c`, `mp_bot.c` (test bot) |
 | config | `JERICHO/CONFIG/mp.ini` (port, name, version strictness, colour) |
-| command line | `-host [port]`, `-join <ip>[:port]`, `-mpcar <model\|slotN>` |
+| command line | `-host [port]`, `-join <ip>[:port]`, `-mpcar [city:]<model\|slotN>` |
 | how to run it | `README.md` in this folder, and `tools/README.md` for every harness |
 | how it works, deeply | `ARCHITECTURE.md` |
 | testing two or four machines | `tools/mp_localpair.py --players N` (one PC), `tools/remote/` (a second PC) |

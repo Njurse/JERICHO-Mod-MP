@@ -39,6 +39,9 @@ typedef struct MP_CONFIG
 	int  strictVersion;		/* host lobby setting: also require the same build */
 	int  car;			/* this machine's vehicle for the match, -1 = level default */
 	int  carIsSlot;			/* 1 = `car` is a 1..10 frontend slot, resolved per city */
+	int  carCity;			/* the city `car`'s MODEL NUMBER belongs to, -1 = the session's
+					 * own (MP_CAR_CITY_SESSION on the wire). A slot is always the
+					 * session's city, so this only applies to a raw model number. */
 	int  firstNameSet;		/* 0 until the player confirms a name once */
 
 	/* MY COLOUR. Off by default, and the default is the point: with it off a
@@ -60,6 +63,7 @@ typedef struct MP_PLAYER
 	int  carId;			/* CAR_DATA slot it drives, -1 = none yet */
 	int  car;			/* vehicle (car id) it asked for, -1 = unknown */
 	int  carIsSlot;			/* 'car' is a per-city frontend SLOT to resolve, not a model */
+	int  carCity;			/* the city that car number belongs to, -1 = the session's own */
 	int  palette;			/* that player's car colour (0 = default) */
 	int  padId;			/* engine pad id bound to it, -1 = none */
 	int  isLocal;			/* 1 = this machine's own player */

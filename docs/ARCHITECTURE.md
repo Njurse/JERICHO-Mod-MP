@@ -592,11 +592,14 @@ attempt had cainescrossfire enabled by accident, which rewrites car handling):**
   the session down. `MP_BUSY_LAUNCH_MS` already exempts the launch that both sides
   order together; the late joiner's own load needs the same treatment (or the timeout
   must be measured against the time the module actually polled).
-- **A model change does not rebuild the mesh.** `MpAdoptRemoteCar` writes `ap.model`
-  and nothing else: no `ap.carCos`, no `CreateDentableCar` -- and that is the only
-  writer of the drawn vertex dump. The wire also carries `cp->ap.model` (a resident
-  SLOT) into a field read as a model NUMBER, which lands right today only because
-  both machines' resident tables agree.
+- **FIXED: a model change rebuilt nothing, and the wire carried a SLOT.** Both halves
+  are done: `MpAdoptRemoteCar` now rebuilds the mesh (`ap.carCos` +
+  `CreateDentableCar`, the only writer of the drawn vertex dump), and the wire
+  carries a (city, model) pair -- `MP_CARSTATE_ENTRY.model` plus `modelCity` --
+  which the receiver resolves to ITS OWN resident slot (`MpResidentSlotForCar`). A
+  peer's car this machine cannot hold is kept as-is, reported ONCE per change, with
+  its colours corrected by carhacks; loading it is the hotload -- carhacks' next
+  unit (`carhacks/MP_ADAPTER.md`).
 
 
 
@@ -639,9 +642,10 @@ palette. `player[0]` is always US — every machine runs its one local player in
 engine slot 0, and the remote players live in the higher slots the mod inits.
 
 The change travels in the per-frame carstate: `MP_CARSTATE_ENTRY` carries the driven
-model (0xFF = on foot) and the owner's slot. The peer matches the VEHICLE **in
-place**: `cp->ap.model` and the colour, on the slot it already drives for that
-player.
+model NUMBER and its city (`model` + `modelCity`, 0xFF = on foot) and the owner's
+slot (`carSlot`, informational). The peer resolves the (city, model) to its OWN
+resident slot (`MpResidentSlotForCar`) and matches the VEHICLE **in place**:
+`cp->ap.model` -- the slot it already drives for that player -- and the colour.
 
 Two hard-won rules:
 

@@ -51,6 +51,12 @@ void MpConfigLoad(void)
 	if (gMp.config.car < -1 || gMp.config.car > 255)
 		gMp.config.car = -1;
 
+	/* The city `car`'s model number belongs to, for a cross-city pick (a slot is
+	 * always the session's city, so it does not apply then). -1 = the session's. */
+	gMp.config.carCity = jer_config_get_int("mp", "car_city", -1);
+	if (gMp.config.carCity < -1 || gMp.config.carCity > 3)
+		gMp.config.carCity = -1;
+
 	gMp.config.modCheck = jer_config_get_int("mp", "mod_check", MP_MODCHECK_OFF);
 	if (gMp.config.modCheck < 0 || gMp.config.modCheck > MP_MODCHECK_EXACT)
 		gMp.config.modCheck = MP_MODCHECK_OFF;
@@ -97,6 +103,7 @@ void MpConfigSave(void)
 	jer_config_set_int("mp", "keepalive_ms", gMp.config.keepaliveMs);
 	jer_config_set_int("mp", "mod_check", gMp.config.modCheck);
 	jer_config_set_int("mp", "car", gMp.config.car);
+	jer_config_set_int("mp", "car_city", gMp.config.carCity);
 	jer_config_set_int("mp", "strict_version", gMp.config.strictVersion);
 
 	jer_config_set_int("mp", "custom_color", gMp.config.colorOn);

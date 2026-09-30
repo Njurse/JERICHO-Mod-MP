@@ -129,6 +129,7 @@ int MpBeginHost(void)
 			/* our own car/palette, so the roster advertises them to joiners */
 			me->car = gMp.config.car;
 			me->carIsSlot = gMp.config.carIsSlot;
+			me->carCity = gMp.config.carCity;
 			me->palette = defaultPlayerPalette;
 		}
 		if (me != NULL) me->carId = 0;
@@ -383,6 +384,18 @@ static int MpPlayerCarModel(int car, int isSlot)
 	return car;
 }
 
+/* The CITY a player's chosen vehicle belongs to, paired with MpPlayerCarModel's
+ * model number. A "slotN" pick is a per-city frontend SLOT, so it resolves in the
+ * SESSION's city; a raw model number may name a city explicitly (-mpcar
+ * city:model). Either way the default is MP_CAR_CITY_SESSION -- the level's own. */
+static int MpPlayerCarCity(int city, int isSlot)
+{
+	if (isSlot || city < 0 || city >= 4)
+		return MP_CAR_CITY_SESSION;
+
+	return city;
+}
+
 /* ------------------------------------------------------------------ */
 /* Seating every player: the level's cars, and its two spare slots      */
 /* ------------------------------------------------------------------ */
@@ -600,6 +613,14 @@ static int MpAssignedCarModel(int playerId)
 	return MP_CITY_SPECIAL[lvl];			/* the 8th player: the special */
 }
 
+/* The city MpAssignedCarModel's model number belongs to: ALWAYS the session's
+ * own -- that function indexes the level's car table. Paired with it so a caller
+ * names both halves of an identity. */
+static int MpAssignedCarCity(void)
+{
+	return MP_CAR_CITY_SESSION;
+}
+
 void MpHostSendRoster(void)
 {
 	MP_ROSTER r;
@@ -623,16 +644,29 @@ void MpHostSendRoster(void)
 		e->flags = (uint8_t)(id == 0 ? MP_ROSTER_FLAG_HOST : 0);
 		e->carId = 0xff;
 		e->model = 0xff;
+		e->modelCity = MP_CAR_CITY_SESSION;
 		e->reserved = (uint16_t)p->palette;
 
-		/* the car this player ASKED for, resolved here on the host (the session
-		 * city) -- so a joiner knows everyone's car before anything is spawned.
+		/* the car this player drives, resolved here on the host -- so a joiner
+		 * knows everyone's car before anything is spawned. An explicit pick keeps
+		 * its own city (a cross-city car); a player who chose nothing gets the
+		 * model every machine assigns them, which is always the session's city.
 		 * The spawn overrides this with the model actually loaded. */
 		{
 			int m = MpPlayerCarModel(p->car, p->carIsSlot);
+			int c = MpPlayerCarCity(p->carCity, p->carIsSlot);
+
+			if (m < 0)
+			{
+				m = MpAssignedCarModel(id);
+				c = MpAssignedCarCity();
+			}
 
 			if (m >= 0 && m <= 0xff)
+			{
 				e->model = (uint8_t)m;
+				e->modelCity = (uint8_t)c;
+			}
 		}
 
 		e->ping = (uint16_t)(id == 0 ? 0 : MpPingForPlayer(id));
@@ -647,8 +681,22 @@ void MpHostSendRoster(void)
 			e->y = cp->hd.where.t[1];
 			e->z = cp->hd.where.t[2];
 
-			/* on foot: nobody is driving that car any more */
-			e->model = (cp->controlType == CONTROL_TYPE_NONE) ? 0xff : (uint8_t)cp->ap.model;
+			/* on foot: nobody is driving that car any more. Otherwise describe it
+			 * the same way the carstate does -- a model NUMBER + its city, never
+			 * our resident slot index (which means a different car elsewhere). */
+			if (cp->controlType == CONTROL_TYPE_NONE ||
+				cp->ap.model < 0 || cp->ap.model >= MAX_CAR_RESIDENT_MODELS ||
+				residentCarModels[cp->ap.model] < 0)
+			{
+				e->model = 0xff;
+			}
+			else
+			{
+				int src = GetCarModelSourceCity(cp->ap.model);
+
+				e->model = (uint8_t)residentCarModels[cp->ap.model];
+				e->modelCity = (uint8_t)((src >= 0) ? src : MP_CAR_CITY_SESSION);
+			}
 		}
 	}
 
@@ -852,6 +900,7 @@ static void MpHandleRoster(const unsigned char* p, int len)
 		{
 			pl->car = (int)e->model;
 			pl->carIsSlot = 0;
+			pl->carCity = (e->modelCity == MP_CAR_CITY_SESSION) ? -1 : (int)e->modelCity;
 		}
 		pl->palette = (int)e->reserved;
 	}
@@ -939,7 +988,9 @@ void MpSendHello(void)
 	/* Send the RAW selection plus a SLOT FLAG: "slotN" is a per-city frontend slot,
 	 * so only the HOST can resolve it (against the session city -- we are still in
 	 * our boot city here). A raw model number passes straight through. reserved[1]
-	 * carries our palette so the host paints our car the colour we see. */
+	 * carries our palette so the host paints our car the colour we see, and
+	 * reserved[2] the CITY that raw model number belongs to (a cross-city pick) --
+	 * so the host's row for us names the same (city, model) we do. */
 	{
 		extern u_char defaultPlayerPalette;
 
@@ -947,6 +998,7 @@ void MpSendHello(void)
 
 		h.car = (uint16_t)((gMp.config.car >= 0) ? gMp.config.car : 0xFFFF);
 		h.reserved[0] = (uint8_t)(gMp.config.carIsSlot ? 1 : 0);
+		h.reserved[2] = (uint8_t)MpPlayerCarCity(gMp.config.carCity, gMp.config.carIsSlot);
 		h.reserved[1] = (uint8_t)((me != NULL && me->carId >= 0)
 			? (uint8_t)car_data[me->carId].ap.palette
 			: (uint8_t)defaultPlayerPalette);
@@ -1170,6 +1222,7 @@ static void MpHandleHello(int connIndex, const unsigned char* p, int len)
 			pl->modsMatched = matched;
 			pl->car = (h.car == 0xFFFF) ? -1 : (int)h.car;
 			pl->carIsSlot = h.reserved[0] ? 1 : 0;
+			pl->carCity = (h.reserved[2] < 4) ? (int)h.reserved[2] : -1;
 			pl->palette = (int)h.reserved[1];
 
 			if (gMpCtx)
@@ -1309,6 +1362,7 @@ static void MpHandleWelcome(const unsigned char* p, int len)
 
 			me->car = gMp.config.car;
 			me->carIsSlot = gMp.config.carIsSlot;
+			me->carCity = gMp.config.carCity;
 			me->palette = defaultPlayerPalette;
 		}
 
@@ -2368,8 +2422,10 @@ static void MpFollowLocalCar(void)
 				driven, cp->ap.model, me->carId);
 
 		me->carId = driven;
-		me->car = cp->ap.model;
-		me->carIsSlot = 0;		/* 'car' is a real model now, not a slot */
+		me->car = (cp->ap.model >= 0 && cp->ap.model < MAX_CAR_RESIDENT_MODELS)
+			? residentCarModels[cp->ap.model] : cp->ap.model;
+		me->carIsSlot = 0;		/* 'car' is a real model NUMBER now, not a slot */
+		me->carCity = GetCarModelSourceCity(cp->ap.model);
 		me->palette = cp->ap.palette;
 	}
 	else if (me->carId >= 0)
@@ -2897,6 +2953,7 @@ static void MpSendOwnCarState(void)
 	 * position -- that would drag the car it was driving to the origin -- it
 	 * releases that car instead. */
 	e.model = MP_CARSTATE_NO_CAR;
+	e.modelCity = MP_CAR_CITY_SESSION;
 	e.carSlot = MP_CARSTATE_NO_CAR;
 
 	if (me->carId >= 0 && me->carId < MAX_CARS)
@@ -2927,8 +2984,26 @@ static void MpSendOwnCarState(void)
 		}
 
 		e.palette = (uint8_t)cp->ap.palette;	/* the colour WE see our car in -- we own it */
-		e.model = (uint8_t)cp->ap.model;	/* ...and WHAT we are driving */
-		e.carSlot = (uint8_t)me->carId;		/* so a peer can drive the same car */
+
+		/* ...and WHAT we are driving, as a model NUMBER plus the city that number
+		 * belongs to -- NOT our resident slot index, which does not mean the same
+		 * car on two machines. The peer resolves the pair to ITS own slot
+		 * (MpResidentSlotForCar). */
+		{
+			int slot = cp->ap.model;
+
+			if (slot >= 0 && slot < MAX_CAR_RESIDENT_MODELS && residentCarModels[slot] >= 0)
+			{
+				int src = GetCarModelSourceCity(slot);
+
+				e.model = (uint8_t)residentCarModels[slot];
+				e.modelCity = (uint8_t)((src >= 0) ? src : MP_CAR_CITY_SESSION);
+			}
+			/* else: the slot holds no model, so there is no car to describe --
+			 * e.model stays MP_CARSTATE_NO_CAR (set above) and the peers release. */
+		}
+
+		e.carSlot = (uint8_t)me->carId;		/* informational: our local CAR_DATA slot */
 		e.x = cp->hd.where.t[0];
 		e.y = cp->hd.where.t[1];
 		e.z = cp->hd.where.t[2];
@@ -2992,6 +3067,51 @@ static void MpReleaseRemoteCar(MP_PLAYER* p)
 	}
 }
 
+static const char* MpCarCityName(int city)
+{
+	static const char* names[4] = { "CHICAGO", "HAVANA", "VEGAS", "RIO" };
+
+	return (city >= 0 && city < 4) ? names[city] : "the session city";
+}
+
+/* The local resident SLOT that holds (city, model) on THIS machine, or -1 when
+ * no resident slot does. `city` is -1 for the SESSION's own city (a slot whose
+ * car data is the level's own) or a 0..3 city index for a cross-city import.
+ *
+ * A model NUMBER alone is not enough: every city ships CARMODEL_0..12 and the
+ * same number is a DIFFERENT vehicle in each, so a number is matched together
+ * with the city its data came from (GetCarModelSourceCity). This is what turns
+ * a peer's (city, model) into a slot HERE, where the slot numbers may differ. */
+static int MpResidentSlotForCar(int city, int model)
+{
+	int slot;
+
+	if (model < 0)
+		return -1;
+
+	for (slot = 0; slot < MAX_CAR_RESIDENT_MODELS; slot++)
+	{
+		int src;
+
+		if (residentCarModels[slot] != model)
+			continue;
+
+		src = GetCarModelSourceCity(slot);
+
+		if ((city < 0) ? (src < 0) : (src == city))
+			return slot;
+	}
+
+	return -1;
+}
+
+/* The last (city, model) we reported NOT holding for a remote player, so "this
+ * machine does not have their car" is one line per CHANGE, not per snapshot --
+ * a carstate arrives every frame. `Set` is 0 until we have logged one. */
+static int sMpCarKeepCity[MP_MAX_PLAYERS];
+static int sMpCarKeepModel[MP_MAX_PLAYERS];
+static unsigned char sMpCarKeepSet[MP_MAX_PLAYERS];
+
 /* Make this player's car in OUR world the vehicle their owner just got into.
  *
  * IN PLACE, on the slot we already drive for them -- ONLY the cosmetic model and
@@ -3004,32 +3124,36 @@ static void MpReleaseRemoteCar(MP_PLAYER* p)
  * warped in as a traffic car". The hijacked car is also owned by the LOCAL traffic
  * system, which then tries to recycle it and crashes (PingInCivCar / StepSim).
  * Matching the vehicle is the job here; matching the ENTITY needs replicated
- * traffic, which the session does not have. */
-static void MpAdoptRemoteCar(MP_PLAYER* p, int slot)
+ * traffic, which the session does not have.
+ *
+ * The owner names the car as (city, model) -- the pair the wire carries -- and
+ * THIS machine resolves it to its own resident slot (MpResidentSlotForCar). A
+ * slot number is never taken off the wire. Returns 1 if the car was changed, 0
+ * when this machine cannot hold it (not resident, or its mesh is not loaded). */
+static int MpAdoptRemoteCar(MP_PLAYER* p, int city, int model)
 {
 	CAR_DATA* cp;
-	int model;
+	int slot;
 
 	if (p == NULL || p->carId < 0 || p->carId >= MAX_CARS)
-		return;
+		return 0;
 
 	cp = &car_data[p->carId];
 
-	if (cp->ap.model == slot)
-		return;
-
-	/* What the wire carries is cp->ap.model, and that is a RESIDENT SLOT index,
-	 * not a model number (mp_proto.h's field is named `model` but holds ap.model).
-	 * A slot means the same car on two machines only when their residentCarModels[]
-	 * agree, so this resolves and logs instead of assuming. */
-	model = (slot >= 0 && slot < MAX_CAR_RESIDENT_MODELS) ? residentCarModels[slot] : -1;
+	/* The resident slot on THIS machine that holds the vehicle the owner named.
+	 * This is the whole reason the wire carries a (city, model) and not a slot:
+	 * slot numbers do not mean the same car on two machines. */
+	slot = MpResidentSlotForCar(city, model);
 
 	/* Only to a slot the renderer actually HAS. Pointing ap.model at a mesh we
 	 * never loaded is a crash, not a cosmetic glitch, so an unavailable slot
 	 * keeps the old one and says so. */
-	if (slot >= 0 && slot < MAX_CAR_RESIDENT_MODELS && gCarCleanModelPtr[slot] != NULL)
+	if (slot >= 0 && gCarCleanModelPtr[slot] != NULL)
 	{
 		int was = cp->ap.model;
+
+		if (was == slot)
+			return 0;		/* already that car */
 
 		cp->ap.model = slot;
 
@@ -3052,20 +3176,45 @@ static void MpAdoptRemoteCar(MP_PLAYER* p, int slot)
 
 		CreateDentableCar(cp);
 
-		p->car = slot;
+		/* p->car is a model NUMBER now (the identity), with its city -- not the
+		 * slot we happened to resolve it to. */
+		p->car = model;
 		p->carIsSlot = 0;
+		p->carCity = (city < 0) ? -1 : city;
+
+		if (p->id >= 0 && p->id < MP_MAX_PLAYERS)
+			sMpCarKeepSet[p->id] = 0;	/* it holds the car now; re-arm the gate */
 
 		if (gMpCtx != NULL)
 			gMpCtx->jer_log(gMpCtx,
-				"[mp] player %d changed car: slot %d -> %d (that slot is model %d here), mesh rebuilt\n",
-				p->id, was, slot, model);
+				"[mp] player %d changed car: slot %d -> %d (%s model %d), mesh rebuilt\n",
+				p->id, was, slot, MpCarCityName(city), model);
+
+		return 1;
 	}
-	else if (gMpCtx != NULL)
+
+	/* Cannot hold it: KEEP the car we have and say so ONCE per change, not every
+	 * frame -- a carstate arrives every frame, so the repetition is the noise this
+	 * avoids. Loading it is the hotload's job (carhacks/MP_ADAPTER.md). */
+	if (gMpCtx != NULL && p->id >= 0 && p->id < MP_MAX_PLAYERS &&
+		(!sMpCarKeepSet[p->id] || sMpCarKeepCity[p->id] != city || sMpCarKeepModel[p->id] != model))
 	{
-		gMpCtx->jer_log(gMpCtx,
-			"[mp] player %d changed car: slot %d is not loaded here (model %d); keeping %d\n",
-			p->id, slot, model, cp->ap.model);
+		sMpCarKeepCity[p->id] = city;
+		sMpCarKeepModel[p->id] = model;
+		sMpCarKeepSet[p->id] = 1;
+
+		if (slot >= 0)
+			gMpCtx->jer_log(gMpCtx,
+				"[mp] player %d drives %s model %d (slot %d here) but that mesh is not loaded; keeping slot %d\n",
+				p->id, MpCarCityName(city), model, slot, cp->ap.model);
+		else
+			gMpCtx->jer_log(gMpCtx,
+				"[mp] player %d drives %s model %d, which this machine does not hold (the hotload will load it); keeping slot %d (model %d)\n",
+				p->id, MpCarCityName(city), model, cp->ap.model,
+				(cp->ap.model >= 0 && cp->ap.model < MAX_CAR_RESIDENT_MODELS) ? residentCarModels[cp->ap.model] : -1);
 	}
+
+	return 0;
 }
 
 static void MpHandleCarState(int connIndex, const unsigned char* p, int len)
@@ -3131,32 +3280,42 @@ static void MpHandleCarState(int connIndex, const unsigned char* p, int len)
 		/* The owner changed VEHICLE: match it BEFORE adopting this pose, so the
 		 * body we are about to write lands on the right car.
 		 *
-		 * Compare the model the car ACTUALLY renders with, not pl->car: the roster
-		 * refresh (every 120 frames) writes the owner's new model into pl->car
-		 * long before the car itself is changed, so gating on pl->car silently
-		 * agreed with the roster while the car on screen stayed the old one. */
-		if (cp->ap.model != (int)e.model)
+		 * The wire carries a model NUMBER plus its city (it used to carry our
+		 * resident SLOT, which only worked while both machines' resident tables
+		 * happened to agree). Resolve it to OUR slot and compare what this car
+		 * ACTUALLY renders with -- not pl->car: the roster refresh (every 120
+		 * frames) writes the owner's new model into pl->car long before the car
+		 * itself is changed, so gating on pl->car silently agreed with the roster
+		 * while the car on screen stayed the old one. */
 		{
-			/* MP_DEBUG: the wire value against what we render, with the resident model
-			 * behind it and whether our mesh for it exists. A model that is not the same
-			 * NUMBER on both machines makes this fire every frame, and every firing
-			 * re-points the mesh without rebuilding the vertices -- the garbled geometry.
-			 * Throttled to once a second, because the repetition IS the signature. */
-			if (getenv("MP_DEBUG") != NULL && gMpCtx != NULL && (gMp.frame % 30) == 0)
-				gMpCtx->jer_log(gMpCtx,
-					"[mp] MODEL: player %d says %d on the wire; we render %d (resident %d, mesh %s) slot %d\n",
-					pl->id, (int)e.model, cp->ap.model,
-					(cp->ap.model >= 0 && cp->ap.model < MAX_CAR_RESIDENT_MODELS)
-						? residentCarModels[cp->ap.model] : -9,
-					(cp->ap.model >= 0 && cp->ap.model < MAX_CAR_RESIDENT_MODELS &&
-					 gCarCleanModelPtr[cp->ap.model] != NULL) ? "present" : "NULL", pl->carId);
+			int wantCity = (e.modelCity == MP_CAR_CITY_SESSION) ? -1 : (int)e.modelCity;
+			int haveSlot = cp->ap.model;
+			int haveModel = (haveSlot >= 0 && haveSlot < MAX_CAR_RESIDENT_MODELS) ? residentCarModels[haveSlot] : -1;
+			int haveCity = (haveSlot >= 0 && haveSlot < MAX_CAR_RESIDENT_MODELS) ? GetCarModelSourceCity(haveSlot) : -2;
 
-			MpAdoptRemoteCar(pl, (int)e.model);
+			if (haveModel != (int)e.model || haveCity != wantCity)
+			{
+				/* MP_DEBUG: the wire (model, city) against what we render, with the
+				 * slot it resolves to HERE. A mismatch that fires every frame is the
+				 * signature of a car this machine cannot hold. Throttled to once a
+				 * second, because the repetition IS the signature. */
+				if (getenv("MP_DEBUG") != NULL && gMpCtx != NULL && (gMp.frame % 30) == 0)
+					gMpCtx->jer_log(gMpCtx,
+						"[mp] MODEL: player %d drives %s model %d on the wire; we render slot %d "
+						"(model %d, src %d, mesh %s); this machine holds it in slot %d\n",
+						pl->id, MpCarCityName(wantCity), (int)e.model, haveSlot, haveModel, haveCity,
+						(haveSlot >= 0 && haveSlot < MAX_CAR_RESIDENT_MODELS &&
+						 gCarCleanModelPtr[haveSlot] != NULL) ? "present" : "NULL",
+						MpResidentSlotForCar(wantCity, (int)e.model));
 
-			if (pl->carId < 0 || pl->carId >= MAX_CARS)
-				continue;
+				if (MpAdoptRemoteCar(pl, wantCity, (int)e.model))
+				{
+					if (pl->carId < 0 || pl->carId >= MAX_CARS)
+						continue;
 
-			cp = &car_data[pl->carId];
+					cp = &car_data[pl->carId];
+				}
+			}
 		}
 
 		/* OWNER-AUTHORITATIVE: this car belongs to another machine, so its owner is

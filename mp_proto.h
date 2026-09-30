@@ -38,7 +38,7 @@
 extern "C" {
 #endif
 
-#define MP_PROTO_VERSION	5	/* 5: per-player colour (MP_TAG_COLOR) */
+#define MP_PROTO_VERSION	6	/* 6: a car's own CITY on the wire (roster/carstate modelCity) */
 
 /* Default UDP+TCP port. 1318 is IANA-unassigned (the neighbour 1319 is
  * amx-icsp), so it is a safe, non-reserved choice for a game. Configurable
@@ -54,6 +54,13 @@ extern "C" {
 /* Capacity. The engine renders at most 2 local player views, but a LAN
  * session can carry more remote players as world cars. */
 #define MP_MAX_PLAYERS		8
+
+/* A car's model number alone is ambiguous: every city ships CARMODEL_0..12 and
+ * the same number is a DIFFERENT vehicle in each. A row that names a car
+ * therefore carries its CITY too. MP_CAR_CITY_SESSION (0xFF) = the session's
+ * city, i.e. the level's own (the ordinary case); 0..3 = that city's data (a
+ * cross-city import). Mirrors carhacks' CHK_CITY_NATIVE. */
+#define MP_CAR_CITY_SESSION	0xFF
 
 /* Fixed field widths for the handshake manifest. */
 #define MP_MOD_ID_MAX		24
@@ -114,15 +121,22 @@ typedef struct MP_SPAWN
 #define MP_ROSTER_NAME_MAX	20
 #define MP_ROSTER_FLAG_HOST	1
 
+/* The roster structs go on the wire verbatim (the host memcpy's the struct and
+ * the client memcpy's it back, both sized with sizeof), so pin their layout to
+ * the contract this header states for the rest of the file. Left naturally
+ * aligned, adding a byte to the entry would silently add 3 padding bytes. */
+#pragma pack(push, 1)
 typedef struct MP_ROSTER_ENTRY
 {
 	uint8_t  id;
 	uint8_t  carId;		/* that machine's local CAR_DATA slot, informational */
 	uint8_t  model;		/* car model, 0xFF = on foot */
+	uint8_t  modelCity;	/* city `model` belongs to: MP_CAR_CITY_SESSION = the
+				 * session's city, 0..3 = a cross-city import */
 	uint8_t  flags;		/* MP_ROSTER_FLAG_* */
 	int32_t  x, y, z;	/* where that player's car is now */
 	uint16_t ping;		/* round trip in ms, as the host measured it */
-	uint16_t reserved;
+	uint16_t reserved;	/* the player's palette */
 	char     name[MP_ROSTER_NAME_MAX];
 } MP_ROSTER_ENTRY;
 
@@ -132,6 +146,7 @@ typedef struct MP_ROSTER
 	uint8_t        reserved[3];
 	MP_ROSTER_ENTRY entries[MP_MAX_PLAYERS];
 } MP_ROSTER;
+#pragma pack(pop)
 #define MP_TAG_CHAT	"JPCX"	/* either side: a chat line (scaffolding) */
 
 /* Envelope flags */
@@ -402,6 +417,8 @@ typedef struct MP_CARSTATE_ENTRY
 	uint8_t  model;		/* the VEHICLE the owner is driving (cp->ap.model);
 				 * MP_CARSTATE_NO_CAR = on foot, so the peers stop
 				 * driving our old car and leave it where it was */
+	uint8_t  modelCity;	/* city `model` belongs to: MP_CAR_CITY_SESSION = the
+				 * session's city, 0..3 = a cross-city import */
 	uint8_t  carSlot;	/* informational: the CAR_DATA slot the owner drives.
 				 * NOT used to move a player onto another car -- slot
 				 * numbers do not mean the same car on two machines
@@ -474,7 +491,8 @@ static_assert(sizeof(MP_REJECT) == 68, "MP_REJECT layout");
 static_assert(sizeof(MP_SESSION) == 12, "MP_SESSION layout");
 static_assert(sizeof(MP_PLAYER_INPUT) == 4, "MP_PLAYER_INPUT layout");
 static_assert(sizeof(MP_INPUT) == 8, "MP_INPUT layout");
-static_assert(sizeof(MP_CARSTATE_ENTRY) == 53, "MP_CARSTATE_ENTRY layout");
+static_assert(sizeof(MP_ROSTER_ENTRY) == 41, "MP_ROSTER_ENTRY layout");
+static_assert(sizeof(MP_CARSTATE_ENTRY) == 54, "MP_CARSTATE_ENTRY layout");
 static_assert(sizeof(MP_HIT) == 16, "MP_HIT layout");
 static_assert(sizeof(MP_CARSTATE) == 8, "MP_CARSTATE layout");
 static_assert(sizeof(MP_CHANNEL) == 26, "MP_CHANNEL layout");
