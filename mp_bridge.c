@@ -109,6 +109,7 @@ int jer_net_is_active(void) { return MpIsActive(); }
 int jer_net_is_host(void)   { return MpIsHost(); }
 int jer_net_peer_count(void) { return MpPeerCount(); }
 int jer_net_local_player(void) { return MpIsActive() ? gMp.localPlayerId : -1; }
+int jer_net_local_car_chosen(void) { return MpIsActive() ? MpLocalCarChosen() : 0; }
 
 /* Called by mp_session.c for each inbound MP_CHANNEL. */
 void MpBridgeDeliver(const char* channel, int peer, const void* data, int len)

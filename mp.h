@@ -160,6 +160,11 @@ int  MpIsHost(void);			/* role == HOST */
 MP_PLAYER* MpLocalPlayer(void);
 MP_PLAYER* MpGetPlayer(int id);
 MP_PLAYER* MpGetPlayerByCar(int carId);	/* NULL when carId is not a player */
+
+/* Is the LOCAL player's car a real CHOICE yet (a pick, or -mpcar), rather than what mp
+ * assigned a player who has not picked? carhacks must not put an assignment into the
+ * session's import set: it takes a resident slot nobody drives. */
+int MpLocalCarChosen(void);
 MP_PLAYER* MpAddPlayer(int id, const char* name, int isLocal);
 void       MpRemovePlayer(int id);
 void       MpReleaseOurCarSlot(int slot);	/* drop the sticky "ours" mark (a leaver's car) */

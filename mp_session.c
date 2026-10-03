@@ -852,6 +852,28 @@ static int MpPlayerCarReady(const MP_PLAYER* p)
 	return p->carConfirmed || p->id == 0;
 }
 
+/* JERICHO: is the LOCAL player's car a real choice yet? See mp.h. A joiner that has
+ * not picked is driving whatever its own machine happened to have - measured: a client
+ * advertises "CHICAGO model 0" while it is still on the title screen. carhacks must not
+ * fold that in: it takes a resident slot nobody drives, and the real pick then finds
+ * its canonical slot occupied by it. This is the same flag the roster publishes
+ * (MP_ROSTER_FLAG_CAR_READY), and the host is always "chosen" - it is the authority for
+ * its own car and never sends a pick message. */
+int MpLocalCarChosen(void)
+{
+	int i;
+
+	for (i = 0; i < MP_MAX_PLAYERS; i++)
+	{
+		MP_PLAYER* p = MpGetPlayer(i);
+
+		if (p != NULL && p->isLocal)
+			return MpPlayerCarReady(p);
+	}
+
+	return 0;
+}
+
 /* Give a car to any player who has none, exactly the way the engine's own
  * player-creation loop does it. A peer that joins a match already in progress
  * gets no car from the engine at all -- and a player with no car is invisible
