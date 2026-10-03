@@ -295,6 +295,7 @@ unsigned short MpModHash(void);
 void MpSessionReset(void);
 int  MpStartMatch(void);		/* host: launch the agreed level for all players */
 int  MpOnNetSpawn(void* userdata, void* args);	/* add remote player cars */
+int  MpOnCarContact(void* userdata, void* args);	/* JER_EVENT_COLLISION: relay a car-to-car contact */
 void MpLockstepFrame(void);		/* one input-lockstep tick (PRE_SIM) */
 int  MpInputForPlayer(int id);		/* the pad to apply to this player's car */
 

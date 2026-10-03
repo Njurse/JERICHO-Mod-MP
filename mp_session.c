@@ -61,6 +61,13 @@ static char gMpQuietPad = 1;
  * to it -- minutes into a second match if the first one ran long. */
 static unsigned long gMpHitArmFrame;
 
+/* Frame at which OUR engine last reported a contact with each peer's car. The
+ * RECEIVING half of a hand-off consults it: when our own engine has just resolved
+ * the same contact its rigid-body response is already in our car's velocity, and
+ * the module's push on top of that would land one collision twice. Session state,
+ * for the same reason as the arm frame above. */
+static unsigned long gMpSelfContactFrame[MP_MAX_PLAYERS];
+
 /* defined below, needed by the launch path above them */
 static int MpAssignedCarModel(int playerId);
 
@@ -100,6 +107,7 @@ void MpSessionReset(void)
 	gMp.seed = 0;
 	gMp.frame = 0;
 	gMpHitArmFrame = 0;	/* collisions arm afresh in every match */
+	memset(gMpSelfContactFrame, 0, sizeof(gMpSelfContactFrame));
 	gMp.running = 0;
 	gMp.leaving = 0;
 	gMp.modsMatched = 1;
@@ -1933,14 +1941,193 @@ static void MpHandleInput(const unsigned char* p, int len)
 /* push theirs. Both cars actually move, and neither machine ever       */
 /* writes a car it does not own.                                       */
 /* ------------------------------------------------------------------ */
-#define MP_FIXEDH		4096	/* the velocity fix-point scale (FIXEDH / units << 12) */
-#define MP_HIT_RADIUS		900	/* world units; car body scale */
-#define MP_HIT_MIN_CLOSING	4	/* whole units/frame; don't fire on mere adjacency */
+#define MP_FIXEDH		4096	/* the velocity fix-point scale (1 world unit/frame << 12) */
+#define MP_HIT_RADIUS		900	/* world units; car body scale (the probe FALLBACK only) */
+#define MP_HIT_MIN_CLOSING	4	/* WHOLE units/frame; don't fire on mere adjacency */
 #define MP_HIT_PUSH		60	/* per-cent of the closing speed given up */
-#define MP_HIT_MAX_PUSH		20	/* whole units/frame cap */
+#define MP_HIT_MAX_PUSH		20	/* WHOLE units/frame cap */
 #define MP_HIT_ARM_FRAMES	120	/* let the spawn/drop settle before contacts count */
 #define MP_HIT_COOLDOWN_FRAMES	15
+#define MP_HIT_SELF_FRAMES	4	/* our own engine reported this contact this recently */
+#define MP_HIT_PROBE_QUIET	90	/* ... and the probe stands down this long after one */
 
+/* Contacts arm afresh in every match (see gMpHitArmFrame at the top of this file
+ * for why the arm frame is session state and not a function local). */
+static int MpHitArmed(void)
+{
+	if (gMpHitArmFrame == 0)
+		gMpHitArmFrame = gMp.frame + MP_HIT_ARM_FRAMES;
+
+	return (gMp.frame >= gMpHitArmFrame);
+}
+
+/* The contact normal US -> THEM in the velocity fix-point (MP_FIXEDH = 1.0), and
+ * the closing speed in WHOLE units per frame.
+ *
+ * THE UNITS ARE THE WHOLE POINT. A velocity is fixed-point, so the dot product of
+ * a velocity difference with a fixed-point normal carries MP_FIXEDH TWICE; it is
+ * reduced here, once, rather than left 4096x too large. The thresholds and the cap
+ * above are documented in whole units/frame and are now actually in them -- the
+ * previous code compared and scaled FIXEDH values against those numbers, which made
+ * every hand-off 1/4096 of the intended push: a contact that moved nothing, which
+ * is what "the cars drive through each other" was. */
+static long MpContactNormal(CAR_DATA* mine, CAR_DATA* other, long* px, long* py, long* pz)
+{
+	/* 64-bit: a world span squared overflows 32, and two cars a region apart is
+	 * an ordinary thing to ask about. */
+	long long dx = (long long)other->hd.where.t[0] - (long long)mine->hd.where.t[0];
+	long long dy = (long long)other->hd.where.t[1] - (long long)mine->hd.where.t[1];
+	long long dz = (long long)other->hd.where.t[2] - (long long)mine->hd.where.t[2];
+	long long d2 = dx * dx + dy * dy + dz * dz;
+	long d;
+
+	*px = MP_FIXEDH;
+	*py = 0;
+	*pz = 0;
+
+	if (d2 <= 0)
+		return 0;
+
+	d = (long)sqrt((double)d2);
+
+	if (d == 0)
+		return 0;
+
+	*px = (long)(dx * MP_FIXEDH / d);
+	*py = (long)(dy * MP_FIXEDH / d);
+	*pz = (long)(dz * MP_FIXEDH / d);
+
+	return (long)(((long long)(mine->st.n.linearVelocity[0] - other->st.n.linearVelocity[0]) * *px
+		+ (long long)(mine->st.n.linearVelocity[1] - other->st.n.linearVelocity[1]) * *py
+		+ (long long)(mine->st.n.linearVelocity[2] - other->st.n.linearVelocity[2]) * *pz)
+		/ MP_FIXEDH / MP_FIXEDH);
+}
+
+/* Report a contact between OUR car and `pl`'s: give up our own share of the
+ * closing speed here, and ask THEIR owner to give up theirs. Returns 1 when a
+ * contact was reported (the caller's cooldown mark is set here, so both triggers
+ * share one rate limit).
+ *
+ * `localHalf` decides whether OUR car is pushed as well. The engine-contact path
+ * passes 0: our own engine has just resolved this contact, so its response is
+ * already ours and a second impulse would double the hit. The probe fallback
+ * passes 1, because by definition the engine did not see that overlap. */
+static int MpContactPush(MP_PLAYER* me, MP_PLAYER* pl, int localHalf, const char* why)
+{
+	CAR_DATA* mine = &car_data[me->carId];
+	CAR_DATA* other = &car_data[pl->carId];
+	long px, py, pz, closing, push, ix, iy, iz;
+	MP_HIT h;
+
+	closing = MpContactNormal(mine, other, &px, &py, &pz);
+
+	if (closing < MP_HIT_MIN_CLOSING)
+		return 0;
+
+	push = closing * MP_HIT_PUSH / 100;
+
+	if (push > MP_HIT_MAX_PUSH)
+		push = MP_HIT_MAX_PUSH;
+
+	/* The impulse is a VELOCITY delta, and px is ALREADY normal * MP_FIXEDH, so a
+	 * whole-unit push along it is one multiply: (n << 12) * push == n * push << 12.
+	 * Dividing here as well (what the old code did) is the 4096x that made the
+	 * hand-off inert. */
+	ix = px * push;
+	iy = py * push;
+	iz = pz * push;
+
+	if (localHalf)
+	{
+		mine->st.n.linearVelocity[0] -= (int)ix;
+		mine->st.n.linearVelocity[1] -= (int)iy;
+		mine->st.n.linearVelocity[2] -= (int)iz;
+	}
+
+	memset(&h, 0, sizeof(h));
+	h.targetId = (uint8_t)pl->id;
+	h.impulse[0] = (int)ix;
+	h.impulse[1] = (int)iy;
+	h.impulse[2] = (int)iz;
+
+	pl->lastHitFrame = gMp.frame;
+
+	if (MpIsHost())
+	{
+		int ci = MpConnFindByPlayer(pl->id);
+
+		if (ci >= 0)
+			MpSendConn(ci, MP_TAG_HIT, 0, &h, sizeof(h));
+	}
+	else
+		MpSendToHost(MP_TAG_HIT, 0, &h, sizeof(h));
+
+	if (gMpCtx != NULL)
+		gMpCtx->jer_log(gMpCtx,
+			"[mp] hit: we bumped player %d (%s: closing %ld, giving up %ld units/frame)\n",
+			pl->id, why, closing, push);
+
+	return 1;
+}
+
+/* JER_EVENT_COLLISION -- the engine has just resolved a car-to-car contact
+ * (handling.c fires it for the pair it resolved, BEFORE either car's impulse is
+ * applied, so the velocities read here are still the pre-impact ones: the true
+ * closing speed).
+ *
+ * This is the primary trigger for the hand-off, and it is the fix for "the
+ * collision is not always registered on the remote player": probing for proximity
+ * on a later frame asked the question after our own engine had already absorbed
+ * the closing velocity, so it read ~0 and nothing was sent for exactly the hits
+ * that mattered. */
+int MpOnCarContact(void* ud, void* args)
+{
+	JER_ARGS_COLLISION* a = (JER_ARGS_COLLISION*)args;
+	MP_PLAYER* me = MpLocalPlayer();
+	MP_PLAYER* them;
+	int mineId, otherId;
+
+	(void)ud;
+
+	/* car1 == NULL is a car-vs-WORLD hit: not ours to relay. */
+	if (a == NULL || a->car0 == NULL || a->car1 == NULL)
+		return JER_RESULT_CONTINUE;
+
+	if (me == NULL || me->carId < 0 || !gMp.running)
+		return JER_RESULT_CONTINUE;
+
+	mineId = CAR_INDEX((CAR_DATA*)a->car0);
+	otherId = CAR_INDEX((CAR_DATA*)a->car1);
+
+	if (mineId == me->carId)
+		them = MpGetPlayerByCar(otherId);
+	else if (otherId == me->carId)
+		them = MpGetPlayerByCar(mineId);
+	else
+		return JER_RESULT_CONTINUE;	/* two other cars; not our business */
+
+	if (them == NULL || !them->active || them->isLocal || them->carId < 0)
+		return JER_RESULT_CONTINUE;
+
+	/* Remember it whether or not we act, so the RECEIVING half knows the engine
+	 * has this contact in hand and does not add the peer's push on top. */
+	gMpSelfContactFrame[them->id] = gMp.frame;
+
+	if (!MpHitArmed())
+		return JER_RESULT_CONTINUE;
+
+	if (gMp.frame - them->lastHitFrame < MP_HIT_COOLDOWN_FRAMES)
+		return JER_RESULT_CONTINUE;
+
+	MpContactPush(me, them, 0, "engine contact");
+
+	return JER_RESULT_CONTINUE;
+}
+
+/* The FALLBACK probe, on the sim frame. The engine's own contact hook above is
+ * what reports a hit; this only catches an overlap the engine never resolved --
+ * a snapshot teleport, or a car that arrived while we were loading. It applies the
+ * LOCAL half as well, precisely because the engine did not move us in that case. */
 static void MpHitFrame(void)
 {
 	MP_PLAYER* me = MpLocalPlayer();
@@ -1950,9 +2137,7 @@ static void MpHitFrame(void)
 	if (me == NULL || me->carId < 0)
 		return;
 
-	if (gMpHitArmFrame == 0)
-		gMpHitArmFrame = gMp.frame + MP_HIT_ARM_FRAMES;
-	if (gMp.frame < gMpHitArmFrame)
+	if (!MpHitArmed())
 		return;
 
 	mine = &car_data[me->carId];
@@ -1961,70 +2146,35 @@ static void MpHitFrame(void)
 	{
 		MP_PLAYER* pl = &gMp.players[i];
 		CAR_DATA* other;
-		long dx, dy, dz, d2, d, px, py, pz, closing, push;
-		MP_HIT h;
+		long long dx, dy, dz, d2;
 
 		if (!pl->active || pl->isLocal || pl->id == me->id || pl->carId < 0)
 			continue;
 		if (gMp.frame - pl->lastHitFrame < MP_HIT_COOLDOWN_FRAMES)
 			continue;
 
+		/* STAND DOWN while the engine is reporting contacts with this peer. The
+		 * probe is the fallback for an overlap the engine never saw; left to run
+		 * whenever it likes it takes the shared cooldown first (it is a distance
+		 * test, so it fires on a near miss the engine's collision boxes do not
+		 * touch) and masks the accurate trigger for the next 15 frames. Measured
+		 * before this: 3..5 engine contacts against ~68 probe hits in one pair
+		 * run, i.e. the primary trigger was starved by its own fallback. */
+		if (gMpSelfContactFrame[pl->id] != 0 &&
+			(gMp.frame - gMpSelfContactFrame[pl->id]) < MP_HIT_PROBE_QUIET)
+			continue;
+
 		other = &car_data[pl->carId];
 
-		dx = other->hd.where.t[0] - mine->hd.where.t[0];
-		dy = other->hd.where.t[1] - mine->hd.where.t[1];
-		dz = other->hd.where.t[2] - mine->hd.where.t[2];
+		dx = (long long)other->hd.where.t[0] - (long long)mine->hd.where.t[0];
+		dy = (long long)other->hd.where.t[1] - (long long)mine->hd.where.t[1];
+		dz = (long long)other->hd.where.t[2] - (long long)mine->hd.where.t[2];
 		d2 = dx * dx + dy * dy + dz * dz;
 
-		if (d2 == 0 || d2 > (long)MP_HIT_RADIUS * MP_HIT_RADIUS)
+		if (d2 == 0 || d2 > (long long)MP_HIT_RADIUS * MP_HIT_RADIUS)
 			continue;
 
-		d = (long)sqrt((double)d2);
-		if (d == 0)
-			continue;
-
-		px = dx * MP_FIXEDH / d;	/* unit normal in the velocity fix-point, US -> THEM */
-		py = dy * MP_FIXEDH / d;
-		pz = dz * MP_FIXEDH / d;
-
-		closing = ((mine->st.n.linearVelocity[0] - other->st.n.linearVelocity[0]) * px
-			+ (mine->st.n.linearVelocity[1] - other->st.n.linearVelocity[1]) * py
-			+ (mine->st.n.linearVelocity[2] - other->st.n.linearVelocity[2]) * pz) / MP_FIXEDH;
-
-		if (closing < MP_HIT_MIN_CLOSING)
-			continue;
-
-		push = closing * MP_HIT_PUSH / 100;
-		if (push > MP_HIT_MAX_PUSH)
-			push = MP_HIT_MAX_PUSH;
-
-		/* we give up the closing component ... */
-		mine->st.n.linearVelocity[0] -= px * push / MP_FIXEDH;
-		mine->st.n.linearVelocity[1] -= py * push / MP_FIXEDH;
-		mine->st.n.linearVelocity[2] -= pz * push / MP_FIXEDH;
-
-		/* ... and ask THEIR owner to give it up too. */
-		memset(&h, 0, sizeof(h));
-		h.targetId = (uint8_t)pl->id;
-		h.impulse[0] = px * push / MP_FIXEDH;
-		h.impulse[1] = py * push / MP_FIXEDH;
-		h.impulse[2] = pz * push / MP_FIXEDH;
-
-		pl->lastHitFrame = gMp.frame;
-
-		if (MpIsHost())
-		{
-			int ci = MpConnFindByPlayer(pl->id);
-
-			if (ci >= 0)
-				MpSendConn(ci, MP_TAG_HIT, 0, &h, sizeof(h));
-		}
-		else
-			MpSendToHost(MP_TAG_HIT, 0, &h, sizeof(h));
-
-		if (gMpCtx != NULL)
-			gMpCtx->jer_log(gMpCtx, "[mp] hit: we bumped player %d (closing %ld, push %ld,%ld,%ld)\n",
-				pl->id, closing, (long)h.impulse[0], (long)h.impulse[1], (long)h.impulse[2]);
+		MpContactPush(me, pl, 1, "probe");
 	}
 }
 
@@ -2032,15 +2182,37 @@ static void MpHandleHit(int connIndex, const unsigned char* p, int len)
 {
 	MP_HIT h;
 	MP_PLAYER* me = MpLocalPlayer();
+	int from;
 
 	if (len < (int)sizeof(h))
 		return;
 
 	memcpy(&h, p, sizeof(h));
 
+	from = MpConnPlayerId(connIndex);
+
 	if (me != NULL && h.targetId == me->id && me->carId >= 0 && me->carId < MAX_CARS)
 	{
 		CAR_DATA* cp = &car_data[me->carId];
+
+		/* ONCE per contact. Our own engine resolves the same collision (both
+		 * machines simulate both cars), and its rigid-body response is already in
+		 * our velocity -- so adding the peer's push as well lands one collision
+		 * twice. The engine's contact hook marks the frame it saw one; within
+		 * MP_HIT_SELF_FRAMES of that, this push is the duplicate and is dropped
+		 * (the contact is still logged, so a run can see both halves arriving).
+		 *
+		 * Outside that window nothing local moved us, which is the case the
+		 * hand-off exists for: apply it. */
+		if (from >= 0 && from < MP_MAX_PLAYERS && gMpSelfContactFrame[from] != 0 &&
+			(gMp.frame - gMpSelfContactFrame[from]) <= MP_HIT_SELF_FRAMES)
+		{
+			if (gMpCtx != NULL)
+				gMpCtx->jer_log(gMpCtx,
+					"[mp] hit: player %d bumped us (push %ld,%ld,%ld; our engine has it, kept)\n",
+					from, (long)h.impulse[0], (long)h.impulse[1], (long)h.impulse[2]);
+			return;
+		}
 
 		cp->st.n.linearVelocity[0] += h.impulse[0];
 		cp->st.n.linearVelocity[1] += h.impulse[1];
@@ -2048,7 +2220,7 @@ static void MpHandleHit(int connIndex, const unsigned char* p, int len)
 
 		if (gMpCtx != NULL)
 			gMpCtx->jer_log(gMpCtx, "[mp] hit: player %d bumped us (push %ld,%ld,%ld)\n",
-				MpConnPlayerId(connIndex), (long)h.impulse[0], (long)h.impulse[1], (long)h.impulse[2]);
+				from, (long)h.impulse[0], (long)h.impulse[1], (long)h.impulse[2]);
 		return;
 	}
 

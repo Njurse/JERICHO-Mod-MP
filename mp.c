@@ -1654,6 +1654,11 @@ JER_MODULE_ENTRY(jer_module_mp_entry)(JERICHO_CONTEXT* ctx)
 	ctx->jer_register_hook(ctx, JER_EVENT_NET_RECV, MpOnNetRecv, NULL, 100);
 	ctx->jer_register_hook(ctx, JER_EVENT_LEVEL_LAUNCH, MpOnLevelLaunch, NULL, 0);
 	ctx->jer_register_hook(ctx, JER_EVENT_NET_SPAWN, MpOnNetSpawn, NULL, 0);
+	/* The engine's OWN car-to-car contact. Registered here (and not read from a
+	 * proximity probe on some later frame) because this fires while the pair's
+	 * pre-impact velocities are still in place, which is the only moment the
+	 * closing speed can be read before our own engine absorbs it. */
+	ctx->jer_register_hook(ctx, JER_EVENT_COLLISION, MpOnCarContact, NULL, 0);
 	/* The resident car models: a match asks for enough distinct cars to seat every
 	 * player. Registered at the default priority -- nothing else here competes for
 	 * the level's spare resident slots. */
