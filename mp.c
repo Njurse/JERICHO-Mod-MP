@@ -1391,9 +1391,9 @@ static const JER_PAUSE_MENU_ITEM mpColorItems[] =
 {
 	/* label, get_label, on_activate, userdata, submenu, adjust */
 	{ NULL, MpColorLabelOn, MpColorToggleOn, NULL, NULL, 0 },
-	{ NULL, MpColorLabelR, NULL, MpColorAdjustR, NULL, 1 },
-	{ NULL, MpColorLabelG, NULL, MpColorAdjustG, NULL, 1 },
-	{ NULL, MpColorLabelB, NULL, MpColorAdjustB, NULL, 1 },
+	{ NULL, MpColorLabelR, MpColorAdjustR, NULL, NULL, 1 },
+	{ NULL, MpColorLabelG, MpColorAdjustG, NULL, NULL, 1 },
+	{ NULL, MpColorLabelB, MpColorAdjustB, NULL, NULL, 1 },
 };
 
 static const JER_PAUSE_MENU mpColorMenu =
