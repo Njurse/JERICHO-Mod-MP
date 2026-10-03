@@ -199,6 +199,7 @@ flushed as the socket accepts them (§10, trap 2).
 | `JPCH` | both | addon channel payload (the `jer_net.h` bridge) |
 | `JPLV` | both | LEAVE |
 | `JPCX` | both | chat line (T to open, Enter to send, Esc to cancel; received as a notify) |
+| `JPCC` | client -> host | the car this player picked in the car select. Sent when the pick becomes known (at launch), because the `JPHL` hello goes out at CONNECT time, long before the player has chosen. The host records it, republishes `JPRS`, and - in a match already running - builds the vehicle then rather than at hello. No car is built for a player until this arrives, so a joiner's vehicle never appears before they have picked it. |
 
 ---
 

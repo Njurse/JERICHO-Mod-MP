@@ -129,9 +129,14 @@ void MpRemovePlayer(int id)
 		MpNotifyf("%s left", p->name);
 
 	/* take their car out of the world so it does not sit there parked with
-	 * nobody driving it; the slot is recycled by the engine */
+	 * nobody driving it; the slot is recycled by the engine.
+	 *
+	 * Release the sticky "ours" mark FIRST: MpKeepOurCarsFromTrafficAi takes any
+	 * marked slot straight back off CONTROL_TYPE_NONE, so freeing the car while the
+	 * mark stood made it flicker out and re-appear on the next frame. */
 	if (!p->isLocal && p->carId >= 0 && p->carId < MAX_CARS)
 	{
+		MpReleaseOurCarSlot(p->carId);
 		car_data[p->carId].controlType = CONTROL_TYPE_NONE;
 
 		if (gMpCtx != NULL)

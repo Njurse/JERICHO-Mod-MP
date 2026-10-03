@@ -249,6 +249,28 @@ void MpLeaveSession(void)
  * and enter the game. NumPlayers stays 1 so each machine gets the FULL screen
  * (no split-screen); the other players are puppet cars managed by the module
  * and placed from the network every frame. */
+/* Tell the host which car this player ended up with. The HELLO carried the CONFIG
+ * value at CONNECT time - long before the player reached the car select - so
+ * without this every other machine drew a car they never chose. Only a client
+ * sends: the host's own car is in the roster it builds anyway. */
+static void MpSendPickedCar(int model, int city)
+{
+	MP_CAR c;
+
+	if (MpIsHost() || !gMp.connected)
+		return;
+
+	memset(&c, 0, sizeof(c));
+	c.model = (model >= 0 && model < 0xFF) ? (uint8_t)model : 0xFF;
+	c.city = (city >= 0 && city < 4) ? (uint8_t)city : 0xFF;
+
+	MpSendToHost(MP_TAG_CAR, 0, &c, sizeof(c));
+
+	if (gMpCtx != NULL)
+		gMpCtx->jer_log(gMpCtx, "[mp] told the host our car: model %d city %d\n",
+			(int)c.model, (int)c.city);
+}
+
 static void MpLaunchLocal(void)
 {
 	/* Idempotent: see gMpLaunched. A second SetState(STATE_GAMESTART) would load
@@ -257,6 +279,34 @@ static void MpLaunchLocal(void)
 		return;
 
 	gMpLaunched = 1;
+
+	/* TEST LEVER (MP_TEST_CARSELECT=slotN): the stock car select is the one step a
+	 * padless run cannot drive, so this writes exactly the state CarSelectScreen
+	 * leaves behind when Select is pressed (FEmain.c): carSelection plus
+	 * wantedCar[0] resolved against THIS machine's city, before the session city is
+	 * applied below - the same order the real pick happens in. It is what makes
+	 * "is the player's pick respected?" a line in a headless run instead of
+	 * something only a human at a menu can check. */
+	{
+		const char* s = MpTestCarSelect();
+
+		if (s != NULL)
+		{
+			extern int carSelection;
+			extern char carNumLookup[4][10];
+			int slotNo = atoi(s);
+			int idx = (slotNo >= 1 && slotNo <= 10) ? slotNo - 1 : 0;
+			int lvl = (GameLevel >= 0 && GameLevel < 4) ? GameLevel : 0;
+
+			carSelection = idx;
+			wantedCar[0] = carNumLookup[lvl][idx];
+
+			if (gMpCtx != NULL)
+				gMpCtx->jer_log(gMpCtx,
+					"[mp] test: car select honoured slot %d -> wantedCar[0]=%d (MP_TEST_CARSELECT)\n",
+					slotNo, wantedCar[0]);
+		}
+	}
 
 	GameLevel = gMp.city;
 	GameType = GAME_TAKEADRIVE;
@@ -299,7 +349,21 @@ static void MpLaunchLocal(void)
 	 * than from whatever city this machine happened to boot with. A raw number
 	 * the level cannot load is left alone -- InitPlayer clamps it to a resident
 	 * car, so it is no longer a crash. */
-	if (gMp.config.car >= 0)
+	/* A car the player PICKED in the stock car select wins over everything below.
+	 * The engine writes that pick to wantedCar[0] the moment they press Select
+	 * (CarSelectScreen, FEmain.c), and mp used to overwrite it a moment later from
+	 * its own config - which is exactly why "car selections aren't respected when
+	 * joining": the choice was thrown away microseconds after it was made. A -car
+	 * boot argument lands in the same variable, so that is respected too.
+	 * -mpcar is now only the DEFAULT, for a machine where nobody picks: the
+	 * launchers and the headless harness. */
+	if (wantedCar[0] >= 0)
+	{
+		if (gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx, "[mp] using the car-select pick: model %d (city %d)\n",
+				wantedCar[0], GameLevel);
+	}
+	else if (gMp.config.car >= 0)
 	{
 		int car = gMp.config.car;
 
@@ -332,6 +396,23 @@ static void MpLaunchLocal(void)
 		if (gMpCtx != NULL)
 			gMpCtx->jer_log(gMpCtx, "[mp] no car chosen -> assigned model %d (player %d, city %d)\n",
 				wantedCar[0], me, GameLevel);
+	}
+
+	/* The pick is only known NOW, so this is the first moment it can be sent.
+	 * Refresh our own row too: the roster every machine reads should name the car
+	 * we are actually driving. */
+	{
+		MP_PLAYER* me = MpLocalPlayer();
+
+		if (me != NULL)
+		{
+			me->car = wantedCar[0];
+			me->carIsSlot = 0;
+			me->carCity = -1;	/* the pick is resolved against the session's city */
+			me->carConfirmed = 1;
+		}
+
+		MpSendPickedCar(wantedCar[0], -1);
 	}
 
 	/* Log the host's own car sources. WITH -mpcar wantedCar[0] is the pick; without
@@ -743,6 +824,19 @@ static int MpSetStartCar(int slot, MP_PLAYER* p)
 	return cid;
 }
 
+/* Is this player's vehicle ready to be built?
+ *
+ * Only a player who has CHOSEN a car gets one, so that a joiner's vehicle does not
+ * appear on every screen while they are still in the car select. The HOST is the
+ * exception, and must be: it is the authority for its own car, it never sends the
+ * pick message (only clients do), so gating it would mean a client never builds
+ * the host's car at all - "the client can't see the host". Player 0 is always the
+ * host. */
+static int MpPlayerCarReady(const MP_PLAYER* p)
+{
+	return p->carConfirmed || p->id == 0;
+}
+
 /* Give a car to any player who has none, exactly the way the engine's own
  * player-creation loop does it. A peer that joins a match already in progress
  * gets no car from the engine at all -- and a player with no car is invisible
@@ -765,7 +859,8 @@ void MpSpawnLateJoiners(void)
 		int rot, k;
 		char padid;
 
-		if (p == NULL || p->isLocal || p->carId >= 0)
+		/* Only a player who has CHOSEN a car gets one -- see carConfirmed. */
+		if (p == NULL || p->isLocal || p->carId >= 0 || !MpPlayerCarReady(p))
 			continue;
 
 		/* The smallest CAR_DATA slot no player is already driving. Counting the
@@ -1170,6 +1265,46 @@ static void MpSendWelcome(int connIndex, int playerId, int matched)
 	MpMarkBusy(MP_BUSY_LAUNCH_MS);
 }
 
+/* A client picked a car. The host records it and - for a match already running -
+ * builds the vehicle NOW rather than at HELLO time: a joining player has no car
+ * until they have chosen one, which is what stops a placeholder car appearing on
+ * everybody's screen while they are still in the car select. */
+static void MpHandleCar(int connIndex, const unsigned char* p, int len)
+{
+	MP_CAR c;
+	MP_PLAYER* pl;
+	int id;
+
+	if (len < (int)sizeof(MP_CAR) || !MpIsHost())
+		return;
+
+	memcpy(&c, p, sizeof(c));
+
+	id = MpConnPlayerId(connIndex);
+	pl = MpGetPlayer(id);
+
+	if (pl == NULL || !pl->active)
+		return;
+
+	pl->car = (c.model == 0xFF) ? -1 : (int)c.model;
+	pl->carIsSlot = 0;
+	pl->carCity = (c.city < 4) ? (int)c.city : -1;
+	pl->carConfirmed = 1;
+
+	if (gMpCtx != NULL)
+		gMpCtx->jer_log(gMpCtx, "[mp] player %d picked car model %d (city %d)\n",
+			id, pl->car, pl->carCity);
+
+	/* A running match has no car for this player yet - the engine creates player
+	 * cars only at level init - so ask for one on the next frame, never from
+	 * inside the network poll. */
+	if (gMp.running && pl->carId < 0)
+		gMp.pendingSpawn = 1;
+
+	/* republish, so every machine draws the car that was actually picked */
+	MpHostSendRoster();
+}
+
 static void MpHandleHello(int connIndex, const unsigned char* p, int len)
 {
 	MP_HELLO h;
@@ -1266,12 +1401,11 @@ static void MpHandleHello(int connIndex, const unsigned char* p, int len)
 		}
 	}
 
-	/* A match that is already running has no car for this player: the engine
-	 * creates player cars exactly once, at level init (InitGameVariables), and
-	 * that has long since happened. Ask for one on the NEXT FRAME -- building it
-	 * here would be doing engine work from inside the network poll. */
-	if (gMp.running)
-		gMp.pendingSpawn = 1;
+	/* NO car is built here any more. A HELLO arrives when the client CONNECTS - before
+	 * it has shown the player the car select - so a car spawned now would be a
+	 * placeholder nobody chose, sitting on every other machine with the level's
+	 * default model until the player got round to picking. MpHandleCar builds it
+	 * when it hears which car they actually chose. */
 
 	MpSendWelcome(connIndex, id, matched);
 
@@ -1557,7 +1691,11 @@ int MpOnNetSpawn(void* userdata, void* args)
 	{
 		MP_PLAYER* p = MpGetPlayer(i);
 
-		if (p == NULL || p->isLocal)
+		/* Only a player who has CHOSEN a car gets one built here. A peer whose pick has
+		 * not arrived is left with NO car on purpose: their vehicle must not appear on
+		 * every screen before they have picked it in the car select. MpHandleCar builds
+		 * it the moment the pick lands. */
+		if (p == NULL || p->isLocal || !MpPlayerCarReady(p))
 			continue;
 
 		PlayerStartInfo[slot] = &ReplayStreams[slot].SourceType;
@@ -1950,6 +2088,7 @@ static const char* gTestLeaveStr;
 static const char* gTestOnFootStr;
 static const char* gTestCarChangeStr;
 static const char* gTestChatKeyStr;
+static const char* gTestCarSelectStr;
 
 static void MpResolveTestLevers(void)
 {
@@ -1965,6 +2104,7 @@ static void MpResolveTestLevers(void)
 	gTestOnFootStr = getenv("MP_TEST_ONFOOT");
 	gTestCarChangeStr = getenv("MP_TEST_CARCHANGE");
 	gTestChatKeyStr = getenv("MP_TEST_CHATKEY");
+	gTestCarSelectStr = getenv("MP_TEST_CARSELECT");
 }
 
 /* MP_TEST_CHATKEY is read by the frame hook in mp.c, so it is exposed rather
@@ -1973,6 +2113,13 @@ const char* MpTestChatKey(void)
 {
 	MpResolveTestLevers();
 	return gTestChatKeyStr;
+}
+
+/* MP_TEST_CARSELECT, read once: see the launch lever in MpLaunchLocal. */
+const char* MpTestCarSelect(void)
+{
+	MpResolveTestLevers();
+	return gTestCarSelectStr;
 }
 
 static void MpHeartbeatTick(void)
@@ -2743,6 +2890,18 @@ static void MpDriveRemotePed(MP_PLAYER* p)
  *
  * Every frame, in PRE_SIM -- which is BEFORE the civ-AI pass in the same frame, so
  * a car handed over this frame never reaches the AI at all. */
+/* A slot that is no longer OURS. The gMpOurCars mark is sticky on purpose - the
+ * traffic AI must never reach a car one of us owns - but it has to be dropped
+ * when the owner leaves. MpKeepOurCarsFromTrafficAi below takes any marked slot
+ * straight back off CONTROL_TYPE_NONE, which is exactly what removing a
+ * departing player's car sets: without this the car flickered out and re-appeared
+ * on the very next frame, looking like an identical car parked in its place. */
+void MpReleaseOurCarSlot(int slot)
+{
+	if (slot >= 0 && slot < MAX_CARS)
+		gMpOurCars[slot] = 0;
+}
+
 static void MpKeepOurCarsFromTrafficAi(void)
 {
 	int i;
@@ -3557,6 +3716,12 @@ void MpHandleMessage(int connIndex, const char* tag, const unsigned char* payloa
 	if (memcmp(tag, MP_TAG_ROSTER, 4) == 0)
 	{
 		MpHandleRoster(payload, len);
+		return;
+	}
+
+	if (memcmp(tag, MP_TAG_CAR, 4) == 0)
+	{
+		MpHandleCar(connIndex, payload, len);
 		return;
 	}
 

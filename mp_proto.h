@@ -38,7 +38,7 @@
 extern "C" {
 #endif
 
-#define MP_PROTO_VERSION	7	/* 7: dead wire fields dropped (roster x/y/z, carstate carSlot, the frame byte in the input/ped/colour headers) */
+#define MP_PROTO_VERSION	8	/* 8: MP_TAG_CAR -- a client tells the host the car it picked in the car select */
 
 /* Default UDP+TCP port. 1318 is IANA-unassigned (the neighbour 1319 is
  * amx-icsp), so it is a safe, non-reserved choice for a game. Configurable
@@ -96,6 +96,7 @@ extern "C" {
 #define MP_TAG_HIT	"JPHI"	/* either side: "my car bumped yours, you push yourself" */
 #define MP_TAG_PED	"JPPD"	/* owner -> peers: an ON-FOOT player's pose */
 #define MP_TAG_COLOR	"JPCL"	/* either side: a player's chosen colour */
+#define MP_TAG_CAR	"JPCC"	/* client -> host: the car this player picked */
 
 /* The 'JPSW' meeting-point message (MP_SPAWN) has been RETIRED: the two
  * machines already agree on the engine's own deterministic spawn, and a client
@@ -448,6 +449,13 @@ typedef struct MP_PING
 } MP_PING;
 
 #define MP_PONG MP_PING
+
+typedef struct MP_CAR
+{
+	uint8_t  model;		/* the chosen model; 0xFF = none */
+	uint8_t  city;		/* 0..3 = the city it belongs to, 0xFF = the session's own */
+	uint8_t  reserved[2];
+} MP_CAR;
 
 /* A chat line: a player's message, announced to every seat. */
 #define MP_CHAT_TEXT_MAX	96

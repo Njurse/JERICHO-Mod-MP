@@ -60,7 +60,9 @@ typedef struct MP_PLAYER
 	int  active;			/* slot in use */
 	int  id;			/* 0 = host, 1..MP_MAX_PLAYERS-1 = clients */
 	char name[MP_NAME_MAX];
-	int  carId;			/* CAR_DATA slot it drives, -1 = none yet */
+	int  carId;
+	int  carConfirmed;	/* this player has CHOSEN a car (see MpHandleCar): no car is
+				 * built for anyone until then */			/* CAR_DATA slot it drives, -1 = none yet */
 	int  car;			/* vehicle (car id) it asked for, -1 = unknown */
 	int  carIsSlot;			/* 'car' is a per-city frontend SLOT to resolve, not a model */
 	int  carCity;			/* the city that car number belongs to, -1 = the session's own */
@@ -160,6 +162,7 @@ MP_PLAYER* MpGetPlayer(int id);
 MP_PLAYER* MpGetPlayerByCar(int carId);	/* NULL when carId is not a player */
 MP_PLAYER* MpAddPlayer(int id, const char* name, int isLocal);
 void       MpRemovePlayer(int id);
+void       MpReleaseOurCarSlot(int slot);	/* drop the sticky "ours" mark (a leaver's car) */
 void       MpResetPlayers(void);
 
 /* ------------------------------------------------------------------ */
@@ -171,6 +174,7 @@ void MpNetPoll(int waitMs);		/* service sockets (PRE_SIM/FRAME) */
 unsigned long MpNowMs(void);		/* monotonic milliseconds */
 int MpDebugOn(void);			/* is MP_DEBUG set? cached; safe to call per frame */
 const char* MpTestChatKey(void);	/* MP_TEST_CHATKEY, resolved once */
+const char* MpTestCarSelect(void);	/* MP_TEST_CARSELECT, resolved once */
 void MpSuppressCrashDialogs(void);
 void* MpLocalPedPtr(void);		/* our own player's pedestrian, or NULL in a car */
 

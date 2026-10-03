@@ -27,7 +27,7 @@ import sys
 import threading
 import time
 
-PROTO = 7                     # must match mp_proto.h MP_PROTO_VERSION -- the game drops any frame whose envelope version differs
+PROTO = 8                     # must match mp_proto.h MP_PROTO_VERSION -- the game drops any frame whose envelope version differs
 SDK = 2                       # JERICHO_SDK_VERSION
 MP_VER = "0.1.0"              # JERICHO/MODS/mp/mod.toml version -- always advertised
 NUL = bytes([0])
@@ -37,7 +37,7 @@ TAG = {
     "session": b"JPSS", "start": b"JPST", "input": b"JPIN",
     "carstate": b"JPCS", "ping": b"JPPN", "pong": b"JPPO",
     "channel": b"JPCH", "leave": b"JPLV", "chat": b"JPCX",
-    "roster": b"JPRS",
+    "roster": b"JPRS", "car": b"JPCC",
 }
 UDP_MAGIC = 0x31504D4A
 
