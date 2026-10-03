@@ -116,6 +116,13 @@ extern "C" {
  * left the level's own AI car sitting in the remote player's slot. */
 #define MP_ROSTER_NAME_MAX	20
 #define MP_ROSTER_FLAG_HOST	1
+/* The host HAS a car for this player (its own car, or a peer whose pick has
+ * landed and whose car the host has built). A client must not build a car for a
+ * peer who has not picked yet -- that is the placeholder the host stopped making
+ * -- but it must build one the moment the host HAS one, or a third machine never
+ * gets the car at all and the player is invisible on it while still colliding
+ * (its carstate entries are dropped for a player with no car here). */
+#define MP_ROSTER_FLAG_CAR_READY	2
 
 /* The roster structs go on the wire verbatim (the host memcpy's the struct and
  * the client memcpy's it back, both sized with sizeof), so pin their layout to

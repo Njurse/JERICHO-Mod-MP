@@ -70,6 +70,7 @@ static unsigned long gMpSelfContactFrame[MP_MAX_PLAYERS];
 
 /* defined below, needed by the launch path above them */
 static int MpAssignedCarModel(int playerId);
+static int MpPlayerCarReady(const MP_PLAYER* p);
 
 extern int MapHeight(VECTOR* pos);	/* the engine's ground height at an x/z */
 
@@ -749,6 +750,12 @@ void MpHostSendRoster(void)
 		e->modelCity = MP_CAR_CITY_SESSION;
 		e->reserved = (uint16_t)p->palette;
 
+		/* Whether THIS host has a car for that player yet -- the same gate the
+		 * spawn uses, and the only way a third machine can tell "their pick has
+		 * landed" (it never sees the pick message, which goes to the host). */
+		if (MpPlayerCarReady(p))
+			e->flags |= MP_ROSTER_FLAG_CAR_READY;
+
 		/* the car this player drives, resolved here on the host -- so a joiner
 		 * knows everyone's car before anything is spawned. An explicit pick keeps
 		 * its own city (a cross-city car); a player who chose nothing gets the
@@ -1043,6 +1050,26 @@ static void MpHandleRoster(const unsigned char* p, int len)
 			pl->carCity = (e->modelCity == MP_CAR_CITY_SESSION) ? -1 : (int)e->modelCity;
 		}
 		pl->palette = (int)e->reserved;
+
+		/* The host has a car for them: build OUR copy of it. Without this a third
+		 * machine never gives a late joiner a car at all -- its carstate entries
+		 * are then dropped (a player with no car here) and the player is INVISIBLE
+		 * on every screen but the host's own, while still colliding: the reported
+		 * "clients can see themselves and the host, but not other clients".
+		 *
+		 * Only the host ever asked for the spawn before (MpHandleCar, the pick
+		 * message), and a pick goes to the host alone -- so this flag is the only
+		 * thing that tells a client "their pick has landed, build them".
+		 *
+		 * Never from inside the poll: the spawn is deferred to the next frame like
+		 * every other spawn this module makes. */
+		if (!pl->isLocal && (e->flags & MP_ROSTER_FLAG_CAR_READY))
+		{
+			pl->carConfirmed = 1;
+
+			if (gMp.running && pl->carId < 0)
+				gMp.pendingSpawn = 1;
+		}
 	}
 }
 
