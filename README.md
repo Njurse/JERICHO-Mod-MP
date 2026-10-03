@@ -48,7 +48,10 @@ join handshake then admits or refuses clients by their enabled-mod manifest.
   costs smoothness, never a frozen frame.
 - **Contacts are handed off** — a machine can only move its OWN car, so when
   yours touches a peer's you push yours and report it (`MP_HIT`); the peer's
-  machine pushes theirs. Both cars move and each stays its owner's truth.
+  machine pushes theirs. Both cars move and each stays its owner's truth. The
+  contact comes from the engine's OWN collision event (so a hit is registered
+  even when our engine has already absorbed it), and the receiving side applies
+  the push once — not on top of its own engine's response to the same contact.
 - **Chat** — press `T` to type a line, `Enter` to send, `Escape` to cancel; the
   owner echoes it and the host fans it out, so every seat sees it (`JPCX`).
 - **The host owns the roster** — `MP_ROSTER` publishes who is in the match,

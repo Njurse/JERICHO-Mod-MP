@@ -221,6 +221,17 @@ in the canonical order.
 The roster also carries each player's name, host flag, vehicle and ping, which is
 what the pause-menu list reads.
 
+**And whether the HOST has a car for that player** (`MP_ROSTER_FLAG_CAR_READY`,
+set from the same `MpPlayerCarReady` gate the spawn uses). That flag is how a THIRD
+machine finds out that a late joiner's pick has landed — the pick message goes to
+the host alone — and it is what a client needs to build that player's car:
+without it a third machine added the player row but no car, so every carstate
+entry for them was dropped and the player was invisible on it while still
+colliding on everyone else's (the host sees all clients, a client sees only
+itself and the host). The host republishes the roster after it spawns, so the flag
+arrives one frame behind the car. Additive flag, no layout change: an older peer
+ignores it and behaves exactly as before.
+
 ### The spawn contract: the level's own start, and never a y
 
 The engine places a player car from a per-slot start record, built at level init:
@@ -504,11 +515,40 @@ Implemented: the adopted state carries the orientation quaternion and both
 velocities (`MP_CARSTATE_HAS_BODY`), and `MpHandleCarState` rebuilds the handling
 matrix from them rather than poking `hd.where`.
 
-### D. Car-to-car collision — implemented, hand-off
+### D. Car-to-car collision — implemented, engine-triggered
 
 A contact is reported (`MP_HIT`) and each owner pushes its own car, so a collision
-moves both cars without breaking owner-authority. Closed-loop testing of the push
-on both seats is still the thing to add if it becomes load-bearing for a game mode.
+moves both cars without breaking owner-authority.
+
+**The trigger is the engine's own contact**, `JER_EVENT_COLLISION` (fired by
+`GlobalTimeStep` for the pair it actually resolved, before either car's impulse is
+applied, so the velocities read there are still the pre-impact ones — the true
+closing speed). It used to be a proximity probe run on a later frame, and that is
+the bug the pair's own log shows: by then our engine has already absorbed the
+closing velocity, so the probe read ~0 and nothing was sent for exactly the hits
+that mattered — "the collision is not always registered on the remote player".
+The probe survives as a FALLBACK for an overlap the engine never saw (a snapshot
+teleport) and stands down for 90 frames after the engine reports one, so the
+accurate trigger is not starved by its own fallback (measured before: 3..5 engine
+contacts against ~68 probe hits).
+
+**The units were wrong by 4096x.** The thresholds and cap were documented in whole
+units/frame but computed and compared as fixed-point (`closing` is a dot product of
+a fixed-point velocity with a fixed-point normal, so it carried the fix-point
+twice), and the impulse divided by `MP_FIXEDH` once more. A capped push therefore
+moved a car by 0.005 units/frame: the log said `push -20,0,0` and nothing happened.
+The closing speed is reduced to whole units/frame and the impulse is one multiply
+(`px` IS the normal in the velocity's own scale).
+
+**Applied once.** Both machines simulate both cars, so each resolves the same
+contact locally; the receiving half applies the peer's push only when our own engine
+has not reported that contact within the last few frames, and the owner's half is
+skipped entirely on the engine-triggered path (the engine has already moved us).
+The impulse lands at PRE_SIM, before the frame's `StepCars` integration.
+
+Measured over the two-instance harness with the pursuit bot: `closing 26, giving up
+15 units/frame` and the peer receives `push 48032,0,44656` (11.7 units/frame), on
+both seats, with the duplicate suppression visible as "our engine has it, kept".
 
 ### E. Damage and health
 
@@ -549,8 +589,16 @@ throttle from replicated input, a client gathering itself beside the host, map b
 **Reasoned but not observed:** that the roster ordering removes the cop placeholder
 on both machines; that the client's unattended auto-launch reaches the level from a
 fresh pair; that the pause-menu list shows the right names/vehicles/ping on screen
-(the row *contents* are verified from the log, the drawing is not); car-to-car
-collision actually pushing both cars.
+(the row *contents* are verified from the log, the drawing is not).
+
+Car-to-car collision is now OBSERVED in both directions: with the pursuit bot the
+same contact appears as "we bumped player N (engine contact: closing 26, giving up
+15 units/frame)" on one seat and "player N bumped us (push 48032,0,44656)" on the
+other, and the two sims stay within 1-3 units (the adopt lines), so the push lands.
+What is NOT observed is a two-seat run longer than ~65 s: every pair run so far
+drops the joiner mid-match ("send failed" here, "DROPPED ... timeout" on the host)
+at that point, and the same 90 s run on the unmodified build reproduces it, so it
+is a transport bug of its own and not this work.
 
 **Known broken:** the frontend-driven second start (Chicago); damage is not synced
 (a snap now writes a rigid body — see C).
