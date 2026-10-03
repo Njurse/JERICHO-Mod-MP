@@ -28,6 +28,7 @@ extern int gWantNight;		/* glaunch.c: 1 = the night take-a-ride level variant */
 #include "dr2roads.h"	/* FindSurfaceD2: the real ground height at a point */
 #include "pedest.h"	/* pUsedPeds: our player's own pedestrian, when on foot */
 #include "jer_npc.h"	/* jer_npc_*: the pedestrian we stand in for a REMOTE one */
+#include "jer_ped_palette.h"	/* jer_ped_palette_reset: scope the suit-colour cache to a session */
 
 #include <string.h>
 #include <stdio.h>
@@ -43,6 +44,12 @@ extern int gWantNight;		/* glaunch.c: 1 = the night take-a-ride level variant */
  * Cleared when the session ends: a stale mark would make us take a STOCK traffic
  * car for one of ours on the next match, which would break the traffic instead. */
 static unsigned char gMpOurCars[MAX_CARS];
+
+/* Last reported palette value LOGGED per player, so the continuous carstate
+ * stream logs a correction once per reported value instead of every packet.
+ * File scope (not a function static) so the session can clear it: a leftover
+ * "already logged" mark would swallow the first report after a reconnect. */
+static signed char gPaletteLogged[MP_MAX_PLAYERS];
 
 /* A pad nobody writes, for cars that must sit still. Pad 1 is free because a match
  * keeps NumPlayers at 1 -- each machine drives the whole screen. Not -1 and not
@@ -101,6 +108,16 @@ void MpSessionReset(void)
 	gMp.localPlaced = 0;
 	gMp.lastRejectReason = MP_REJECT_NONE;
 	gMp.lastRejectText[0] = '\0';
+
+	/* the palette-correction log is throttled per reported value; clear that
+	 * memory so a fresh session reports its first correction */
+	memset(gPaletteLogged, 0, sizeof(gPaletteLogged));
+
+	/* A new session starts with a clean suit-colour cache, so a colour minted for
+	 * a player in a previous match cannot be handed back for a different one
+	 * (the level load clears it too; this makes the scope explicit and
+	 * independent of a level reload). */
+	jer_ped_palette_reset();
 }
 
 int MpBeginHost(void)
@@ -710,9 +727,12 @@ void MpHostSendRoster(void)
  * on every screen, has no input applied to anything, and cannot be hit. That is
  * the "no client shows up on the host" report.
  *
- * The player cars occupy slots [0, n) and are assigned in ascending player id,
- * so the first slot that is not already claimed is simply how many rows have
- * one. player[] is MAX_PLAYERS (16) entries, so this is safe past slot 1. */
+ * A slot is CLAIMED by whoever drives it, so the slot for a new car is the
+ * smallest CAR_DATA slot no player is already driving -- NOT "how many rows have
+ * one". Counting is only right while the cars fill a contiguous [0, n); once a
+ * player leaves, its slot is free but the count points at an occupied one, and
+ * two players end up in the same car. player[] is MAX_PLAYERS (16) entries, so
+ * this is safe past slot 1. */
 void MpSpawnLateJoiners(void)
 {
 	int id, slot, spawned = 0;
@@ -726,13 +746,19 @@ void MpSpawnLateJoiners(void)
 		if (p == NULL || p->isLocal || p->carId >= 0)
 			continue;
 
-		slot = 0;
-		for (k = 0; k < MP_MAX_PLAYERS; k++)
+		/* The smallest CAR_DATA slot no player is already driving. Counting the
+		 * rows was only correct while the cars occupied a contiguous [0, n): after
+		 * a player LEAVES, its slot is free but the count still points at a slot
+		 * that is taken. Slot 0 is the local player's, and the same scan skips it
+		 * because the local row drives it. */
+		slot = -1;
+		for (k = 0; k < MAX_CARS; k++)
 		{
-			MP_PLAYER* q = MpGetPlayer(k);
-
-			if (q != NULL && q->carId >= 0)
-				slot++;
+			if (MpGetPlayerByCar(k) == NULL)
+			{
+				slot = k;
+				break;
+			}
 		}
 
 		if (slot < 1 || slot >= MAX_CARS)
@@ -1608,10 +1634,6 @@ int MpOnNetSpawn(void* userdata, void* args)
 /* ------------------------------------------------------------------ */
 /* Input lockstep                                                      */
 /* ------------------------------------------------------------------ */
-#define MP_BARRIER_MS 200
-#define MP_SYNC_INTERVAL	30	/* host resync snapshot cadence (frames) */
-#define MP_SYNC_SNAP_DIST	600	/* divergence past which the remote car is corrected. Was 300: the host's correction of the client's car fired on ordinary simulation differences, which reads as the host overcorrecting. */
-#define MP_SYNC_HARD_DIST	3000	/* divergence past which the correction TELEPORTS. Anything closer is eased across a quarter of the gap per snapshot instead, because a hard snap is the "the car warped weirdly" the player sees. */
 
 int MpInputForPlayer(int id)
 {
@@ -1775,51 +1797,12 @@ static void MpHandleInput(const unsigned char* p, int len)
 	}
 }
 
-/* Line every player car up on one patch of road, spaced out, all facing the
- * same way.
- *
- * The meeting point has to come from ONE machine. If each side simply puts the
- * other players' cars next to itself, the two placements disagree, the resync
- * sees a big divergence and drags them apart again -- cars rubber-banding
- * between spawn points. The host is that machine: it already owns the roster,
- * and its own car is standing at a spawn the level chose.
- */
-void MpPlaceSpawns(int x, int y, int z, int heading)
-{
-	/* RETIRED: this used to teleport EVERY car onto the host's car spot with the
-	 * host's car Y. That is what put the cars in the air -- a single y taken from
-	 * the host and applied at every other car's x/z leaves them above or below the
-	 * ground actually under them, and the engine then pulls them down (logs showed
-	 * the local car at y=75 falling to 26 on the first sim frames).
-	 *
-	 * It was there because the two machines were thought to spawn on opposite
-	 * sides of the map. They do not: with the line-up off, BOTH machines place
-	 * both cars at exactly the same x/z/y (the engine's own spawn is
-	 * deterministic), so the map's baked start is already agreed on and there is
-	 * nothing to correct. Kept as a logged no-op so the call sites stay obvious. */
-	if (gMpCtx != NULL)
-	{
-		static unsigned long lastMs;
-
-		if ((MpNowMs() - lastMs) > 1000)
-		{
-			lastMs = MpNowMs();
-			gMpCtx->jer_log(gMpCtx,
-				"[mp] spawn: using the map's own start (line-up retired; was %d,%d,%d)\n", x, y, z);
-		}
-	}
-}
-
-static void MpHandleSpawn(const unsigned char* p, int len)
-{
-	MP_SPAWN s;
-
-	if (len < (int)sizeof(s))
-		return;
-
-	memcpy(&s, p, sizeof(s));
-	MpPlaceSpawns(s.x, s.y, s.z, s.heading);
-}
+/* The old "meeting point" line-up (MpPlaceSpawns / 'JPSW') is GONE. It
+ * teleported every car onto the host's spot carrying the host's single y, which
+ * is exactly the trap in ARCHITECTURE section 4. Both machines already agree on
+ * the engine's own deterministic spawn, and a client gathers itself beside the
+ * host in MpHandleCarState, so there was nothing left for a host broadcast to
+ * do. Do not reintroduce one. */
 
 /* ------------------------------------------------------------------ */
 /* Collisions, without giving up owner-authority                       */
@@ -3431,12 +3414,11 @@ static void MpHandleCarState(int connIndex, const unsigned char* p, int len)
 
 			if (corrected || cp->ap.palette != (u_char)pal)
 			{
-				static signed char logged[16];		/* last reported palette logged, per player */
-				int fresh = corrected && pl->id >= 0 && pl->id < 16 &&
-					(logged[pl->id] != (signed char)e.palette);
+				int fresh = corrected && pl->id >= 0 && pl->id < MP_MAX_PLAYERS &&
+					(gPaletteLogged[pl->id] != (signed char)e.palette);
 
 				if (fresh)
-					logged[pl->id] = (signed char)e.palette;
+					gPaletteLogged[pl->id] = (signed char)e.palette;
 
 				if ((cp->ap.palette != (u_char)pal || fresh) && gMpCtx != NULL)
 					gMpCtx->jer_log(gMpCtx, "[mp] palette: player %d reports %d, drawn as %d%s\n",
@@ -3458,13 +3440,24 @@ static void MpHandleCarState(int connIndex, const unsigned char* p, int len)
 			{
 				CAR_DATA* my = &car_data[me->carId];
 				MATRIX m;
+				int gy;
 
-				/* The gather uses the PEER's resolved y (e.y), so it does not lift
-				 * our car -- same trap as the spawn, and it is not hit here. */
+				/* OUR x/z (the peer's spot offset along X) -- but the HEIGHT is
+				 * resolved from the ground UNDER where we land, never carried from
+				 * the peer's y 600 units away. A y taken at one x/z and applied at
+				 * another is the single-Y trap (ARCHITECTURE §4): the car ends up
+				 * above or below the road and the engine has to drag it down. This
+				 * mirrors the engine's own "place a car at a position" recipe
+				 * (civ_ai.c: MapHeight at the target minus the suspension offset). */
 				my->hd.where.t[0] = e.x + 600;
-				my->hd.where.t[1] = e.y;
+				my->hd.where.t[1] = 0;
 				my->hd.where.t[2] = e.z;
 				my->hd.direction = e.heading;
+
+				gy = MapHeight((VECTOR*)my->hd.where.t);
+				if (my->ap.carCos != NULL)
+					gy -= my->ap.carCos->wheelDisp[0].vy;
+				my->hd.where.t[1] = gy;
 
 				/* Rebuild the handling matrix too: setting only t[]/direction left the
 				 * collision box at the OLD spot until the engine next recomputed it --
@@ -3475,7 +3468,9 @@ static void MpHandleCarState(int connIndex, const unsigned char* p, int len)
 				gMp.localPlaced = 1;
 
 				if (gMpCtx)
-					gMpCtx->jer_log(gMpCtx, "[mp] gathered next to peer at %d,%d,%d\n", e.x, e.y, e.z);
+					gMpCtx->jer_log(gMpCtx,
+						"[mp] gathered next to peer at %d,%d,%d (ground under us, not the peer's y)\n",
+						my->hd.where.t[0], my->hd.where.t[1], my->hd.where.t[2]);
 			}
 		}
 
@@ -3532,12 +3527,6 @@ void MpHandleMessage(int connIndex, const char* tag, const unsigned char* payloa
 	if (memcmp(tag, MP_TAG_INPUT, 4) == 0)
 	{
 		MpHandleInput(payload, len);
-		return;
-	}
-
-	if (memcmp(tag, MP_TAG_SPAWN, 4) == 0)
-	{
-		MpHandleSpawn(payload, len);
 		return;
 	}
 
@@ -3621,5 +3610,7 @@ void MpHandleMessage(int connIndex, const char* tag, const unsigned char* payloa
 		return;
 	}
 
-	/* SESSION is not used yet; unknown tags are ignored. */
+	/* No protocol surface sends a bare 'JPSS' (the launch config rides in
+	 * 'JPST'; MP_TAG_SESSION / MP_SESSION_LOBBY are reserved); unknown tags
+	 * are ignored. */
 }

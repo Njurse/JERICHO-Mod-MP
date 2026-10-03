@@ -37,7 +37,7 @@ TAG = {
     "session": b"JPSS", "start": b"JPST", "input": b"JPIN",
     "carstate": b"JPCS", "ping": b"JPPN", "pong": b"JPPO",
     "channel": b"JPCH", "leave": b"JPLV", "chat": b"JPCX",
-    "spawn": b"JPSW", "roster": b"JPRS",
+    "roster": b"JPRS",
 }
 UDP_MAGIC = 0x31504D4A
 
@@ -266,11 +266,12 @@ def mode_client(args):
     send_frame(s, TAG["hello"], build_hello(args.name, mods, args.build))
     print(f"[mock-client] sent HELLO (name={args.name}, mods={[m[0] for m in mods]}, build={args.build:#06x})")
 
-    # The host pings on a keepalive timer, and it can ping before it has even
-    # answered us, so skip pings/pongs while waiting for the actual reply.
+    # The host sends the ROSTER before the WELCOME (order is load-bearing: a live
+    # joiner picks the players/cars from it), and it pings on a keepalive timer --
+    # skip both while waiting for the actual reply.
     while True:
         tag, payload = recv_frame(s)
-        if tag is None or tag not in (TAG["ping"], TAG["pong"]):
+        if tag is None or tag not in (TAG["ping"], TAG["pong"], TAG["roster"]):
             break
 
     if tag == TAG["welcome"]:

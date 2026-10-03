@@ -5,11 +5,12 @@ touchpoints, the traps that keep costing days, and a prioritised roadmap. It
 assumes you have read `../README.md` (what the mod is, how to configure it) and
 `../tools/README.md` (how to run it).
 
-**Status at the time of writing.** The join path works: a player can host, another
-can join, both get a car, they start together, and each drives the other. The
-transport is proven. What is *not* proven is a clean two-player match end to end —
-see "Roadmap" and, specifically, "Unverified" at the bottom, which lists exactly
-what has been observed and what has only been reasoned about.
+**Status.** A two-player match is verified end to end on one machine: a host and a
+joiner load the same level, each gets its own car, and each machine mirrors the
+other's car to within single-digit world units while both drive
+(`mp_localpair.py`, PASS). Chat (open/type/send/receive) works in a live match, and
+a player's suit colour now goes through the canonical JERICHO colour type. What is
+still open is listed under "Roadmap" and "Unverified" at the bottom.
 
 ---
 
@@ -147,9 +148,11 @@ the engine then pulls it down — the logs showed the local car starting at y=75
 falling to 26 within a couple of frames. It was believed the two machines spawned
 on opposite sides of the map; they do not. With the line-up off, BOTH machines
 place both cars at exactly the same x/z/y (the engine's own spawn is
-deterministic), so the map's baked start is already agreed on and `MpPlaceSpawns`
-is now a logged no-op. Do not reintroduce a single-Y teleport: to move a car, move
-it in x/z and let the engine place its height, or offset it ALONG the road.
+deterministic), so the map's baked start is already agreed on. The line-up and its
+`JPSW` meeting-point message have since been REMOVED outright, and a joining
+client instead gathers itself beside the host (`MpHandleCarState`), resolving the
+height under its OWN x/z. Do not reintroduce a single-Y teleport: to move a car,
+move it in x/z and let the engine place its height, or offset it ALONG the road.
 
 ### The steady state
 
@@ -157,7 +160,8 @@ Per simulation frame (`JER_EVENT_PRE_SIM`):
 
 1. `MpSendInput(MpLocalPad())` — our pad goes out. A client sends one row; the host
    merges every row it has seen and broadcasts the whole set.
-2. Every `MP_SYNC_INTERVAL` frames: snapshot exchange.
+2. `MpSendOwnCarState` — the one car we own goes out (owner-authoritative; there is
+   no separate snapshot cadence).
 3. Every 120 frames: the host refreshes the roster (names, vehicles, ping).
 4. `MpNetPoll(0)` — receive everything available and act on it.
 
@@ -187,15 +191,14 @@ flushed as the socket accepts them (§10, trap 2).
 | `JPWL` | H→C | WELCOME: player id + lobby + live state |
 | `JPRJ` | H→C | REJECT: why, in text |
 | `JPRS` | H→all | ROSTER: who is in the match, ascending id, host first |
-| `JPSS` | H→C | SESSION: config broadcast |
+| `JPSS` | H→C | SESSION: config broadcast — **reserved; no sender or handler** (the launch config rides in `JPST`) |
 | `JPST` | H→all | START: begin the level launch |
-| `JPSW` | H→all | SPAWN: the meeting point |
 | `JPIN` | C→H, H→all | INPUT: this frame's pad set |
-| `JPCS` | H→C | CARSTATE: resync snapshot |
+| `JPCS` | each→H, H→all | CARSTATE: the sender's own car, adopted verbatim by everyone else |
 | `JPPN` / `JPPO` | both | PING / PONG (the PONG echoes the tick, so the host can compute RTT) |
 | `JPCH` | both | addon channel payload (the `jer_net.h` bridge) |
 | `JPLV` | both | LEAVE |
-| `JPCX` | both | chat line (scaffolding) |
+| `JPCX` | both | chat line (T to open, Enter to send, Esc to cancel; received as a notify) |
 
 ---
 
@@ -298,13 +301,11 @@ non-deterministic simulations cannot be reconciled that way -- the follower's vi
 a remote car wandered +/-100-900 units while driving, and no threshold fixes that.
 With adoption it is 0-2 units.
 
-**Accepted trade-off:** because our engine's response to a contact is overwritten by
-the owner's next frame, **a car you drive into is not pushed**. That is the price of
-the tight sync. A collision hand-off (give the engine authority on contact) is the
-follow-up if pushes are wanted back.
-
-**Leftover to clean:** `MP_SYNC_INTERVAL`, `MP_SYNC_SNAP_DIST` and
-`MP_SYNC_HARD_DIST` are now dead.
+**Contacts are handed off, not simulated twice.** A machine can only move the ONE
+car it owns, so when your car touches a peer's you push yours and report it
+(`MP_HIT`); the peer's machine pushes theirs. Both cars move and each stays its
+owner's truth. (The older "a car you drive into is not pushed" trade-off no longer
+applies — see `MpHitFrame` / `MpHandleHit` in `mp_session.c`.)
 
 ---
 
@@ -345,7 +346,9 @@ Engine hooks this work *added*, which other modules can use too:
 - **`JER_EVENT_NET_INPUT` / `NET_CAR_STATE` / `NET_PLAYERS` / `NET_RECV` /
   `NET_SPAWN`** — the synchronisation surface (substitute a car's input, capture or
   apply a transform, enumerate local player slots, receive a channel payload, add
-  remote player cars).
+  remote player cars). `NET_CAR_STATE` and `NET_PLAYERS` are declared for
+  completeness but **no module registers them today** — mp drives its sync from
+  `NET_INPUT`, `NET_RECV` and `NET_SPAWN`. Treat them as reserved, not live.
 - **`JER_EVENT_LEVEL_LAUNCH`** — gained in/out `timeOfDay`/`weather` so a session's
   host can dictate the match conditions.
 - **`JER_EVENT_CMDLINE`** — a module picks up its own shortcuts after the engine
@@ -477,14 +480,15 @@ the launch went wrong), `car: player N slot S`, `added N remote player car(s)`,
 
 ## 12. Roadmap
 
-Ordered by what is proven broken and what unblocks the most.
+Ordered by what is proven broken and what unblocks the most. Items marked DONE are
+implemented and, where noted, observed.
 
-### A. Verify the pair end to end — do this first
+### A. Verify the pair end to end — DONE
 
-The client's auto-launch is built but never confirmed against a running pair, and
-the roster fix is reasoned, not observed. Everything below is guesswork until a
-two-instance run reaches a match with both cars present and no cop placeholder.
-`mp_pair.bat` on Havana arena 0, host car 0, client car 12.
+Verified: a two-instance run (`mp_localpair.py`, and `mp_pair.bat`) reaches a match
+with both cars present and no cop placeholder, each machine mirroring the other's
+car to within single-digit world units while both drive. The client's auto-launch
+and the roster ordering are confirmed, not reasoned.
 
 ### B. Stop the frontend-driven second start
 
@@ -493,19 +497,17 @@ second start, using the frontend's city rather than the session's — fits the f
 menu flow re-entering `MpBeginHost`/`MpStartMatch`. An unattended session must be
 authoritative over the menus. Also give `MpBeginHost`'s idempotency a test.
 
-### C. A snap must write a rigid body
+### C. A snap writes a rigid body — DONE
 
-Position and heading are not a body state. Write the orientation quaternion and
-`st.n.linearVelocity` — reuse the engine's own handling-matrix helper rather than
-poking `hd.where` — and only then is the resync a real correction. Without this,
-the divergence between two simulations has no correct way to be fixed.
+Implemented: the adopted state carries the orientation quaternion and both
+velocities (`MP_CARSTATE_HAS_BODY`), and `MpHandleCarState` rebuilds the handling
+matrix from them rather than poking `hd.where`.
 
-### D. Make car-to-car collision a tested feature
+### D. Car-to-car collision — implemented, hand-off
 
-This is the payoff of input replication and it has never been demonstrated. Both
-cars are non-local-`controlType` engine cars, so the collision loop should pair
-them; what needs checking is that the pair survives the `hd.speed` guard, that the
-box orientation is right after a spawn, and that both sides feel the push.
+A contact is reported (`MP_HIT`) and each owner pushes its own car, so a collision
+moves both cars without breaking owner-authority. Closed-loop testing of the push
+on both seats is still the thing to add if it becomes load-bearing for a game mode.
 
 ### E. Damage and health
 
@@ -513,11 +515,10 @@ A wreck should look the same on every machine. `totalDamage`, `ap.damage[]`,
 `needsDenting` are not synced at all, so a car that is badly bent on one screen is
 straight on another.
 
-### F. Put the arena in the session config
+### F. The arena in the session config — DONE
 
-Right now the multiplayer map/arena is a *local boot flag*, so the client has to be
-told with `-mp` and a mismatch silently loads a different map. It belongs in
-`WELCOME`/`SESSION` with the city.
+`MP_WELCOME` carries `arena` and the client applies it with the city, so both sides
+load the same multiplayer map without being told separately.
 
 ### G. Smoothing for latency
 
@@ -527,8 +528,9 @@ underlying state trustworthy.
 
 ### H. Out of scope for now
 
-Matchmaking beyond LAN, chat/rally beyond the scaffolding in place, host migration.
-The lobby's "Enforce Mods" policy is implemented; nothing exercises it yet.
+Matchmaking beyond LAN, host migration, traffic/police replication. Chat is
+implemented (open on `T`, send on Enter, received as a notify). The lobby's
+"Enforce Mods" policy is implemented; nothing exercises it yet.
 
 ---
 
@@ -536,11 +538,11 @@ The lobby's "Enforce Mods" policy is implemented; nothing exercises it yet.
 
 Kept honest and separate, because the difference matters when picking this up.
 
-**Observed working:** the transport (HELLO/WELCOME/REJECT/roster/START/SPAWN/INPUT/
+**Observed working:** the transport (HELLO/WELCOME/REJECT/roster/START/INPUT/
 PING all seen on the wire), discovery and the beacon, a client being accepted and
 launching into a live match, remote cars being engine-simulated with the right
 `controlType`/`padId` and present in `active_car_list`, a remote car accepting
-throttle from replicated input, the meeting point being adopted, map blips firing
+throttle from replicated input, a client gathering itself beside the host, map blips firing
 (`map: drew N remote blip(s)`), the crash from `-level`-on-the-client and its fix.
 
 **Reasoned but not observed:** that the roster ordering removes the cop placeholder
@@ -549,8 +551,8 @@ fresh pair; that the pause-menu list shows the right names/vehicles/ping on scre
 (the row *contents* are verified from the log, the drawing is not); car-to-car
 collision actually pushing both cars.
 
-**Known broken:** the frontend-driven second start (Chicago); a snap does not write
-a rigid body; damage is not synced.
+**Known broken:** the frontend-driven second start (Chicago); damage is not synced
+(a snap now writes a rigid body — see C).
 
 **Open, from the 2026-09 four-seat runs (re-taken with a clean modlist — the first
 attempt had cainescrossfire enabled by accident, which rewrites car handling):**

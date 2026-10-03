@@ -19,8 +19,31 @@
 #include "jer_config.h"
 #include "jer_frontend.h"
 #include "jer_pause_menu.h"
+#include "jer_colour.h"		/* a player's suit colour is a canonical JER_COLOUR */
 #include "jer_ped_palette.h"	/* a player's own Tanner in their own colour */
 #include "jer_npc.h"		/* JerNpc: the stand-in we drew for a remote player */
+
+/* The chat key needs PsyX's debug-key hook, but NOT its header: PsyX_public.h and
+ * SDL_scancode.h both pull in math/SDL defines that collide with the game's in
+ * this TU (a C4005 'M_PI': macro redefinition). So the one symbol is declared
+ * here -- matching GameDebugKeysHandlerFunc, and C-linkage because PsyX_public.h
+ * wraps the declaration in extern "C" -- and the two scancodes are named
+ * constants (SDL2 USB-HID indices, fixed). */
+typedef void (*MpDebugKeysFn)(int nKey, char down);
+typedef void (*MpTextInputFn)(const char* buf);
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+extern MpDebugKeysFn g_dbg_gameDebugKeys;
+extern MpTextInputFn g_cfg_gameOnTextInput;
+#ifdef __cplusplus
+}
+#endif
+
+#define MP_KEY_CHAT_OPEN	23	/* SDL_SCANCODE_T */
+#define MP_KEY_CHAT_SEND	40	/* SDL_SCANCODE_RETURN */
+#define MP_KEY_CHAT_CANCEL	41	/* SDL_SCANCODE_ESCAPE */
 
 #include "driver2.h"
 #include "main.h"
@@ -521,10 +544,125 @@ static void MpAutostartFromEnv(void)
 	}
 }
 
+/* ------------------------------------------------------------------ */
+/* Chat: opening the prompt from the keyboard                         */
+/* ------------------------------------------------------------------ */
+/* The pad is busy driving, so chat opens on a KEYBOARD key. PsyX hands a module
+ * a raw scancode through g_dbg_gameDebugKeys -- the only such hook -- and it is a
+ * single slot, so we CHAIN whatever was there rather than clobber it; a module
+ * that installed its own handler keeps working.
+ *
+ * `T` is chosen because the default PsyX keyboard map does not bind it to a pad
+ * button (X/V/Z/C, LSHIFT, the arrows, SPACE and RETURN are all taken), so
+ * opening chat does not also steer the car. ESCAPE closes the prompt again. */
+static MpDebugKeysFn gMpPrevDebugKeys = NULL;
+static MpTextInputFn gMpPrevTextInput = NULL;
+
+static void MpOnTextInput(const char* text);	/* our handler; defined below */
+
+/* Take/release PsyX's single text-input slot, CHAINING whoever had it. Idempotent
+ * on purpose: the frame hook re-asserts it every frame, so any path that forgot
+ * to release self-heals instead of leaving the keyboard grabbed. */
+static void MpChatGrabKeyboard(int on)
+{
+	if (on)
+	{
+		if (g_cfg_gameOnTextInput != MpOnTextInput)
+		{
+			gMpPrevTextInput = g_cfg_gameOnTextInput;
+			g_cfg_gameOnTextInput = MpOnTextInput;
+		}
+	}
+	else if (g_cfg_gameOnTextInput == MpOnTextInput)
+	{
+		g_cfg_gameOnTextInput = gMpPrevTextInput;
+		gMpPrevTextInput = NULL;
+	}
+}
+
+/* PsyX hands every typed character here while the prompt is up. NULL is the
+ * BACKSPACE key (PsyX's convention for it -- there is no character). Everything
+ * else appends, up to the buffer, terminator included. */
+static void MpOnTextInput(const char* text)
+{
+	if (!gMp.chatOpen)
+	{
+		/* not ours: pass it on untouched */
+		if (gMpPrevTextInput != NULL)
+			gMpPrevTextInput(text);
+		return;
+	}
+
+	if (text == NULL)		/* backspace: drop the last character */
+	{
+		size_t n = strlen(gMp.chatBuf);
+
+		if (n > 0)
+			gMp.chatBuf[n - 1] = '\0';
+		return;
+	}
+
+	/* Enter may arrive here as text on some backends; treat it as SEND. */
+	if (text[0] == '\r' || text[0] == '\n')
+	{
+		MpChatSendText(gMp.chatBuf);
+		MpChatGrabKeyboard(0);
+		return;
+	}
+
+	{
+		size_t have = strlen(gMp.chatBuf);
+		size_t room = sizeof(gMp.chatBuf) - 1 - have;
+		size_t i;
+
+		for (i = 0; text[i] != '\0' && i < room; i++)
+			gMp.chatBuf[have + i] = text[i];
+
+		gMp.chatBuf[have + i] = '\0';
+	}
+}
+
+static void MpOnDebugKey(int nKey, char down)
+{
+	if (gMpPrevDebugKeys != NULL)
+		gMpPrevDebugKeys(nKey, down);
+
+	if (!down)
+		return;
+
+	/* In a live match only: while the frontend is up the engine's own text fields
+	 * (and every other module) want the keyboard. */
+	if (!MpIsActive() || !gMp.running)
+		return;
+
+	if (nKey == MP_KEY_CHAT_OPEN && !gMp.chatOpen)
+	{
+		MpChatOpen();
+		MpChatGrabKeyboard(1);	/* the prompt owns the keyboard while it is up */
+	}
+	else if (nKey == MP_KEY_CHAT_SEND && gMp.chatOpen)
+	{
+		/* Enter sends: the owner echoes the line and the host fans it out. */
+		MpChatSendText(gMp.chatBuf);
+		MpChatGrabKeyboard(0);
+	}
+	else if (nKey == MP_KEY_CHAT_CANCEL && gMp.chatOpen)
+	{
+		gMp.chatOpen = 0;
+		gMp.chatBuf[0] = '\0';
+		MpChatGrabKeyboard(0);
+	}
+}
+
 static int MpOnBoot(void* userdata, void* args)
 {
 	(void)userdata;
 	(void)args;
+
+	/* Chat needs the keyboard while the pad drives: take PsyX's one debug-key slot,
+	 * CHAINING any existing handler so nothing else is starved. */
+	gMpPrevDebugKeys = g_dbg_gameDebugKeys;
+	g_dbg_gameDebugKeys = MpOnDebugKey;
 
 	MpNetStart();
 
@@ -596,6 +734,56 @@ static int MpOnFrame(void* userdata, void* args)
 	 * crashed the client. FRAME and not PRE_SIM: a joining client is sitting in
 	 * the FRONTEND, and PRE_SIM only runs in game, so the request was set and
 	 * then never acted on. */
+	/* Chat owns PsyX's single text-input slot exactly while the prompt is up.
+	 * Re-asserted every frame so a missed release self-heals. */
+	MpChatGrabKeyboard(gMp.chatOpen ? 1 : 0);
+
+	/* Test lever: MP_TEST_CHATKEY=<secs> feeds the chat KEY into our own handler
+	 * once, that many seconds after the match goes live, so the open path can be
+	 * exercised with no keyboard (the harness has none). Inert unless set. */
+	{
+		static unsigned long fireAtMs = 0;
+		const char* s = getenv("MP_TEST_CHATKEY");
+
+		if (s != NULL && gMpCtx != NULL)
+		{
+			if (fireAtMs == 0 && gMp.running)
+				fireAtMs = MpNowMs() + (unsigned long)(atoi(s) * 1000);
+
+			if (fireAtMs != 0 && fireAtMs != (unsigned long)-1 && MpNowMs() >= fireAtMs)
+			{
+				const char* comma;
+
+				fireAtMs = (unsigned long)-1;	/* once */
+				gMpCtx->jer_log(gMpCtx, "[mp] test: MP_TEST_CHATKEY -> chat key press\n");
+				MpOnDebugKey(MP_KEY_CHAT_OPEN, 1);
+
+				/* MP_TEST_CHATKEY=<secs>,<text>: type the text through the real
+				 * character handler, then one BACKSPACE, and log what landed. */
+				comma = strchr(s, ',');
+				if (comma != NULL)
+				{
+					const char* t = comma + 1;
+
+					for (; *t != '\0'; t++)
+					{
+						char one[2];
+
+						one[0] = *t;
+						one[1] = '\0';
+						MpOnTextInput(one);
+					}
+
+					MpOnTextInput(NULL);	/* backspace */
+					gMpCtx->jer_log(gMpCtx, "[mp] test: chat buffer now '%s'\n", gMp.chatBuf);
+
+					gMpCtx->jer_log(gMpCtx, "[mp] test: chat SEND\n");
+					MpOnDebugKey(MP_KEY_CHAT_SEND, 1);
+				}
+			}
+		}
+	}
+
 	if (gMp.pendingLaunch)
 	{
 		gMp.pendingLaunch = 0;
@@ -1070,7 +1258,11 @@ static int MpOnPedDraw(void* userdata, void* args)
 		return JER_RESULT_CONTINUE;
 	}
 
-	jer_ped_palette_select(jer_ped_palette_team(r, g, b, MP_COLOR_STRENGTH));
+	/* The player's suit colour in JERICHO's canonical colour space (jer_colour.h):
+	 * the config / wire carries r,g,b, and jer_colour_make clamps and names it so
+	 * this draw path never has to think about the engine's two packings. Each
+	 * distinct colour gets its own palette rows; identical colours share them. */
+	jer_ped_palette_select(jer_ped_palette_team_colour(jer_colour_make(r, g, b), MP_COLOR_STRENGTH));
 
 	return JER_RESULT_CONTINUE;
 }
@@ -1156,6 +1348,11 @@ static int MpOnPauseMenu(void* userdata, void* args)
 
 	if (pm == NULL || pm->action != JER_PAUSE_OPEN)
 		return JER_RESULT_CONTINUE;
+
+	/* While the chat prompt is up, START is the player typing RETURN -- claim it,
+	 * so the engine pause does not open over the prompt. */
+	if (gMp.chatOpen)
+		return JER_RESULT_STOP;
 
 	if (!gMp.running)
 		return JER_RESULT_CONTINUE;
@@ -1328,37 +1525,10 @@ static int MpOnGameStart(void* userdata, void* args)
 			cp->hd.where.t[0], cp->hd.where.t[1], cp->hd.where.t[2]);
 	}
 
-	/* Every car now exists. The host's car is standing on a spawn point the
-	 * level chose, which makes it the one meeting point both machines can
-	 * agree on -- so it hands that spot out and everybody lines up on it.
-	 * Without this each machine keeps its own take-a-ride spawn on opposite
-	 * sides of the map and can never see the others. */
-	if (MpIsHost())
-	{
-		MP_PLAYER* me = MpLocalPlayer();
-
-		if (me != NULL && me->carId >= 0 && me->carId < MAX_CARS)
-		{
-			CAR_DATA* cp = &car_data[me->carId];
-			MP_SPAWN s;
-
-			/* The host's RESOLVED car position is the meeting point: by GAME_START
-			 * the engine has already dropped the car onto the road, so cp->hd.where
-			 * is the settled road height. PlayerStartInfo[..]->position.vy is only
-			 * the level DATUM -- it reads 0 in Rio while the road is at y=30 -- so
-			 * using it here put BOTH cars at y=0. */
-			s.x = cp->hd.where.t[0];
-			s.y = cp->hd.where.t[1];
-			s.z = cp->hd.where.t[2];
-			s.heading = cp->hd.direction;
-
-			MpPlaceSpawns(s.x, s.y, s.z, s.heading);
-			MpHostBroadcast(MP_TAG_SPAWN, 0, &s, sizeof(s));
-
-			gMpCtx->jer_log(gMpCtx, "[mp] meeting point %d,%d,%d heading %d sent\n",
-				s.x, s.y, s.z, s.heading);
-		}
-	}
+	/* The host used to broadcast a "meeting point" ('JPSW') here and every
+	 * machine lined up on it. RETIRED: both machines already place both cars at
+	 * the engine's own deterministic spawn, and a client gathers itself beside
+	 * the host in MpHandleCarState (see ARCHITECTURE section 4). */
 
 	return JER_RESULT_CONTINUE;
 }
@@ -1419,7 +1589,8 @@ JER_MODULE_ENTRY(jer_module_mp_entry)(JERICHO_CONTEXT* ctx)
 
 	ctx->jer_register_module(ctx, "mp", "Multiplayer", "0.1.0", "JERICHO",
 		"LAN multiplayer: host/join, UDP discovery, JERICHO addon net bridge, "
-		"deterministic input lockstep with host state-resync fallback.",
+		"owner-authoritative car sync (each machine drives its own car and "
+		"broadcasts its state; peers adopt it verbatim), and in-match chat.",
 		"", JERICHO_SDK_VERSION);
 
 	memset(&gMp, 0, sizeof(gMp));

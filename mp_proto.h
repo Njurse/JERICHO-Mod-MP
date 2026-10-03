@@ -83,7 +83,8 @@ extern "C" {
 #define MP_TAG_HELLO	"JPHL"	/* client -> host: identity + mod manifest */
 #define MP_TAG_WELCOME	"JPWL"	/* host -> client: accepted (id + lobby) */
 #define MP_TAG_REJECT	"JPRJ"	/* host -> client: refused (reason text) */
-#define MP_TAG_SESSION	"JPSS"	/* host -> client: session config broadcast */
+#define MP_TAG_SESSION	"JPSS"	/* RESERVED: nothing sends or handles it -- the launch
+				 * config rides in MP_START ('JPST'), see MP_SESSION */
 #define MP_TAG_START	"JPST"	/* host -> client: begin the level launch */
 #define MP_TAG_INPUT	"JPIN"	/* client -> host, host -> client: input set */
 #define MP_TAG_CARSTATE	"JPCS"	/* host -> client: resync snapshot */
@@ -91,21 +92,15 @@ extern "C" {
 #define MP_TAG_PONG	"JPPO"
 #define MP_TAG_CHANNEL	"JPCH"	/* addon net bridge payload */
 #define MP_TAG_LEAVE	"JPLV"	/* either side: leaving the session */
-#define MP_TAG_SPAWN	"JPSW"	/* host -> all: where everyone lines up */
 #define MP_TAG_ROSTER	"JPRS"	/* host -> all: who is in the match */
 #define MP_TAG_HIT	"JPHI"	/* either side: "my car bumped yours, you push yourself" */
 #define MP_TAG_PED	"JPPD"	/* owner -> peers: an ON-FOOT player's pose */
 #define MP_TAG_COLOR	"JPCL"	/* either side: a player's chosen colour */
 
-/* How far apart the player cars stand at the meeting point: close enough that
- * everybody is on one screen, far enough not to spawn inside each other. */
-#define MP_SPAWN_SLOT_DIST	260
-
-typedef struct MP_SPAWN
-{
-	int32_t x, y, z;
-	int32_t heading;
-} MP_SPAWN;
+/* The 'JPSW' meeting-point message (MP_SPAWN) has been RETIRED: the two
+ * machines already agree on the engine's own deterministic spawn, and a client
+ * gathers itself beside the host (MpHandleCarState). Tag 95's slot is free but
+ * must not be reused for a different meaning without a protocol version bump. */
 
 /* The host's view of the match: one row per player, in ASCENDING PLAYER ID.
  *
@@ -286,8 +281,9 @@ typedef struct MP_REJECT
 	char     text[MP_REJECT_TEXT_MAX];
 } MP_REJECT;
 
-/* 'JPSS' -- host -> client: the lobby's pending session config, also used
- * to keep clients' lobby readouts in sync before the start. */
+/* The launch config. It travels INSIDE MP_START ('JPST'), not as a standalone
+ * 'JPSS' message -- there is no sender or handler for a bare JPSS, so that tag
+ * is reserved. `state` is set to MP_SESSION_STARTING when the host launches. */
 typedef struct MP_SESSION
 {
 	uint8_t  gamemode;
@@ -302,8 +298,8 @@ typedef struct MP_SESSION
 
 enum
 {
-	MP_SESSION_LOBBY = 0,
-	MP_SESSION_STARTING
+	MP_SESSION_LOBBY = 0,	/* reserved: no lobby-state JPSS is ever sent today */
+	MP_SESSION_STARTING	/* the only value the launch path sets */
 };
 
 /* 'JPST' -- host -> client: launch the level with the agreed config. */

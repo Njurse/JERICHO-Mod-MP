@@ -33,6 +33,8 @@ That is the whole design. Everything below is a consequence of it.
    same place. Nobody else has to configure anything.
 4. **Drive.** Each player sees the others' cars moving, and their own car responds
    to their own pad with no delay. Collisions push both cars.
+5. **Talk.** Press `T` to open a chat line, type, and press `Enter` to send it to
+   everyone (Escape cancels). Every player sees the line at once.
 
 ---
 
@@ -127,9 +129,9 @@ mod.
   nothing tries to make them. This is why a car slot number means nothing on another
   machine (it may hold a different car there), and why matching a *model* by number
   is the only safe way to talk about "the car they are driving".
-- **Dents.** Health is synced; the exact dent artwork is each machine's own business.
-- **Damage in general** is not synced yet — a wreck can look different on two
-  screens.
+- **Dents and damage.** Nothing about a car's condition is synced: `totalDamage`,
+  `ap.damage[]` and `needsDenting` never travel, so a wreck can look different on
+  two screens. (There is no health field on the wire — see `MP_CARSTATE_ENTRY`.)
 
 ---
 

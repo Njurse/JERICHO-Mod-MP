@@ -299,6 +299,20 @@ is under test is the game's own code.
 Use it to check that the other machine's copy of your car becomes the vehicle you
 actually got into (`[mp] player N changed car: model A -> B (slot S)`).
 
+## Chat by hand (a headless run has no keyboard)
+
+`MP_TEST_CHATKEY=<seconds>[,<text>]` feeds the chat KEY into the module's own key
+handler once, that many seconds into a live match, and — with a text after the
+comma — types it through the real character handler, backspaces once, presses
+Enter and logs the buffer. So the whole open → type → send path runs with no
+keyboard at all.
+
+    MP_TEST_CHATKEY=10,hello python mp_localpair.py --seconds 45
+
+In game, chat opens on **T** and closes on **Escape**, and **Enter** sends. A
+received line is an ordinary notify, so every seat logs it as
+`[mp] notify row '<name>: <text>'`.
+
 ## Reading a run
 
 The logs are chatty at `MP_DEBUG=1`; `JPPN`, `JPPO`, `pose:`, `JPIN` and `JPCS`

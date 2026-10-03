@@ -37,12 +37,20 @@ join handshake then admits or refuses clients by their enabled-mod manifest.
   config; every machine runs `SetState(STATE_GAMESTART)` with the host's city,
   time and weather. The host adds one `PlayerStartInfo` slot per remote player
   (`JER_EVENT_NET_SPAWN`), so everyone has a car.
-- **Deterministic input lockstep** — each machine contributes its pad per
-  frame; the host gathers and broadcasts the full input set
-  (`MP_INPUT`); every player car is driven from it (`JER_EVENT_NET_INPUT`).
-- **State-resync fallback** — the host periodically broadcasts player-car
-  transforms (`MP_CARSTATE`); a client whose car diverges beyond a threshold
-  snaps it to the host's state.
+- **Owner-authoritative car state** — each machine is the sole authority on the
+  one car it drives, and broadcasts that car's whole rigid body (position,
+  orientation, both velocities, model, colour) every frame (`MP_CARSTATE`).
+  Every other machine adopts it verbatim, so a remote car can never rubber-band
+  against its own driver: the only thing that moves your car is you.
+- **Input replication is the fallback** — each machine also sends its pad
+  (`MP_INPUT`); a car whose owner state has not arrived yet is driven from the
+  replicated input (`JER_EVENT_NET_INPUT`) rather than stalling, so a slow link
+  costs smoothness, never a frozen frame.
+- **Contacts are handed off** — a machine can only move its OWN car, so when
+  yours touches a peer's you push yours and report it (`MP_HIT`); the peer's
+  machine pushes theirs. Both cars move and each stays its owner's truth.
+- **Chat** — press `T` to type a line, `Enter` to send, `Escape` to cancel; the
+  owner echoes it and the host fans it out, so every seat sees it (`JPCX`).
 - **The host owns the roster** — `MP_ROSTER` publishes who is in the match,
   ascending player id (host first), with each player's name, vehicle and ping.
   It goes out *before* a launch so every machine knows how many cars to spawn
@@ -68,7 +76,7 @@ join handshake then admits or refuses clients by their enabled-mod manifest.
 |---|---|
 | `mp.c` | the module's engine-facing entry point and hooks |
 | `mp_net.c` | sockets: TCP session + UDP discovery, framing, per-peer ping |
-| `mp_session.c` | handshake, start, input replication, resync, roster, dispatch |
+| `mp_session.c` | handshake, start, owner-authoritative car sync, roster, chat, dispatch |
 | `mp_players.c` | the player registry and the car accessors built on it |
 | `mp_config.c` | config, module identity, build/manifest hashes |
 | `mp_map.c` | the multiplayer-map blips (`JER_EVENT_DRAW_MAP`) |

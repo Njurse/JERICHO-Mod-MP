@@ -2,6 +2,6 @@ id = "mp"
 name = "Multiplayer"
 version = "0.1.0"
 author = "JERICHO"
-description = "LAN multiplayer: host/join with UDP discovery, a generic JERICHO addon net bridge, and synchronized play (client-authoritative car replication with host state-resync fallback)."
+description = "LAN multiplayer: host/join with UDP discovery, a generic JERICHO addon net bridge, owner-authoritative car sync (each machine drives its own car and broadcasts its state; peers adopt it verbatim), in-match chat, and a host-maintained roster."
 dependencies = []
 default-enabled = true

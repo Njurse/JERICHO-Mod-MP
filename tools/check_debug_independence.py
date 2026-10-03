@@ -30,9 +30,11 @@ BAD = re.compile(
 )
 
 # env vars that are FEATURE levers, not debug switches: they are *meant* to
-# change behaviour (autostart, the test bot, config). Only debug-style switches
-# are checked.
-FEATURE = re.compile(r'getenv\("(MP_AUTOSTART|MP_AUTOJOIN_START|MP_BOT|MP_TESTDRIVE|USERNAME|USER)"\)')
+# change behaviour (autostart, the test bot, config, and the test levers). Only
+# debug-style switches are checked.
+FEATURE = re.compile(
+    r'getenv\("(MP_AUTOSTART|MP_AUTOJOIN_START|MP_BOT|MP_TESTDRIVE|USERNAME|USER'
+    r'|MP_EXTRA_SLOTS|MP_TEST_ONFOOT|MP_TEST_CARCHANGE|MP_TEST_CHATKEY|MP_MAP|MP_PAUSE)"\)')
 
 
 def guarded_body(lines, i):

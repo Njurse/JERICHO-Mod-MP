@@ -929,7 +929,9 @@ int MpUiDrawOverlay(void* userdata, void* args)
 #endif
 	MpDrawCarLabels();
 
-	/* chat prompt (scaffolding: the buffer is filled by a future key hook) */
+	/* The chat prompt: the line being typed, with a cursor, along the bottom.
+	 * Drawn from DRAW_OVERLAY, which the engine fires only while the world is
+	 * stepping -- so seeing this up IS the proof it shows while driving. */
 	if (gMp.chatOpen)
 	{
 		char line[MP_NOTIFY_TEXT_MAX + 2];
@@ -937,6 +939,17 @@ int MpUiDrawOverlay(void* userdata, void* args)
 		snprintf(line, sizeof(line), "%s_", gMp.chatBuf);
 		SetTextColour(150, 255, 150);
 		PrintString(line, 8, 232);
+
+		if (gMpCtx != NULL && getenv("MP_DEBUG") != NULL)
+		{
+			static unsigned long lastMs;
+
+			if ((MpNowMs() - lastMs) > 1000)
+			{
+				lastMs = MpNowMs();
+				gMpCtx->jer_log(gMpCtx, "[mp] chat: prompt drawn (bottom-left, in game)\n");
+			}
+		}
 	}
 
 	return JER_RESULT_CONTINUE;
@@ -944,6 +957,9 @@ int MpUiDrawOverlay(void* userdata, void* args)
 
 void MpChatOpen(void)
 {
+	if (gMpCtx != NULL && getenv("MP_DEBUG") != NULL)
+		gMpCtx->jer_log(gMpCtx, "[mp] chat: prompt open (type; Enter to send, Esc to cancel)\n");
+
 	gMp.chatOpen = 1;
 	gMp.chatBuf[0] = '\0';
 }

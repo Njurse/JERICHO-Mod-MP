@@ -136,7 +136,6 @@ typedef struct MP_STATE
 	int notifyNext;				/* ring write cursor */
 	char chatBuf[MP_NOTIFY_TEXT_MAX];	/* pending chat line being typed */
 	int chatOpen;				/* 1 = the chat prompt is up */
-	int inputSetReady;			/* client: the host's full set arrived */
 
 	MP_PLAYER players[MP_MAX_PLAYERS];
 	int playerCount;		/* number of active registry rows */
@@ -315,7 +314,6 @@ void MpChatOpen(void);			/* open the chat prompt (scaffolding) */
 void MpChatSendText(const char* text);	/* send + locally echo a chat line */
 void MpSendChat(const char* text);	/* put a chat line on the wire */
 void MpSendInput(int pad);		/* replicate this frame's input (host relays the set) */
-void MpPlaceSpawns(int x, int y, int z, int heading);	/* line every player car up here */
 void MpSpawnLateJoiners(void);	/* give a car to a player who joined a live match */
 void MpHostSendRoster(void);		/* host: publish who is in the match */
 int MpOnCarDataSource(void* userdata, void* args);	/* resident car models: seat every player */
