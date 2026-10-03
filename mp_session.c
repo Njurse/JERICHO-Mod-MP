@@ -3577,6 +3577,14 @@ static int MpAdoptRemoteCar(MP_PLAYER* p, int city, int model)
 
 		CreateDentableCar(cp);
 
+		/* Say it: the car was REBUILT, not merely re-pointed. A hot-loaded car also
+		 * had its cosmetics replaced the moment they landed (JerHotLoadCarCosmetics),
+		 * and this is the call that makes the car on the road use them. */
+		if (gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx,
+				"[mp] rebuilt player %d's car on slot %d (model %d from %s): cosmetics, collision box and mesh are that car's own now\n",
+				p->id, slot, model, MpCarCityName(city));
+
 		/* p->car is a model NUMBER now (the identity), with its city -- not the
 		 * slot we happened to resolve it to. */
 		p->car = model;
