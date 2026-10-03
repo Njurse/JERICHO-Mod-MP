@@ -175,6 +175,7 @@ unsigned long MpNowMs(void);		/* monotonic milliseconds */
 int MpDebugOn(void);			/* is MP_DEBUG set? cached; safe to call per frame */
 const char* MpTestChatKey(void);	/* MP_TEST_CHATKEY, resolved once */
 const char* MpTestCarSelect(void);	/* MP_TEST_CARSELECT, resolved once */
+const char* MpTestFrontendJoin(void);	/* MP_TEST_FRONTEND_JOIN, resolved once */
 void MpSuppressCrashDialogs(void);
 void* MpLocalPedPtr(void);		/* our own player's pedestrian, or NULL in a car */
 

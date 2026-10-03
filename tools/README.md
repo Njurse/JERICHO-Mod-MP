@@ -286,6 +286,26 @@ launched by hand with that in mind.
 almost no match to observe (both sides stop at ~150 carstates, symmetrically, which
 looks like a fault and is not). `--seconds 60 --settle 5` gives a full window.
 
+## Joining through the menus (so a CLIENT reaches the vehicle select)
+
+`MP_TEST_FRONTEND_JOIN=1` makes a `-join` keep the front end instead of taking the
+unattended path. Without it, every client lever (`-join`, `MP_AUTOSTART=join`) sets
+`autoSession` — "no menus: launch as soon as we are in" — so the client never opens
+the car screen, and "does a joiner reach the vehicle select and its roster?" cannot
+be answered headlessly. With it the client takes the route a person at the machine
+takes: `WELCOME` -> `MpUiOpenCarSelect` (screen 14) -> the menu -> `Ride`, which
+hands the launch back through `JER_EVENT_MP_FRONTEND`.
+
+Combine it with carhacks' own harness, which walks to the car screen and drives its
+rows so no pad is needed:
+
+    MP_TEST_FRONTEND_JOIN=1 CHK_FORCE_MENU=1 CHK_FORCE_CAR=8 CHK_FORCE_ROSTER_CITY=1 \
+        python mp_localpair.py --players 2 --seconds 90 --settle 6
+
+`CHK_FORCE_CAR` is the row index in the roster and `CHK_FORCE_ROSTER_CITY` picks
+WHICH city's roster you are browsing (the pick becomes a cross-city car), so the
+pair covers "scroll the cars", "scroll the cities" and the pick that follows.
+
 ## Driving a car change by hand
 
 `MP_TEST_CARCHANGE=<seconds>[,<exitSeconds>]` makes every machine it reaches get out

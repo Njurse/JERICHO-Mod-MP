@@ -509,7 +509,25 @@ static int MpOnCmdLine(void* userdata, void* args)
 			if (gMpCtx != NULL)
 				gMpCtx->jer_log(gMpCtx, "[mp] -join %s:%d\n", ip, port);
 
-			gMp.autoSession = 1;	/* no menus: launch as soon as we are in */
+			/* MP_TEST_FRONTEND_JOIN keeps the MENUS: without it a join is the
+			 * unattended path ("no menus: launch as soon as we are in"), a client
+			 * never reaches the vehicle select, and "does a client reach the car
+			 * screen and its roster?" is unanswerable headlessly. With it the
+			 * client takes the route a human takes: WELCOME -> MpUiOpenCarSelect
+			 * (screen 14) -> the menu -> Ride, which hands the launch back through
+			 * JER_EVENT_MP_FRONTEND. See MpTestFrontendJoin. */
+			{
+				const char* feJoin = MpTestFrontendJoin();
+				int menuJoin = (feJoin != NULL && feJoin[0] != '\0' && feJoin[0] != '0');
+
+				if (!menuJoin)
+					gMp.autoSession = 1;	/* no menus: launch as soon as we are in */
+				else if (gMpCtx != NULL)
+					gMpCtx->jer_log(gMpCtx,
+						"[mp] -join %s:%d WITH the menus (MP_TEST_FRONTEND_JOIN): the car screen will be offered\n",
+						ip, port);
+			}
+
 			MpBeginJoinAsync(ip, port);
 		}
 	}

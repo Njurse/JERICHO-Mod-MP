@@ -2312,6 +2312,7 @@ static const char* gTestOnFootStr;
 static const char* gTestCarChangeStr;
 static const char* gTestChatKeyStr;
 static const char* gTestCarSelectStr;
+static const char* gTestFrontendJoinStr;
 
 static void MpResolveTestLevers(void)
 {
@@ -2328,6 +2329,24 @@ static void MpResolveTestLevers(void)
 	gTestCarChangeStr = getenv("MP_TEST_CARCHANGE");
 	gTestChatKeyStr = getenv("MP_TEST_CHATKEY");
 	gTestCarSelectStr = getenv("MP_TEST_CARSELECT");
+	gTestFrontendJoinStr = getenv("MP_TEST_FRONTEND_JOIN");
+}
+
+/* MP_TEST_FRONTEND_JOIN: is a joining machine meant to KEEP the menus?
+ *
+ * Every other client lever (-join, MP_AUTOSTART=join) sets autoSession, i.e.
+ * "no menus: launch as soon as we are in" -- so a client never opens the vehicle
+ * select and a headless run could not answer "does a CLIENT reach the car screen
+ * and its roster?". With this set the join keeps autoSession off, and the client
+ * takes the route a human at the machine takes: WELCOME -> MpUiOpenCarSelect ->
+ * screen 14 -> the menu -> Ride (which hands the launch back through
+ * JER_EVENT_MP_FRONTEND).
+ *
+ * Set = any non-empty value other than "0", like the other levers. */
+const char* MpTestFrontendJoin(void)
+{
+	MpResolveTestLevers();
+	return gTestFrontendJoinStr;
 }
 
 /* MP_TEST_CHATKEY is read by the frame hook in mp.c, so it is exposed rather
