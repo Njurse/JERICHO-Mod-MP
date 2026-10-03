@@ -868,6 +868,21 @@ void MpSpawnLateJoiners(void)
 {
 	int id, slot, spawned = 0;
 
+	/* THE LEVEL'S OWN START RECORDS MUST EXIST FIRST. The placement below copies
+	 * player 0's record and both call sites can arrive while a level is still
+	 * coming up -- a city change reloads one -- and PlayerStartInfo[0] is NULL
+	 * until the engine builds it during the load (main.c:3485). Dereferencing it
+	 * is the 0xC0000005 reported as "changing cities as a client joining the
+	 * game": MpSpawnLateJoiners+0x188 in the JERICHO dump.
+	 *
+	 * Ask again next frame instead of giving up: the caller clears the request
+	 * before calling this, so a deferred pass has to re-arm itself. */
+	if (PlayerStartInfo[0] == NULL)
+	{
+		gMp.pendingSpawn = 1;
+		return;
+	}
+
 	for (id = 0; id < MP_MAX_PLAYERS; id++)
 	{
 		MP_PLAYER* p = MpGetPlayer(id);
@@ -893,8 +908,17 @@ void MpSpawnLateJoiners(void)
 			}
 		}
 
-		if (slot < 1 || slot >= MAX_CARS)
+		if (slot < 1 || slot >= MAX_CARS || slot >= MAX_PLAYERS)
+		{
+			/* past the engine's own player table: InitPlayer below would write
+			 * through the end of player[] (MAX_PLAYERS), so a player who has no
+			 * slot in it cannot be seated -- say so rather than corrupt. */
+			if (gMpCtx != NULL)
+				gMpCtx->jer_log(gMpCtx,
+					"[mp] spawn: no car slot for player %d (found %d, engine holds %d player rows)\n",
+					id, slot, MAX_PLAYERS);
 			continue;
+		}
 
 		/* THE LEVEL'S OWN START, one lane per player -- NOT a copy of player 0's record.
 		 *

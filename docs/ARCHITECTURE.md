@@ -239,6 +239,18 @@ slot 0 from the mission (or `levelstartpos`), slot 1 beside it at +600 in x
 (`main.c:3401-3405`) -- and **only x/z are set**. `position.vy` stays 0 and
 placement resolves the height later (`main.c:3384`, `main.c:641-642`).
 
+**And the pass must not run before those records exist.** `MpSpawnLateJoiners`
+copies player 0's record, and `PlayerStartInfo[0]` is NULL until the engine builds
+it during a level load (`main.c:3485`). The level-init call site is safe -- the
+event it hangs off fires *after* that (`main.c:3534`) -- but the frame-hook call is
+not: it can arrive while a level is still coming up (a client joining a session and
+walking the city screen does exactly this), and it dereferenced the NULL record.
+That is the reported "access violation changing cities as a client joining the
+game": `MpSpawnLateJoiners+0x188` in the JERICHO dump, an `0xC0000005`. The pass
+now defers until the record exists, re-arming its own request (the caller clears it
+before the call, so a deferred pass is otherwise lost), and it refuses a slot
+outside the engine's `player[]` table (`MAX_PLAYERS`) instead of writing past it.
+
 A LIVE join has no engine record for its slot -- the level was loaded for the
 players who were there -- so `MpSpawnLateJoiners` builds one in that same shape:
 the start point, one 600-unit lane per player id, the level's own heading, no y.
@@ -579,8 +591,7 @@ implemented (open on `T`, send on Enter, received as a notify). The lobby's
 
 Kept honest and separate, because the difference matters when picking this up.
 
-**Observed working:** the transport (HELLO/WELCOME/REJECT/roster/START/INPUT/
-PING all seen on the wire), discovery and the beacon, a client being accepted and
+**Observed working:** the transport (HELLO/WELCOME/REJECT/roster/START/INPUT/PING all seen on the wire), discovery and the beacon, a client being accepted and
 launching into a live match, remote cars being engine-simulated with the right
 `controlType`/`padId` and present in `active_car_list`, a remote car accepting
 throttle from replicated input, a client gathering itself beside the host, map blips firing
