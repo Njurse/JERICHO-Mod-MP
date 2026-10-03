@@ -661,23 +661,34 @@ attempt had cainescrossfire enabled by accident, which rewrites car handling):**
   which the receiver resolves to ITS OWN resident slot (`MpResidentSlotForCar`).
 - **LANDED: the hotload** (carhacks + the engine, `carhacks/MP_ADAPTER.md`). A machine
   that loaded its level BEFORE a peer's pick can now materialise that peer's imported
-  car: `JerHotLoadCarModel(slot)` builds the slot's geometry into the engine's own
-  pool -- the level's `malloctab` is rewound per load and live with its allocations,
-  so it cannot be used -- and carhacks' fold triggers it
-  (`chkImportHotLoad` -> `InitCarImport` -> the build). Measured on the host:
-  `hot-loaded HAVANA model 3 into resident slot 8` and then `peer 2 drives HAVANA
-  model 3 and this machine draws exactly that (slot 8) - their own colours`, where
-  the same peer used to be drawn as `RIO model 3` in the level's own slot.
-- **OPEN, and it is the picking side, not the holding side.** The wire carries the
-  (city, model) of the slot the OWNER is driving (`MpSendCarState`: a source-less
-  slot becomes `MP_CAR_CITY_SESSION`). So a picker whose own machine placed it in the
-  level's own car of the same number (`JERICHO: player 0 car forced to model 3`
-  resolves a model number to *a* resident slot, and the level's own slot 2 has model
-  3 too) reports `session model 3`, and every other machine then resolves the
-  substitute and the hotload has nothing to build. The pick's city has to decide
-  which slot the PICKER is put into. Until then `MpAdoptRemoteCar` keeps the
-  substitute and reports it once per change, with carhacks logging
-  `peer N drives <CITY> model M, but this machine draws <LEVEL> model M in slot K`.
+  car in full: geometry (`JerHotLoadCarModel`, into the engine's own pool - the level's
+  `malloctab` is rewound per load), the per-slot source city, the COSMETICS
+  (`JerHotLoadCarCosmetics`: wheels, shadow corners, collision box, COG), and the
+  TEXTURE PAGES + rows (`JerHotLoadCarTpages`, which re-runs the level-load pin walk;
+  `CarPinRecord` is idempotent so the cars already pinned are untouched). mp's swap then
+  rebuilds a car already on the road and logs it.
+- **LANDED: the catch-up.** A joiner learns who drives what from the per-player table
+  (`CHK_NET_CARS`) and the host's agreed set, and both now BUILD what they name - its
+  level loaded before any of those cars existed in it, so without this it drew them as
+  the level's own car of that number ("player 3 didn't see player 2's imported car").
+- **The slot mapping is canonical** (`chkImportCanonicalSlot`, carhacks): lowest owning
+  player id first, taking the i-th spare the LEVEL leaves free. Append-only (a joiner
+  cannot displace a car already in a slot), and the same mapping on every machine, which
+  is what makes the page indices and palette rows baked against a slot agree. A peer's
+  assigned car is not a choice and is not published (`MpLocalCarChosen` /
+  `jer_net_local_car_chosen`).
+- **OPEN: palette and page placement with more than one guest city.** On the host a
+  second imported city's textures and colours come out wrong while the first is right
+  ("the vegas car imported proper but not the havana one's textures and colors"), and the
+  machine that imported a car gets SCENERY textures contaminated. Both are collisions in
+  the shared pool/bank rather than missing imports. The bank holds three guest cities
+  (`CIV_CLUT_ROWS 32` / `CIV_CLUT_IMPORT_ROW 8` / `CIV_CLUT_BLOCK_ROWS 8`) and the tpage
+  remap indices are `110..127`; test with a DIFFERENT palette number per player so a
+  mix-up is unambiguous.
+- **OPEN: the host's mapping is not yet authoritative** when a client's own level load
+  precedes a lower-id peer's pick: measured, client2 derived slot 7 for its own car where
+  the host derived 9. The clients already receive the host's set, so adopting it (and
+  moving a car that must move, with a re-hot-load) is the shape of the fix.
 
 
 
