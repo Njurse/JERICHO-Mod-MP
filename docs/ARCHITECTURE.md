@@ -644,8 +644,8 @@ palette. `player[0]` is always US — every machine runs its one local player in
 engine slot 0, and the remote players live in the higher slots the mod inits.
 
 The change travels in the per-frame carstate: `MP_CARSTATE_ENTRY` carries the driven
-model NUMBER and its city (`model` + `modelCity`, 0xFF = on foot) and the owner's
-slot (`carSlot`, informational). The peer resolves the (city, model) to its OWN
+model NUMBER and its city (`model` + `modelCity`, 0xFF = on foot). The peer resolves
+the (city, model) to its OWN
 resident slot (`MpResidentSlotForCar`) and matches the VEHICLE **in place**:
 `cp->ap.model` -- the slot it already drives for that player -- and the colour.
 
@@ -657,7 +657,7 @@ Two hard-won rules:
   the client ended up warped in as a traffic car". The hijacked car also belongs to
   the LOCAL traffic system, which then recycles or steps it and CRASHES
   (`PingInCivCar` on one side, `StepSim` on the other, both read out of dumps).
-  `carSlot` in the carstate is informational only.
+  There is deliberately no carSlot on the wire at all — see `MP_CARSTATE_ENTRY`.
 * **NEVER hand a car the mod created (`InitPlayer`) to the traffic AI.** Flipping
   its controlType to CIV_AI gives the engine's traffic AI a car whose civ-AI state
   does not exist — an access violation inside `CivSteerAngle` (rva 0xC961 in one

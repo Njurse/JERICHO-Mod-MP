@@ -1,10 +1,8 @@
 /*
- * mp_session.c -- JERICHO Multiplayer session: bring-up, the join
- * handshake (with the mod-match lobby policy) and message dispatch.
- *
- * The per-frame input lockstep and the host state-resync fallback land in
- * later steps; this file currently owns the handshake and the send/recv
- * dispatch that the transport (mp_net.c) calls into.
+ * mp_session.c -- JERICHO Multiplayer session: bring-up, the join handshake
+ * (with the mod-match lobby policy), the per-frame owner-authoritative car
+ * sync and input replication, the roster, the on-foot stand-ins, chat, and the
+ * send/recv dispatch that the transport (mp_net.c) calls into.
  */
 #include "jericho.h"
 #include "jer_events.h"
@@ -106,8 +104,6 @@ void MpSessionReset(void)
 	gMp.leaving = 0;
 	gMp.modsMatched = 1;
 	gMp.localPlaced = 0;
-	gMp.lastRejectReason = MP_REJECT_NONE;
-	gMp.lastRejectText[0] = '\0';
 
 	/* the palette-correction log is throttled per reported value; clear that
 	 * memory so a fresh session reports its first correction */
@@ -694,9 +690,6 @@ void MpHostSendRoster(void)
 			CAR_DATA* cp = &car_data[p->carId];
 
 			e->carId = (uint8_t)p->carId;
-			e->x = cp->hd.where.t[0];
-			e->y = cp->hd.where.t[1];
-			e->z = cp->hd.where.t[2];
 
 			/* on foot: nobody is driving that car any more. Otherwise describe it
 			 * the same way the carstate does -- a model NUMBER + its city, never
@@ -719,6 +712,35 @@ void MpHostSendRoster(void)
 
 	len = (int)(sizeof(MP_ROSTER) - (size_t)(MP_MAX_PLAYERS - r.count) * sizeof(MP_ROSTER_ENTRY));
 	MpHostBroadcast(MP_TAG_ROSTER, 0, &r, len);
+}
+
+/* The pool-checked vehicle for one remote player: an explicit -mpcar pick if
+ * there is one, else the model EVERY machine independently assigns this player id
+ * (MpAssignedCarModel) -- never the local player's model, which is what made two
+ * machines simulate different cars for the same player. Writes the start record's
+ * model and palette and, for the two slots the engine re-applies, wantedCar.
+ * Returns the model chosen.
+ *
+ * Shared by the level-init spawn (MpOnNetSpawn) and the late-joiner spawn: they
+ * carried two copies of this and had already drifted apart once. */
+static int MpSetStartCar(int slot, MP_PLAYER* p)
+{
+	int cid = MpPlayerCarModel(p->car, p->carIsSlot);
+
+	if (cid < 0)
+		cid = MpAssignedCarModel(p->id);
+
+	PlayerStartInfo[slot]->model = (u_char)cid;
+	PlayerStartInfo[slot]->palette = (u_char)(p->palette >= 0 ? p->palette : 0);
+
+	/* wantedCar is 2 entries -- the local players' -- so only slots 0..1 fit. It is
+	 * the channel the engine re-applies as its LAST word before the level runs, and
+	 * the only place a remote slot's model can be corrected after something resets
+	 * it. */
+	if (slot >= 0 && slot < 2)
+		wantedCar[slot] = cid;
+
+	return cid;
 }
 
 /* Give a car to any player who has none, exactly the way the engine's own
@@ -803,26 +825,15 @@ void MpSpawnLateJoiners(void)
 					PlayerStartInfo[slot]->position.vz, lane);
 		}
 
-		/* Same pool-checked per-player vehicle as the level-init spawn
-		 * (MpOnNetSpawn): the host's own model is NOT this player's, and copying it
-		 * made the joiner's car identical to the host's on the host's screen. */
+		/* Same pool-checked per-player vehicle as the level-init spawn, via the
+		 * shared helper (see MpSetStartCar). */
 		{
 			int lvl = (GameLevel >= 0 && GameLevel < 4) ? GameLevel : 0;
-			int cid = MpPlayerCarModel(p->car, p->carIsSlot);
-
-			/* an explicit pick, else the model every machine assigns this player */
-			if (cid < 0)
-				cid = MpAssignedCarModel(id);
-
-			PlayerStartInfo[slot]->model = (u_char)cid;
-			PlayerStartInfo[slot]->palette = (u_char)(p->palette >= 0 ? p->palette : 0);
-
-			if (slot >= 0 && slot < 2)
-				wantedCar[slot] = cid;
+			int cid = MpSetStartCar(slot, p);
 
 			if (gMpCtx != NULL)
 				gMpCtx->jer_log(gMpCtx, "[mp] late joiner: player %d -> slot %d model %d (city %d)\n",
-					id, slot, PlayerStartInfo[slot]->model, lvl);
+					id, slot, cid, lvl);
 		}
 
 		/* The car keeps the height InitPlayer took from the record (0, the engine's own
@@ -847,7 +858,7 @@ void MpSpawnLateJoiners(void)
 		car_data[slot].hd.where.t[2] = PlayerStartInfo[slot]->position.vz;
 		car_data[slot].hd.direction = rot;
 
-		if (getenv("MP_DEBUG") != NULL && gMpCtx != NULL)
+		if (MpDebugOn() && gMpCtx != NULL)
 			gMpCtx->jer_log(gMpCtx,
 				"[mp] spawn: player %d placed at %d,%d,%d (y is the record's, not the local car's)\n",
 				id, car_data[slot].hd.where.t[0], car_data[slot].hd.where.t[1],
@@ -1245,7 +1256,6 @@ static void MpHandleHello(int connIndex, const unsigned char* p, int len)
 
 		if (pl != NULL)
 		{
-			pl->modsMatched = matched;
 			pl->car = (h.car == 0xFFFF) ? -1 : (int)h.car;
 			pl->carIsSlot = h.reserved[0] ? 1 : 0;
 			pl->carCity = (h.reserved[2] < 4) ? (int)h.reserved[2] : -1;
@@ -1273,7 +1283,7 @@ static void MpHandleHello(int connIndex, const unsigned char* p, int len)
 			matched ? "" : " [mods differ]");
 }
 
-/* Chat (scaffolding): the host is the echo point, so a line is announced
+/* Chat: the host is the echo point, so a line is announced
  * exactly once on every peer. Clients send to the host, which republishes to
  * everyone (including the sender); the host announces its own line directly. */
 void MpSendChat(const char* text)
@@ -1394,7 +1404,6 @@ static void MpHandleWelcome(const unsigned char* p, int len)
 
 		if (me != NULL)
 		{
-			me->modsMatched = gMp.modsMatched;
 			me->carId = 0;		/* our own car is engine slot 0 */
 		}
 	}
@@ -1457,9 +1466,6 @@ static void MpHandleReject(const unsigned char* p, int len)
 		return;
 
 	memcpy(&r, p, sizeof(r));
-
-	gMp.lastRejectReason = r.reason;
-	snprintf(gMp.lastRejectText, sizeof(gMp.lastRejectText), "%s", r.text);
 
 	if (gMpCtx)
 		gMpCtx->jer_log(gMpCtx, "[mp] join refused: %s (reason %d)\n", r.text, r.reason);
@@ -1561,35 +1567,11 @@ int MpOnNetSpawn(void* userdata, void* args)
 		PlayerStartInfo[slot]->controlType = CONTROL_TYPE_PLAYER;
 		PlayerStartInfo[slot]->flags = 0;
 
-		/* Each remote player gets a POOL-CHECKED vehicle: the engine's own
-		 * per-level car table (carNumLookup), indexed by player id, so both
-		 * machines independently pick the SAME car for the same player. The old
-		 * code inherited the LOCAL player's model from the memcpy above, so on the
-		 * host the client drove the host's car and on the client the host drove the
-		 * client's -- two machines simulating different cars for one player, and
-		 * with a chosen special car (e.g. -mpcar 12) an unloaded model on both.
-		 * carNumLookup's entries are the level's own cars, so this cannot ask for a
-		 * model the level lacks. Only remote cars reach here (the local player is
-		 * skipped above); i is that player's id. */
+		/* POOL-CHECKED vehicle, via the shared helper (see MpSetStartCar). Only remote
+		 * cars reach here -- the local player is skipped above. */
 		{
 			int lvl = (GameLevel >= 0 && GameLevel < 4) ? GameLevel : 0;
-			/* an explicit pick (-mpcar) if there is one, else the model EVERY machine
-			 * assigns this player id -- see MpAssignedCarModel */
-			int cid = MpPlayerCarModel(p->car, p->carIsSlot);
-
-			if (cid < 0)
-				cid = MpAssignedCarModel(p->id);
-
-			PlayerStartInfo[slot]->model = (u_char)cid;
-			PlayerStartInfo[slot]->palette = (u_char)(p->palette >= 0 ? p->palette : 0);
-
-			/* Also put it in wantedCar, which the engine re-applies to
-			 * PlayerStartInfo[] as its LAST word before the level runs (main.c).
-			 * Something between here and the spawn loop resets the remote slot's model
-			 * to the level default, and wantedCar is the one channel that survives it.
-			 * wantedCar is 2 entries -- for the local players -- so only slot 1 fits. */
-			if (slot >= 0 && slot < 2)
-				wantedCar[slot] = cid;
+			int cid = MpSetStartCar(slot, p);
 
 			if (gMpCtx != NULL)
 			{
@@ -1603,7 +1585,7 @@ int MpOnNetSpawn(void* userdata, void* args)
 
 				gMpCtx->jer_log(gMpCtx,
 					"[mp] netspawn: player %d -> slot %d model %d (city %d, asked %d)\n",
-					i, slot, PlayerStartInfo[slot]->model, lvl, p->car);
+					i, slot, cid, lvl, p->car);
 
 				gMpCtx->jer_log(gMpCtx,
 					"[mp] spawn y: slot %d vy=%d (local slot 0 vy=%d) surface y=%d\n",
@@ -1729,7 +1711,6 @@ void MpSendInput(int pad)
 	gMp.padForPlayer[gMp.localPlayerId] = pad;
 
 	memset(&h, 0, sizeof(h));
-	h.frame = (uint32_t)gMp.frame;
 
 	for (i = 0; i < MP_MAX_PLAYERS; i++)
 	{
@@ -1957,10 +1938,47 @@ static void MpHandleHit(int connIndex, const unsigned char* p, int len)
  *
  * A line per second is nothing next to MP_DEBUG, and it is unconditional on
  * purpose: this is a testing lever, not debug spam. */
+/* ------------------------------------------------------------------ */
+/* The test levers, resolved ONCE                                     */
+/* ------------------------------------------------------------------ */
+/* Every tick below consults its lever EVERY simulation frame, and a libc getenv
+ * per frame is pure overhead for a value that cannot change while the game runs.
+ * Resolve them all at the first frame; the ticks then read a cached pointer, so
+ * their behaviour and their log lines are unchanged. An inert lever stays NULL. */
+static const char* gHeartbeatStr;
+static const char* gTestLeaveStr;
+static const char* gTestOnFootStr;
+static const char* gTestCarChangeStr;
+static const char* gTestChatKeyStr;
+
+static void MpResolveTestLevers(void)
+{
+	static int resolved = 0;
+
+	if (resolved)
+		return;
+
+	resolved = 1;
+
+	gHeartbeatStr = getenv("MP_HEARTBEAT");
+	gTestLeaveStr = getenv("MP_TEST_LEAVE");
+	gTestOnFootStr = getenv("MP_TEST_ONFOOT");
+	gTestCarChangeStr = getenv("MP_TEST_CARCHANGE");
+	gTestChatKeyStr = getenv("MP_TEST_CHATKEY");
+}
+
+/* MP_TEST_CHATKEY is read by the frame hook in mp.c, so it is exposed rather
+ * than duplicated: one resolution point for every test lever. */
+const char* MpTestChatKey(void)
+{
+	MpResolveTestLevers();
+	return gTestChatKeyStr;
+}
+
 static void MpHeartbeatTick(void)
 {
 	static unsigned long lastMs;
-	const char* s = getenv("MP_HEARTBEAT");
+	const char* s = gHeartbeatStr;
 	unsigned long now;
 	int secs;
 
@@ -1992,6 +2010,10 @@ void MpLockstepFrame(void)
 		return;
 
 	++gMp.frame;
+
+	/* the test levers are read from the environment ONCE, not every frame (see
+	 * MpResolveTestLevers); the ticks below then only consult the cache */
+	MpResolveTestLevers();
 
 	/* test lever: prove the sim tick is still running (MP_HEARTBEAT) */
 	MpHeartbeatTick();
@@ -2109,7 +2131,7 @@ static void MpTestLeaveTick(void)
 	if (gMp.role != MP_ROLE_CLIENT)
 		return;
 
-	s = getenv("MP_TEST_LEAVE");
+	s = gTestLeaveStr;
 
 	if (s == NULL)
 		return;
@@ -2153,7 +2175,7 @@ static void MpTestOnFootTick(void)
 	if (done || !gMp.running)
 		return;
 
-	s = getenv("MP_TEST_ONFOOT");
+	s = gTestOnFootStr;
 
 	if (s == NULL)
 		return;
@@ -2178,7 +2200,7 @@ static void MpTestOnFootTick(void)
 	/* MP_DEBUG: name the wait and the car state, so "it did not fire" can be read
 	 * rather than guessed at. Same inline-condition form as MpLinkTick, so nothing
 	 * is conditional on the flag. */
-	if (getenv("MP_DEBUG") != NULL && gMpCtx != NULL && (gMp.frame % 60) == 0)
+	if (MpDebugOn() && gMpCtx != NULL && (gMp.frame % 60) == 0)
 		gMpCtx->jer_log(gMpCtx,
 			"[mp] test: onfoot waited %lums of %d000ms, carId %d, running %d\n",
 			now - startMs, atoi(s), me != NULL ? me->carId : -99, gMp.running);
@@ -2213,7 +2235,7 @@ static void MpTestCarChangeTick(void)
 	if (stage >= 2)
 		return;
 
-	s = getenv("MP_TEST_CARCHANGE");
+	s = gTestCarChangeStr;
 
 	if (s == NULL || !gMp.running)
 		return;
@@ -2529,7 +2551,6 @@ static void MpSendOwnPedState(void)
 	memset(&h, 0, sizeof(h));
 	memset(&e, 0, sizeof(e));
 
-	h.frame = gMp.frame;
 	h.count = 1;
 
 	e.playerId = (uint8_t)me->id;
@@ -2590,7 +2611,6 @@ static void MpHandlePedState(int connIndex, const unsigned char* p, int len)
 		pl->pedZ = e.z;
 		pl->pedHeading = (int)(e.heading & 0xFFF);
 		pl->pedSpeed = e.speed;
-		pl->pedMoving = (e.flags & MP_PED_MOVING) ? 1 : 0;
 		pl->pedLastMs = MpNowMs();
 	}
 }
@@ -2678,7 +2698,7 @@ static void MpDriveRemotePed(MP_PLAYER* p)
 	{
 		jer_npc_set_world(n, p->pedX, p->pedY, p->pedZ, p->pedHeading);
 
-		if (gMpCtx != NULL && getenv("MP_DEBUG") != NULL)
+		if (gMpCtx != NULL && MpDebugOn())
 			gMpCtx->jer_log(gMpCtx, "[mp] ped: player %d corrected %d units\n", p->id, err);
 	}
 
@@ -2794,7 +2814,6 @@ static void MpSendColors(int whole)
 	int i, n = 0;
 
 	memset(&h, 0, sizeof(h));
-	h.frame = gMp.frame;
 
 	if (whole)
 	{
@@ -2937,7 +2956,6 @@ static void MpSendOwnCarState(void)
 	 * releases that car instead. */
 	e.model = MP_CARSTATE_NO_CAR;
 	e.modelCity = MP_CAR_CITY_SESSION;
-	e.carSlot = MP_CARSTATE_NO_CAR;
 
 	if (me->carId >= 0 && me->carId < MAX_CARS)
 	{
@@ -2947,7 +2965,7 @@ static void MpSendOwnCarState(void)
 		 * it is the only one a violent impact can saturate. If this fires, the peer is
 		 * seeing a CLAMPED attitude (the intended degradation) rather than a wrapped
 		 * one. Log-only. */
-		if (getenv("MP_DEBUG") != NULL && gMpCtx != NULL)
+		if (MpDebugOn() && gMpCtx != NULL)
 		{
 			int a, big = 0;
 
@@ -2986,7 +3004,6 @@ static void MpSendOwnCarState(void)
 			 * e.model stays MP_CARSTATE_NO_CAR (set above) and the peers release. */
 		}
 
-		e.carSlot = (uint8_t)me->carId;		/* informational: our local CAR_DATA slot */
 		e.x = cp->hd.where.t[0];
 		e.y = cp->hd.where.t[1];
 		e.z = cp->hd.where.t[2];
@@ -3282,7 +3299,7 @@ static void MpHandleCarState(int connIndex, const unsigned char* p, int len)
 				 * slot it resolves to HERE. A mismatch that fires every frame is the
 				 * signature of a car this machine cannot hold. Throttled to once a
 				 * second, because the repetition IS the signature. */
-				if (getenv("MP_DEBUG") != NULL && gMpCtx != NULL && (gMp.frame % 30) == 0)
+				if (MpDebugOn() && gMpCtx != NULL && (gMp.frame % 30) == 0)
 					gMpCtx->jer_log(gMpCtx,
 						"[mp] MODEL: player %d drives %s model %d on the wire; we render slot %d "
 						"(model %d, src %d, mesh %s); this machine holds it in slot %d\n",
@@ -3303,29 +3320,36 @@ static void MpHandleCarState(int connIndex, const unsigned char* p, int len)
 
 		/* OWNER-AUTHORITATIVE: this car belongs to another machine, so its owner is
 		 * the truth. Adopt the WHOLE body every snapshot -- no easing, no tolerance.
-		 * (The accepted cost: because our engine's response to a contact is
-		 * overwritten by the owner's next frame, a car we drive into is not pushed.) */
+		 * A contact is a separate message (MP_HIT: the owner of the MOVING car
+		 * pushes its own), so there is no push to leave room for here. */
 		{
-			long dx = (long)e.x - (long)cp->hd.where.t[0];
-			long dy = (long)e.y - (long)cp->hd.where.t[1];
-			long dz = (long)e.z - (long)cp->hd.where.t[2];
-			long d2 = dx * dx + dy * dy + dz * dz;
-			int dh = ((e.heading - cp->hd.direction + 2048) & 4095) - 2048;
-
 			/* The HOST<->CLIENT deviation for this REMOTE car: how far our own
-			 * simulation of it is from its owner's snapshot. One line per
-			 * snapshot that arrives, for every remote car. A small steady value is
-			 * input latency; a growing one is the two simulations drifting apart;
-			 * a spiky one is the resync fighting the engine. This is the number to
+			 * simulation of it is from its owner's snapshot. One line per snapshot
+			 * that arrives, for every remote car. A small steady value is input
+			 * latency; a growing one is the two simulations drifting apart; a
+			 * spiky one is the resync fighting the engine. This is the number to
 			 * watch for "the cars are not where they are on the other machine".
 			 * (|d| is the world-unit distance, dh the heading error in 1/4096
 			 * turns.) Logged on arrival, NOT gated on our own frame counter: the
 			 * peer's snapshot arrives on ITS cadence, which need not line up with
-			 * ours -- gating on `frame % 30` silently logged nothing. */
-			if (gMpCtx != NULL)
+			 * ours -- gating on `frame % 30` silently logged nothing.
+			 *
+			 * It IS MP_DEBUG-gated, and that matters: this is a sqrt plus a
+			 * 10-field format per remote car per snapshot, and a shipped run
+			 * (packaged launchers do not set MP_DEBUG) must not pay for it. The
+			 * math lives inside the guard so a production frame does none of it. */
+			if (MpDebugOn() && gMpCtx != NULL)
+			{
+				long dx = (long)e.x - (long)cp->hd.where.t[0];
+				long dy = (long)e.y - (long)cp->hd.where.t[1];
+				long dz = (long)e.z - (long)cp->hd.where.t[2];
+				long d2 = dx * dx + dy * dy + dz * dz;
+				int dh = ((e.heading - cp->hd.direction + 2048) & 4095) - 2048;
+
 				gMpCtx->jer_log(gMpCtx,
 					"[mp] adopt: player %d snap %u |d|=%ld d2=%ld (dx=%ld dy=%ld dz=%ld) dh=%d pal=%d md=%d\n",
 					e.playerId, (unsigned)h.frame, (long)sqrt((double)d2), d2, dx, dy, dz, dh, (int)e.palette, (int)e.model);
+			}
 
 			/* Adopt in full: the owner is the truth for its own car. */
 
@@ -3504,7 +3528,7 @@ static void MpHandlePing(int connIndex, const unsigned char* p, int len)
 
 void MpHandleMessage(int connIndex, const char* tag, const unsigned char* payload, int len)
 {
-	if (getenv("MP_DEBUG") != NULL && gMpCtx != NULL)
+	if (MpDebugOn() && gMpCtx != NULL)
 		gMpCtx->jer_log(gMpCtx, "[mp] recv %.4s len=%d conn=%d\n", tag, len, connIndex);
 
 	/* A HELLO or a WELCOME means the handshake is under way, so this

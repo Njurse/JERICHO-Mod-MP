@@ -38,7 +38,7 @@
 extern "C" {
 #endif
 
-#define MP_PROTO_VERSION	6	/* 6: a car's own CITY on the wire (roster/carstate modelCity) */
+#define MP_PROTO_VERSION	7	/* 7: dead wire fields dropped (roster x/y/z, carstate carSlot, the frame byte in the input/ped/colour headers) */
 
 /* Default UDP+TCP port. 1318 is IANA-unassigned (the neighbour 1319 is
  * amx-icsp), so it is a safe, non-reserved choice for a game. Configurable
@@ -129,7 +129,6 @@ typedef struct MP_ROSTER_ENTRY
 	uint8_t  modelCity;	/* city `model` belongs to: MP_CAR_CITY_SESSION = the
 				 * session's city, 0..3 = a cross-city import */
 	uint8_t  flags;		/* MP_ROSTER_FLAG_* */
-	int32_t  x, y, z;	/* where that player's car is now */
 	uint16_t ping;		/* round trip in ms, as the host measured it */
 	uint16_t reserved;	/* the player's palette */
 	char     name[MP_ROSTER_NAME_MAX];
@@ -142,7 +141,7 @@ typedef struct MP_ROSTER
 	MP_ROSTER_ENTRY entries[MP_MAX_PLAYERS];
 } MP_ROSTER;
 #pragma pack(pop)
-#define MP_TAG_CHAT	"JPCX"	/* either side: a chat line (scaffolding) */
+#define MP_TAG_CHAT	"JPCX"	/* either side: a chat line */
 
 /* Envelope flags */
 #define MP_FLAG_RELIABLE	0x01	/* sender wants an ordered/reliable channel */
@@ -321,7 +320,6 @@ typedef struct MP_PLAYER_INPUT
 /* 'JPIN' -- one frame's input set. Header followed by count rows. */
 typedef struct MP_INPUT
 {
-	uint32_t frame;
 	uint8_t  count;
 	uint8_t  reserved[3];
 } MP_INPUT;
@@ -366,7 +364,6 @@ static_assert(sizeof(MP_PEDSTATE_ENTRY) == 24, "MP_PEDSTATE_ENTRY layout");
 
 typedef struct MP_PEDSTATE
 {
-	uint32_t frame;
 	uint8_t  count;
 	uint8_t  reserved[3];
 } MP_PEDSTATE;	/* header only, like MP_CARSTATE: the entries follow */
@@ -389,7 +386,6 @@ static_assert(sizeof(MP_COLOR_ENTRY) == 8, "MP_COLOR_ENTRY layout");
 
 typedef struct MP_COLOR
 {
-	uint32_t frame;
 	uint8_t  count;
 	uint8_t  reserved[3];
 } MP_COLOR;	/* header only: the entries follow */
@@ -398,7 +394,12 @@ typedef struct MP_COLOR
  * heading: hd.direction is an OUTPUT the engine re-derives from the orientation,
  * so a snap that writes only that leaves the receiver's car at the wrong ATTITUDE
  * -- which is how a remote car ends up driving around upside down. Orientation
- * and velocities come straight from st.n (the handling state). */
+ * and velocities come straight from st.n (the handling state).
+ *
+ * There is deliberately NO carSlot here: a CAR_DATA slot number means a different
+ * car on two machines (traffic is not replicated), so moving a player by slot
+ * warps them into an unrelated car. Vehicles are matched by MODEL, in place
+ * (MpAdoptRemoteCar). */
 #define MP_CARSTATE_HAS_BODY	1
 
 /* entry.model when the owner is on foot: no vehicle to drive, so the peers
@@ -415,12 +416,6 @@ typedef struct MP_CARSTATE_ENTRY
 				 * driving our old car and leave it where it was */
 	uint8_t  modelCity;	/* city `model` belongs to: MP_CAR_CITY_SESSION = the
 				 * session's city, 0..3 = a cross-city import */
-	uint8_t  carSlot;	/* informational: the CAR_DATA slot the owner drives.
-				 * NOT used to move a player onto another car -- slot
-				 * numbers do not mean the same car on two machines
-				 * (traffic is not replicated), so that warps a player
-				 * into an unrelated car. Models are matched in place
-				 * instead (see MpAdoptRemoteCar). */
 	int16_t  orient[4];	/* st.n.orientation */
 	int32_t  x, y, z;	/* world units */
 	int32_t  heading;	/* hd.direction */
@@ -454,7 +449,7 @@ typedef struct MP_PING
 
 #define MP_PONG MP_PING
 
-/* A chat line (scaffolding for the eventual chat feature). */
+/* A chat line: a player's message, announced to every seat. */
 #define MP_CHAT_TEXT_MAX	96
 
 typedef struct MP_CHAT
@@ -486,9 +481,9 @@ static_assert(sizeof(MP_WELCOME) == 17, "MP_WELCOME layout");
 static_assert(sizeof(MP_REJECT) == 68, "MP_REJECT layout");
 static_assert(sizeof(MP_SESSION) == 12, "MP_SESSION layout");
 static_assert(sizeof(MP_PLAYER_INPUT) == 4, "MP_PLAYER_INPUT layout");
-static_assert(sizeof(MP_INPUT) == 8, "MP_INPUT layout");
-static_assert(sizeof(MP_ROSTER_ENTRY) == 41, "MP_ROSTER_ENTRY layout");
-static_assert(sizeof(MP_CARSTATE_ENTRY) == 54, "MP_CARSTATE_ENTRY layout");
+static_assert(sizeof(MP_INPUT) == 4, "MP_INPUT layout");
+static_assert(sizeof(MP_ROSTER_ENTRY) == 29, "MP_ROSTER_ENTRY layout");
+static_assert(sizeof(MP_CARSTATE_ENTRY) == 53, "MP_CARSTATE_ENTRY layout");
 static_assert(sizeof(MP_HIT) == 16, "MP_HIT layout");
 static_assert(sizeof(MP_CARSTATE) == 8, "MP_CARSTATE layout");
 static_assert(sizeof(MP_CHANNEL) == 26, "MP_CHANNEL layout");

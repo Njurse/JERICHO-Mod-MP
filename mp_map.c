@@ -38,7 +38,7 @@ int MpOnDrawMap(void* userdata, void* args)
 	 * players are added by the loop below; ours is the engine's. */
 	m->suppressStockBlip = 0;
 
-	if (getenv("MP_DEBUG") != NULL && gMpCtx != NULL)
+	if (MpDebugOn() && gMpCtx != NULL)
 	{
 		static int announced;
 
@@ -86,7 +86,7 @@ int MpOnDrawMap(void* userdata, void* args)
 
 	/* one line, so "did the hook run and how many blips" is answerable from the
 	 * log rather than from a screenshot */
-	if (drawn > 0 && getenv("MP_DEBUG") != NULL && gMpCtx != NULL)
+	if (drawn > 0 && MpDebugOn() && gMpCtx != NULL)
 	{
 		static unsigned long lastLoggedMs;
 

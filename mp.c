@@ -52,7 +52,6 @@ extern MpTextInputFn g_cfg_gameOnTextInput;
 #include "players.h"
 #include "cars.h"
 #include "camera.h"
-#include "overmap.h"	/* gMapXOffset/gMapYOffset for the multiplayer map */
 #include "glaunch.h"
 #include "state.h"
 
@@ -65,6 +64,41 @@ extern MpTextInputFn g_cfg_gameOnTextInput;
 
 MP_STATE gMp;
 JERICHO_CONTEXT* gMpCtx;
+
+/* Is MP_DEBUG set? Resolved ONCE and cached. The module asks this from the
+ * per-frame, per-poll and per-message paths (and a getenv there is a libc call
+ * per ask), while the environment cannot change once the game is running. This
+ * is the ONLY place that reads it -- grep for one site. */
+int MpDebugOn(void)
+{
+	static int resolved = 0;
+	static int on = 0;
+
+	if (!resolved)
+	{
+		const char* dbg = getenv("MP_DEBUG");
+
+		on = (dbg != NULL);
+		resolved = 1;
+	}
+
+	return on;
+}
+
+/* Boolean test levers that the per-frame paths read (the map census in MpOnFrame,
+ * the pause census in the overlay). Resolved once, for the same reason: an
+ * environment value cannot change while the game runs, and these are tested every
+ * frame. `cache` is a module-owned int initialised to -1. */
+static int MpLeverFlag(const char* name, int* cache)
+{
+	if (*cache < 0)
+		*cache = (getenv(name) != NULL);
+
+	return *cache;
+}
+
+static int gTestMapOn = -1;
+static int gTestPauseOn = -1;
 
 /* ------------------------------------------------------------------ */
 /* Default player name                                                 */
@@ -421,6 +455,11 @@ static int MpOnCmdLine(void* userdata, void* args)
 
 				gMp.config.carCity = city;
 
+				/* Make the choice durable. Without this the slot-ness is never
+				 * written, so on the next launch `car` would be read back as a
+				 * MODEL number (see MpConfigLoad). */
+				MpConfigSave();
+
 				if (gMpCtx != NULL)
 					gMpCtx->jer_log(gMpCtx, "[mp] -mpcar %s (car=%d slot=%d city=%d)\n",
 						v, gMp.config.car, gMp.config.carIsSlot, gMp.config.carCity);
@@ -704,7 +743,7 @@ static int MpOnFrame(void* userdata, void* args)
 	{
 		static unsigned long ticks;
 
-		if (getenv("MP_DEBUG") != NULL && gMpCtx != NULL && (++ticks % 120) == 0)
+		if (MpDebugOn() && gMpCtx != NULL && (++ticks % 120) == 0)
 			gMpCtx->jer_log(gMpCtx,
 				"[mp] framehook: tick %lu mpframe %lu running %d connected %d frontend %d\n",
 				ticks, gMp.frame, gMp.running, gMp.connected, gInFrontend);
@@ -713,7 +752,7 @@ static int MpOnFrame(void* userdata, void* args)
 	/* MP_DEBUG: echo the engine's notice ROWS, so the WRAP can be checked from
 	 * the log without eyes on the screen -- a wrapped message is several
 	 * entries, one per drawn line. Log-only, so it cannot change behaviour. */
-	if (getenv("MP_DEBUG") != NULL && gMpCtx != NULL)
+	if (MpDebugOn() && gMpCtx != NULL)
 	{
 		static int lastNotices = -1;
 		int n = jer_error_count();
@@ -743,7 +782,7 @@ static int MpOnFrame(void* userdata, void* args)
 	 * exercised with no keyboard (the harness has none). Inert unless set. */
 	{
 		static unsigned long fireAtMs = 0;
-		const char* s = getenv("MP_TEST_CHATKEY");
+		const char* s = MpTestChatKey();
 
 		if (s != NULL && gMpCtx != NULL)
 		{
@@ -801,15 +840,16 @@ static int MpOnFrame(void* userdata, void* args)
 		 * level init (the level's mission header is not parsed yet) and build it
 		 * here once the level is up. */
 		if (gMp.running)
-			MpSpawnLateJoiners();	}
+			MpSpawnLateJoiners();
+	}
 
-	/* Test lever: hold the in-game map open, so the multiplayer-map blip hook
-	 * can be exercised without a human pressing the map button.
+	/* Test lever: dump the player list, so the roster/player-row formatting can
+	 * be exercised without a human opening any screen.
 	 *
 	 * MP_MAP used to force the map open -- the same mistake the pause lever made:
 	 * the engine then draws a map whose state was never set up, and the screen
 	 * goes red. It only logs now. */
-	if (getenv("MP_MAP") != NULL && gMp.running)
+	if (MpLeverFlag("MP_MAP", &gTestMapOn) && gMp.running)
 		MpLogPlayerList();
 
 	/* A connection loss asked for the main menu: take it as soon as the engine
@@ -871,8 +911,9 @@ static int MpOnFrame(void* userdata, void* args)
 
 	/* diagnostic: where the module thinks every player car is, and whether the
 	 * engine is actually simulating it (list= is membership of the engine's
-	 * own active_car_list, which StepCars walks) */
-	if (gMp.running && gMpCtx != NULL && (gMp.frame % 60) == 0)
+	 * own active_car_list, which StepCars walks). MP_DEBUG-gated: it is a scan
+	 * plus a 12-field line per player every 2s, for a dev only. */
+	if (MpDebugOn() && gMp.running && gMpCtx != NULL && (gMp.frame % 60) == 0)
 	{
 		int i;
 
@@ -1065,7 +1106,7 @@ static void MpDrawPlayerList(void)
 		PrintString(net, 10, y + 10);
 
 		/* so the list can be checked without eyes on the screen */
-		if (getenv("MP_DEBUG") != NULL && gMpCtx != NULL)
+		if (MpDebugOn() && gMpCtx != NULL)
 		{
 			static unsigned long lastListMs;
 
@@ -1125,7 +1166,7 @@ static int MpOnDrawOverlay(void* userdata, void* args)
 	 *
 	 *     draw  = what the player sees (needs the pause menu actually open)
 	 *     log   = the rows, which is what the test is checking anyway */
-	if (getenv("MP_PAUSE") != NULL && gMp.running)
+	if (MpLeverFlag("MP_PAUSE", &gTestPauseOn) && gMp.running)
 		MpLogPlayerList();
 
 	if (gDrawPauseMenus || gMpShowPlayers)
@@ -1375,7 +1416,7 @@ static int MpOnPreSim(void* userdata, void* args)
 	/* MP_DEBUG: is this hook still being called at all? A session whose sim silently
 	 * stops here looks alive (polls continue on the FRAME hook, remote cars keep
 	 * being adopted) while nothing owns a car any more. */
-	if (getenv("MP_DEBUG") != NULL && gMpCtx != NULL && (gMp.frame % 120) == 0)
+	if (MpDebugOn() && gMpCtx != NULL && (gMp.frame % 120) == 0)
 		gMpCtx->jer_log(gMpCtx,
 			"[mp] presim: frame %lu running %d connected %d frontend %d\n",
 			gMp.frame, gMp.running, gMp.connected, gInFrontend);
@@ -1441,7 +1482,7 @@ static int MpOnNetInput(void* userdata, void* args)
 				in->pad = MpInputForPlayer(p->id);
 				in->handled = 1;
 
-				if ((gMp.frame % 60) == 0 && gMpCtx != NULL)
+				if (MpDebugOn() && (gMp.frame % 60) == 0 && gMpCtx != NULL)
 					gMpCtx->jer_log(gMpCtx, "[mp] netinput: car %d <- player %d pad %#x (fallback)\n",
 						carId, p->id, in->pad);
 			}
@@ -1540,7 +1581,7 @@ static int MpOnNetRecv(void* userdata, void* args)
 
 	(void)userdata;
 
-	if (getenv("MP_DEBUG") != NULL && gMpCtx != NULL)
+	if (MpDebugOn() && gMpCtx != NULL)
 		gMpCtx->jer_log(gMpCtx, "[mp] bridge recv '%s' from peer %d (%d bytes)\n",
 			(r->channel != NULL) ? r->channel : "?", r->peer, r->len);
 

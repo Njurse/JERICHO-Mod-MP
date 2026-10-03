@@ -57,6 +57,11 @@ void MpConfigLoad(void)
 	if (gMp.config.carCity < -1 || gMp.config.carCity > 3)
 		gMp.config.carCity = -1;
 
+	/* 1 = `car` is a 1..10 frontend SLOT to resolve per city, not a model number
+	 * (set by `-mpcar slotN`, or by the car menu). Without this the choice does not
+	 * survive a restart: the slot number would be read back as a model. */
+	gMp.config.carIsSlot = jer_config_get_int("mp", "car_is_slot", 0) ? 1 : 0;
+
 	gMp.config.modCheck = jer_config_get_int("mp", "mod_check", MP_MODCHECK_OFF);
 	if (gMp.config.modCheck < 0 || gMp.config.modCheck > MP_MODCHECK_EXACT)
 		gMp.config.modCheck = MP_MODCHECK_OFF;
@@ -104,6 +109,7 @@ void MpConfigSave(void)
 	jer_config_set_int("mp", "mod_check", gMp.config.modCheck);
 	jer_config_set_int("mp", "car", gMp.config.car);
 	jer_config_set_int("mp", "car_city", gMp.config.carCity);
+	jer_config_set_int("mp", "car_is_slot", gMp.config.carIsSlot);
 	jer_config_set_int("mp", "strict_version", gMp.config.strictVersion);
 
 	jer_config_set_int("mp", "custom_color", gMp.config.colorOn);

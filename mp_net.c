@@ -1,15 +1,16 @@
 /*
  * mp_net.c -- JERICHO Multiplayer transport.
  *
- * Non-blocking-ish TCP session + UDP LAN discovery beacon. The socket
- * scaffolding mirrors the proven gaildrv2.c approach:
+ * Non-blocking TCP session + UDP LAN discovery beacon. The socket layer
+ * mirrors the proven gaildrv2.c approach:
  *
  *   - Windows: winsock2 (included BEFORE windows.h; the PSX libapi.h
  *     OpenEvent clash is defused), ws2_32 linked via #pragma.
  *   - Linux: plain BSD sockets.
- *   - sockets stay BLOCKING for recv (we only recv when FIONREAD reports
- *     bytes), with SO_SNDTIMEO so a wedged peer cannot freeze the game;
- *     the listen socket is non-blocking so accept() never hangs.
+ *   - session sockets are NON-blocking (MpSetNonBlocking), and recv only runs
+ *     when select() reports something to read, so no socket call can stall a
+ *     frame; SO_SNDTIMEO is set as a belt-and-braces backstop.
+ *     The listen socket is non-blocking too, so accept() never hangs.
  *
  * Framing and the message catalog live in mp_proto.h. Complete messages
  * are handed to MpHandleMessage() (mp_session.c) which owns the semantics.
@@ -220,7 +221,7 @@ static void MpTuneConn(SOCKET s)
 }
 
 static void MpDropConn(int idx, const char* why);	/* used by the send queue */
-static void MpLinkTick(void);				/* link-state logging, MP_DEBUG only */
+static void MpLinkTick(unsigned long now);		/* link-state logging, MP_DEBUG only */
 
 /* Would this send only have had to wait? Non-blocking sockets say so this way,
  * and it is NOT an error -- it is the normal case on a busy link. */
@@ -252,7 +253,7 @@ static int MpFlushConn(int idx)
 
 		if (n > 0)
 		{
-			if (getenv("MP_DEBUG") != NULL && gMpCtx != NULL)
+			if (MpDebugOn() && gMpCtx != NULL)
 				gMpCtx->jer_log(gMpCtx, "[mp] wrote %d byte(s) conn=%d\n", n, idx);
 
 			c->sbufOff += n;
@@ -343,7 +344,7 @@ static void MpCloseSock(SOCKET* s)
 {
 	if (*s != INVALID_SOCKET)
 	{
-		if (getenv("MP_DEBUG") != NULL && gMpCtx != NULL)
+		if (MpDebugOn() && gMpCtx != NULL)
 			gMpCtx->jer_log(gMpCtx, "[mp] MpCloseSock(%llu)\n", (unsigned long long)*s);
 
 		closesocket(*s);
@@ -604,11 +605,11 @@ static void MpClientConnectCancel(void)
 }
 
 /* ------------------------------------------------------------------ */
-/* Client: connect (blocking variant, used by -join / MP_AUTOSTART)     */
+/* Client: disconnect                                                   */
 /* ------------------------------------------------------------------ */
-/* NOTE: the join is always asynchronous now (MpClientConnectBegin +
- * MpClientConnectPoll) so the frontend can show "Connecting to ..." instead
- * of freezing. The blocking variant was removed with the last caller. */
+/* The join itself is always ASYNCHRONOUS (MpClientConnectBegin +
+ * MpClientConnectPoll), so the frontend can show "Connecting to ..." instead of
+ * freezing; there is no blocking connect variant. */
 
 void MpClientDisconnect(void)
 {
@@ -780,7 +781,7 @@ int MpClientConnectBegin(const char* host, int port)
 	return 1;
 }
 
-void MpClientConnectPoll(void)
+void MpClientConnectPoll(unsigned long now)
 {
 	fd_set wfds, efds;
 	struct timeval tv;
@@ -804,7 +805,7 @@ void MpClientConnectPoll(void)
 	if (select((int)gConnectingSock + 1, NULL, &wfds, &efds, &tv) <= 0)
 	{
 		/* not resolved yet -- only give up after the bounded wait */
-		if ((MpClockMs() - gConnectingSinceMs) > (unsigned long)MP_CONNECT_TIMEOUT_MS)
+		if ((now - gConnectingSinceMs) > (unsigned long)MP_CONNECT_TIMEOUT_MS)
 			MpJoinFail("timed out");
 
 		return;
@@ -962,11 +963,6 @@ int MpConnFindByPlayer(int playerId)
 	return -1;
 }
 
-int MpSendToPlayer(int playerId, const char* tag, int flags, const void* payload, int len)
-{
-	return MpSendConn(MpConnFindByPlayer(playerId), tag, flags, payload, len);
-}
-
 void MpConnAssignPlayer(int connIndex, int playerId)
 {
 	if (connIndex >= 0 && connIndex < MP_MAX_PLAYERS)
@@ -1108,11 +1104,11 @@ void MpDiagDump(const char* reason)
 		if (!p->active)
 			continue;
 
-		fprintf(f, "  id %d  %-16s %s%s  carId %d  car %d (slot %d)  palette %d  pad %d\n",
+		fprintf(f, "  id %d  %-16s %s%s  carId %d  car %d (slot %d)  palette %d\n",
 			p->id, p->name[0] ? p->name : "(unnamed)",
 			p->connected ? "connected" : "gone",
 			p->isLocal ? " LOCAL" : "",
-			p->carId, p->car, p->carIsSlot, p->palette, p->padId);
+			p->carId, p->car, p->carIsSlot, p->palette);
 	}
 
 	fprintf(f, "\n-- last %d event(s), oldest first --\n", gDiagCount);
@@ -1389,24 +1385,27 @@ static void MpProcessConn(int idx)
 
 			/* Nothing to read: stop draining, the rest waits for the next poll.
 			 *
-			 * This break is LOAD-BEARING. The session sockets are blocking (the
-			 * client's is set so in MpClientAdopt, the host's in MpAcceptPeers),
-			 * so falling through to recv() would HANG the whole game thread until
-			 * the peer happened to speak. It used to be unconditional. An edit
-			 * that deleted a debug log left its `if (getenv("MP_DEBUG") ...)`
-			 * behind with this break as its body, so the break only fired WITH
-			 * MP_DEBUG set: with it, the pair worked; without it -- i.e. every
-			 * packaged/real launch -- a connection was dropped the instant
-			 * nothing was pending. Keep it unconditional. */
+			 * This break must stay UNCONDITIONAL, but for a different reason than
+			 * the one that used to be claimed here. The session sockets are
+			 * NON-blocking (MpSetNonBlocking), so falling through is not a hang --
+			 * recv() would return WSAEWOULDBLOCK and the check below would break
+			 * anyway. What it saves is the wasted recv() syscall per connection per
+			 * poll; the poll runs several times a frame, so it is a real saving.
+			 *
+			 * The historical reason to keep it unconditional still holds: an edit
+			 * once deleted a debug log and left its `if (MP_DEBUG ...)` behind with
+			 * this break as its body, so it only fired WITH MP_DEBUG set -- with it
+			 * the pair worked, without it (every packaged launch) a connection was
+			 * dropped the instant nothing was pending. */
 			if (sel <= 0 || !isset)
 				break;
 		}
 
 		n = recv(c->sock, buf, (int)sizeof(buf), 0);
-		if (n <= 0 && getenv("MP_DEBUG") != NULL && gMpCtx != NULL)
+		if (n <= 0 && MpDebugOn() && gMpCtx != NULL)
 			gMpCtx->jer_log(gMpCtx, "[mp] recv n=%d\n", n);
 
-		if (n > 0 && getenv("MP_DEBUG") != NULL && gMpCtx != NULL)
+		if (n > 0 && MpDebugOn() && gMpCtx != NULL)
 			gMpCtx->jer_log(gMpCtx, "[mp] read %d byte(s) conn=%d\n", n, idx);
 
 		if (n == 0)
@@ -1525,9 +1524,8 @@ static unsigned long gLastPingMs;
 /* Both sides ping on a timer, so an idle session (frontend lobby, a quiet
  * stretch, a paused game) keeps proving it is alive -- the silence timeout
  * then means what it says: the peer really is gone. */
-static void MpKeepaliveTick(void)
+static void MpKeepaliveTick(unsigned long now)
 {
-	unsigned long now = MpClockMs();
 	MP_PING pg;
 	int ms;
 
@@ -1616,9 +1614,11 @@ void MpNetPoll(int waitMs)
 	if (gListen != INVALID_SOCKET)
 		MpAcceptPeers();
 
-	MpDiscoveryPoll();
-	MpClientConnectPoll();	/* finish an asynchronous join */
-	MpKeepaliveTick();	/* prove we are alive to our peers */
+	/* ONE clock read for the whole poll -- it runs several times a frame, and
+	 * every step below works off this value rather than reading it again. */
+	MpDiscoveryPoll(now);
+	MpClientConnectPoll(now);	/* finish an asynchronous join */
+	MpKeepaliveTick(now);	/* prove we are alive to our peers */
 
 	/* A poll gap longer than the timeout means WE were not running -- a level
 	 * load, a long pause, a debugger. The peers' recv timers went stale because
@@ -1684,7 +1684,7 @@ void MpNetPoll(int waitMs)
 
 	/* and a periodic look at the link itself, so a stall is visible before it
 	 * turns into a drop */
-	MpLinkTick();
+	MpLinkTick(now);
 }
 
 /* MP_DEBUG: a periodic look at the LINK, so a stall can be seen BEFORE it becomes
@@ -1692,16 +1692,15 @@ void MpNetPoll(int waitMs)
  * many bytes are stuck in that peer's send queue -- the three numbers that
  * separate "they stopped talking" from "we stopped listening" from "we queued but
  * never flushed". Log-only. */
-static void MpLinkTick(void)
+static void MpLinkTick(unsigned long now)
 {
 	static unsigned long lastMs;
-	unsigned long now = MpNowMs();
 	int i;
 
 	/* NOTE: nothing here returns or breaks on the MP_DEBUG guard -- control flow
 	 * conditional on a debug flag is exactly what the debug-independence check
 	 * refuses, so even the interval test lives in the guard's condition. */
-	if (getenv("MP_DEBUG") != NULL && gMpCtx != NULL && (now - lastMs) >= 5000)
+	if (MpDebugOn() && gMpCtx != NULL && (now - lastMs) >= 5000)
 	{
 		lastMs = now;
 
@@ -1963,7 +1962,7 @@ static void MpBeaconSend(void)
 		/* Which interfaces the beacon actually left by. "I can't see his
 		 * server" is usually a beacon going out of the wrong adapter -- or
 		 * out of none at all -- so log every target, not just the send. */
-		if (getenv("MP_DEBUG") != NULL && gMpCtx != NULL)
+		if (MpDebugOn() && gMpCtx != NULL)
 		{
 			struct in_addr ia;
 			ia.s_addr = targets[i];
@@ -1975,7 +1974,7 @@ static void MpBeaconSend(void)
 			(struct sockaddr*)&addr, sizeof(addr));
 	}
 
-	if (n <= 0 && getenv("MP_DEBUG") != NULL && gMpCtx != NULL)
+	if (n <= 0 && MpDebugOn() && gMpCtx != NULL)
 		gMpCtx->jer_log(gMpCtx,
 			"[mp] beacon: no broadcast target at all -- no usable adapter? "
 			"A server on this machine will be invisible to everyone.\n");
@@ -2087,7 +2086,7 @@ static void MpBeaconRecv(void)
 		/* Log every beacon we actually received, with its sender: when a
 		 * server is visible from one machine and not the other, this line is
 		 * the difference between the two. */
-		if (getenv("MP_DEBUG") != NULL && gMpCtx != NULL)
+		if (MpDebugOn() && gMpCtx != NULL)
 			gMpCtx->jer_log(gMpCtx, "[mp] beacon <- %s \"%s\" players=%u/%u city=%u\n",
 				inet_ntoa(from.sin_addr), b.hostName,
 				(unsigned)b.players, (unsigned)b.maxPlayers, (unsigned)b.city);
@@ -2096,15 +2095,12 @@ static void MpBeaconRecv(void)
 	}
 }
 
-void MpDiscoveryPoll(void)
+void MpDiscoveryPoll(unsigned long now)
 {
-	unsigned long now;
 	int i;
 
 	if (gBeaconSock == INVALID_SOCKET)
 		return;
-
-	now = MpClockMs();
 
 	if (gBeaconAdvertise &&
 	    (gLastBeaconMs == 0 || (now - gLastBeaconMs) >= (unsigned long)gMp.config.beaconMs))

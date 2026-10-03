@@ -54,11 +54,6 @@ MP_PLAYER* MpGetPlayerByCar(int carId)
 	return NULL;
 }
 
-int MpIsPlayerCar(int carId)
-{
-	return MpGetPlayerByCar(carId) != NULL;
-}
-
 /* The overlay needs a car's pose, but only mp.c pulls in cars.h -- expose a
  * tiny accessor rather than leaking CAR_DATA into the UI file. */
 void MpCarPose(int carId, int* x, int* y, int* z, int* heading)
@@ -103,7 +98,6 @@ MP_PLAYER* MpAddPlayer(int id, const char* name, int isLocal)
 				memset(p, 0, sizeof(*p));
 				p->active = 1;
 				p->carId = -1;
-				p->padId = -1;
 				p->car = -1;
 				p->carCity = -1;
 				p->id = id;
@@ -146,7 +140,6 @@ void MpRemovePlayer(int id)
 
 	memset(p, 0, sizeof(*p));
 	p->carId = -1;
-	p->padId = -1;
 	p->carCity = -1;
 
 	if (gMp.playerCount > 0)
@@ -161,7 +154,6 @@ void MpResetPlayers(void)
 	{
 		memset(&gMp.players[i], 0, sizeof(gMp.players[i]));
 		gMp.players[i].carId = -1;
-		gMp.players[i].padId = -1;
 	}
 
 	gMp.playerCount = 0;

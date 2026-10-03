@@ -733,7 +733,7 @@ void MpUiTick(void)
 }
 
 /* ------------------------------------------------------------------ */
-/* Lower-left info overlay: who joined/left + chat scaffolding         */
+/* Lower-left info overlay: who joined/left + the chat prompt          */
 /* ------------------------------------------------------------------ */
 void MpNotify(const char* text)
 {
@@ -776,7 +776,7 @@ void MpNotify(const char* text)
 		gMp.notifyUntil[slot] = MpNowMs() + MP_NOTIFY_MS;
 		gMp.notifyNext = (slot + 1) % MP_NOTIFY_MAX;
 
-		if (getenv("MP_DEBUG") != NULL && gMpCtx != NULL)
+		if (MpDebugOn() && gMpCtx != NULL)
 			gMpCtx->jer_log(gMpCtx, "[mp] notify row '%s'\n", gMp.notifyText[slot]);
 
 		pos += take;
@@ -798,55 +798,6 @@ void MpNotifyf(const char* fmt, ...)
 	MpNotify(b);
 }
 
-/* Radar/compass markers: each car placed on a ring by its bearing. Disabled
- * here in favour of the world-space labels below, but KEPT for reuse (flip
- * MP_RADAR to 1). */
-#define MP_RADAR 0
-
-#if MP_RADAR
-static void MpDrawRadar(void)
-{
-	MP_PLAYER* me = MpLocalPlayer();
-	int mx, my, mz, mh, k;
-
-	if (me == NULL || me->carId < 0)
-		return;
-
-	MpCarPose(me->carId, &mx, &my, &mz, &mh);
-
-	{
-		float head = (float)(mh & 0xfff) * (6.2831853f / 4096.0f);
-
-		for (k = 0; k < MP_MAX_PLAYERS; k++)
-		{
-			MP_PLAYER* p = &gMp.players[k];
-			float dx, dz, ang;
-			int cx, cy, cz, ch, sx, sy;
-			char tag[8];
-
-			if (!p->active || p->isLocal || p->carId < 0)
-				continue;
-
-			MpCarPose(p->carId, &cx, &cy, &cz, &ch);
-			dx = (float)(cx - mx);
-			dz = (float)(cz - mz);
-			ang = (float)atan2(dx, dz) - head;
-
-			sx = 160 + (int)(sinf(ang) * 112.0f);
-			sy = 120 - (int)(cosf(ang) * 92.0f);
-
-			if (sx < 4) sx = 4;
-			if (sx > 308) sx = 308;
-			if (sy < 8) sy = 8;
-			if (sy > 228) sy = 228;
-
-			snprintf(tag, sizeof(tag), "%d", p->id);
-			SetTextColour(120, 205, 255);
-			PrintString(tag, sx, sy);
-		}
-	}
-}
-#endif	/* MP_RADAR */
 
 /* The other players' numbers, drawn ABOVE their cars. Yaw-only projection
  * (the camera pitch is small enough not to matter for a label). */
@@ -924,9 +875,6 @@ int MpUiDrawOverlay(void* userdata, void* args)
 		row++;
 	}
 
-#if MP_RADAR
-	MpDrawRadar();
-#endif
 	MpDrawCarLabels();
 
 	/* The chat prompt: the line being typed, with a cursor, along the bottom.
@@ -940,7 +888,7 @@ int MpUiDrawOverlay(void* userdata, void* args)
 		SetTextColour(150, 255, 150);
 		PrintString(line, 8, 232);
 
-		if (gMpCtx != NULL && getenv("MP_DEBUG") != NULL)
+		if (gMpCtx != NULL && MpDebugOn())
 		{
 			static unsigned long lastMs;
 
@@ -957,7 +905,7 @@ int MpUiDrawOverlay(void* userdata, void* args)
 
 void MpChatOpen(void)
 {
-	if (gMpCtx != NULL && getenv("MP_DEBUG") != NULL)
+	if (gMpCtx != NULL && MpDebugOn())
 		gMpCtx->jer_log(gMpCtx, "[mp] chat: prompt open (type; Enter to send, Esc to cancel)\n");
 
 	gMp.chatOpen = 1;

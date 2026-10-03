@@ -65,13 +65,10 @@ typedef struct MP_PLAYER
 	int  carIsSlot;			/* 'car' is a per-city frontend SLOT to resolve, not a model */
 	int  carCity;			/* the city that car number belongs to, -1 = the session's own */
 	int  palette;			/* that player's car colour (0 = default) */
-	int  padId;			/* engine pad id bound to it, -1 = none */
 	int  isLocal;			/* 1 = this machine's own player */
 	int  connected;			/* peer link still alive */
-	int  modsMatched;		/* handshake: manifest matched the host */
 	int  isHost;			/* the host's own row (first in the list) */
 	int  pingMs;			/* round trip, measured by the host */
-	unsigned long lastSeenMs;	/* liveness */
 	unsigned long lastStateFrame;	/* sim frame we last adopted this car's owner state */
 	unsigned long lastHitFrame;	/* sim frame we last reported a contact with this player */
 
@@ -80,7 +77,6 @@ typedef struct MP_PLAYER
 	 * thing that knows how to undo it is us. void* so this header does not need
 	 * pedest.h. */
 	void* ped;			/* JerNpc* we spawned for this player, or NULL */
-	int   pedMoving;
 	int   pedX, pedY, pedZ;		/* where the owner says it is */
 	int   pedHeading;
 	int   pedSpeed;
@@ -120,8 +116,6 @@ typedef struct MP_STATE
 	int modsMatched;		/* client: our manifest matched the host */
 	int localPlaced;
 	unsigned long busyUntilMs;		/* client: our own car was gathered next to the host */
-	int lastRejectReason;		/* client: MP_REJECT_* from a refused join */
-	char lastRejectText[MP_REJECT_TEXT_MAX];
 
 	/* the sim frame the session is synchronized on */
 	unsigned int frame;
@@ -130,7 +124,7 @@ typedef struct MP_STATE
 	int padForPlayer[MP_MAX_PLAYERS];	/* the pad applied this frame per player */
 	int inputHave[MP_MAX_PLAYERS];		/* 1 = this player's input arrived */
 
-	/* lower-left info overlay: who joined/left, plus the chat scaffolding */
+	/* lower-left info overlay: who joined/left, plus the chat line */
 	char notifyText[MP_NOTIFY_MAX][MP_NOTIFY_TEXT_MAX];
 	unsigned long notifyUntil[MP_NOTIFY_MAX];	/* ms deadline; 0 = empty */
 	int notifyNext;				/* ring write cursor */
@@ -164,7 +158,6 @@ int  MpIsHost(void);			/* role == HOST */
 MP_PLAYER* MpLocalPlayer(void);
 MP_PLAYER* MpGetPlayer(int id);
 MP_PLAYER* MpGetPlayerByCar(int carId);	/* NULL when carId is not a player */
-int        MpIsPlayerCar(int carId);	/* 1 = a tracked network player's car */
 MP_PLAYER* MpAddPlayer(int id, const char* name, int isLocal);
 void       MpRemovePlayer(int id);
 void       MpResetPlayers(void);
@@ -176,12 +169,14 @@ int  MpNetStart(void);			/* platform socket init; 1 = ok */
 void MpNetShutdown(void);		/* close every socket (SHUTDOWN hook) */
 void MpNetPoll(int waitMs);		/* service sockets (PRE_SIM/FRAME) */
 unsigned long MpNowMs(void);		/* monotonic milliseconds */
+int MpDebugOn(void);			/* is MP_DEBUG set? cached; safe to call per frame */
+const char* MpTestChatKey(void);	/* MP_TEST_CHATKEY, resolved once */
 void MpSuppressCrashDialogs(void);
 void* MpLocalPedPtr(void);		/* our own player's pedestrian, or NULL in a car */
 
 /* How hard a custom colour is pushed onto a character's palette rows. Strong
  * enough to be unmistakable, short of repainting the whole model flat. */
-#define MP_COLOR_STRENGTH 160	/* no modal crash box: the dump is the report */
+#define MP_COLOR_STRENGTH 160
 
 int  MpHostBegin(void);			/* open listener + start beaconing */
 void MpHostEnd(void);
@@ -190,7 +185,7 @@ void MpClientDisconnect(void);
 /* Asynchronous join (the UI, -join and MP_AUTOSTART all use it): start, then
  * poll -- so a slow or dead address cannot freeze a frame. */
 int  MpClientConnectBegin(const char* host, int port);
-void MpClientConnectPoll(void);
+void MpClientConnectPoll(unsigned long now);	/* now = the caller's poll clock */
 int  MpJoinState(void);			/* MP_JOIN_* */
 void MpJoinStateSet(int state);		/* mp_session.c: WELCOME / REJECT */
 const char* MpJoinTarget(void);		/* host of the current attempt */
@@ -208,14 +203,13 @@ enum
 int  MpHostBroadcast(const char* tag, int flags, const void* payload, int len);
 int  MpHostRelay(int exceptConn, const char* tag, int flags, const void* payload, int len);
 int  MpSendToHost(const char* tag, int flags, const void* payload, int len);
-int  MpSendToPlayer(int playerId, const char* tag, int flags, const void* payload, int len);
 int  MpSendConn(int connIndex, const char* tag, int flags, const void* payload, int len);
 int  MpConnFindByPlayer(int playerId);
 void MpConnAssignPlayer(int connIndex, int playerId);
 void MpConnClose(int connIndex);		/* close a peer (after a reject) */
 void MpConnShutdownGraceful(int connIndex);
 void MpConnSetPing(int connIndex, unsigned long ms);
-int  MpPingForPlayer(int playerId);	/* half-close: flush the refusal, then drain */
+int  MpPingForPlayer(int playerId);	/* RTT in ms, or -1 -- from the PING/PONG tick */
 void MpConnHandshakeDone(int connIndex);	/* this connection has seen a HELLO/WELCOME */
 void MpConnEvent(const char* ev, int idx, const char* why);	/* the connection log */
 void MpConnLineText(char* out, int cap, int part);	/* the on-screen one (part 0 / 1) */
@@ -226,18 +220,18 @@ int  MpConnPlayerId(int connIndex);	/* peer's assigned player id, -1 until hello
 int  MpPeerCount(void);
 
 /* Per-peer link stats for the on-screen readout. Everything here is measured, not
- * guessed: ping from the PING/PONG tick, rx/tx from the transport's byte counters.
- * lossPct is -1 ("n/a") because the session is TCP, which does not lose datagrams
- * -- a real figure would have to come from a UDP-carried channel we don't have. */
+ * guessed: ping from the PING/PONG tick, rx/tx from the transport's byte counters,
+ * lossPct from how often a frame passes with nothing arriving. */
 typedef struct MP_PEER_STATS
 {
 	unsigned long rxBytes;
 	unsigned long txBytes;
 	unsigned long linkMs;	/* how long the link has been up */
 	int           pingMs;	/* round trip, from the PING/PONG tick */
-	int           lossPct;	/* % of polls in which NO data arrived from this peer
-				 * (0..100), measured at the APPLICATION layer -- TCP
-				 * itself never reports loss; -1 = unknown */
+	int           lossPct;	/* EWMA of the % of sim frames in which NOTHING arrived
+				 * from this peer (0..100), sampled once per frame at the
+				 * APPLICATION layer -- TCP never reports loss itself,
+				 * so this is the closest honest proxy we have */
 } MP_PEER_STATS;
 
 int  MpPeerStats(int playerId, MP_PEER_STATS* out);	/* 0 = no such link */
@@ -283,7 +277,7 @@ typedef struct MP_SERVER
 /* host: advertise=1 (beacon out); join: advertise=0 (listen for beacons) */
 void       MpDiscoveryStart(int advertise);
 void       MpDiscoveryStop(void);
-void       MpDiscoveryPoll(void);
+void       MpDiscoveryPoll(unsigned long now);
 int        MpDiscoveryCount(void);
 MP_SERVER* MpDiscoveryGet(int index);
 int        MpDiscoveryRevision(void);	/* changes when the visible server set does */
@@ -307,10 +301,10 @@ int MpIsValidAddress(const char* host);	/* dotted-quad check (no DNS in this mod
 void MpUiInit(void);			/* register the frontend menus (jer_frontend) */
 void MpUiTick(void);			/* refresh the live lobby menu when needed */
 
-/* Lower-left info overlay (who joined/left) + chat scaffolding. */
+/* Lower-left info overlay (who joined/left) + the chat prompt. */
 void MpNotify(const char* text);	/* queue a line for the overlay */
 void MpNotifyf(const char* fmt, ...);	/* printf-style MpNotify */
-void MpChatOpen(void);			/* open the chat prompt (scaffolding) */
+void MpChatOpen(void);			/* open the chat prompt (bound to a key in mp.c) */
 void MpChatSendText(const char* text);	/* send + locally echo a chat line */
 void MpSendChat(const char* text);	/* put a chat line on the wire */
 void MpSendInput(int pad);		/* replicate this frame's input (host relays the set) */
