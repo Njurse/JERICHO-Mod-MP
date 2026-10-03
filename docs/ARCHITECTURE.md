@@ -658,10 +658,26 @@ attempt had cainescrossfire enabled by accident, which rewrites car handling):**
   are done: `MpAdoptRemoteCar` now rebuilds the mesh (`ap.carCos` +
   `CreateDentableCar`, the only writer of the drawn vertex dump), and the wire
   carries a (city, model) pair -- `MP_CARSTATE_ENTRY.model` plus `modelCity` --
-  which the receiver resolves to ITS OWN resident slot (`MpResidentSlotForCar`). A
-  peer's car this machine cannot hold is kept as-is, reported ONCE per change, with
-  its colours corrected by carhacks; loading it is the hotload -- carhacks' next
-  unit (`carhacks/MP_ADAPTER.md`).
+  which the receiver resolves to ITS OWN resident slot (`MpResidentSlotForCar`).
+- **LANDED: the hotload** (carhacks + the engine, `carhacks/MP_ADAPTER.md`). A machine
+  that loaded its level BEFORE a peer's pick can now materialise that peer's imported
+  car: `JerHotLoadCarModel(slot)` builds the slot's geometry into the engine's own
+  pool -- the level's `malloctab` is rewound per load and live with its allocations,
+  so it cannot be used -- and carhacks' fold triggers it
+  (`chkImportHotLoad` -> `InitCarImport` -> the build). Measured on the host:
+  `hot-loaded HAVANA model 3 into resident slot 8` and then `peer 2 drives HAVANA
+  model 3 and this machine draws exactly that (slot 8) - their own colours`, where
+  the same peer used to be drawn as `RIO model 3` in the level's own slot.
+- **OPEN, and it is the picking side, not the holding side.** The wire carries the
+  (city, model) of the slot the OWNER is driving (`MpSendCarState`: a source-less
+  slot becomes `MP_CAR_CITY_SESSION`). So a picker whose own machine placed it in the
+  level's own car of the same number (`JERICHO: player 0 car forced to model 3`
+  resolves a model number to *a* resident slot, and the level's own slot 2 has model
+  3 too) reports `session model 3`, and every other machine then resolves the
+  substitute and the hotload has nothing to build. The pick's city has to decide
+  which slot the PICKER is put into. Until then `MpAdoptRemoteCar` keeps the
+  substitute and reports it once per change, with carhacks logging
+  `peer N drives <CITY> model M, but this machine draws <LEVEL> model M in slot K`.
 
 
 
