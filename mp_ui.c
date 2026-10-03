@@ -23,6 +23,7 @@
  * full PSX type set -- declare just what the overlay needs instead). */
 extern void SetTextColour(unsigned char Red, unsigned char Green, unsigned char Blue);
 extern int  PrintString(char* string, int x, int y);
+extern int  gInFrontend;		/* glaunch.h: the engine is showing the frontend */
 
 #include <stdio.h>
 #include <string.h>
@@ -33,9 +34,10 @@ extern int  PrintString(char* string, int x, int y);
 
 enum
 {
-	/* NOTE: these MUST match the jer_frontend_register_menu() order in
-	 * MpUiInit -- JerFrontendMenuScreen reports the registered index, which
-	 * is what jer_frontend_current_menu() returns. */
+	/* The LOGICAL order of MpUiInit's registrations. It is NOT the registered
+	 * index: another module may register a menu first (carhacks does), which
+	 * shifts every index below by one. Every use goes through gMenuIdx[], resolved
+	 * by id after registration - see MpResolveMenus. */
 	M_ROOT = 0,
 	M_LAN,
 	M_HOST,
@@ -44,8 +46,37 @@ enum
 	M_LOBBY,
 	M_OPTIONS,
 	M_NAME,
-	M_MANUAL
+	M_MANUAL,
+	M_COUNT
 };
+
+/* Each mp menu's id, in the enum's order, and the index it ACTUALLY registered at
+ * (-1 = not registered). */
+static const char* const kMenuIds[M_COUNT] = {
+	"mp.root", "mp.lan", "mp.host", "mp.mode", "mp.join",
+	"mp.lobby", "mp.options", "mp.name", "mp.manual"
+};
+static int gMenuIdx[M_COUNT];
+static int gMenusResolved;	/* set once MpResolveMenus has run: an index is only
+				 * meaningful after the registration pass */
+
+/* Open the menu `logical`, if it registered. Inert until MpResolveMenus has run,
+ * so a caller that fires before the registration pass cannot open index 0 by
+ * accident (the array is zero-filled). */
+static void MpMenuOpen(int logical)
+{
+	if (gMenusResolved && logical >= 0 && logical < M_COUNT && gMenuIdx[logical] >= 0)
+		jer_frontend_open(gMenuIdx[logical]);
+}
+
+/* Is the menu `logical` the one on screen? Not a plain index comparison: the
+ * engine reports -1 for "not a module menu", and an unregistered menu is never
+ * on screen. */
+static int MpMenuIs(int logical)
+{
+	return gMenusResolved && logical >= 0 && logical < M_COUNT &&
+		gMenuIdx[logical] >= 0 && jer_frontend_current_menu() == gMenuIdx[logical];
+}
 
 static const char* const kCityNames[] = { "Chicago", "Havana", "Las Vegas", "Rio" };
 static const char* const kTimeNames[] = { "Dawn", "Day", "Dusk", "Night" };
@@ -136,7 +167,7 @@ static int ActHostStart(void* ud)
 		gMp.city = gCity;
 		gMp.timeOfDay = gTimeOfDay;
 		gMp.weather = gWeather;
-		jer_frontend_open(M_LOBBY);
+		jer_frontend_open(gMenuIdx[M_LOBBY]);
 	}
 
 	return 1;
@@ -195,7 +226,7 @@ static int ActModeMP(void* ud)
  * the city-confirm hook). */
 void MpUiOpenModeMenu(void)
 {
-	jer_frontend_open(M_HOSTSET);
+	jer_frontend_open(gMenuIdx[M_HOSTSET]);
 }
 
 /* Open the stock CAR SELECT (screen 14) so a joining player picks their own
@@ -238,7 +269,7 @@ static int ActJoinServer(void* ud)
 	/* asynchronous: the lobby shows "Connecting to <addr>..." while the
 	 * socket connects, instead of the menu freezing for up to 5 s */
 	if (s != NULL && MpBeginJoinAsync(s->ip, s->port))
-		jer_frontend_open(M_LOBBY);
+		jer_frontend_open(gMenuIdx[M_LOBBY]);
 
 	return 1;
 }
@@ -280,7 +311,7 @@ static int ActManualConnect(void* ud)
 		gMpCtx->jer_log(gMpCtx, "[mp] joining manual %s:%d\n", gManualIp, gManualPort);
 
 	if (MpBeginJoinAsync(gManualIp, gManualPort))
-		jer_frontend_open(M_LOBBY);
+		jer_frontend_open(gMenuIdx[M_LOBBY]);
 
 	return 1;
 }
@@ -339,26 +370,26 @@ static int ActNameDone(void* ud)
 	snprintf(gMp.config.playerName, sizeof(gMp.config.playerName), "%s", gNameEdit);
 	gMp.config.firstNameSet = 1;
 	MpConfigSave();
-	jer_frontend_open(M_OPTIONS);
+	jer_frontend_open(gMenuIdx[M_OPTIONS]);
 	return 1;
 }
 
 /* ------------------------------------------------------------------ */
 /* Static menus                                                        */
 /* ------------------------------------------------------------------ */
-static const JER_FE_ITEM kRootItems[] =
+static JER_FE_ITEM kRootItems[] =
 {
-	{ "LAN",          NULL, NULL, NULL,           NULL, M_LAN, 0 },
+	{ "LAN",          NULL, NULL, NULL,           NULL, -1, 0 },
 	{ "Split-Screen", NULL, NULL, ActSplitScreen, NULL, -1,    0 },
 	{ "Back",         NULL, NULL, NULL,           NULL, -1,    1 },
 };
 static const JER_FE_MENU kRootMenu = { "mp.root", kRootItems, 3, NULL, NULL };
 
-static const JER_FE_ITEM kLanItems[] =
+static JER_FE_ITEM kLanItems[] =
 {
-	{ "Host Game", NULL, NULL, ActHostGame, NULL, M_HOST,    0 },
-	{ "Join Game", NULL, NULL, ActJoinEnter, NULL, M_JOIN,    0 },
-	{ "Options",   NULL, NULL, NULL,         NULL, M_OPTIONS, 0 },
+	{ "Host Game", NULL, NULL, ActHostGame, NULL, -1,    0 },
+	{ "Join Game", NULL, NULL, ActJoinEnter, NULL, -1,    0 },
+	{ "Options",   NULL, NULL, NULL,         NULL, -1, 0 },
 	{ "Back",      NULL, NULL, NULL,         NULL, -1,        1 },
 };
 static const JER_FE_MENU kLanMenu = { "mp.lan", kLanItems, 4, NULL, NULL };
@@ -378,15 +409,41 @@ static const JER_FE_ITEM kHostSetItems[] =
 };
 static const JER_FE_MENU kHostSetMenu = { "mp.mode", kHostSetItems, 3, NULL, NULL };
 
-static const JER_FE_ITEM kOptionsItems[] =
+static JER_FE_ITEM kOptionsItems[] =
 {
-	{ "Change Name",    NULL, NULL, NULL,       NULL,       M_NAME, 0 },
+	{ "Change Name",    NULL, NULL, NULL,       NULL,       -1, 0 },
 	{ NULL, LblEnforce, NULL, NULL, AdjEnforce, -1,       0 },
 	{ NULL, LblStrict,  NULL, NULL, AdjStrict,  -1,       0 },
 	{ NULL, LblPort,    NULL, NULL, AdjPort,    -1,       0 },
 	{ "Back",           NULL, NULL, NULL,       NULL,      -1,     1 },
 };
 static const JER_FE_MENU kOptionsMenu = { "mp.options", kOptionsItems, 5, NULL, NULL };
+
+/* Resolve every mp menu by id and point the submenu rows at what they got. The
+ * item arrays are written with -1 and wired HERE, because the registered index
+ * depends on what every OTHER module registered first: carhacks activates before
+ * mp and registers its car-select menu, so mp's own order was one index off and
+ * the LAN row opened the root menu again. */
+static void MpResolveMenus(void)
+{
+	int i;
+
+	for (i = 0; i < M_COUNT; i++)
+	{
+		gMenuIdx[i] = jer_frontend_find(kMenuIds[i]);
+
+		if (gMenuIdx[i] < 0 && gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx, "[mp] frontend menu '%s' is NOT registered\n", kMenuIds[i]);
+	}
+
+	kRootItems[0].submenu = gMenuIdx[M_LAN];
+	kLanItems[0].submenu = gMenuIdx[M_HOST];
+	kLanItems[1].submenu = gMenuIdx[M_JOIN];
+	kLanItems[2].submenu = gMenuIdx[M_OPTIONS];
+	kOptionsItems[0].submenu = gMenuIdx[M_NAME];
+
+	gMenusResolved = 1;
+}
 
 /* ------------------------------------------------------------------ */
 /* Dynamic menus (join / lobby / name)                                 */
@@ -471,7 +528,7 @@ static void JoinOnEnter(void* ud)
 	gJoinItems[k].userdata = NULL;
 	gJoinItems[k].on_activate = NULL;
 	gJoinItems[k].on_adjust = NULL;
-	gJoinItems[k].submenu = M_MANUAL;
+	gJoinItems[k].submenu = gMenuIdx[M_MANUAL];
 	gJoinItems[k].is_back = 0;
 	k++;
 
@@ -700,18 +757,35 @@ static void WireDynamic(void)
  * engine keeps the cursor across a live refresh, so scrolling does not jump. */
 void MpUiTick(void)
 {
+	/* One line when the frontend first shows: how many menus the registry holds,
+	 * and where mp's own landed. The two numbers differing from mp's enum order is
+	 * exactly the "a submenu row pushes a breadcrumb and opens the wrong screen"
+	 * bug, so it is worth a line rather than a session of guessing. */
+	{
+		static int probed = 0;
+
+		if (!probed && gInFrontend && gMpCtx != NULL)
+		{
+			probed = 1;
+			gMpCtx->jer_log(gMpCtx,
+				"[mp] frontend: %d menu(s) registered; mp.root=%d mp.lan=%d mp.join=%d mp.lobby=%d\n",
+				jer_frontend_menu_count(), gMenuIdx[M_ROOT], gMenuIdx[M_LAN],
+				gMenuIdx[M_JOIN], gMenuIdx[M_LOBBY]);
+		}
+	}
+
 	if (gLobbyBuiltCount >= 0 && gMp.playerCount != gLobbyBuiltCount)
 		jer_frontend_refresh();
 
 	/* the lobby's "Connecting to ..." row clears itself the moment the join
 	 * resolves -- accepted (READY) or refused/failed */
-	if (jer_frontend_current_menu() == M_LOBBY && MpJoinState() != gLobbyJoinState)
+	if (MpMenuIs(M_LOBBY) && MpJoinState() != gLobbyJoinState)
 		jer_frontend_refresh();
 
 	/* The Join screen is rebuilt only by its on_enter, which the engine runs
 	 * on setup/refresh alone -- without this the server list would be frozen
 	 * at whatever had been found when the player opened it. */
-	if (jer_frontend_current_menu() == M_JOIN)
+	if (MpMenuIs(M_JOIN))
 	{
 		int scanning = (gJoinScanStart != 0) &&
 			(MpNowMs() - gJoinScanStart) < MP_JOIN_SCAN_MS;
@@ -940,6 +1014,9 @@ void MpUiInit(void)
 	jer_frontend_register_menu(&kOptionsMenu);
 	jer_frontend_register_menu(&gNameMenu);
 	jer_frontend_register_menu(&gManualMenu);
+
+	/* resolve the real registered index of each menu (see MpResolveMenus) */
+	MpResolveMenus();
 
 	jer_frontend_set_main_entry("mp.root");
 
