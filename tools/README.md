@@ -306,6 +306,22 @@ rows so no pad is needed:
 WHICH city's roster you are browsing (the pick becomes a cross-city car), so the
 pair covers "scroll the cars", "scroll the cities" and the pick that follows.
 
+## Giving each seat its own pick
+
+`--seat-env SEAT=KEY=VALUE` (repeatable; seats are `host`, `client` = every
+joiner, and `client1`, `client2` ... = one joiner) sets an environment variable for
+that seat alone. Exported variables reach every seat, so a shared
+`CHK_FORCE_CAR` has all of them ride the SAME car — which hides whether a peer's
+pick is really respected on the other machines. Give them different ones:
+
+    MP_TEST_FRONTEND_JOIN=1 CHK_FORCE_MENU=1 python mp_localpair.py --players 3 \
+        --seat-env host=CHK_FORCE_ROSTER_CITY=3 --seat-env host=CHK_FORCE_CAR=0 \
+        --seat-env client=CHK_FORCE_ROSTER_CITY=1 --seat-env client=CHK_FORCE_CAR=2
+
+Each seat then logs its own `RIDE <CITY> slot N -> model M`, and the host logs per
+peer whether it draws that car (`peer N drives <CITY> model M and this machine
+draws exactly that (slot K)`) or not.
+
 ## Driving a car change by hand
 
 `MP_TEST_CARCHANGE=<seconds>[,<exitSeconds>]` makes every machine it reaches get out

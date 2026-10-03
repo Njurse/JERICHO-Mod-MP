@@ -437,12 +437,19 @@ def main():
     ap.add_argument("--forbid", action="append", default=[], metavar="REGEX",
                     help="end the run AND fail the moment this appears -- a marker that must "
                          "never turn up (repeatable)")
-    ap.add_argument("--stall", type=int, default=10, metavar="SECS",
-                    help="if a side's sim tick stops advancing (or, without heartbeats, "
+    ap.add_argument("--stall", type=int, default=10, metavar="SECS",                    help="if a side's sim tick stops advancing (or, without heartbeats, "
                          "NEITHER log grows) for this many seconds, stop and report STALLED. "
                          "STALLED is not a pass: a frozen game logs nothing, and that used to "
                          "be indistinguishable from a healthy run whose markers were all "
                          "logged early. 0 disables.")
+    ap.add_argument("--seat-env", action="append", default=[], metavar="SEAT=KEY=VALUE",
+                    help="set an env var for ONE seat (seats: host, client, client1, "
+                         "client2 ...). Repeatable, and applied after the inherited "
+                         "environment. This is how each player picks a DIFFERENT car -- "
+                         "e.g. --seat-env host=CHK_FORCE_CAR=8 with "
+                         "--seat-env client=CHK_FORCE_CAR=2 -- because one shared value "
+                         "has every seat ride the same car and hides whether a peer's own "
+                         "pick is really respected on the other machines.")
     ap.add_argument("--tail", type=int, default=3, metavar="SECS",
                     help="print the running tail of both logs this often while waiting, so a "
                          "bad run is obvious as it happens (0 = never)")
@@ -552,6 +559,25 @@ def main():
     client_env = dict(env)
     client_env.pop("MP_AUTOSTART", None)
 
+    # Per-seat overrides: --seat-env host=K=V, --seat-env client=K=V (every joiner),
+    # --seat-env client2=K=V (one joiner). Applied after everything else, so a seat
+    # can be given a pick the other seats do not have.
+    seat_env = {"host": {}, "client": {}}
+    for spec in args.seat_env:
+        if spec.count("=") < 2:
+            raise SystemExit(f"--seat-env wants SEAT=KEY=VALUE, got {spec!r}")
+
+        seat, rest = spec.split("=", 1)
+        key, val = rest.split("=", 1)
+        seat = seat.strip().lower()
+
+        if seat != "host" and seat != "client" and not seat.startswith("client"):
+            raise SystemExit(f"--seat-env: unknown seat {seat!r} (host, client, client1 ...)")
+
+        seat_env.setdefault(seat, {})[key] = val
+
+    host_env.update(seat_env.get("host", {}))
+
     # The test bot is OFF unless asked for; it drives the player's actual car.
     if args.bot != "off":
         host_env["MP_BOT"] = args.bot
@@ -601,7 +627,12 @@ def main():
 
         argv += ["-join", f"127.0.0.1:{args.port}"]
 
-        procs[name] = launch(dirs[name], args.exe, argv, client_env)
+        # this seat's own picks: the generic client entries first, then its own
+        this_env = dict(client_env)
+        this_env.update(seat_env.get("client", {}))
+        this_env.update(seat_env.get(f"client{i + 1}", {}))
+
+        procs[name] = launch(dirs[name], args.exe, argv, this_env)
         log(f"joiner {i + 1} pid {procs[name].pid} args: {' '.join(argv)}")
 
         if i + 1 < len(names) - 1:
