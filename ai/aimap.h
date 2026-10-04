@@ -46,9 +46,16 @@
 extern "C" {
 #endif
 
-#define AIMAP_SIZE	33	/* samples per side; odd, so one sits on the centre */
-#define AIMAP_STEP	384	/* world units between samples (a fraction of MAP_CELL_SIZE) */
+#define AIMAP_SIZE	49	/* samples per side; odd, so one sits on the centre */
+#define AIMAP_STEP	512	/* world units between samples (a quarter of a MAP_CELL_SIZE) */
 #define AIMAP_RADIUS	350	/* the probe's radius: about a car's width */
+
+/* The window is 49 x 512 = +/- 12,288 world units, i.e. about +/- 6 map cells and a fifth of
+ * a region. It was 33 x 384 = +/- 6,144, which at a car's speed is a couple of seconds of
+ * driving - so every route was short and the car re-planned almost as often as it steered.
+ * The cost of the bigger window is real but small: 2401 samples instead of 1089 per build
+ * (three cheap engine calls each) and a worst case of 2401-squared comparisons in A*'s
+ * open-list scan, at a re-plan rate of about 1.4 Hz. */
 
 /* Sample flags. */
 #define AIMAP_BLOCKED	0x01	/* CellEmpty found something a car cannot pass */

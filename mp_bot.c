@@ -1175,6 +1175,74 @@ static int MpBotDraw(void)
 static void MpBotDrawPlan(const char* what, const AIGOAL* goal, const struct MPBOT_AI* ai,
 	int aimX, int aimZ, long gap2, unsigned int pad);
 
+/* The engine's own world-space debug line (DebugOverlay.obj, always linked - the collision
+ * and civ-AI debug views draw with exactly this). Raw world frame; colour components are
+ * PSX-style 0..250. */
+extern void Debug_AddLine(VECTOR& pointA, VECTOR& pointB, CVECTOR& color);
+
+/* The route, drawn IN THE WORLD: red for the route, yellow for the goal, green for where
+ * the car is aiming this frame. Drawn every frame while MP_BOT_DRAW is on, because a line
+ * that only appears a few times a second reads as a flicker rather than as a route. */
+static void MpBotDrawRoute(const struct MPBOT_AI* ai, CAR_DATA* mine, const AIGOAL* goal,
+	int aimX, int aimZ)
+{
+	CVECTOR cRoute = { 250, 60, 60 };
+	CVECTOR cGoal = { 250, 250, 60 };
+	CVECTOR cAim = { 60, 250, 60 };
+	VECTOR a, b;
+	int k, y;
+	const int CROSS = 600;
+
+	if (!MpBotDraw() || mine == NULL)
+		return;
+
+	/* lifted off the ground so the line does not z-fight the road it is drawn over, and at
+	 * the car's own height, which is what the engine's road debug does too */
+	y = mine->hd.where.t[1] + 60;
+
+	for (k = 1; k < ai->path.waypoints; k++)
+	{
+		a.vx = ai->path.wx[k - 1];
+		a.vy = y;
+		a.vz = ai->path.wz[k - 1];
+
+		b.vx = ai->path.wx[k];
+		b.vy = y;
+		b.vz = ai->path.wz[k];
+
+		Debug_AddLine(a, b, cRoute);
+	}
+
+	/* where we are aiming, so it is visible that the aim leads the car */
+	a.vx = mine->hd.where.t[0];
+	a.vy = y;
+	a.vz = mine->hd.where.t[2];
+
+	b.vx = aimX;
+	b.vy = y;
+	b.vz = aimZ;
+
+	Debug_AddLine(a, b, cAim);
+
+	/* the goal as a cross on the ground: a single distant line is hard to find */
+	a.vx = goal->x - CROSS;
+	a.vy = y;
+	a.vz = goal->z;
+
+	b.vx = goal->x + CROSS;
+	b.vy = y;
+	b.vz = goal->z;
+
+	Debug_AddLine(a, b, cGoal);
+
+	a.vx = goal->x;
+	a.vz = goal->z - CROSS;
+	b.vx = goal->x;
+	b.vz = goal->z + CROSS;
+
+	Debug_AddLine(a, b, cGoal);
+}
+
 /* Plan a route to a world point, or keep the one we have. Returns 1 when there is a route
  * to follow at all. */
 static int MpBotRouteTo(MPBOT_AI* ai, CAR_DATA* mine, int goalX, int goalZ, int force)
@@ -1508,12 +1576,14 @@ static int MpBotCatMouse(void)
 
 	{
 		/* the live readout: the route shape and where the car is aiming, a few times a
-		 * second, straight onto the HUD */
+		 * second, straight onto the HUD - and the route itself drawn in the world */
 		long rgx = tgt->hd.where.t[0] - mine->hd.where.t[0];
 		long rgz = tgt->hd.where.t[2] - mine->hd.where.t[2];
 
 		MpBotDrawPlan(isMouse ? "MOUSE" : "CAT", &goal, &ai, aimX, aimZ,
 			rgx * rgx + rgz * rgz, pad);
+
+		MpBotDrawRoute(&ai, mine, &goal, aimX, aimZ);
 	}
 
 	return pad;

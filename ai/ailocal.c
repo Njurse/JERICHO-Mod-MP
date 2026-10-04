@@ -147,8 +147,17 @@ int AiLocalGoal(const AIMAP* map, int fromX, int fromZ, AIGOAL* out)
 /* ------------------------------------------------------------------ */
 
 /* How far out a flee goal is looked for, in samples. Far enough to be a real
- * destination (about two map cells), near enough to be reachable in one plan. */
-#define AILOCAL_FLEE_RING	10
+ * destination, near enough to be reachable in one plan - and it scales with the grid, so
+ * widening the window widens the running too. 16 x AIMAP_STEP is about 8,000 world units,
+ * roughly four map cells: a cross-town destination rather than the next junction. */
+#define AILOCAL_FLEE_RING	16
+
+/* The road bonus has to stay COMPARABLE TO THE DISTANCE RANGE, or widening the ring
+ * drowns it: the distance term grows with the square of the ring (about 0..250 over a
+ * ring of 16 at this step), so a fixed small bonus quietly stops mattering and the
+ * flee drifts back off the road. 120 is about half that range - the mouse will take a
+ * road up to about half the ring closer to the cat, and no more. */
+#define AILOCAL_ROAD_BONUS	120
 
 int AiLocalFleeGoal(const AIMAP* map, int fromX, int fromZ, int threatX, int threatZ, AIGOAL* out)
 {
@@ -219,7 +228,7 @@ int AiLocalFleeGoal(const AIMAP* map, int fromX, int fromZ, int threatX, int thr
 			score = (int)(away / 4);
 
 			if (AiMapRoad(map, ix, iz))
-				score += 40;		/* a road breaks ties towards the road network */
+				score += AILOCAL_ROAD_BONUS;	/* see the define: it must not be drowned by distance */
 
 			score += AiMapClearance(map, ix, iz) * 2;
 
