@@ -2781,6 +2781,13 @@ static void MpTestOnFootTick(void)
 		gMpCtx->jer_log(gMpCtx,
 			"[mp] test: getting OUT now, %ss in (MP_TEST_ONFOOT)\n", s);
 
+	/* The engine's real leave-car path (handling.c) calls
+	 * ActivatePlayerPedestrian FIRST: it creates the player's ped and links it
+	 * in player[0].pPed, and ChangeCarPlayerToPed then points spoolXZ at that
+	 * ped. Calling ChangeCarPlayerToPed directly leaves spoolXZ pointing at a
+	 * NULL ped, and the next civ-AI pass (CivControl -> CheckPingOut) faults on
+	 * it. Mirror the engine: activate the ped, then step out. */
+	ActivatePlayerPedestrian(&car_data[me->carId], NULL, 0, NULL, TANNER_MODEL);
 	ChangeCarPlayerToPed(0);
 }
 
@@ -2827,6 +2834,14 @@ static void MpTestCarChangeTick(void)
 
 		if (gMpCtx != NULL)
 			gMpCtx->jer_log(gMpCtx, "[mp] TEST car change: getting OUT now\n");
+
+		/* Same as MP_TEST_ONFOOT: activate the ped first so ChangeCarPlayerToPed
+		 * has a valid player[0].pPed to point spoolXZ at (else the next civ-AI
+		 * pass faults in CivControl -> CheckPingOut). */
+		me = MpLocalPlayer();
+
+		if (me != NULL && me->carId >= 0)
+			ActivatePlayerPedestrian(&car_data[me->carId], NULL, 0, NULL, TANNER_MODEL);
 
 		ChangeCarPlayerToPed(0);
 		return;
@@ -2999,45 +3014,37 @@ static void MpFollowLocalCar(void)
 	}
 	else if (me->carId >= 0)
 	{
-		/* ON FOOT. The car we left is the ENGINE's to keep: it has already been
-		 * handed back to CIV_AI and stays in the world where it was. We only
-		 * report "no car" (model 0xFF) so the peers let theirs go too. */
+		/* ON FOOT. The car we left stays in the world as a stopped, empty civ
+		 * car (below) so it can be walked back to and re-entered. We only report
+		 * "no car" (model 0xFF) so the peers let theirs go too. */
 		CAR_DATA* left = &car_data[me->carId];
 
-		/* ...except it must NOT be handed to CIV_AI.
+		/* Leave the car as the stopped, empty civ car ChangeCarPlayerToPed made
+		 * it, NOT CONTROL_TYPE_PLAYER.
 		 *
-		 * players.c's ChangeCarPlayerToPed sets controlType = CONTROL_TYPE_CIV_AI
-		 * on the car it takes the player out of. Our cars come from InitPlayer and
-		 * have no AI data, so the very next civ-AI pass -- main.c's PingInCivCar,
-		 * which scans for a slot whose controlType is free -- walks into whatever
-		 * is in those fields. An access violation on BOTH machines, caught from a
-		 * dump: EXCEPTION_ACCESS_VIOLATION at rva 0xFFA5 -> PingInCivCar+0x105.
+		 * ChangeCarPlayerToPed sets controlType = CIV_AI with
+		 * thrustState = CIV_AI_THRUST_STOP / ctrlState = CIV_AI_CTRL_EMPTY. In
+		 * that state the civ-AI pass is harmless even though the car has no nav
+		 * data: CivControl's STOP branch does no work (CivAccelTrafficRules'
+		 * STOP case is an empty break, and ctrlState EMPTY takes the safe
+		 * default), so it never dereferences the uninitialised ai.c node/lane
+		 * fields. And CIV_AI is exactly what TannerCanEnterCar accepts, so the
+		 * player can walk back and get in again -- CONTROL_TYPE_PLAYER kept the
+		 * car out of the traffic AI but also made it un-enterable, which is the
+		 * "can't return to my car" report. Re-assert the stopped/empty state and
+		 * clear the wheel, and take its pad away so nothing drives it.
 		 *
-		 * Take the car straight back. CONTROL_TYPE_PLAYER with playerCarId = -1 is
-		 * exactly what an unowned remote car already is: nothing drives it, it sits
-		 * where it was left, and the civ AI ignores it because it is not a free
-		 * slot. This runs from PRE_SIM, which is BEFORE that civ-AI pass in the same
-		 * frame, so the car never reaches the AI at all. */
-		left->controlType = CONTROL_TYPE_PLAYER;
+		 * This runs from PRE_SIM, which is BEFORE the civ-AI pass in the same
+		 * frame, so the car is already in its final state when the AI looks. */
+		left->controlType = CONTROL_TYPE_CIV_AI;
+		left->ai.c.thrustState = CIV_AI_THRUST_STOP;
+		left->ai.c.ctrlState = CIV_AI_CTRL_EMPTY;
 		left->wheel_angle = 0;
-
-		/* ...and take its PAD away, or it keeps driving.
-		 *
-		 * CONTROL_TYPE_PLAYER means "driven from the pad this car points at", and
-		 * that pad is still the one the player's own hands are on. So a car you
-		 * stepped out of carried on driving around under your inputs -- reported
-		 * exactly that way: "each client's car still drives around with their
-		 * inputs after they exit the vehicle".
-		 *
-		 * Point it at pad 1 instead. In a match NumPlayers stays 1 (each machine
-		 * drives the whole screen), so pad 1 is never written and the car coasts to
-		 * a stop and stays where it was left. It cannot be NULL: some engine sites
-		 * dereference ai.padid without checking. */
 		left->ai.padid = &gMpQuietPad;
 
 		if (gMpCtx != NULL)
 			gMpCtx->jer_log(gMpCtx,
-				"[mp] car change: on foot (left slot %d, kept from the traffic AI)\n",
+				"[mp] car change: on foot (left slot %d, parked empty for re-entry)\n",
 				me->carId);
 
 		me->carId = -1;
@@ -3298,12 +3305,13 @@ static void MpDriveRemotePed(MP_PLAYER* p)
  * PingInCivCar+0x105, on both machines, part-way into an ordinary match with
  * nobody asking for anything.
  *
- * Two ways a car of ours stops being ours in the AI's eyes: players.c hands it to
- * CONTROL_TYPE_CIV_AI when a player gets out, and a car can end up
- * CONTROL_TYPE_NONE (abandoned, wrecked, a mission reset). Both make it available,
- * so both are taken back. CONTROL_TYPE_PLAYER with nobody driving it is exactly
- * what an unowned remote car already is: it sits where it was left, and the AI
- * ignores it.
+ * A car of ours that a player steps out of is left as CIV_AI with
+ * thrustState = STOP / ctrlState = EMPTY (see MpFollowLocalCar): safe for the AI
+ * AND enterable again, so that state is deliberately NOT taken back here. What
+ * still has to be taken back is CONTROL_TYPE_NONE: a wrecked/abandoned car is a
+ * free slot the traffic AI will recycle, which it cannot survive.
+ * CONTROL_TYPE_PLAYER with nobody driving it is exactly what an unowned remote
+ * car already is: it sits where it was left, and the AI ignores it.
  *
  * Every frame, in PRE_SIM -- which is BEFORE the civ-AI pass in the same frame, so
  * a car handed over this frame never reaches the AI at all. */
@@ -3338,8 +3346,7 @@ static void MpKeepOurCarsFromTrafficAi(void)
 		if (!gMpOurCars[i])
 			continue;
 
-		if (car_data[i].controlType == CONTROL_TYPE_CIV_AI ||
-		    car_data[i].controlType == CONTROL_TYPE_NONE)
+		if (car_data[i].controlType == CONTROL_TYPE_NONE)
 		{
 			int was = car_data[i].controlType;
 
@@ -3352,7 +3359,7 @@ static void MpKeepOurCarsFromTrafficAi(void)
 
 			if (gMpCtx != NULL)
 				gMpCtx->jer_log(gMpCtx,
-					"[mp] car: our slot %d was controlType %d (traffic AI / free); "
+					"[mp] car: our slot %d was controlType %d (free); "
 					"taken back so the AI cannot reach it\n", i, was);
 		}
 	}
