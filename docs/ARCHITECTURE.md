@@ -907,6 +907,22 @@ Headless: `MP_TEST_CARCHANGE=<seconds>[,<exitSeconds>]` performs a real change (
 engine's own `ChangePedPlayerToCar`, onto the nearest civilian car) and optionally
 gets out afterwards. It fires on every machine the env var reaches.
 
+It cannot test the MID-MATCH IMPORT, though, and the reason is worth keeping: it takes
+over a car that is already in the level, so the peer holds that car too and there is
+nothing to import. What has to be imported is a car the peer does NOT hold. So:
+
+`MP_TEST_CITYCHANGE=<seconds>,<city>[,<slot>]` takes the pause menu's own action
+(`MpChangeCar`) onto a car from a DIFFERENT city, which is exactly the import case.
+`city` indexes the cities the car mods know (`MpCarQueryCities`), `slot` indexes the
+engine's per-city model table (`carNumLookup`), and it does nothing at all unless the
+value has that shape — an absent or malformed value must never move a car by itself.
+
+Measured on a RIO pair with `--seat-env host=MP_TEST_CITYCHANGE=10,1`: the host
+hot-loaded a foreign car mid-level (`hot-loaded HAVANA model 1 into resident slot 7`,
+geometry and cosmetics), and the client logged `player 0 drives VEGAS model 2 on the
+wire; we render slot 0 (model 1, src -1, mesh present); this machine holds it in slot
+-1` — the #13 gap, reproduced on demand instead of described.
+
 ## 16. Testing against the other PC, without touching it
 
 A two-machine bug is diagnosed from two logs, so the rig exists to get both logs

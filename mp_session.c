@@ -2032,6 +2032,7 @@ static void MpDriveRemotePed(MP_PLAYER* p);
 static void MpKeepOurCarsFromTrafficAi(void);
 static void MpSendColors(int whole);
 static void MpTestCarChangeTick(void);
+static void MpTestCityChangeTick(void);
 static void MpTestLeaveTick(void);
 static void MpTestOnFootTick(void);
 
@@ -2512,6 +2513,7 @@ static const char* gHeartbeatStr;
 static const char* gTestLeaveStr;
 static const char* gTestOnFootStr;
 static const char* gTestCarChangeStr;
+static const char* gTestCityChangeStr;
 static const char* gTestChatKeyStr;
 static const char* gTestCarSelectStr;
 static const char* gTestFrontendJoinStr;
@@ -2529,6 +2531,7 @@ static void MpResolveTestLevers(void)
 	gTestLeaveStr = getenv("MP_TEST_LEAVE");
 	gTestOnFootStr = getenv("MP_TEST_ONFOOT");
 	gTestCarChangeStr = getenv("MP_TEST_CARCHANGE");
+	gTestCityChangeStr = getenv("MP_TEST_CITYCHANGE");
 	gTestChatKeyStr = getenv("MP_TEST_CHATKEY");
 	gTestCarSelectStr = getenv("MP_TEST_CARSELECT");
 	gTestFrontendJoinStr = getenv("MP_TEST_FRONTEND_JOIN");
@@ -2611,6 +2614,7 @@ void MpLockstepFrame(void)
 
 	/* test lever: a scripted mid-session car change (inert unless MP_TEST_CARCHANGE) */
 	MpTestCarChangeTick();
+	MpTestCityChangeTick();
 
 	/* test lever: a clean leave part-way through (inert unless MP_TEST_LEAVE), so
 	 * that "a deliberate quit" and "a connection died" can be told apart in a
@@ -3139,6 +3143,115 @@ static void MpTestCarChangeTick(void)
 			best, car_data[best].ap.model, bestD);
 
 	ChangePedPlayerToCar(0, &car_data[best]);
+}
+
+/* MP_TEST_CITYCHANGE=<secs>,<city>[,<slot>] -- the pause menu's "Respawn as this car",
+ * taken by itself at <secs> seconds, for a car from a DIFFERENT city.
+ *
+ * MP_TEST_CARCHANGE above takes over the nearest LOCAL traffic car, and that is the wrong
+ * test for the mid-match import: the peer is in the same level, so it already holds that
+ * car and there is nothing to import at all. What has to be imported is a car the peer does
+ * NOT hold, and a car from another city is exactly that -- so this lever drives the real
+ * case, through the same entry point the menu uses (MpChangeCar), deliberately, rather than
+ * through a second path that could drift away from it.
+ *
+ * city indexes the cities the car mods know (MpCarQueryCities), slot indexes the engine's
+ * own per-city model table (carNumLookup), and both are explicit so a pair run can send each
+ * seat to a different city and exercise both directions at once.
+ *
+ * Set = "<secs>,<city>[,<slot>]". Any other shape does nothing, so an absent or malformed
+ * value can never change a car by itself. */
+static void MpTestCityChangeTick(void)
+{
+	static int done;
+	static unsigned long startMs;
+	const char* s;
+	const char* comma;
+	extern char carNumLookup[4][10];
+	int secs, city, slot = 0, i, n, model;
+	int cities[8];
+	MP_PLAYER* me;
+	unsigned long now;
+
+	if (done)
+		return;
+
+	s = gTestCityChangeStr;
+
+	if (s == NULL || !gMp.running)
+		return;
+
+	comma = strchr(s, ',');
+
+	if (comma == NULL)
+		return;			/* "<secs>,<city>" is the minimum */
+
+	secs = atoi(s);
+	city = atoi(comma + 1);
+
+	comma = strchr(comma + 1, ',');
+
+	if (comma != NULL)
+	{
+		slot = atoi(comma + 1);
+
+		if (slot < 0 || slot >= 10)
+			slot = 0;
+	}
+
+	if (startMs == 0)
+		startMs = MpNowMs();
+
+	now = MpNowMs();
+
+	if ((int)((now - startMs) / 1000) < secs)
+		return;
+
+	me = MpLocalPlayer();
+
+	if (me == NULL || me->carId < 0)
+		return;			/* no car of ours yet: try again next frame */
+
+	/* Only a city the mods know, and only an index the engine's own model table has:
+	 * MpChangeCar resolves the pair against resident slots, so anything else is a failed
+	 * switch reported as if it were a real one. */
+	if (city < 0 || city > 3)
+	{
+		if (gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx,
+				"[mp] test: MP_TEST_CITYCHANGE city %d is out of range - nothing done\n", city);
+
+		done = 1;
+		return;
+	}
+
+	n = MpCarQueryCities(cities, (int)(sizeof(cities) / sizeof(cities[0])));
+
+	for (i = 0; i < n; i++)
+		if (cities[i] == city)
+			break;
+
+	if (i == n)
+	{
+		if (gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx,
+				"[mp] test: MP_TEST_CITYCHANGE city %d is not one the mods know - nothing done\n",
+				city);
+
+		done = 1;
+		return;
+	}
+
+	model = (int)(unsigned char)carNumLookup[city][slot];
+
+	done = 1;
+
+	if (gMpCtx != NULL)
+		gMpCtx->jer_log(gMpCtx,
+			"[mp] test: MP_TEST_CITYCHANGE -> %s model %d (we are model %d)\n",
+			MpCarCityName(city), model, car_data[me->carId].ap.model);
+
+	MpChangeCar(city, model);
 }
 
 /* A SATURATING cast to int16, for the wire fields that are still 16-bit.
