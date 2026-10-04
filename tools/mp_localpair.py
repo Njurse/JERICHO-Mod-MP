@@ -534,7 +534,11 @@ def main():
                          "e.g. --seat-env host=CHK_FORCE_CAR=8 with "
                          "--seat-env client=CHK_FORCE_CAR=2 -- because one shared value "
                          "has every seat ride the same car and hides whether a peer's own "
-                         "pick is really respected on the other machines.")
+                         "pick is really respected on the other machines. To force a "
+                         "CROSS-CITY pick, pair it with CHK_FORCE_ROSTER_CITY: "
+                         "--seat-env host=CHK_FORCE_ROSTER_CITY=1 --seat-env host=CHK_FORCE_CAR=8 "
+                         "(--seat-env host=CHK_FORCE_ROSTER_CITY=2 --seat-env client=CHK_FORCE_CAR=2 "
+                         "on the joiner), city 0..3 = CHICAGO/HAVANA/VEGAS/RIO.")
     ap.add_argument("--tail", type=int, default=3, metavar="SECS",
                     help="print the running tail of both logs this often while waiting, so a "
                          "bad run is obvious as it happens (0 = never)")
