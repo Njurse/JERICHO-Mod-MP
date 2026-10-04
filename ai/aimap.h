@@ -40,6 +40,8 @@
  * half-built grid.
  * ------------------------------------------------------------------ */
 
+#include <stddef.h>	/* NULL: the pure half of this library has no engine headers to lean on */
+
 #ifdef __cplusplus
 extern "C" {
 #endif
