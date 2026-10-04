@@ -527,8 +527,9 @@ measured, the host used to reach d=38246 and wedge there. It now eases off past 
 units and, past 5000, turns round and drives back at its pursuers
 (`MP_BOT_GAP=<ease>,<turnback>`), which is what keeps the pair inside a few thousand
 units so contacts happen. `tools/README.md` has the table and the assertion regexes;
-a PASS from that rig wants `lost=0` and `dumps=0`, and the occasional `lost=2` is the
-pre-existing mid-run disconnect rather than the bot.
+a PASS from that rig wants `lost=0` and `dumps=0`. The `lost=2` that run used to
+report was the clock-underflow disconnect (trap 15) and is gone; a `lost=N` now
+means a real drop, which is what makes the verdict worth reading.
 
 ---
 
