@@ -24,6 +24,21 @@ Usage:
     python JERICHO/MODS/mp/tools/mp_tries.py                 # the three tries above
     python .../mp_tries.py --try rio:1 --try havana:12 --keep --seconds 70
     python .../mp_tries.py --require "draws exactly that"    # a check per try
+    python .../mp_tries.py --scenario T2 --keep              # a car-switch release scenario
+    python .../mp_tries.py --scenario all --keep             # T2, T3, T5 and T6
+
+SCENARIOS (--scenario) are the car-switch release tests (#14 / #12; carhacks/MP_ADAPTER.md,
+"Releasing a slot"). Each is a pre-set try - player count, picks, test levers and the lines
+that must / must not appear - so the run is one word instead of a quoted command line:
+
+    T2  switch until the spares would run out: the client changes car 7 times, more than the
+        6 spare resident slots; every old car's slot must be RELEASED, the spares never exhaust
+    T3  a shared car outlives its leaver: two joiners drive the same VEGAS 1, one leaves; the
+        slot must be KEPT ("still named by player N"), never released
+    T5  the release waits for the car: the client switches while its old car is still drawn
+        on the host; the host must DEFER, then release once the car has been re-modelled
+    T6  two same-city imports (VEGAS 1 and VEGAS 3), one switches away: only that slot goes,
+        the shared pages stay, and crosscheck.py's invariants still hold on the host
 
 Exit status is 0 only if every try's verdict passed.
 """
@@ -57,8 +72,57 @@ DEFAULT_TRIES = ["rio:1", "vegas:1", "havana:12"]
 EVIDENCE = {
     "identity": r"\[carhacks/net\] (?:player \d+ drives .*|peer \d+ drives .*)|\[mp\] (?:late joiner: .*|rebuilt player .*|player \d+ changed car: .*)",
     "pages": r"cross-city: (?:slot \d+ holds .*|set \d+ .*index .*|.*left unplaced.*|.*evicting the world.*)",
+    # one line per release decision (carhacks/net.c, chkNetReleaseSlotIfUnused) and the pool
+    # summary CarSlotResReport prints after each - the numbers a leak shows up in
+    "release": r"\[carhacks\] release: slot \d+ .*|cross-city: pool - .*",
 }
 EVIDENCE_LIMIT = 6
+
+# The release line every scenario reads (carhacks/net.c). VERDICT is released/kept/deferred.
+REL = r"\[carhacks\] release: slot \d+ \({car}\) {verdict}"
+ANY_CAR = r"\w+ model \d+"
+
+# The car-switch release scenarios (see the module docstring). `pick` is the frontend pick
+# every joiner makes (a seat-env can override it per joiner); `seat_env` and `require`/`forbid`
+# use mp_localpair.py's seat names (host, client = every joiner, client1, client2 ...).
+SCENARIOS = {
+    "T2": {
+        "what": "switch until the spares would run out (7 switches, 6 spares): every old slot released",
+        "pick": "vegas:1", "players": 2, "seconds": 120,
+        "seat_env": ["client=MP_TEST_PAUSECAR=30,3,1;40,1,2;50,2,3;60,3,2;70,1,3;80,2,2;90,3,3"],
+        "require": ["client=" + REL.format(car=ANY_CAR, verdict="released"),
+                    "host=" + REL.format(car=ANY_CAR, verdict="released"),
+                    r"client=\[mp\] test: PAUSECAR change 7 of 7"],
+        "forbid": [r"no spare resident slot"],
+    },
+    "T3": {
+        "what": "two joiners share VEGAS 1, one leaves: the slot is kept, not released",
+        "pick": "vegas:1", "players": 3, "seconds": 100,
+        "seat_env": ["client1=MP_TEST_LEAVE=60"],
+        "require": ["host=" + REL.format(car=r"VEGAS model 1", verdict="kept") + r" - still named by player \d+",
+                    r"host=\[carhacks/net\] player \d+ left the session"],
+        "forbid": [REL.format(car=r"VEGAS model 1", verdict="released")],
+    },
+    "T5": {
+        "what": "switch while the old car is still drawn on the host: deferred, then released",
+        "pick": "vegas:1", "players": 2, "seconds": 80,
+        "seat_env": ["client=MP_TEST_PAUSECAR=35,3,1"],
+        "require": ["host=" + REL.format(car=r"VEGAS model 1", verdict="deferred") + r" - car \d+ still on it",
+                    "host=" + REL.format(car=r"VEGAS model 1", verdict="released"),
+                    "client=" + REL.format(car=r"VEGAS model 1", verdict="released")],
+        "forbid": [],
+    },
+    "T6": {
+        "what": "VEGAS 1 and VEGAS 3 imported, VEGAS 3 switches away: only its slot goes",
+        "pick": "vegas:1", "players": 3, "seconds": 100,
+        "seat_env": ["client2=CHK_FORCE_CAR=3", "client2=MP_TEST_PAUSECAR=30,3,1"],
+        "require": ["host=" + REL.format(car=r"VEGAS model 3", verdict="released")],
+        "forbid": [REL.format(car=r"VEGAS model 1", verdict="released")],
+        "crosscheck": True,
+    },
+}
+
+CROSSCHECK = os.path.join(HERE, "..", "..", "carhacks", "tools", "crosscheck.py")
 
 
 def identity_check(host_text, client_text, guest_pick=True):
@@ -146,11 +210,18 @@ def grep(text, pattern, limit=EVIDENCE_LIMIT):
     return out
 
 
-def run_try(index, spec, args):
+def run_try(index, spec, args, scenario=None, name=None):
+    """One pair run. With `scenario` (a SCENARIOS entry), its player count, seconds, levers and
+    require/forbid lines are added to the ordinary try for its pick."""
+    if scenario is not None:
+        spec = scenario["pick"]
+
     city, model, city_index = parse_try(spec)
     port = args.port + index - 1
     game_dir = args.game_dir or DEFAULT_GAME_DIR
-    run_dir = os.path.join(args.out, f"try{index}")
+    run_dir = os.path.join(args.out, f"try{index}" if name is None else f"try{index}-{name}")
+    players = scenario["players"] if scenario is not None else 2
+    seconds = scenario["seconds"] if scenario is not None else args.seconds
 
     env = dict(os.environ)
     # A joining client that reaches the module's car screen and picks for itself: the
@@ -159,8 +230,8 @@ def run_try(index, spec, args):
     env["CHK_FORCE_MENU"] = "1"
 
     cmd = [sys.executable, LOCALPAIR,
-           "--players", "2",
-           "--seconds", str(args.seconds),
+           "--players", str(players),
+           "--seconds", str(seconds),
            "--port", str(port),
            "--level", CITY_DIR[args.host_city],
            "--game-dir", game_dir,
@@ -170,13 +241,27 @@ def run_try(index, spec, args):
            "--seat-env", f"client=CHK_FORCE_ROSTER_CITY={city_index}",
            "--seat-env", f"client=CHK_FORCE_CAR={model}"]
 
+    if scenario is not None:
+        for spec_env in scenario["seat_env"]:
+            cmd += ["--seat-env", spec_env]
+
+        for want in scenario["require"]:
+            cmd += ["--require", want]
+
+        for bad in scenario["forbid"]:
+            cmd += ["--forbid", bad]
+
     for want in args.require:
         cmd += ["--require", want]
 
     cmd += args.extra
 
-    print(f"\n=== try {index}: client picks {city.upper()} model {model} "
-          f"(host {args.host_city.upper()} slot {args.host_slot}) ===", flush=True)
+    if scenario is not None:
+        print(f"\n=== try {index}: scenario {name} - {scenario['what']} "
+              f"({players} players, {seconds}s) ===", flush=True)
+    else:
+        print(f"\n=== try {index}: client picks {city.upper()} model {model} "
+              f"(host {args.host_city.upper()} slot {args.host_slot}) ===", flush=True)
 
     proc = subprocess.run(cmd, cwd=REPO_ROOT, env=env,
                           capture_output=True, text=True, errors="replace")
@@ -199,11 +284,13 @@ def run_try(index, spec, args):
     # before the next try overwrites them.
     pair_dir = os.path.abspath(os.path.join(game_dir, ".mp-pair"))
 
-    identity, pages = [], []
+    identity, pages, release = [], [], []
     host_text = client_text = ""
+    host_log = None
 
-    for seat in ("a", "b"):
+    for seat in "abcdefgh"[:players]:
         log_path = os.path.join(pair_dir, seat, "JERICHO.log")
+        label = "host" if seat == "a" else ("client" if seat == "b" else f"client{ord(seat) - ord('a')}")
 
         try:
             with open(log_path, errors="replace") as fh:
@@ -213,26 +300,35 @@ def run_try(index, spec, args):
 
         if seat == "a":
             host_text = text
-        else:
+            host_log = log_path
+        elif seat == "b":
             client_text = text
 
         if args.keep:
             os.makedirs(run_dir, exist_ok=True)
 
             try:
-                shutil.copy(log_path, os.path.join(
-                    run_dir, f"{'host' if seat == 'a' else 'client'}.JERICHO.log"))
+                shutil.copy(log_path, os.path.join(run_dir, f"{label}.JERICHO.log"))
             except OSError:
                 pass
 
-        identity += [f"{'host' if seat == 'a' else 'client'}: {l}"
-                     for l in grep(text, EVIDENCE["identity"])]
-        pages += [f"{'host' if seat == 'a' else 'client'}: {l}"
-                  for l in grep(text, EVIDENCE["pages"])]
+        identity += [f"{label}: {l}" for l in grep(text, EVIDENCE["identity"])]
+        pages += [f"{label}: {l}" for l in grep(text, EVIDENCE["pages"])]
+        release += [f"{label}: {l}" for l in grep(text, EVIDENCE["release"], limit=12)]
 
     passed = proc.returncode == 0
     problems = identity_check(host_text, client_text,
                               guest_pick=(city != args.host_city))
+
+    # T6: the cross-city invariants on the host's log, after a slot was released under a car
+    # that shares its pages.
+    if scenario is not None and scenario.get("crosscheck") and host_log is not None:
+        cc = subprocess.run([sys.executable, CROSSCHECK, host_log],
+                            capture_output=True, text=True, errors="replace")
+
+        if cc.returncode != 0:
+            tail = [l for l in (cc.stdout + cc.stderr).splitlines() if l.strip()][-4:]
+            problems.append("crosscheck.py on the host log failed: " + " | ".join(tail))
 
     # An identity problem fails the try even when the harness said PASS: "correct on the
     # host but the client was still the old car" is exactly the failure a verdict cannot see.
@@ -241,12 +337,13 @@ def run_try(index, spec, args):
 
     return {
         "try": index,
-        "pick": f"{city}:{model}",
+        "pick": f"{city}:{model}" if name is None else f"{name} {city}:{model}",
         "pass": passed,
         "verdict": verdict_line,
         "problems": problems,
         "identity": identity,
         "pages": pages,
+        "release": release,
         "dir": run_dir if args.keep else "",
     }
 
@@ -270,6 +367,9 @@ def main():
                          "load, so budget a few minutes for all three)")
     ap.add_argument("--port", type=int, default=1450,
                     help="first port; each try takes the next one (default 1450)")
+    ap.add_argument("--scenario", action="append", default=[], metavar="NAME",
+                    help=f"run a car-switch release scenario ({', '.join(SCENARIOS)}, or 'all'); "
+                         f"repeatable. Without --try, only the scenarios run")
     ap.add_argument("--require", action="append", default=[],
                     help="passed to every try (see mp_localpair.py --require)")
     ap.add_argument("--keep", action="store_true",
@@ -287,8 +387,19 @@ def main():
     if args.out is None:
         args.out = os.path.join(HERE, ".mp-tries")
 
-    tries = args.tries or DEFAULT_TRIES
+    names = []
+
+    for want in args.scenario:
+        for one in (SCENARIOS if want.lower() == "all" else [want.upper()]):
+            if one not in SCENARIOS:
+                raise SystemExit(f"[tries] unknown scenario '{want}' - one of "
+                                 f"{', '.join(SCENARIOS)}, all")
+            names.append(one)
+
+    tries = args.tries or ([] if names else DEFAULT_TRIES)
     results = [run_try(i, spec, args) for i, spec in enumerate(tries, 1)]
+    results += [run_try(len(tries) + i, None, args, SCENARIOS[n], n)
+                for i, n in enumerate(names, 1)]
 
     print("\n=============================== tries ===============================")
     print(f"{'try':>3}  {'client pick':<14} {'result':<8} verdict")
@@ -307,7 +418,7 @@ def main():
         for problem in r["problems"]:
             print(f"    [identity PROBLEM] {problem}")
 
-        for label, key in (("identity", "identity"), ("pages", "pages")):
+        for label, key in (("identity", "identity"), ("pages", "pages"), ("release", "release")):
             for line in r[key] or ["<nothing matched>"]:
                 print(f"    [{label}] {line}")
 

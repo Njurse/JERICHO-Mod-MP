@@ -349,8 +349,22 @@ def check_requires(names, dirs, requires):
     texts = {n: read_log(dirs[n]) for n in names}
     missing = []
 
+    # The seat names the help (and --seat-env) use: host = the first seat, clientN = the Nth
+    # joiner, client = ANY joiner. The texts are keyed by the seat DIRECTORY (a, b, c ...), and
+    # matching the prefix against those alone meant `host=REGEX` was never scoped: the prefix
+    # stayed part of the pattern, which then could not match anything - a guaranteed FAIL.
+    alias = {"host": [names[0]], "client": list(names[1:])}
+    for i, n in enumerate(names[1:]):
+        alias[f"client{i + 1}"] = [n]
+
     for want in requires:
-        if "=" in want and want.split("=", 1)[0] in texts:
+        prefix = want.split("=", 1)[0].strip().lower() if "=" in want else None
+
+        if prefix is not None and prefix in alias:
+            seat, pattern = want.split("=", 1)
+            haystack = "\n".join(texts[n] for n in alias[prefix])
+            where = seat
+        elif prefix is not None and prefix in texts:
             seat, pattern = want.split("=", 1)
             haystack = texts[seat]
             where = seat
