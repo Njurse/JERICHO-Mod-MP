@@ -145,12 +145,60 @@ static int MpBotSpotClear(CAR_DATA* mine, int dir, int len)
  * nearest other player's car. Two instances then close the gap on their own,
  * which is how car-to-car collision and the two players meeting each other get
  * exercised without two humans. Returns 0 (coast) when there is nobody else. */
+/* ------------------------------------------------------------------ */
+/* TURN AROUND, DO NOT REVERSE                                          */
+/*                                                                     */
+/* Both driving bots used to recover by REVERSING: "backing out"         */
+/* (CAR_PAD_BRAKE | steer), and, on a big heading error, "reversing round */
+/* is the only coherent way about". Measured in the pair harness, that    */
+/* reads as the cars SHUFFLING instead of chasing round the map: the       */
+/* reverse half of a recovery puts the car back where the previous half     */
+/* started, and a stopped car given steer-only cannot turn at all, so the   */
+/* pair stayed wedged in the scenery and never met.                        */
+/*                                                                     */
+/* A turn-around does the same job in one movement and leaves the car      */
+/* pointing somewhere new. Two rules, both from what this engine's car      */
+/* physics needs:                                                           */
+/*   * the wheels must be ROLLING for a handbrake to pivot the car, so the  */
+/*     handbrake is held only for the first frames of the manoeuvre and     */
+/*     only while there is speed - on a stopped car it is a locked axle;     */
+/*   * the throttle stays on throughout, because steer-only cannot move a    */
+/*     car - that is what left the old "spinning round" recovery parked.     */
+/* The driving bots never select CAR_PAD_BRAKE any more.                     */
+/* ------------------------------------------------------------------ */
+#define MPBOT_TURN_FRAMES	20	/* the handbrake part, ~0.3 s at 60 Hz */
+#define MPBOT_TURN_MIN_SPEED	10	/* below this a handbrake is a locked axle, not a turn */
+
+/* One frame of a turn-around. `dir` uses the callers' steering convention
+ * (non-zero = left). `*frames` is the manoeuvre and `*pulse` the handbrake part
+ * of it; both are decremented here. */
+static int MpBotTurnPad(int* frames, int* pulse, int dir, int spd)
+{
+	int left = (dir != 0);
+	int pad = CAR_PAD_ACCEL | (left ? CAR_PAD_LEFT : CAR_PAD_RIGHT);
+
+	if (spd < 0)
+		spd = -spd;
+
+	(*frames)--;
+
+	if (*pulse > 0)
+	{
+		(*pulse)--;
+
+		if (spd > MPBOT_TURN_MIN_SPEED)
+			pad = CAR_PAD_HANDBRAKE | (left ? CAR_PAD_LEFT : CAR_PAD_RIGHT);
+	}
+
+	return pad;
+}
+
 static int MpBotChase(int fight)
 {
 	MP_PLAYER* me = MpLocalPlayer();
 	CAR_DATA* mine;
 	CAR_DATA* tgt = NULL;
-	static int stuckFrames, recoverFrames, recoverDir, recoverReverse;
+	static int stuckFrames, turnFrames, turnDir, turnPulse;
 	int k;
 
 	if (me == NULL || me->carId < 0)
@@ -174,19 +222,13 @@ static int MpBotChase(int fight)
 
 	/* The very primitive "pathfinder": a straight line at the peer is enough on
 	 * an open map, but the cars wedge on the first building and never meet again.
-	 * If the car is not moving, back out and turn (the only thing that frees a
-	 * car off a wall) and on alternate attempts swing round on the wheel. NO
-	 * WHEELSPIN: spinning the wheels is a grip loss, which is what made the cars
+	 * A wedge is cleared by TURNING (MpBotTurnPad), never by reversing - a
+	 * reverse moves the car back to where the wedge started, which is how the
+	 * pair ended up shuffling on the spot instead of chasing. NO WHEELSPIN
+	 * either: spinning the wheels is a grip loss, which is what made the cars
 	 * bobble and slide into the scenery. */
-	if (recoverFrames > 0)
-	{
-		recoverFrames--;
-
-		if (recoverReverse)
-			return CAR_PAD_BRAKE | (recoverDir ? CAR_PAD_LEFT : CAR_PAD_RIGHT);
-
-		return (recoverDir ? CAR_PAD_LEFT : CAR_PAD_RIGHT);
-	}
+	if (turnFrames > 0)
+		return MpBotTurnPad(&turnFrames, &turnPulse, turnDir, mine->hd.speed);
 
 	{
 		int dx = tgt->hd.where.t[0] - mine->hd.where.t[0];
@@ -295,14 +337,14 @@ static int MpBotChase(int fight)
 			{
 				if (++stuckFrames > 40)
 				{
-					recoverFrames = recoverReverse ? 45 : 70;
-					recoverDir ^= 1;
-					recoverReverse ^= 1;
+					turnFrames = MPBOT_TURN_FRAMES + 40;
+					turnPulse = MPBOT_TURN_FRAMES;
+					turnDir ^= 1;
 					stuckFrames = 0;
 
 					if (gMpCtx != NULL)
-						gMpCtx->jer_log(gMpCtx, "[mp] chase: stuck, %s (dir %d)\n",
-							recoverReverse ? "backing out" : "spinning round", recoverDir);
+						gMpCtx->jer_log(gMpCtx, "[mp] chase: stuck, handbrake turn (dir %d)\n",
+							turnDir);
 				}
 			}
 			else
@@ -320,9 +362,17 @@ static int MpBotChase(int fight)
 			pad = (adiff > 96) ? ((diff > 0) ? CAR_PAD_LEFT : CAR_PAD_RIGHT) : 0;
 		}
 		else if (adiff > 1500)
-			/* The peer is behind us: reversing round is the only coherent way
-			 * about, and the one case where reverse is right. */
-			pad = CAR_PAD_BRAKE | ((diff > 0) ? CAR_PAD_LEFT : CAR_PAD_RIGHT);
+		{
+			/* The peer is behind us: TURN ROUND, never reverse. Full lock with the
+			 * rear locked for the first frames brings the nose round, and the
+			 * throttle then drives us out of it - a reverse moved us AWAY from
+			 * them, which is what made the pair shuffle instead of meet. */
+			turnFrames = MPBOT_TURN_FRAMES + 20;
+			turnPulse = MPBOT_TURN_FRAMES;
+			turnDir = diff;
+
+			pad = MpBotTurnPad(&turnFrames, &turnPulse, turnDir, mine->hd.speed);
+		}
 		else if (adiff > 700)
 			/* Badly off line: EASE OFF and steer. Powering through a big
 			 * correction is what made them bobble and slide into the scenery. */
@@ -483,7 +533,7 @@ static int MpBotPursuit(void)
 	MP_PLAYER* me = MpLocalPlayer();
 	CAR_DATA* mine;
 	CAR_DATA* tgt = NULL;
-	static int stuckFrames, recoverFrames, recoverDir, recoverReverse;
+	static int stuckFrames, turnFrames, turnDir, turnPulse;
 	int k;
 
 	if (me == NULL || me->carId < 0)
@@ -505,15 +555,8 @@ static int MpBotPursuit(void)
 
 	mine = &car_data[me->carId];
 
-	if (recoverFrames > 0)
-	{
-		recoverFrames--;
-
-		if (recoverReverse)
-			return CAR_PAD_BRAKE | (recoverDir ? CAR_PAD_LEFT : CAR_PAD_RIGHT);
-
-		return (recoverDir ? CAR_PAD_LEFT : CAR_PAD_RIGHT);
-	}
+	if (turnFrames > 0)
+		return MpBotTurnPad(&turnFrames, &turnPulse, turnDir, mine->hd.speed);
 
 	{
 		int dx = tgt->hd.where.t[0] - mine->hd.where.t[0];
@@ -531,21 +574,22 @@ static int MpBotPursuit(void)
 			spd = -spd;
 
 		/* same wedge detection as chase: a car stopped against scenery has to be
-		 * backed out; the runner wedges at least as often as the pursuer */
+		 * turned out (never reversed); the runner wedges at least as often as the
+		 * pursuer */
 		/* Constant action: a wedge is cleared in a fraction of a second, not after
 		 * seconds of sitting still. A stopped car is a wasted frame of the test. */
 		if (spd < 3)
 		{
 			if (++stuckFrames > 20)
 			{
-				recoverFrames = recoverReverse ? 18 : 26;
-				recoverDir ^= 1;
-				recoverReverse ^= 1;
+				turnFrames = MPBOT_TURN_FRAMES + 20;
+				turnPulse = MPBOT_TURN_FRAMES;
+				turnDir ^= 1;
 				stuckFrames = 0;
 
 				if (gMpCtx != NULL)
-					gMpCtx->jer_log(gMpCtx, "[mp] bot: %s stuck, %s\n",
-						evade ? "evade" : "pursue", recoverReverse ? "backing out" : "turning round");
+					gMpCtx->jer_log(gMpCtx, "[mp] bot: %s stuck, handbrake turn (dir %d)\n",
+						evade ? "evade" : "pursue", turnDir);
 			}
 		}
 		else
@@ -573,15 +617,15 @@ static int MpBotPursuit(void)
 			}
 			else if (++noProg > 150)
 			{
-				recoverFrames = 55;
-				recoverReverse = 0;
-				recoverDir ^= 1;
+				turnFrames = MPBOT_TURN_FRAMES + 35;
+				turnPulse = MPBOT_TURN_FRAMES;
+				turnDir ^= 1;
 				best = 0;
 				noProg = 0;
 
 				if (gMpCtx != NULL)
 					gMpCtx->jer_log(gMpCtx, "[mp] bot: no progress for 150 frames, turning round (dir %d)\n",
-						recoverDir);
+						turnDir);
 			}
 		}
 
@@ -591,8 +635,15 @@ static int MpBotPursuit(void)
 		 * turn (the move that replaces scraping along the wall), a medium one coasts
 		 * through it, and only a roughly aligned car gets full throttle. */
 		if (adiff > 1200)
-			/* a real U-turn: slow right down and turn hard */
-			pad = CAR_PAD_BRAKE | ((diff > 0) ? CAR_PAD_LEFT : CAR_PAD_RIGHT);
+		{
+			/* a real U-turn: turn hard, with the handbrake for the first frames,
+			 * and drive out of it. Never a reverse - see the note on MpBotTurnPad. */
+			turnFrames = MPBOT_TURN_FRAMES + 20;
+			turnPulse = MPBOT_TURN_FRAMES;
+			turnDir = diff;
+
+			pad = MpBotTurnPad(&turnFrames, &turnPulse, turnDir, spd);
+		}
 		else if (adiff > 420)
 			/* a corner. NEVER steer-only: a stationary car cannot steer, and the
 			 * old steer-only pad left the bot sitting still "thinking" for
@@ -603,9 +654,10 @@ static int MpBotPursuit(void)
 		else
 			pad = CAR_PAD_ACCEL;
 
-		/* a car that has STOPPED always gets the throttle back (unless we are
-		 * deliberately braking into a U-turn), so it never idles in place */
-		if (spd < 3 && (pad & CAR_PAD_BRAKE) == 0)
+		/* a car that has STOPPED always gets the throttle back, so it never idles
+		 * in place. Nothing here brakes any more: a turn-around drives out of the
+		 * corner under power, and a handbrake pad already carries the throttle. */
+		if (spd < 3)
 			pad |= CAR_PAD_ACCEL;
 
 		/* the pursuer keeps the power on when it is closing, so the collision is
