@@ -135,6 +135,20 @@ static int MpBotSpotClearAt(int x, int y, int z, int dir, int len, int radius)
 	return CellEmpty(&p, radius);
 }
 
+/* CONTACT. The forward trace starts `len` units ahead of the car and CellEmpty only looks
+ * at the cell THAT POINT falls in (objcoll.c:41-44) - `radius` widens the box test, it does
+ * not widen the cell search. So a wall the car is already touching can sit BEHIND the first
+ * probe and the trace reads "clear" while the car is embedded in it, which is exactly how a
+ * car gets pinned on scenery it believes is not there. Testing the car's OWN position closes
+ * that hole: a collision object inside a car-radius of the centre means contact, whatever
+ * the forward trace says. Only used for the wedge test - it is the same answer for every
+ * heading, so it must never take part in choosing one. */
+static int MpBotContacted(CAR_DATA* mine)
+{
+	return !MpBotSpotClearAt(mine->hd.where.t[0], mine->hd.where.t[1], mine->hd.where.t[2],
+		mine->hd.direction, 0, MPBOT_CAR_CLEAR);
+}
+
 static int MpBotSpotClear(CAR_DATA* mine, int dir, int len)
 {
 	return MpBotSpotClearAt(mine->hd.where.t[0], mine->hd.where.t[1], mine->hd.where.t[2],
@@ -307,7 +321,7 @@ static int MpBotChase(int fight)
 	MP_PLAYER* me = MpLocalPlayer();
 	CAR_DATA* mine;
 	CAR_DATA* tgt = NULL;
-	static int stuckFrames, turnFrames, turnDir, turnPulse, backFrames, backDir, holding, everMoved;
+	static int stuckFrames, turnFrames, turnDir, turnPulse, backFrames, backDir, holding, everMoved, modeLogged;
 	int k;
 
 	if (me == NULL || me->carId < 0)
@@ -351,6 +365,19 @@ static int MpBotChase(int fight)
 		int dx = tgt->hd.where.t[0] - mine->hd.where.t[0];
 		int dz = tgt->hd.where.t[2] - mine->hd.where.t[2];
 		int flee = (!fight && MpIsHost());	/* chase: the host runs, the joiner chases. fight: both charge. */
+
+		/* Say which way round this seat is running, ONCE. "Both seats chased" and "both
+		 * seats fled" are the first things to rule out when a pair behaves strangely,
+		 * and without this line it can only be inferred from which side logs recoveries.
+		 * The role is the LOCAL one (gMp.role == MP_ROLE_HOST), and MP_ROLE_NONE is 0
+		 * rather than HOST, so a seat that has not joined yet is not accidentally a
+		 * host - it chases until it is given a role. */
+		if (!modeLogged && gMpCtx != NULL)
+		{
+			modeLogged = 1;
+			gMpCtx->jer_log(gMpCtx, "[mp] chase: this seat is the %s, so it %s\n",
+				MpIsHost() ? "HOST" : "JOINER", flee ? "FLEES" : "CHASES");
+		}
 		int want = flee ? MpBotFleeWant(mine, (ratan2(dx, dz) + 2048) & 0xfff)
 		                : (ratan2(dx, dz) & 0xfff);
 		int diff, adiff;
@@ -471,16 +498,17 @@ static int MpBotChase(int fight)
 					 * move, so the line has to carry it. One line per decision, not per
 					 * frame, so a pair run can be read for it. */
 					int ahead = MpBotSpotClear(mine, mine->hd.direction, 1100);
+					int contact = MpBotContacted(mine);
 
 					stuckFrames = 0;
 					turnDir ^= 1;
 
-					if (!ahead)
+					if (!ahead || contact)
 					{
-						/* A wall in front: a turn with the throttle on cannot move a car
-						 * that cannot move, so back it off the wall first - the one place
-						 * a reverse is right. Bounded and non-alternating, so it is not
-						 * the old shuffle. */
+						/* A wall in front, OR something the forward trace cannot see because the
+						 * car is already inside it: a turn with the throttle on cannot move a car
+						 * that cannot move, so back it off first - the one place a reverse is right.
+						 * Bounded and non-alternating, so it is not the old shuffle. */
 						backDir = turnDir;
 						backFrames = MPBOT_BACK_FRAMES;
 
@@ -493,8 +521,8 @@ static int MpBotChase(int fight)
 
 						if (gMpCtx != NULL)
 							gMpCtx->jer_log(gMpCtx,
-								"[mp] chase: recover - wedged (speed %d), ahead clear=0, backing out (dir %d)\n",
-								mine->hd.speed, backDir);
+								"[mp] chase: recover - wedged (speed %d), ahead clear=%d, in contact=%d, backing out (dir %d)\n",
+								mine->hd.speed, ahead, contact, backDir);
 					}
 					else
 					{
