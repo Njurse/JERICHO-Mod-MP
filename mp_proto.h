@@ -236,6 +236,10 @@ typedef struct MP_BEACON
 #define MP_KEEPALIVE_INTERVAL_MS	1000
 #define MP_KEEPALIVE_MIN_MS		250	/* clamp for the config value */
 
+/* Silence that drops a peer. The default; the runtime value is read from
+ * mp.ini as idle_drop_ms (0 = never drop). Shared so mp_config.c can default it. */
+#define MP_CONN_TIMEOUT_MS	30000
+
 /* ------------------------------------------------------------------ */
 /* Handshake                                                           */
 /* ------------------------------------------------------------------ */

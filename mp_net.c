@@ -89,7 +89,13 @@
 #define MP_HANDSHAKE_TIMEOUT_MS	5000	/* a peer that connects and then says
 								 * nothing is not a player: give up on it
 								 * long before the idle timeout */
-#define MP_CONN_TIMEOUT_MS	30000	/* drop a peer after 30 s of silence. It was 10 s, and the busy guard that excuses a SILENT LEVEL LOAD is OUR OWN flag (MpBusy) -- the peer's is not visible to us, so a peer that was loading (or just hitching) for longer than 10 s got dropped by the OTHER side: the "it disconnects after a while" report. Real liveness still comes from the 1 s keepalive, which is why this grace can be generous. */
+/* MP_CONN_TIMEOUT_MS (now in mp_proto.h) is the default idle drop: a peer silent
+ * this long is dropped, unless idle_drop_ms is set to 0 to disable it. It was
+ * 10 s, and the busy guard that excuses a SILENT LEVEL LOAD is OUR OWN flag
+ * (MpBusy) -- the peer's is not visible to us, so a peer that was loading (or
+ * just hitching) for longer than 10 s got dropped by the OTHER side: the "it
+ * disconnects after a while" report. Real liveness still comes from the 1 s
+ * keepalive, which is why this grace can be generous. */
 #define MP_CONNECT_TIMEOUT_MS	5000
 
 /* ------------------------------------------------------------------ */
@@ -1809,7 +1815,10 @@ void MpNetPoll(int waitMs)
 		 * starts: a player still in the car select is legitimately quiet (or slow to
 		 * pick), so "silence == dead" only holds once the match is running. This is
 		 * the "client was kicked for taking a few seconds to choose a car" fix. */
-		if (gConn[i].used && (now - gConn[i].lastRecvMs) > MP_CONN_TIMEOUT_MS && !MpBusy() && gMp.running)
+		/* idle_drop_ms = 0 turns this off entirely: a stalled/very-busy peer is
+		 * then left connected rather than ejected mid-playtest (see mp.ini). */
+		if (gConn[i].used && gMp.config.idleDropMs > 0 &&
+			(now - gConn[i].lastRecvMs) > (unsigned long)gMp.config.idleDropMs && !MpBusy() && gMp.running)
 			MpDropConn(i, "timeout");
 	}
 

@@ -47,6 +47,13 @@ void MpConfigLoad(void)
 	if (gMp.config.keepaliveMs < MP_KEEPALIVE_MIN_MS || gMp.config.keepaliveMs > 30000)
 		gMp.config.keepaliveMs = MP_KEEPALIVE_INTERVAL_MS;
 
+	/* Silence that drops a peer. 0 = never drop: for playtesting, so a stall (a
+	 * freeze, a long pause, a machine busy in another window) no longer ejects
+	 * the other seat. Default is the old 30 s grace. */
+	gMp.config.idleDropMs = jer_config_get_int("mp", "idle_drop_ms", MP_CONN_TIMEOUT_MS);
+	if (gMp.config.idleDropMs < 0 || gMp.config.idleDropMs > 600000)
+		gMp.config.idleDropMs = MP_CONN_TIMEOUT_MS;
+
 	gMp.config.car = jer_config_get_int("mp", "car", -1);
 	if (gMp.config.car < -1 || gMp.config.car > 255)
 		gMp.config.car = -1;
@@ -106,6 +113,7 @@ void MpConfigSave(void)
 	jer_config_set_int("mp", "port", gMp.config.port);
 	jer_config_set_int("mp", "beacon_ms", gMp.config.beaconMs);
 	jer_config_set_int("mp", "keepalive_ms", gMp.config.keepaliveMs);
+	jer_config_set_int("mp", "idle_drop_ms", gMp.config.idleDropMs);
 	jer_config_set_int("mp", "mod_check", gMp.config.modCheck);
 	jer_config_set_int("mp", "car", gMp.config.car);
 	jer_config_set_int("mp", "car_city", gMp.config.carCity);

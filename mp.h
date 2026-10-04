@@ -35,6 +35,7 @@ typedef struct MP_CONFIG
 	char hostName[MP_NAME_MAX];	/* advertised server name when hosting */
 	int  beaconMs;			/* discovery beacon interval */
 	int  keepaliveMs;		/* liveness ping cadence */
+	int  idleDropMs;		/* silence that drops a peer; 0 = never drop */
 	int  modCheck;			/* host lobby setting: MP_MODCHECK_* */
 	int  strictVersion;		/* host lobby setting: also require the same build */
 	int  car;			/* this machine's vehicle for the match, -1 = level default */
