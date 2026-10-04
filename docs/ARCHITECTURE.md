@@ -496,6 +496,31 @@ These have each cost real time. They are not hypothetical.
 
 ---
 
+### A burst must never cost the connection
+
+The read loop in mp_net.c used to drain the socket until select() said nothing was pending
+and *then* parse, so every byte of a burst had to fit in rbuf at once. A burst bigger than
+that buffer dropped the peer with "overflow", and a burst is exactly what a briefly stalled
+local game produces: one real session died that way mid-chase after 54239 bytes
+receiver-side, with nothing wrong on the wire. The read is now bounded by the space actually
+left, the frames are parsed at the end of the same call, and a full buffer STOPS READING
+instead of dropping -- the rest waits in the kernel buffer for the next poll, and the poll
+runs several times a frame.
+
+The buffer must also hold one maximal legal frame, and it did not: the parser accepts
+env.len up to 8192, i.e. a 8196-byte frame, against an 8192-byte buffer, so a maximal frame
+could never be assembled and would have been dropped as "bad frame" while the send side was
+entitled to send it. MP_RECV_BUF is now derived from MP_RECV_MAX_FRAME.
+
+And a **bad handle (err 6, WSA_INVALID_HANDLE / EBADF) is not a transient error.** It says
+the handle is not a socket any more, i.e. the connection has already been closed -- by us,
+or by the send path right after the peer reset it. Classifying it as "transient, kept alive"
+turned a plain teardown into a mysterious "send failed" drop carrying a huge byte count on
+the other end. When a session ends this way, read the FIRST event, not the line the drop was
+reported on: in the run that produced this, the real first event was `send error 10054` for
+that connection, the peer having reset it, which is what the pair harness does when a seat's
+window ends and the process exits (exit 0, no dump).
+
 ## 11. Testing
 
 `tools/README.md` has the detail. The one thing to internalise: **the mock is

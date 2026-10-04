@@ -59,10 +59,14 @@
 #  define MP_LAST_ERROR()	WSAGetLastError()
 #  define MP_ECONNRESET		WSAECONNRESET
 #  define MP_ECONNABORTED	WSAECONNABORTED
+/* NOT a transient stack hiccup: this says the handle is not a socket any more, i.e. the
+ * connection has already been closed -- by us. Winsock spells it 6, POSIX as EBADF. */
+#  define MP_EBADHANDLE		WSA_INVALID_HANDLE
 #else
 #  define MP_LAST_ERROR()	errno
 #  define MP_ECONNRESET		ECONNRESET
 #  define MP_ECONNABORTED	ECONNABORTED
+#  define MP_EBADHANDLE		EBADF
 #endif
 
 #include "jericho.h"
@@ -72,7 +76,12 @@
 #include <stdio.h>
 #include <stdlib.h>		/* malloc/free for the adapter list */
 
-#define MP_RECV_BUF		8192
+/* The largest frame this side will accept: the envelope plus a payload of 8192, which is the
+ * limit the parser enforces on env.len below. THE BUFFER MUST HOLD ONE OF THESE. It did not:
+ * the limit accepted a 8196-byte frame and the buffer was 8192, so a maximal frame could
+ * never be assembled and the peer was dropped for sending something the protocol allows. */
+#define MP_RECV_MAX_FRAME	(MP_ENVELOPE_SIZE + 8192)
+#define MP_RECV_BUF		(MP_RECV_MAX_FRAME + 512)	/* room for a second, partial one */
 #define MP_SEND_BUF		2048
 #define MP_SEND_QUEUE	8192	/* frames waiting for a busy socket */
 #define MP_ACCEPT_BACKLOG	8
@@ -1538,7 +1547,7 @@ static void MpProcessConn(int idx)
 	{
 		fd_set rd;
 		struct timeval tv;
-		int n;
+		int n, space;
 
 		FD_ZERO(&rd);
 		FD_SET(c->sock, &rd);
@@ -1567,7 +1576,21 @@ static void MpProcessConn(int idx)
 				break;
 		}
 
-		n = recv(c->sock, buf, (int)sizeof(buf), 0);
+		/* Room for what we are about to ask for. If a partial frame has already filled
+		 * the buffer, STOP READING and leave the rest in the socket: the frames buffered
+		 * so far are parsed below, the space they free is used next poll, and the peer is
+		 * never dropped for a burst it was entitled to send.
+		 *
+		 * The old code drained the socket until select() said nothing was pending and
+		 * THEN dropped the connection if that turned out to be more than the buffer held.
+		 * A burst is exactly what a stalled local game produces, and one real session died
+		 * that way mid-chase after 54239 bytes receiver-side. */
+		space = MP_RECV_BUF - c->rbufLen;
+
+		if (space < MP_ENVELOPE_SIZE + 8)
+			break;
+
+		n = recv(c->sock, buf, space < (int)sizeof(buf) ? space : (int)sizeof(buf), 0);
 		if (n <= 0 && MpDebugOn() && gMpCtx != NULL)
 			gMpCtx->jer_log(gMpCtx, "[mp] recv n=%d\n", n);
 
@@ -1606,6 +1629,18 @@ static void MpProcessConn(int idx)
 				return;
 			}
 
+			/* ...but a BAD HANDLE is not one of those. err 6 says the socket is not a
+			 * socket any more: this connection has already been closed, by us. Polling
+			 * it as though it were alive is how a clean teardown turned into a
+			 * "send failed" drop carrying a huge byte count on the other end -- the
+			 * shape the mid-match disconnect has been read as all along. Say what it
+			 * is and end the connection. */
+			if (err == MP_EBADHANDLE)
+			{
+				MpDropConn(idx, "socket closed (bad handle)");
+				return;
+			}
+
 			/* Anything else is NOT proof the peer is gone -- under a burst (a
 			 * busy chase, a flurry of contacts) the stack reports transient
 			 * errors like WSAENOBUFS/WSAENETRESET, and dropping on those kills a
@@ -1623,12 +1658,9 @@ static void MpProcessConn(int idx)
 			break;
 		}
 
-		if (c->rbufLen + n > MP_RECV_BUF)
-		{
-			MpDropConn(idx, "overflow");
-			return;
-		}
-
+		/* Cannot overflow: the read above is bounded by the space that was left, and a
+		 * maximal legal frame always fits (see MP_RECV_BUF). The drop that used to be here
+		 * was the burst bug. */
 		memcpy(c->rbuf + c->rbufLen, buf, n);
 		c->rbufLen += n;
 		c->rxBytes += (unsigned long)n;
