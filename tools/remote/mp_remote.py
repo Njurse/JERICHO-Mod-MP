@@ -190,7 +190,7 @@ def do_update(agent, tag):
 
 # ------------------------------------------------------------------ seats
 
-def local_start(args, bot=None):
+def local_start(args, bot=None, env_extra=None):
     exe = os.path.join(GAME_DIR, EXE_NAME)
     if not os.path.isfile(exe):
         raise SystemExit(f"no {EXE_NAME} in {GAME_DIR} -- build first (build_dev.bat)")
@@ -200,6 +200,9 @@ def local_start(args, bot=None):
 
     if bot:
         env["MP_BOT"] = bot           # the same lever the peer's seat gets, so both cars drive
+
+    for k, v in (env_extra or {}).items():
+        env[k] = v
     # Keep the output: a game that dies in a second says why on stdout, and
     # discarding it turns "it exited" into a mystery.
     os.makedirs(WORK, exist_ok=True)
@@ -208,7 +211,7 @@ def local_start(args, bot=None):
     return p
 
 
-def seat_args(seat, host_ip, port, extra, bot=None):
+def seat_args(seat, host_ip, port, extra, bot=None, env_extra=None):
     if seat == "host":
         base = f"-nointro -nofmv -host {port}"
     else:
@@ -216,9 +219,14 @@ def seat_args(seat, host_ip, port, extra, bot=None):
 
     # `+K=V` is ENVIRONMENT on the far end -- the agent parses leading +tokens as env for
     # the game (there is deliberately no way to push files to that machine), which is how
-    # a remote seat gets MP_BOT. MP_BOT=chase is mp_localpair's default and means the
-    # HOST FLEES while every joiner CHASES, so an unattended pair actually moves.
-    prefix = f"+MP_BOT={bot} " if bot else ""
+    # a remote seat gets MP_BOT and the MP_TEST_* levers. MP_BOT=chase is mp_localpair's
+    # default and means the HOST FLEES while every joiner CHASES.
+    pairs = dict(env_extra or {})
+
+    if bot:
+        pairs["MP_BOT"] = bot
+
+    prefix = "".join(f"+{k}={v} " for k, v in pairs.items())
 
     return (prefix + base + " " + extra).strip()
 
@@ -285,22 +293,33 @@ def cmd_deploy(a):
 
     print("2. start")
     bot = None if a.bot == "off" else a.bot
-    remote_args = seat_args("client" if a.seat == "host" else "host", host_ip, a.port_game, a.extra, bot)
+    env_extra = {}
+
+    for pair in (a.env or []):
+        if "=" not in pair:
+            raise SystemExit(f"--env wants K=V, got {pair!r}")
+        k, v = pair.split("=", 1)
+        env_extra[k] = v
+
+    remote_args = seat_args("client" if a.seat == "host" else "host", host_ip, a.port_game, a.extra, bot, env_extra)
     local_args = seat_args(a.seat, host_ip, a.port_game, a.extra, None)
 
     if bot:
         print(f"  bot: {bot} on both seats (the host flees, every joiner chases)")
 
+    for k, v in env_extra.items():
+        print(f"  env: {k}={v} on both seats")
+
     if a.seat == "host":
         # the host first: it must be listening before the client dials
-        local_proc = local_start(local_args, bot)
+        local_proc = local_start(local_args, bot, env_extra)
         print(f"  local  HOST  pid {local_proc.pid}: {local_args}")
         time.sleep(a.lead)
         print(f"  remote CLIENT: {agent.start(remote_args)}")
     else:
         print(f"  remote HOST : {agent.start(remote_args)}")
         time.sleep(a.lead)
-        local_proc = local_start(local_args, bot)
+        local_proc = local_start(local_args, bot, env_extra)
         print(f"  local  CLIENT pid {local_proc.pid}: {local_args}")
 
     os.makedirs(WORK, exist_ok=True)
@@ -494,6 +513,11 @@ def main():
                          "default, same as mp_localpair) makes the host FLEE and every "
                          "joiner CHASE, so an unattended pair moves; 'pursuit' has both "
                          "hunt; 'off' leaves the cars to whoever is at the keyboard")
+    ap.add_argument("--env", action="append", metavar="K=V",
+                    help="set an environment variable on BOTH seats (repeatable). This is "
+                         "how the MP_TEST_* levers reach a seat, e.g. "
+                         "--env 'MP_TEST_PAUSECAR=25,3,1;35,1,2' to make both players "
+                         "cycle cars across cities mid-match")
     ap.add_argument("--lead", type=int, default=4,
                     help="seconds between starting the host and the client")
     ap.add_argument("--seconds", type=int, default=90, help="how long `run` waits")
