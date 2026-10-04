@@ -183,6 +183,12 @@ where turning on the throttle cannot work because the car cannot move at all. Bo
 and it does not alternate, so it cannot become the old reversing shuffle. */
 #define MPBOT_BACK_FRAMES	22	/* ~0.4 s */
 
+/* Following at minimum distance is not a reason to do anything dramatic: hold station
+inside IN and only take the chase up again once the gap has reached OUT. Two thresholds,
+not a derivative, so the car cannot flicker between chasing and waiting. */
+#define MPBOT_FOLLOW_IN		900L
+#define MPBOT_FOLLOW_OUT	2200L
+
 /* One frame of a turn-around. `dir` uses the callers' steering convention
  * (non-zero = left). `*frames` is the manoeuvre and `*pulse` the handbrake part
  * of it; both are decremented here. */
@@ -213,28 +219,81 @@ the corner it just ran into. Instead, sweep a fan of headings that all still gai
 ground on the pursuer and take the one with the most room ahead - the flee then heads
 for open space rather than for whatever happens to be behind it. Cheaper than a route
 and it fixes the symptom that is actually visible. */
-#define MPBOT_FLEE_FAN	256	/* 22.5 deg steps, so the fan spans +/- 90 deg */
+#define MPBOT_FLEE_FAN	256	/* 22.5 deg steps */
+#define MPBOT_FLEE_SPAN	6	/* +/- 135 deg: anywhere open beats a wall behind him */
+#define MPBOT_FLEE_WIDTH	128	/* 11 deg either side must be clear too: no grazing */
+
+/* Is there a CORRIDOR along `dir`, not merely a line? Probing the centre line alone lets
+the fleer pick a heading that clears a wall by centimetres - which is what "it grazes
+along walls" is - so a heading only counts as open if the lines either side of it are
+open too. No trigonometry needed: the side lines are just the heading rotated. */
+static int MpBotCorridorClear(CAR_DATA* mine, int dir, int len)
+{
+	return MpBotSpotClear(mine, dir, len) &&
+		MpBotSpotClear(mine, (dir - MPBOT_FLEE_WIDTH) & 0xfff, len) &&
+		MpBotSpotClear(mine, (dir + MPBOT_FLEE_WIDTH) & 0xfff, len);
+}
+
+/* How far the corridor stays open, in range steps. THIS is the "that is a road" test: a
+ * heading still clear at 4800 units is a street, one that clears 1200 and then stops is a
+ * driveway into a wall. The flee wants the road even when the road is not straight back
+ * the way it came. */
+#define MPBOT_FLEE_REACH	4	/* ranges the corridor is probed over */
+#define MPBOT_FLEE_ROAD		3	/* depth that counts as a road rather than a gap */
+
+static const int MpBotFleeRange[MPBOT_FLEE_REACH] = { 1200, 2400, 3600, 4800 };
+
+static int MpBotCorridorDepth(CAR_DATA* mine, int dir)
+{
+	int k, depth = 0;
+
+	for (k = 0; k < MPBOT_FLEE_REACH; k++)
+	{
+		if (!MpBotCorridorClear(mine, dir, MpBotFleeRange[k]))
+			break;
+
+		depth++;
+	}
+
+	return depth;
+}
 
 static int MpBotFleeWant(CAR_DATA* mine, int away)
 {
-	int best = away, bestScore = -9999, i;
+	static int lastLogged = -1;
+	int best = away, bestScore = -9999, bestDepth = 0, i;
 
-	for (i = -4; i <= 4; i++)
+	for (i = -MPBOT_FLEE_SPAN; i <= MPBOT_FLEE_SPAN; i++)
 	{
 		int d = (away + i * MPBOT_FLEE_FAN) & 0xfff;
-		int near = MpBotSpotClear(mine, d, 1400) ? 1 : 0;
-		int far = MpBotSpotClear(mine, d, 2800) ? 1 : 0;
+		int depth = MpBotCorridorDepth(mine, d);
 
-		/* openness first, then how much of "away" it keeps: a clear heading 45
-		 * degrees off still beats a blocked one straight back. */
-		int score = near * 4 + far * 2 - (i < 0 ? -i : i);
+		/* A ROAD BEATS A GAP: depth (how far it stays open) is worth more than
+		 * pointing exactly away, so the flee turns down a street rather than running
+		 * at the wall behind it. The |i| penalty still stops it turning tail and
+		 * driving AT the pursuer just because that way happens to be a long road. */
+		int score = depth * 3 - (i < 0 ? -i : i) * 2;
 
 		if (score > bestScore)
 		{
 			bestScore = score;
+			bestDepth = depth;
 			best = d;
 		}
 	}
+
+	/* Make the scan visible: without this there is no way to tell a fleer that is
+	 * choosing open ground from one that is not. Only when it differs from straight
+	 * back, and only on change, so a run is readable rather than a wall of lines. */
+	if (best != away && best != lastLogged && gMpCtx != NULL)
+	{
+		lastLogged = best;
+		gMpCtx->jer_log(gMpCtx,
+			"[mp] chase: flee scan - straight back is not the way out, heading %d of 4096 (open %d range(s)%s)\n",
+			best, bestDepth, bestDepth >= MPBOT_FLEE_ROAD ? ", a road" : "");
+	}
+	else if (best == away)
+		lastLogged = -1;
 
 	return best;
 }
@@ -244,7 +303,7 @@ static int MpBotChase(int fight)
 	MP_PLAYER* me = MpLocalPlayer();
 	CAR_DATA* mine;
 	CAR_DATA* tgt = NULL;
-	static int stuckFrames, turnFrames, turnDir, turnPulse, backFrames, backDir;
+	static int stuckFrames, turnFrames, turnDir, turnPulse, backFrames, backDir, holding;
 	int k;
 
 	if (me == NULL || me->carId < 0)
@@ -442,12 +501,21 @@ static int MpBotChase(int fight)
 
 		dist = (long)dx * (long)dx + (long)dz * (long)dz;
 
-		if (!flee && dist < 900L * 900L)
-		{
-			/* The chaser is on top of the runner: coast to a stop and just face
-			 * them, so the pair does not ram itself out of sight. */
+		/* FOLLOWING AT MINIMUM DISTANCE is not a reason to do anything dramatic. The
+		 * chaser used to panic-turn the moment the heading error went large, which at
+		 * close range happens constantly as the two cars swap sides, so the pair never
+		 * settled. Hysteresis rather than a derivative: inside MPBOT_FOLLOW_IN stop and
+		 * wait with the nose on them, and only take the chase up again once the gap has
+		 * actually reached MPBOT_FOLLOW_OUT. */
+		if (flee)
+			holding = 0;
+		else if (dist < MPBOT_FOLLOW_IN * MPBOT_FOLLOW_IN)
+			holding = 1;
+		else if (dist > MPBOT_FOLLOW_OUT * MPBOT_FOLLOW_OUT)
+			holding = 0;
+
+		if (holding)
 			pad = (adiff > 96) ? ((diff > 0) ? CAR_PAD_LEFT : CAR_PAD_RIGHT) : 0;
-		}
 		else if (adiff > 1500)
 		{
 			/* The peer is behind us: TURN ROUND, never reverse. Full lock with the

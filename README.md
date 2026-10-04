@@ -203,10 +203,23 @@ the spot instead of chasing across the map.
 
 The fleeing side scans rather than running blind. 180 degrees from the pursuer is one fixed
 heading, so when a wall is there the fleer has nothing else in mind and circles the corner
-it just ran into; `MpBotFleeWant` sweeps a fan of headings that all still gain ground and
-takes the one with the most room, which is what "flee towards something open" has to mean
-without a route. This is still a greedy, reactive probe: it cannot plan around a building,
-and a pair measured 30 recoveries in 40 s even with the changes above. A real fix wants a
+it just ran into. `MpBotFleeWant` sweeps a fan of headings (up to +/- 135 degrees in 22.5
+degree steps) and scores each by how far its CORRIDOR stays open - a heading still clear at
+4800 units is a road, one that clears 1200 and then stops is a driveway into a wall - so the
+flee turns down a street instead of into the wall behind it. The corridor test probes the
+lines either side of the heading as well, because probing the centre line alone let it pick
+headings that cleared walls by centimetres (the "it grazes along walls" symptom). Measured:
+334 of 398 flee decisions in one 45 s pair were roads, 240 of them at full depth. A wide-open
+street a few degrees off "straight back" therefore beats a narrow gap dead astern.
+
+Following at minimum distance is not a reason to do anything dramatic. Inside
+`MPBOT_FOLLOW_IN` (900) the chaser stops and waits with its nose on the target, and only
+takes the chase up again once the gap has reached `MPBOT_FOLLOW_OUT` (2200). Two thresholds
+rather than a distance derivative, so it cannot flicker between chasing and waiting; the
+panic-turn at close range is gone. The same run: 18 recoveries, down from 31 over 45 s.
+
+None of this is a pathfinder. It is a greedy, reactive probe with no lookahead, so it still
+cannot plan around a building - 10 of those 18 recoveries were wedges. A real fix wants a
 lookahead or a coarse route, and that is a separate unit, not a tweak.
 
 A run wants `lost=0` and `dumps=0`.
