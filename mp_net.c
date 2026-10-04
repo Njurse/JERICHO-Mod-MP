@@ -82,7 +82,6 @@
 #  define MP_SHUT_WR		SHUT_WR
 #endif
 
-#define MP_SND_TIMEOUT_MS	250
 #define MP_CLOSE_GRACE_MS	2000	/* how long a half-closed (refused) peer may
 								 * take to read its rejection before we
 								 * stop waiting and close the socket */
@@ -245,12 +244,22 @@ static void MpSetNonBlocking(SOCKET s, int on)
 #endif
 }
 
+/* Connection tuning. TCP_NODELAY only.
+ *
+ * SO_SNDTIMEO used to be set here too (250 ms), as belt-and-braces against a
+ * blocking send stalling the frame, and it was WRONG to have it: the session
+ * sockets are NON-BLOCKING (MpSetNonBlocking), so nothing here can wait on a
+ * send, and on Windows the stack still enforces SO_SNDTIMEO on such a socket --
+ * the documented outcome of it tripping is an ABORTED connection, which is
+ * exactly the WSAECONNABORTED (10053) that "send failed" reported. Removed
+ * rather than lowered: there is no timeout to want. (The disconnects themselves
+ * turned out to be the clock underflow in the idle timeout -- see MpElapsedMs --
+ * but a timeout that can abort a healthy socket has no business here either.) */
 static void MpTuneConn(SOCKET s)
 {
 	int one = 1;
-	int sndTimeout = MP_SND_TIMEOUT_MS;
+
 	setsockopt(s, IPPROTO_TCP, TCP_NODELAY, (const char*)&one, sizeof(one));
-	setsockopt(s, SOL_SOCKET, SO_SNDTIMEO, (const char*)&sndTimeout, sizeof(sndTimeout));
 }
 
 static void MpDropConn(int idx, const char* why);	/* used by the send queue */
@@ -267,6 +276,25 @@ static int MpWouldBlock(void)
 #else
 	return errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR;
 #endif
+}
+
+/* Milliseconds between two of OUR clock reads, never negative.
+ *
+ * A timestamp stamped DURING a poll can be LATER than the `now` the poll read at
+ * its top: MpNetPoll reads the clock once and then, several steps later, the
+ * receive path stamps each arrival as it happens. GetTickCount moves in ~15 ms
+ * steps, so an arrival in this poll is regularly stamped one tick ahead of `now`.
+ * `now - then` is then a small negative number -- and in UNSIGNED arithmetic that
+ * is a huge positive one, so `(now - lastRecvMs) > idle_drop_ms` was TRUE in the
+ * very poll that heard from the peer: the connection was dropped for "timeout"
+ * immediately after a successful read, on both ends, once every few tens of
+ * seconds of play. That is the long-standing "it disconnects after about a
+ * minute" report. Always compare via this helper. */
+static unsigned long MpElapsedMs(unsigned long now, unsigned long then)
+{
+	long d = (long)(now - then);
+
+	return (d < 0) ? 0UL : (unsigned long)d;
 }
 
 /* Write whatever is queued for this peer. 1 = still fine (possibly with bytes
@@ -293,8 +321,22 @@ static int MpFlushConn(int idx)
 			continue;
 		}
 
-		if (n < 0 && MpWouldBlock())
-			return 1;		/* it will take more next poll */
+		if (n < 0)
+		{
+			/* Capture the error BEFORE MpWouldBlock(), which asks the stack
+			 * again. The recv path already says which errno it saw; the send
+			 * path used to say nothing at all, so the one failure that ends a
+			 * session ("send failed") arrived with no code attached. */
+			int err = MP_LAST_ERROR();
+
+			if (MpWouldBlock())
+				return 1;	/* it will take more next poll */
+
+			if (gMpCtx != NULL)
+				gMpCtx->jer_log(gMpCtx,
+					"[mp] send error %d conn=%d queued=%d\n",
+					err, idx, c->sbufLen - c->sbufOff);
+		}
 
 		return 0;			/* a real error: this peer is gone */
 	}
@@ -929,7 +971,7 @@ void MpClientConnectPoll(unsigned long now)
 	if (select((int)gConnectingSock + 1, NULL, &wfds, &efds, &tv) <= 0)
 	{
 		/* not resolved yet -- only give up after the bounded wait */
-		if ((now - gConnectingSinceMs) > (unsigned long)MP_CONNECT_TIMEOUT_MS)
+		if (MpElapsedMs(now, gConnectingSinceMs) > (unsigned long)MP_CONNECT_TIMEOUT_MS)
 			MpJoinFail("timed out");
 
 		return;
@@ -1761,7 +1803,7 @@ void MpNetPoll(int waitMs)
 	 * load, a long pause, a debugger. The peers' recv timers went stale because
 	 * we were not listening, not because they went away, so credit that time
 	 * back rather than dropping a healthy connection. */
-	if (gLastPollMs != 0 && (now - gLastPollMs) > (unsigned long)MP_CONN_TIMEOUT_MS)
+	if (gLastPollMs != 0 && MpElapsedMs(now, gLastPollMs) > (unsigned long)MP_CONN_TIMEOUT_MS)
 	{
 		for (i = 0; i < MP_MAX_PLAYERS; i++)
 		{
@@ -1789,7 +1831,7 @@ void MpNetPoll(int waitMs)
 		/* a peer we refused: give it time to read the refusal, then let it
 		 * go even if it never closes its side */
 		if (gConn[i].used && gConn[i].closing &&
-			(now - gConn[i].closingSinceMs) > MP_CLOSE_GRACE_MS)
+			MpElapsedMs(now, gConn[i].closingSinceMs) > MP_CLOSE_GRACE_MS)
 		{
 			MpDropConn(i, "refusal not acknowledged");
 			continue;
@@ -1804,7 +1846,7 @@ void MpNetPoll(int waitMs)
 		 * when the host was still loading. Our own link is bounded by the idle
 		 * timeout below (which the busy grace stands down during a load). */
 		if (gConn[i].used && gConn[i].hostSide && !gConn[i].hsDone &&
-			(now - gConn[i].acceptedMs) > MP_HANDSHAKE_TIMEOUT_MS)
+			MpElapsedMs(now, gConn[i].acceptedMs) > MP_HANDSHAKE_TIMEOUT_MS)
 		{
 			MpDropConn(i, "no handshake reply");
 			continue;
@@ -1818,7 +1860,7 @@ void MpNetPoll(int waitMs)
 		/* idle_drop_ms = 0 turns this off entirely: a stalled/very-busy peer is
 		 * then left connected rather than ejected mid-playtest (see mp.ini). */
 		if (gConn[i].used && gMp.config.idleDropMs > 0 &&
-			(now - gConn[i].lastRecvMs) > (unsigned long)gMp.config.idleDropMs && !MpBusy() && gMp.running)
+			MpElapsedMs(now, gConn[i].lastRecvMs) > (unsigned long)gMp.config.idleDropMs && !MpBusy() && gMp.running)
 			MpDropConn(i, "timeout");
 	}
 
@@ -1856,7 +1898,7 @@ static void MpLinkTick(unsigned long now)
 
 			gMpCtx->jer_log(gMpCtx,
 				"[mp] link: conn %d frame %lu heard %lums ago queued %d tx=%lu\n",
-				i, gMp.frame, now - c->lastRecvMs,
+				i, gMp.frame, MpElapsedMs(now, c->lastRecvMs),
 				c->sbufLen - c->sbufOff, c->txBytes);
 		}
 
