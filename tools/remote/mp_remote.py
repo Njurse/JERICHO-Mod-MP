@@ -377,7 +377,14 @@ def pull_logs(a, since=None):
     if os.path.isfile(local_dump):
         mtime = os.path.getmtime(local_dump)
 
-        if (since is None) or (mtime >= since):
+        if since is None:
+            # the bare `logs` command has no run to compare against, so it must not
+            # claim the dump is "from this run" -- say how old it is and let the
+            # reader judge
+            shutil.copyfile(local_dump, os.path.join(WORK, "local", "JERICHO.dmp"))
+            print(f"  local: a crash dump is present, {(time.time() - mtime) / 60.0:.1f} min "
+                  "old (no run to compare against -- `logs` was asked directly)")
+        elif mtime >= since:
             shutil.copyfile(local_dump, os.path.join(WORK, "local", "JERICHO.dmp"))
             print("  local: CRASH DUMP from this run (an access violation, not an Alt+F4)")
         else:
