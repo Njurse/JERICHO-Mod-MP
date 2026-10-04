@@ -95,3 +95,10 @@ IF IT WILL NOT CONNECT
 * Nothing happens on `start` -- check the agent's own log, mp_agent.log, next to
   the game. It records every command it was given (minus the token) and what it
   did about it.
+* `start` fails with "Cannot validate argument on parameter 'ArgumentList'. The
+  argument is null or empty" -- that is an mp_agent.ps1 from before 2026-10-04.
+  It handed Start-Process an empty argument list to mean "no arguments", and
+  Windows PowerShell 5.1 rejects an empty collection outright, so a start with no
+  arguments could never launch the game (nor could a restart-after-update of a
+  game that had been started that way). Fixed in this copy: the parameter is left
+  out entirely when there is nothing to pass.

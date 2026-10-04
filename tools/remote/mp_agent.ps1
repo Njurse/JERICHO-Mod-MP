@@ -618,7 +618,21 @@ function Invoke-Start {
 
     Write-Own ("start: {0} {1}" -f $Exe, ($argv -join ' '))
     $script:LastArgs = $ArgsLine
-    $script:Game = Start-Process -FilePath $Exe -ArgumentList $argv -WorkingDirectory $Root -PassThru
+
+    # -ArgumentList is OMITTED when there is nothing to pass, by SPLATTING the
+    # parameters. Windows PowerShell 5.1 validates the parameter and rejects an empty
+    # collection outright:
+    #   Cannot validate argument on parameter 'ArgumentList'. The argument is null or
+    #   empty. Provide an argument that is not null or empty, and then try the command
+    #   again.
+    # so `start` with no arguments -- a legitimate request; the game then uses its own
+    # config.ini and defaults -- failed with that message instead of launching, and so
+    # did any restart-after-update where the game had been started with no arguments.
+    # Splatting is the only way to leave a parameter out entirely.
+    $sp = @{ FilePath = $Exe; WorkingDirectory = $Root; PassThru = $true }
+    if ($argv.Count -gt 0) { $sp['ArgumentList'] = $argv }
+
+    $script:Game = Start-Process @sp
     return ("OK started (pid {0}) on build {1}" -f $script:Game.Id, (Get-BuildStamp))
 }
 
