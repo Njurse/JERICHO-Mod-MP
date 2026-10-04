@@ -91,9 +91,19 @@ def identity_check(host_text, client_text, guest_pick=True):
     """
     problems = []
 
-    for m in re.finditer(r"\[mp\] player 0 changed car: slot 0 -> \d+ "
-                         r"\(the session city model (\d+)\)", client_text):
+    # The picker's OWN car. Identified by the ROW FIELD the engine logs ([local=1 ...]):
+    # the old form matched any "player 0 changed car: slot 0 -> ..." line, which is the
+    # HOST's row on a client (id 0, isLocal 0) rebuilding the host's own car - correct
+    # behaviour, reported as this failure. A remote row and the local row both print
+    # "player 0" depending on the seat, so the row field is the only reliable marker.
+    for m in re.finditer(r"\[mp\] player \d+ changed car: [^\n]*"
+                         r"\(the session city model (\d+)\)[^\n]*\[local=1",
+                         client_text):
         problems.append(f"the picker's own car is the SESSION city's model {m.group(1)}")
+
+    for m in re.finditer(r"\[mp\] rebuilt player \d+'s car on slot \d+ "
+                         r"\(model \d+ from the session city\)[^\n]*\[local=1", client_text):
+        problems.append("the picker's own car was rebuilt from the session city")
 
     told = set(re.findall(r"\[carhacks/net\] told the session: (\w+) model (\d+)", client_text))
     seen = set(re.findall(r"\[carhacks/net\] peer \d+ drives (\w+) model (\d+)", host_text))

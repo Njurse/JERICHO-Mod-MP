@@ -1167,6 +1167,59 @@ static void MpHandleRoster(const unsigned char* p, int len)
 		}
 	}
 
+	/* EXACTLY ONE ROW IS OURS, and it must be marked after EVERY roster.
+	 *
+	 * The mark is what the whole local-car path keys on - MpLocalPlayer(), which car is
+	 * ours to send state for, and which row mp's remote-car machinery (adopt, rebuild,
+	 * release) must leave alone. The adopt pass above can only mark a row it SEES, and a
+	 * client's own row can be added before localPlayerId is known (it comes from WELCOME,
+	 * which is not guaranteed to precede the first roster), leaving no row marked local at
+	 * all. Measured on the rig: a client's log contained NO row with local=1, so on that
+	 * machine MpLocalPlayer() answered NULL.
+	 *
+	 * Re-asserted here, unconditionally, and logged only when the mark actually changes, so
+	 * a roster that arrives every couple of seconds is not noisy. */
+	if (gMp.localPlayerId >= 0)
+	{
+		MP_PLAYER* me = NULL;
+		int changed = 0;
+
+		for (i = 0; i < MP_MAX_PLAYERS; i++)
+		{
+			MP_PLAYER* row = &gMp.players[i];
+			int should = (row->active && row->id == gMp.localPlayerId) ? 1 : 0;
+
+			if (row->isLocal != should)
+			{
+				row->isLocal = should;
+				changed = 1;
+			}
+
+			if (should)
+				me = row;
+		}
+
+		/* The roster named nobody as us: adopt our own row, so the local path always has
+		 * one to work with (a client whose row never arrived would otherwise have no local
+		 * player at all). */
+		if (me == NULL)
+		{
+			me = MpAddPlayer(gMp.localPlayerId, gMp.config.playerName, 1);
+
+			if (me != NULL)
+			{
+				me->isLocal = 1;
+				changed = 1;
+			}
+		}
+
+		if (changed && gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx,
+				"[mp] local row is player %d (row %d, car %d) - from localPlayerId\n",
+				gMp.localPlayerId, (me != NULL) ? (int)(me - gMp.players) : -1,
+				(me != NULL) ? me->carId : -1);
+	}
+
 	/* AND REMOVE THE ONES THE ROSTER NO LONGER NAMES - they have left.
 	 *
 	 * This was the whole of "cars still dont disappear when the clients disconnect": the
