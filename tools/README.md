@@ -306,6 +306,45 @@ rows so no pad is needed:
 WHICH city's roster you are browsing (the pick becomes a cross-city car), so the
 pair covers "scroll the cars", "scroll the cities" and the pick that follows.
 
+## The driving bot, and the proximity it keeps
+
+The bot (mp/mp_bot.c, on only when `MP_BOT` says so) is a **sparring partner, not a
+navigator**: it probes for scenery with the engine's own `CellEmpty` and steers around what
+it sees, but it does not know the roads and will not drive a route. Its job is to make two
+(or three) real player cars meet, collide and hand those collisions to their owners.
+
+`--bot chase` (the rig's default) is the shape that does it: **the host flees and every
+joiner chases the host**. Two rules keep the pair close enough to actually touch, because
+the flee has no business opening the gap forever:
+
+| gap | what the fleeing host does |
+|---|---|
+| under 2500 | full pace, proper running away |
+| 2500 to 5000 | lifts the throttle - it stops widening the gap and lets the chasers close it |
+| over 5000 | stops fleeing and drives BACK at the chasers, so they meet from both ends |
+
+`MP_BOT_GAP=<ease>,<turnback>` moves both thresholds (defaults `2500,5000`) without a
+rebuild - how close the pair should stay is a feel question. The chase log line names the
+branch it took: `flee` / `flee-hold` (easing) / `loop` (coming back) / `chase` / `fight`,
+printed once a second with the gap as `d=x,z`, `diff` (steering error), the pad bytes and
+the stuck count.
+
+Measured before and after the proximity rule (3 seats, chase):
+
+     before:  d=938 -> 6017 -> 11607 -> 20077 -> 28434 -> 34924 (stuck=37) -> 38246 (stuck=97)
+     after:   host max|d|=1939 mean=936, chaser max|d|=3621 mean=2098, max stuck 14
+
+Useful assertions for a rig run (the harness takes `--until`/`--forbid` regexes over the
+seat logs):
+
+    --forbid "d=-?[0-9]{5}"     never 10,000+ units apart (the runaway this replaced)
+    --forbid "stuck=[5-9][0-9]" never wedged for a second or more
+    --until  "hit: "            a collision was actually handed off
+
+A PASS from this rig also needs `lost=0` and `dumps=0`; note that a mid-run peer loss
+still shows up as `lost=2` occasionally - that is the pre-existing disconnect, not the
+bot (an unmodified-build control reproduces it).
+
 ## Giving each seat its own pick
 
 `--seat-env SEAT=KEY=VALUE` (repeatable; seats are `host`, `client` = every

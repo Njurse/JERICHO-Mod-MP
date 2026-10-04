@@ -500,6 +500,21 @@ Markers worth knowing: `launching: city N mode M` (mode 0 = the mission ladder, 
 the launch went wrong), `car: player N slot S`, `added N remote player car(s)`,
 `map: drew N remote blip(s)`, `list:` (pause-menu rows), `peer dropped (<why>)`.
 
+### The driving bot is a sparring partner, not a navigator
+
+`--bot chase` on the pair rig puts the player cars under mp's own test bot
+(`mp_bot.c`, live only when `MP_BOT` says so) so that a run has two cars that actually
+meet. It is deliberately not navigation: it probes for scenery with the engine's own
+`CellEmpty` and steers around what it sees - no road knowledge, no route, and nothing
+to build on if the requirement ever becomes "drive to a place". What it does have is
+PROXIMITY, because a flee that runs away forever produces no collisions at all:
+measured, the host used to reach d=38246 and wedge there. It now eases off past 2500
+units and, past 5000, turns round and drives back at its pursuers
+(`MP_BOT_GAP=<ease>,<turnback>`), which is what keeps the pair inside a few thousand
+units so contacts happen. `tools/README.md` has the table and the assertion regexes;
+a PASS from that rig wants `lost=0` and `dumps=0`, and the occasional `lost=2` is the
+pre-existing mid-run disconnect rather than the bot.
+
 ---
 
 ## 12. Roadmap
