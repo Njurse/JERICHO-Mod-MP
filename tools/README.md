@@ -109,8 +109,48 @@ update it there (e.g. `WELCOME` is `<12BIB`, 12xu8 + u32 seed + u8 hostCar; a
 launchers (PLAY_HOST/JOIN) never set it, so it is the only way to test what a player
 actually runs (a bug that appears only without `MP_DEBUG` is invisible otherwise).
 
-### Ending a run early, and trusting the tail
+### Asserting a result, not just an absence: `--require`, and `mp_tries.py`
 
+`--forbid` says what must never appear. `--require` is its mirror: the run FAILS
+unless the line appears.
+
+```
+--require "draws exactly that"              any seat may carry it
+--require "client=[carhacks/net] peer 0 drives CHICAGO"   that seat's log only
+```
+
+It exists because "nothing crashed" is not the same as "the right car was drawn", and
+the difference was invisible in a wall of logs. A missing `--require` is reported by
+seat and pattern, so the failure names the thing that did not happen.
+
+`mp_tries.py` runs the shape that matters most as ONE command: a host on its own city
+and a client that joins picking a car from another city, repeated per try, with a
+per-try table plus the identity and page evidence from BOTH seats.
+
+```
+python JERICHO/MODS/mp/tools/mp_tries.py                 # rio:1, vegas:1, havana:12
+python .../mp_tries.py --keep --seconds 70 --try havana:12 --require "draws exactly that"
+```
+
+Each try is a full pair-run of its own, so the client starts from nothing -- exactly
+as a fresh join does. `--keep` copies each try's two logs into `.mp-tries/tryN/`
+before the next try reuses the pair dirs, so the evidence survives.
+
+Two things it prints that a bare verdict does not:
+
+* **the identity evidence per try**, from both seats -- "correct on the host but the
+  client was still the old car" is a real failure mode here, and it is only visible if
+  the two seats are read separately;
+* **the page evidence per try** -- whether the imported pages were pool-pinned
+  (`2 pin(s) (2 in the pool)` vs `(0 in the pool)`), and any line where the palette
+  walk refused or evicted a world page.
+
+A note on the numbers: `--try CITY:MODEL` names the car in the ROSTER menu, and the
+harness's slot numbers do not line up with the engine's model numbers (`--try rio:1`
+loads RIO model 2, because the roster's first row is not the city's model 0). Read the
+try as "a car from that city"; the evidence lines carry the exact (city, model).
+
+### Ending a run early, and trusting the tail
 `mp_localpair.py` judges a RUNNING game -- `verdict()` reads both logs before anything
 is killed -- so what it can see is decided by what the game has actually written to
 disk. Two levers make that reliable, and the harness sets both unless you override

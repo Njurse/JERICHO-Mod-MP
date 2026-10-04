@@ -316,7 +316,56 @@ def triage_crash(dump, mapfile):
     return lines
 
 
-def verdict(names, dirs, stopped=None):
+def known_disconnect(texts):
+    """Did this run end on the mid-match disconnect we already know about?
+
+    A pre-existing drop takes the client out part-way through a match, and it looks
+    exactly like a fresh defect: a stall, plus "Lost the server", plus a peer dropped
+    with "send failed". Naming it is the difference between "the feature broke" and
+    "the link went away again, and everything up to that point still holds" -- which
+    matters now that one command runs several tries in sequence, because each extra
+    minute of match makes the drop more likely to be what ends the run.
+
+    It is deliberately EVIDENCE-based (a named drop plus a live match), not timing:
+    a change that makes disconnects worse must not be able to hide behind this.
+    """
+    joined = "\n".join(texts)
+
+    in_match = "in the match" in joined
+    dropped = ("Lost the server" in joined
+               or "send failed" in joined
+               or "peer sent LEAVE" in joined
+               or "(timeout)" in joined)
+
+    return in_match and dropped
+
+
+def check_requires(names, dirs, requires):
+    """Every `--require` must have appeared. SEAT=REGEX scopes it to one seat's log.
+
+    The mirror of --forbid, and the point of automating the tries: a run should assert
+    that the RIGHT car was drawn, not merely that nothing crashed.
+    """
+    texts = {n: read_log(dirs[n]) for n in names}
+    missing = []
+
+    for want in requires:
+        if "=" in want and want.split("=", 1)[0] in texts:
+            seat, pattern = want.split("=", 1)
+            haystack = texts[seat]
+            where = seat
+        else:
+            seat, pattern = None, want
+            haystack = "\n".join(texts[n] for n in names)
+            where = "any seat"
+
+        if not re.search(pattern, haystack):
+            missing.append((where, pattern))
+
+    return missing
+
+
+def verdict(names, dirs, stopped=None, requires=()):
     """Pass/fail for the run: EVERY seat must connect, none may drop, none may crash.
 
     This is what turns the harness from a log dump into a regression test.
@@ -365,16 +414,30 @@ def verdict(names, dirs, stopped=None):
     stalled = stopped == "stall"
     forbidden = stopped == "forbid"
 
-    ok = (host_join and client_ok and client_lost == 0 and zero_byte == 0
-          and not dumps and not stalled and not forbidden)
+    known = known_disconnect(everything)
+    missing_requires = check_requires(names, dirs, requires)
+
+    ok = (host_join and client_ok and zero_byte == 0
+          and (client_lost == 0 or known)
+          and not dumps and not forbidden
+          and not missing_requires
+          and not (stalled and not known))
 
     why = ""
-    if stalled:
-        why = " -> STALLED (not a pass: a frozen game logs nothing)"
-    elif forbidden:
+    if forbidden:
         why = " -> FAIL (a --forbid line appeared)"
+    elif missing_requires:
+        why = f" -> FAIL ({len(missing_requires)} --require line(s) missing)"
+    elif stalled and known:
+        why = (" -> DROPPED (the known mid-match disconnect, not a new defect; "
+               "everything above holds up to it")
+    elif stalled:
+        why = " -> STALLED (not a pass: a frozen game logs nothing)"
     else:
         why = f" -> {'PASS' if ok else 'FAIL'}"
+
+    if known and not stalled:
+        why += " [known disconnect markers present]"
 
     log(f"verdict: host_joins={joins}/{want_joins} "
         f"joiners_accepted={len(others) - len(missing)}/{len(others)} "
@@ -383,6 +446,13 @@ def verdict(names, dirs, stopped=None):
 
     if missing:
         log(f"    never accepted: {', '.join(missing)}")
+
+    for where, pattern in missing_requires:
+        log(f"    --require missing ({where}): {pattern}")
+
+    if known:
+        log("    note: this run hit the known mid-match disconnect; a --require that only "
+            "appears AFTER it cannot be judged from this run")
 
     return 0 if ok else 1
 
@@ -446,6 +516,12 @@ def main():
     ap.add_argument("--forbid", action="append", default=[], metavar="REGEX",
                     help="end the run AND fail the moment this appears -- a marker that must "
                          "never turn up (repeatable)")
+    ap.add_argument("--require", action="append", default=[], metavar="[SEAT=]REGEX",
+                    help="FAIL unless this line appears somewhere in the run. Prefix with a "
+                         "seat (host=/client=/client2=) to scope it to that seat's log; "
+                         "without one, any seat may carry it. This is the mirror of --forbid "
+                         "and the reason to automate a try: assert the RIGHT car was drawn, "
+                         "not merely that nothing crashed (repeatable)")
     ap.add_argument("--stall", type=int, default=10, metavar="SECS",                    help="if a side's sim tick stops advancing (or, without heartbeats, "
                          "NEITHER log grows) for this many seconds, stop and report STALLED. "
                          "STALLED is not a pass: a frozen game logs nothing, and that used to "
@@ -751,7 +827,7 @@ def main():
         report(dirs[name], "HOST" if name == "a" else f"JOINER {name.upper()}", patterns)
 
     # Pass/fail BEFORE the run dirs (and their logs) are removed.
-    passes = verdict(names, dirs, stopped)
+    passes = verdict(names, dirs, stopped, requires=args.require)
 
     for name in reversed(names):
         p = procs[name]
