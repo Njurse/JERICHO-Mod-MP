@@ -182,3 +182,42 @@ mod.
 `mp = 1` and everything else `0`: cainescrossfire and friends rewrite car handling,
 and a run with them on is not a run of this mod. Check the boot log's module
 inventory — it names every module and whether the modlist or a default enabled it.
+
+---
+
+## 9. Who can join whom
+
+Every join is checked by the **host**, on its side, in this order:
+
+| check | when | what it means |
+| --- | --- | --- |
+| `protoVersion` | always | the two builds speak the same wire protocol (`MP_PROTO_VERSION`) |
+| `sdkVersion` | always | same JERICHO SDK |
+| enabled-mod manifest | per `mod_check` in `mp.ini` | `OFF` admits anyone, `VERSION` wants the same enabled mod ids, `EXACT` their versions too |
+| build identity | only with `Strict Version` on — **default off** | same **release series** |
+
+The build identity compares the **series** of `JERICHO_BUILD_VERSION`, not the
+string. That string is `git describe --tags --always --dirty`, so one release
+reads differently depending on who built it and how — and comparing it raw
+refused every pair that was not identical in provenance, which is every
+cross-platform pair and every pair where one side built the game locally:
+
+| what a build reports | series | joins a `0.9.0` host under strict? |
+| --- | --- | --- |
+| `0.9.0` — the tagged release | `0.9.0` | yes |
+| `v0.9.0` — same, before the leading v is stripped | `0.9.0` | yes |
+| `0.9.0-dirty` — built on a machine whose tree looked dirty | `0.9.0` | yes |
+| `0.9.0-3-gabc1234` — a tree three commits past the tag | `0.9.0` | yes |
+| `0.9.1` | `0.9.1` | no — different release |
+| `alpha-2-g26b6fa4a` — the rolling prerelease | itself | no |
+
+A string with **no version in front is left whole**, so strict stays as strict as
+it can be when there is no release to be strict about: the rolling prerelease's
+`alpha` tag, and a tree with no tags fetched at all, must still match exactly.
+
+**Only the host applies this**, so the change is a loosening rather than a new
+handshake: a host running an older build still hashes the raw string and keeps
+refusing its own series, and no `MP_PROTO_VERSION` bump was needed. A Windows
+release and a Linux release of one version join under strict; for a mixed pair,
+at least the host has to be running a build that knows what a series is.
+

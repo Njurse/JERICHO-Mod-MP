@@ -1562,19 +1562,29 @@ static void MpHandleHello(int connIndex, const unsigned char* p, int len)
 	}
 
 	/* Protocol and SDK version are always required -- they decide whether the
-	 * two builds can speak to each other at all. The BUILD hash is not: it is
-	 * FNV1a of "git describe --tags --always --dirty", so it changes on every
-	 * commit and even on an unclean tree, and two people playing from dev
-	 * builds would never match. It is now behind the lobby's opt-in
-	 * "Strict Version" toggle, which is off by default. */
+	 * two builds can speak to each other at all. The BUILD hash is not: it
+	 * compares the RELEASE SERIES of JERICHO_BUILD_VERSION, not the string
+	 * itself, because the string is `git describe --tags --always --dirty` and
+	 * the same release reads differently depending on who built it how
+	 * ("0.9.0", "0.9.0-dirty", "0.9.0-3-gabc1234"). Comparing the raw string
+	 * refused every pair that was not identical in provenance, which is every
+	 * cross-platform pair and every pair where one side built locally. It is
+	 * still behind the lobby's opt-in "Strict Version" toggle, default off. */
 	if (h.protoVersion != (uint16_t)MP_PROTO_VERSION ||
 	    h.sdkVersion != (uint16_t)JERICHO_SDK_VERSION ||
 	    (gMp.config.strictVersion && h.gameBuild != MpBuildHash()))
 	{
 		if (gMpCtx)
-			gMpCtx->jer_log(gMpCtx, "[mp] reject: version mismatch (proto %d/%d, sdk %d/%d, build %d/%d, strict=%d)\n",
+		{
+			char series[64];
+
+			/* Log the SERIES and not just the two hashes: a player comparing
+			 * builds needs to see which builds disagreed. */
+			MpBuildSeries(series, sizeof(series));
+			gMpCtx->jer_log(gMpCtx, "[mp] reject: version mismatch (proto %d/%d, sdk %d/%d, strict=%d, host series %s build %d, peer build %d)\n",
 				h.protoVersion, MP_PROTO_VERSION, h.sdkVersion, JERICHO_SDK_VERSION,
-				h.gameBuild, MpBuildHash(), gMp.config.strictVersion);
+				gMp.config.strictVersion, series, MpBuildHash(), h.gameBuild);
+		}
 
 		MpSendReject(connIndex, MP_REJECT_VERSION, "game/protocol version mismatch");
 		MpConnShutdownGraceful(connIndex);

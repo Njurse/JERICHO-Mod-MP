@@ -264,8 +264,9 @@ void MpHandleMessage(int connIndex, const char* tag,
 /* ------------------------------------------------------------------ */
 /* Handshake / session bring-up (mp_session.c)                         */
 /* ------------------------------------------------------------------ */
-int  MpBuildManifest(MP_MOD_INFO* out, int max);	/* enabled mods; mp.c */
-unsigned short MpBuildHash(void);			/* game build digest; mp.c */
+int  MpBuildManifest(MP_MOD_INFO* out, int max);	/* enabled mods; mp_config.c */
+void MpBuildSeries(char* out, size_t outSize);		/* release series of JERICHO_BUILD_VERSION; mp_config.c */
+unsigned short MpBuildHash(void);			/* digest of that series; mp_config.c */
 
 void MpSendHello(void);			/* client -> host identity + manifest */
 int  MpBeginHost(void);			/* become host: listen + advertise + self row */

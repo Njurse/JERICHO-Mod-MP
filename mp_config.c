@@ -180,14 +180,78 @@ int MpBuildManifest(MP_MOD_INFO* out, int max)
 	return count;
 }
 
-/* Digest of the game build (JERICHO_BUILD_VERSION) so peers on different
- * exes are refused before anything else happens. */
-unsigned short MpBuildHash(void)
+/* The RELEASE SERIES of the build string, which is what "the same build" has to
+ * mean for two peers to be able to play together at all.
+ *
+ * JERICHO_BUILD_VERSION is `git describe --tags --always --dirty`, so one
+ * release reads differently depending on who built it and how:
+ *
+ *   "0.9.0"             the tagged release
+ *   "v0.9.0"            the same, before the leading v is stripped
+ *   "0.9.0-dirty"       CI, when the index stat cache was stale
+ *   "0.9.0-3-gabc1234"  a tree three commits past the tag
+ *
+ * Hashing THAT refused every pair that was not identical in provenance - which
+ * is every cross-platform pair not built in the same CI run, and every pair
+ * where one side built the game locally. The series is the leading version, and
+ * ONLY when there really is one:
+ *
+ *   "0.9.0"             -> "0.9.0"
+ *   "v0.9.0"            -> "0.9.0"
+ *   "0.9.0-dirty"       -> "0.9.0"
+ *   "0.9.0-3-gabc1234"  -> "0.9.0"
+ *   "8.0-978-gf36979a7" -> "8.0"
+ *   "alpha-2-g26b6fa4a" -> "alpha-2-g26b6fa4a"   no version to compare
+ *   "217642a"           -> "217642a"             bare sha, no tags were fetched
+ *
+ * A string with no version in front is left WHOLE, so strict stays as strict as
+ * it can be when there is no release to be strict about: the rolling
+ * prerelease's alpha tag, or a tree with no tags at all, must still match
+ * exactly.
+ *
+ * Only the HOST applies this (see the hello handler in mp_session.c), so a peer
+ * running an older build still sends a hash of the raw string and will keep
+ * refusing - both sides need a build that knows what a series is. */
+void MpBuildSeries(char* out, size_t outSize)
 {
 	const char* s = JERICHO_BUILD_VERSION;
+	size_t i = 0;
+
+	if (out == NULL || outSize == 0)
+		return;
+
+	if (s == NULL)
+		s = "";
+
+	if (*s == 'v' || *s == 'V')	/* release tags are spelled v0.9.0 */
+		s++;
+
+	while (i + 1 < outSize && ((s[i] >= '0' && s[i] <= '9') || s[i] == '.'))
+		i++;
+
+	if (i > 0 && s[0] >= '0' && s[0] <= '9' && memchr(s, '.', i) != NULL)
+	{
+		memcpy(out, s, i);
+		out[i] = '\0';
+		return;
+	}
+
+	/* no version to compare: keep the whole string, so this stays exact */
+	snprintf(out, outSize, "%s", JERICHO_BUILD_VERSION);
+}
+
+/* Digest of the RELEASE SERIES, so peers on the same release are admitted
+ * whatever their platform or build provenance, and peers on a different
+ * release are refused before anything else happens. */
+unsigned short MpBuildHash(void)
+{
+	char series[64];
+	const char* s;
 	unsigned int h = 2166136261u;
 
-	for (; s != NULL && *s != '\0'; s++)
+	MpBuildSeries(series, sizeof(series));
+
+	for (s = series; *s != '\0'; s++)
 	{
 		h ^= (unsigned char)*s;
 		h *= 16777619u;
