@@ -113,6 +113,20 @@ static int MpBotMode(void)
 	return 1;
 }
 
+/* Is the spot `len` units along heading `dir` clear of scenery? The engine's own test
+ * (CellEmpty, what the civ AI uses), with the same clearance -- so this asks the game,
+ * not a private model of it. */
+static int MpBotSpotClear(CAR_DATA* mine, int dir, int len)
+{
+	VECTOR p;
+
+	p.vx = mine->hd.where.t[0] + (int)(((long)rsin(dir) * len) >> 12);
+	p.vy = mine->hd.where.t[1];
+	p.vz = mine->hd.where.t[2] + (int)(((long)rcos(dir) * len) >> 12);
+
+	return CellEmpty(&p, 350);
+}
+
 /* chase/fight: drive the LOCAL car at (or, for the fleeing host, away from) the
  * nearest other player's car. Two instances then close the gap on their own,
  * which is how car-to-car collision and the two players meeting each other get
@@ -195,12 +209,19 @@ static int MpBotChase(int fight)
 
 		/* Scenery awareness, using the engine's OWN test: CellEmpty is what the
 		 * civ AI uses to know a spot is clear. Probe ALONG THE CAR'S VELOCITY
-		 * VECTOR (falling back to where we want to go when parked) and, if that
-		 * spot has scenery in it, take the first side heading whose probe is
-		 * clear. This is the awareness a straight line at the peer never had -- it
-		 * drove into the first building or tree between them. */
+		 * VECTOR (falling back to where we want to go when parked), at TWO ranges:
+		 * one look ahead is enough to notice a wall and not enough to steer around
+		 * one, because the car covers the near range before it can turn.
+		 *
+		 * The chosen sidestep is HELD for a while instead of re-decided every frame:
+		 * measured, the old code flipped between +448 and -448 from frame to frame
+		 * (the swinging `diff` in the log) and the car went nowhere. The hold is
+		 * dropped the moment the way it actually wants is clear again. */
 		{
-			static const int RPROBE = 1100;
+			static const int ranges[2] = { 1100, 2200 };
+			static const int step[6] = { 448, -448, 896, -896, 1344, -1344 };	/* nearest angle first */
+			static int holdDir = -1;
+			static int holdFrames = 0;
 			int pdir = want;
 			int vx = mine->st.n.linearVelocity[0];
 			int vz = mine->st.n.linearVelocity[2];
@@ -208,29 +229,38 @@ static int MpBotChase(int fight)
 			if ((long)vx * (long)vx + (long)vz * (long)vz > 400L * 400L)
 				pdir = ratan2(vx, vz) & 0xfff;
 
+			if (holdFrames > 0)
 			{
-				const int probe[3] = { pdir, (pdir + 448) & 0xfff, (pdir - 448) & 0xfff };
-				VECTOR p;
-				int i;
+				holdFrames--;
 
-				p.vx = mine->hd.where.t[0] + (int)(((long)rsin(probe[0]) * RPROBE) >> 12);
-				p.vy = mine->hd.where.t[1];
-				p.vz = mine->hd.where.t[2] + (int)(((long)rcos(probe[0]) * RPROBE) >> 12);
+				/* the way it wants is clear again: stop dodging */
+				if (MpBotSpotClear(mine, want, ranges[0]))
+					holdFrames = 0;
+				else
+					pdir = holdDir;		/* committed: keep going round the same side */
+			}
 
-				if (!CellEmpty(&p, 350))
+			if (!MpBotSpotClear(mine, pdir, ranges[0]) ||
+				!MpBotSpotClear(mine, pdir, ranges[1]))
+			{
+				int i, chosen = -1;
+
+				for (i = 0; i < 6; i++)
 				{
-					for (i = 1; i < 3; i++)
-					{
-						p.vx = mine->hd.where.t[0] + (int)(((long)rsin(probe[i]) * RPROBE) >> 12);
-						p.vy = mine->hd.where.t[1];
-						p.vz = mine->hd.where.t[2] + (int)(((long)rcos(probe[i]) * RPROBE) >> 12);
+					int d = (pdir + step[i]) & 0xfff;
 
-						if (CellEmpty(&p, 350))
-						{
-							want = probe[i];
-							break;
-						}
+					if (MpBotSpotClear(mine, d, ranges[0]) && MpBotSpotClear(mine, d, ranges[1]))
+					{
+						chosen = d;
+						break;
 					}
+				}
+
+				if (chosen >= 0)
+				{
+					holdDir = chosen;
+					holdFrames = 30;	/* ~0.5s at 60Hz: long enough to commit to the turn */
+					want = chosen;
 				}
 			}
 		}
@@ -249,7 +279,7 @@ static int MpBotChase(int fight)
 			 * it never moves, and a throttle-only test missed exactly that. */
 			if (spd < 4)
 			{
-				if (++stuckFrames > 100)
+				if (++stuckFrames > 40)
 				{
 					recoverFrames = recoverReverse ? 45 : 70;
 					recoverDir ^= 1;
