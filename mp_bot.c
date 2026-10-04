@@ -169,6 +169,20 @@ static int MpBotSpotClear(CAR_DATA* mine, int dir, int len)
 #define MPBOT_TURN_FRAMES	20	/* the handbrake part, ~0.3 s at 60 Hz */
 #define MPBOT_TURN_MIN_SPEED	10	/* below this a handbrake is a locked axle, not a turn */
 
+/* A dodge that is re-decided every half second reads as indecision: the car wiggles down
+the road instead of going anywhere. ~1.1 s at 60 Hz is long enough to commit to one side
+and short enough to abandon it when it stops helping. */
+#define MPBOT_DODGE_FRAMES	65
+
+/* Wedged is speed-below-4 for this long before anything is done about it. 40 frames was
+0.7 s of sitting in the corner first, which is most of why the pair looked lazy. */
+#define MPBOT_STUCK_FRAMES	24
+
+/* The ONE reverse the driving bots still use: backing out of a wall that is dead ahead,
+where turning on the throttle cannot work because the car cannot move at all. Bounded,
+and it does not alternate, so it cannot become the old reversing shuffle. */
+#define MPBOT_BACK_FRAMES	22	/* ~0.4 s */
+
 /* One frame of a turn-around. `dir` uses the callers' steering convention
  * (non-zero = left). `*frames` is the manoeuvre and `*pulse` the handbrake part
  * of it; both are decremented here. */
@@ -198,7 +212,7 @@ static int MpBotChase(int fight)
 	MP_PLAYER* me = MpLocalPlayer();
 	CAR_DATA* mine;
 	CAR_DATA* tgt = NULL;
-	static int stuckFrames, turnFrames, turnDir, turnPulse;
+	static int stuckFrames, turnFrames, turnDir, turnPulse, backFrames, backDir;
 	int k;
 
 	if (me == NULL || me->carId < 0)
@@ -222,11 +236,19 @@ static int MpBotChase(int fight)
 
 	/* The very primitive "pathfinder": a straight line at the peer is enough on
 	 * an open map, but the cars wedge on the first building and never meet again.
-	 * A wedge is cleared by TURNING (MpBotTurnPad), never by reversing - a
-	 * reverse moves the car back to where the wedge started, which is how the
-	 * pair ended up shuffling on the spot instead of chasing. NO WHEELSPIN
-	 * either: spinning the wheels is a grip loss, which is what made the cars
-	 * bobble and slide into the scenery. */
+	 * A wedge is cleared by TURNING (MpBotTurnPad) - a reverse moves the car back
+	 * to where the wedge started, which is how the pair ended up shuffling on the
+	 * spot instead of chasing - EXCEPT when a wall is dead ahead, where turning on
+	 * the throttle cannot work and a short back-out is the only thing that frees
+	 * the car. NO WHEELSPIN either: spinning the wheels is a grip loss, which is
+	 * what made the cars bobble and slide into the scenery. */
+	if (backFrames > 0)
+	{
+		backFrames--;
+
+		return CAR_PAD_BRAKE | (backDir ? CAR_PAD_LEFT : CAR_PAD_RIGHT);
+	}
+
 	if (turnFrames > 0)
 		return MpBotTurnPad(&turnFrames, &turnPulse, turnDir, mine->hd.speed);
 
@@ -315,7 +337,7 @@ static int MpBotChase(int fight)
 				if (chosen >= 0)
 				{
 					holdDir = chosen;
-					holdFrames = 30;	/* ~0.5s at 60Hz: long enough to commit to the turn */
+					holdFrames = MPBOT_DODGE_FRAMES;	/* commit: see the define */
 					want = chosen;
 				}
 			}
@@ -335,7 +357,7 @@ static int MpBotChase(int fight)
 			 * it never moves, and a throttle-only test missed exactly that. */
 			if (spd < 4)
 			{
-				if (++stuckFrames > 40)
+				if (++stuckFrames > MPBOT_STUCK_FRAMES)
 				{
 					/* WHY the recovery fired, and whether there is anything in front of the
 					 * car: a wall dead ahead is the one case a reverse is actually the right
@@ -343,15 +365,33 @@ static int MpBotChase(int fight)
 					 * frame, so a pair run can be read for it. */
 					int ahead = MpBotSpotClear(mine, mine->hd.direction, 1100);
 
-					turnFrames = MPBOT_TURN_FRAMES + 40;
-					turnPulse = MPBOT_TURN_FRAMES;
-					turnDir ^= 1;
 					stuckFrames = 0;
+					turnDir ^= 1;
 
-					if (gMpCtx != NULL)
-						gMpCtx->jer_log(gMpCtx,
-							"[mp] chase: recover - wedged (speed %d), ahead clear=%d, handbrake turn (dir %d)\n",
-							mine->hd.speed, ahead, turnDir);
+					if (!ahead)
+					{
+						/* A wall in front: a turn with the throttle on cannot move a car
+						 * that cannot move, so back it off the wall first - the one place
+						 * a reverse is right. Bounded and non-alternating, so it is not
+						 * the old shuffle. */
+						backDir = turnDir;
+						backFrames = MPBOT_BACK_FRAMES;
+
+						if (gMpCtx != NULL)
+							gMpCtx->jer_log(gMpCtx,
+								"[mp] chase: recover - wedged (speed %d), ahead clear=0, backing out (dir %d)\n",
+								mine->hd.speed, backDir);
+					}
+					else
+					{
+						turnFrames = MPBOT_TURN_FRAMES + 40;
+						turnPulse = MPBOT_TURN_FRAMES;
+
+						if (gMpCtx != NULL)
+							gMpCtx->jer_log(gMpCtx,
+								"[mp] chase: recover - wedged (speed %d), ahead clear=%d, handbrake turn (dir %d)\n",
+								mine->hd.speed, ahead, turnDir);
+					}
 				}
 			}
 			else
@@ -545,7 +585,7 @@ static int MpBotPursuit(void)
 	MP_PLAYER* me = MpLocalPlayer();
 	CAR_DATA* mine;
 	CAR_DATA* tgt = NULL;
-	static int stuckFrames, turnFrames, turnDir, turnPulse;
+	static int stuckFrames, turnFrames, turnDir, turnPulse, backFrames, backDir;
 	int k;
 
 	if (me == NULL || me->carId < 0)
