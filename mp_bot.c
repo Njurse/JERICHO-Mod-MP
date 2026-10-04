@@ -14,6 +14,7 @@
 #include "pad.h"
 #include "players.h"	/* player[]: the on-foot bot drives OUR pedestrian */
 #include "objcoll.h"	/* CellEmpty: the engine's own scenery test */
+#include "dr2roads.h"	/* JerRoadAt / JerRoadInfoAt: the engine's own road network */
 
 #include <string.h>
 #include <stdlib.h>
@@ -280,10 +281,32 @@ static int MpBotCorridorDepth(CAR_DATA* mine, int dir)
 	return depth;
 }
 
+#define MPBOT_FLEE_ROAD_AT	1600	/* how far along a heading the road question is asked */
+
+/* IS THAT HEADING ON A ROAD? The engine already knows where the roads are, so ask it instead
+ * of guessing from geometry: a scenery probe cannot tell a street from the MAP EDGE, and the
+ * map edge is exactly what the flee used to pick as "away", cornering itself against the
+ * boundary. This is the fix for "stay along a road path". */
+static int MpBotOnRoadTo(CAR_DATA* mine, int dir, int len)
+{
+	return JerRoadAt(
+		mine->hd.where.t[0] + (int)(((long)rsin(dir) * len) >> 12),
+		mine->hd.where.t[1],
+		mine->hd.where.t[2] + (int)(((long)rcos(dir) * len) >> 12));
+}
+
+#define MPBOT_FLEE_KEEP		10	/* margin: a heading this much better is worth switching for.
+					 * A neighbouring heading that gains ONE depth step is only 5 better
+					 * (depth is worth 3, the off-axis penalty 2), which is not enough -
+					 * the car then alternates between two adjacent steps and wobbles. */
+
 static int MpBotFleeWant(CAR_DATA* mine, int away)
 {
 	static int lastLogged = -1;
+	static int held = -1, heldDepth = 0;
 	int best = away, bestScore = -9999, bestDepth = 0, i;
+	int road = away, roadScore = -9999, roadDepth = 0, foundRoad = 0;
+	int heldScore = -9999, heldSeen = 0;
 
 	for (i = -MPBOT_FLEE_SPAN; i <= MPBOT_FLEE_SPAN; i++)
 	{
@@ -302,6 +325,46 @@ static int MpBotFleeWant(CAR_DATA* mine, int away)
 			bestDepth = depth;
 			best = d;
 		}
+
+		/* where the heading we are ALREADY committed to scored this frame */
+		if (held >= 0 && d == held)
+		{
+			heldSeen = 1;
+			heldScore = score;
+			heldDepth = depth;
+		}
+
+		/* a second pass for the road: any heading that is on the road network beats
+		 * any heading that is not, which is what keeps the flee on the map and moving
+		 * rather than cornering itself at the edge */
+		if (MpBotOnRoadTo(mine, d, MPBOT_FLEE_ROAD_AT) && score > roadScore)
+		{
+			foundRoad = 1;
+			roadScore = score;
+			roadDepth = depth;
+			road = d;
+		}
+	}
+
+	if (foundRoad)
+	{
+		best = road;
+		bestDepth = roadDepth;
+	}
+
+	/* HYSTERESIS. Re-deciding the heading every frame is what makes the car wobble down
+	 * the road: two headings that score within a point of each other alternate, so the
+	 * steering never settles and the flee looks unsure of itself. Keep the heading we
+	 * already chose unless a new one is CLEARLY better. */
+	if (heldSeen && heldScore >= bestScore - MPBOT_FLEE_KEEP)
+	{
+		best = held;
+		bestDepth = heldDepth;
+	}
+	else
+	{
+		held = best;
+		heldDepth = bestDepth;
 	}
 
 	/* Make the scan visible: without this there is no way to tell a fleer that is
@@ -311,8 +374,9 @@ static int MpBotFleeWant(CAR_DATA* mine, int away)
 	{
 		lastLogged = best;
 		gMpCtx->jer_log(gMpCtx,
-			"[mp] chase: flee scan - straight back is not the way out, heading %d of 4096 (open %d range(s)%s)\n",
-			best, bestDepth, bestDepth >= MPBOT_FLEE_ROAD ? ", a road" : "");
+			"[mp] chase: flee scan - straight back is not the way out, heading %d of 4096 (open %d range(s)%s%s)\n",
+			best, bestDepth, bestDepth >= MPBOT_FLEE_ROAD ? ", a road" : "",
+			foundRoad ? ", on the road network" : ", OFF the road network");
 	}
 	else if (best == away)
 		lastLogged = -1;
