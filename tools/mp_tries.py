@@ -100,6 +100,55 @@ def car(city, slot):
     """The rig's name for '<slot> of <city>'s roster', spelled as the module logs it."""
     return f"{city.upper()} model {CAR_SLOT_TO_MODEL[slot]}"
 
+
+# The test levers whose numbers are SECONDS, and which of their fields those are. --scale
+# shortens a run by multiplying them; a lever field that is NOT seconds (a city, a model)
+# must never be scaled, or the scenario quietly starts asking for a different car.
+SCALED_LEVERS = {
+    "MP_TEST_PAUSECAR": "first-of-each",	# 30,3,1;45,1,2 - field 0 of each ';' entry
+    "MP_TEST_LEAVE": "all",
+    "MP_TEST_ONFOOT": "all",
+    "MP_TEST_RESTART": "all",
+    "MP_TEST_CARCHANGE": "all",			# <changeSecs>[,<exitSecs>] - both are times
+}
+
+
+def scale_lever_value(key, value, scale):
+    """MP_TEST_PAUSECAR=30,3,1;45,1,2 with scale 0.5 -> 15,3,1;22,1,2 (city/model untouched)."""
+    mode = SCALED_LEVERS.get(key)
+
+    if mode is None or scale == 1.0:
+        return value
+
+    def secs(tok):
+        try:
+            return str(max(1, int(round(int(tok) * scale))))
+        except ValueError:
+            return tok
+
+    if mode == "all":
+        return ",".join(secs(t) for t in value.split(","))
+
+    out = []
+
+    for entry in value.split(";"):
+        fields = entry.split(",")
+        fields[0] = secs(fields[0])
+        out.append(",".join(fields))
+
+    return ";".join(out)
+
+
+def scale_seat_env(spec, scale):
+    """SEAT=KEY=VALUE -> the same, with the lever's own seconds shortened by `scale`."""
+    parts = spec.split("=", 2)
+
+    if len(parts) != 3:
+        return spec
+
+    seat, key, value = parts
+    return f"{seat}={key}={scale_lever_value(key, value, scale)}"
+
 # The car-switch release scenarios (see the module docstring). `pick` is the frontend pick
 # every joiner makes (a seat-env can override it per joiner); `seat_env` and `require`/`forbid`
 # use mp_localpair.py's seat names (host, client = every joiner, client1, client2 ...).
@@ -248,6 +297,12 @@ def run_try(index, spec, args, scenario=None, name=None):
     players = scenario["players"] if scenario is not None else 2
     seconds = scenario["seconds"] if scenario is not None else args.seconds
 
+    # --scale shortens a scenario's own run time as well as its levers' seconds, so a whole
+    # pass costs less wall clock. 30s is the floor: below that the level load dominates and
+    # the scenario stops being the scenario.
+    if scenario is not None and args.scale != 1.0:
+        seconds = max(30, int(round(seconds * args.scale)))
+
     env = dict(os.environ)
     # A joining client that reaches the module's car screen and picks for itself: the
     # whole point is that the PICK drives the car, not a launcher argument.
@@ -268,7 +323,7 @@ def run_try(index, spec, args, scenario=None, name=None):
 
     if scenario is not None:
         for spec_env in scenario["seat_env"]:
-            cmd += ["--seat-env", spec_env]
+            cmd += ["--seat-env", scale_seat_env(spec_env, args.scale)]
 
         for want in scenario["require"]:
             cmd += ["--require", want]
@@ -403,6 +458,13 @@ def main():
     ap.add_argument("--seconds", type=int, default=55,
                     help="match seconds per try (default 55; each try also pays the level "
                          "load, so budget a few minutes for all three)")
+    ap.add_argument("--scale", type=float, default=1.0, metavar="F",
+                    help="shorten every --scenario by F, INCLUDING the seconds inside its "
+                         "test levers (MP_TEST_PAUSECAR/_LEAVE/_ONFOOT/_RESTART/_CARCHANGE), "
+                         "so a pass costs less wall clock without changing what it "
+                         "exercises - a lever's city and model are left alone. The run time "
+                         "has a 30s floor, because below that the level load dominates. "
+                         "e.g. --scale 0.5 takes T2 from 120s to 60s per seat")
     ap.add_argument("--port", type=int, default=1450,
                     help="first port; each try takes the next one (default 1450)")
     ap.add_argument("--scenario", action="append", default=[], metavar="NAME",
