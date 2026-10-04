@@ -632,20 +632,19 @@ is a transport bug of its own and not this work.
 **Open, from the 2026-09 four-seat runs (re-taken with a clean modlist — the first
 attempt had cainescrossfire enabled by accident, which rewrites car handling):**
 
-- **`PingInCivCar` faults again, and it is not the `possibleLanes` overflow this
-  time.** A two-seat run with `MP_TEST_ONFOOT=7` (get out at 7s) crashed BOTH seats
-  with `EXCEPTION_ACCESS_VIOLATION`, both at `JERICHO_dev.exe+0x102A0` =
-  `?PingInCivCar@@YAHH@Z (+0x100)` — dumps in `.mp-pair/a/` and `.mp-pair/b/`, no
-  stall, so the world was running. `possibleLanes` is already 32, so 0..30 lanes fit
-  and this is a different fault at (or very near) the old address.
-
-  Candidates, none yet verified: the vacated car (`ChangeCarPlayerToPed` sets the car
-  we left to `CONTROL_TYPE_CIV_AI`, and `PingInCivCar` reads AI data a car that was
-  never traffic never had — though the guard `MpKeepOurCarsFromTrafficAi` is supposed
-  to undo that, and it logged nothing here); or something the stand-in pedestrian
-  changes in the ping's neighbourhood. Note this run had the on-foot lever on, which
-  the older "4/4 at level start" crash did not — so a fresh triage is warranted, not
-  a reread of the old one.
+- **Getting out of a car crashed the session — RESOLVED.** `MP_TEST_ONFOOT` called
+  `ChangeCarPlayerToPed` directly, which points `player[0].spoolXZ` at the player's
+  ped — but in a match the player is put straight into a car by `InitPlayer` and
+  never had a ped, so `spoolXZ` went NULL-adjacent. The next civ-AI pass faults on
+  it in two places that both read `spoolXZ`: `CivControl -> CheckPingOut` (civ_ai.c
+  reads `MainPlayer.spoolXZ->vx`, `JERICHO_dev.exe+0xE3B5`) and `PingInCivCar`
+  (reads `player[playerNum].spoolXZ->vx`, `+0x102A0`) — one root cause under both
+  addresses. The levers now call `ActivatePlayerPedestrian` first, exactly like the
+  engine's own leave-car path (handling.c), so the ped and spoolXZ are valid.
+  Re-entry was broken too: the vacated car was parked as `CONTROL_TYPE_PLAYER`,
+  which `TannerCanEnterCar` refuses (it only accepts CIV_AI). It is now left as the
+  stopped/empty civ car, which the AI ignores and the player can re-enter
+  (commits 89fb0f83, 8c523f5b).
 
 
 - **The third joiner was cainescrossfire.** With it off, all four seats join:
@@ -760,11 +759,14 @@ Two hard-won rules:
   the LOCAL traffic system, which then recycles or steps it and CRASHES
   (`PingInCivCar` on one side, `StepSim` on the other, both read out of dumps).
   There is deliberately no carSlot on the wire at all — see `MP_CARSTATE_ENTRY`.
-* **NEVER hand a car the mod created (`InitPlayer`) to the traffic AI.** Flipping
-  its controlType to CIV_AI gives the engine's traffic AI a car whose civ-AI state
-  does not exist — an access violation inside `CivSteerAngle` (rva 0xC961 in one
-  dump). Getting OUT therefore only stops driving the car: it is left standing where
-  the player left it, and the input fallback coasts it to a stop.
+* **A car the mod created (`InitPlayer`) has no civ-AI state, so it may reach the
+  traffic AI ONLY as a stopped, empty car.** Getting OUT leaves the car as CIV_AI
+  with thrustState STOP / ctrlState EMPTY (what `ChangeCarPlayerToPed` set):
+  `CivControl`'s STOP branch does no work (`CivAccelTrafficRules`' STOP case is an
+  empty break), so the AI never touches the uninitialised nav fields, and
+  `TannerCanEnterCar` still accepts it so the player can walk back and get in. It
+  must never reach an ACTIVE civ state (driving/turning) — that is what used to
+  crash inside `CivSteerAngle` (rva 0xC961 in one dump).
 
 A model the renderer has not loaded is NOT applied (`gCarCleanModelPtr[model] ==
 NULL`): pointing `ap.model` at a mesh that does not exist is a crash, not a
