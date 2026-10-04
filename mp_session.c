@@ -3694,8 +3694,10 @@ static int MpAdoptRemoteCar(MP_PLAYER* p, int city, int model)
 		 * and this is the call that makes the car on the road use them. */
 		if (gMpCtx != NULL)
 			gMpCtx->jer_log(gMpCtx,
-				"[mp] rebuilt player %d's car on slot %d (model %d from %s): cosmetics, collision box and mesh are that car's own now\n",
-				p->id, slot, model, MpCarCityName(city));
+				"[mp] rebuilt player %d's car on slot %d (model %d from %s): cosmetics, collision box and mesh are that car's own now"
+				" [local=%d localId=%d slot=%d]\n",
+				p->id, slot, model, MpCarCityName(city),
+				p->isLocal, gMp.localPlayerId, p->carId);
 
 		/* p->car is a model NUMBER now (the identity), with its city -- not the
 		 * slot we happened to resolve it to. */
@@ -3708,8 +3710,10 @@ static int MpAdoptRemoteCar(MP_PLAYER* p, int city, int model)
 
 		if (gMpCtx != NULL)
 			gMpCtx->jer_log(gMpCtx,
-				"[mp] player %d changed car: slot %d -> %d (%s model %d), mesh rebuilt\n",
-				p->id, was, slot, MpCarCityName(city), model);
+				"[mp] player %d changed car: slot %d -> %d (%s model %d), mesh rebuilt"
+				" [local=%d localId=%d row=%d]\n",
+				p->id, was, slot, MpCarCityName(city), model,
+				p->isLocal, gMp.localPlayerId, (int)(p - gMp.players));
 
 		return 1;
 	}

@@ -61,7 +61,7 @@ EVIDENCE = {
 EVIDENCE_LIMIT = 6
 
 
-def identity_check(host_text, client_text):
+def identity_check(host_text, client_text, guest_pick=True):
     """The two identity assertions from the plan, on the seat that matters.
 
     Both come from measured failures, not theory:
@@ -76,13 +76,22 @@ def identity_check(host_text, client_text):
        the import is right, the advert is right, and the picker is in CHICAGO's model 2 -
        "the client was still rio car 1", one city along.
 
+       SCOPED TO THE PICKER. On the picker's own machine the local player is id 0, and a
+       peer's rebuild line is not this failure: matching any `player \\d+` reported the
+       host's own car as the picker's.
+
     2. CROSS-SEAT AGREEMENT. What the picker says it drives and what the host says it
        drives must be the same car. When they disagree, each machine is internally
        consistent and the match still shows the wrong vehicle to somebody.
+
+    `guest_pick` says the chooser picked a city other than the host's, which is when "the
+    level's own model N" is a symptom rather than the ordinary, correct description of a
+    native pick (a car that resolves to the level's own vehicle legitimately reads that way,
+    including right after a rebuild).
     """
     problems = []
 
-    for m in re.finditer(r"\[mp\] player \d+ changed car: slot \d+ -> \d+ "
+    for m in re.finditer(r"\[mp\] player 0 changed car: slot 0 -> \d+ "
                          r"\(the session city model (\d+)\)", client_text):
         problems.append(f"the picker's own car is the SESSION city's model {m.group(1)}")
 
@@ -92,9 +101,11 @@ def identity_check(host_text, client_text):
     if told and seen and not (told & seen):
         problems.append(f"the picker says it drives {sorted(told)}; the host says {sorted(seen)}")
 
-    # A player who chose a car must never be described by the level's own numbers.
-    for m in re.finditer(r"\[carhacks/net\] (?:player|peer) \d+ drives level model (\d+)", host_text):
-        problems.append(f"a seat reports the picker as the level's own model {m.group(1)}")
+    # A player who chose a GUEST car must never be described by the level's own numbers.
+    if guest_pick:
+        for m in re.finditer(r"\[carhacks/net\] (?:player|peer) \d+ drives level model (\d+)",
+                             host_text):
+            problems.append(f"a seat reports the guest picker as the level's own model {m.group(1)}")
 
     return problems
 
@@ -210,7 +221,8 @@ def run_try(index, spec, args):
                   for l in grep(text, EVIDENCE["pages"])]
 
     passed = proc.returncode == 0
-    problems = identity_check(host_text, client_text)
+    problems = identity_check(host_text, client_text,
+                              guest_pick=(city != args.host_city))
 
     # An identity problem fails the try even when the harness said PASS: "correct on the
     # host but the client was still the old car" is exactly the failure a verdict cannot see.

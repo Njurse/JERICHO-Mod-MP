@@ -633,6 +633,24 @@ int MpJoinTargetPort(void)
 	return gConnectingPort;
 }
 
+/* Join retries (see MpJoinFail): the statics live here, above MpClientDisconnect, because
+ * that function cancels a pending retry. */
+#define MP_JOIN_ATTEMPTS	3
+#define MP_JOIN_RETRY_MS	1200
+
+static int gJoinAttempt;		/* 1..MP_JOIN_ATTEMPTS for the target being tried */
+static unsigned long gJoinRetryAtMs;	/* a retry is due at this time, 0 = none pending */
+
+/* The connection was accepted: the retries did their job (or none were needed), so the next
+ * join starts counting from one again. Called where the join state goes READY, and from the
+ * join entry point. NOT from the connect itself - the retry path goes through there, and
+ * resetting it there would make the retries endless. */
+void MpJoinRetryClear(void)
+{
+	gJoinAttempt = 0;
+	gJoinRetryAtMs = 0;
+}
+
 static void MpClientConnectCancel(void)
 {
 	MpCloseSock(&gConnectingSock);
@@ -648,6 +666,14 @@ static void MpClientConnectCancel(void)
 void MpClientDisconnect(void)
 {
 	int i;
+
+	/* A cancelled or abandoned join must not come back to life: a retry the last failed
+	 * attempt asked for would otherwise fire ~1.2 s later, reconnecting to a server the
+	 * player has walked away from - and if they have since started HOSTING, the retry's
+	 * handover would tear that new session down. Clear the PENDING RETRY only; the attempt
+	 * count stays, because clearing it here would make the retries endless (the retry path
+	 * comes through this function too). */
+	gJoinRetryAtMs = 0;
 
 	if (gMpCtx != NULL)
 	{
@@ -764,29 +790,17 @@ static int MpClientAdopt(SOCKET s, const char* host, int port)
  *    saying it failed to connect - i think sometimes the tests fail prematurely and i have
  *    to intervene by manually navigating the menu on the client to connect"
  *
- * A failed attempt leaves no state behind (MpClientConnectCancel drops the socket and the
- * conn row), so a retry is safe. The toast and the permanent failure only come after the
- * LAST attempt, so a retry is silent apart from the log -- otherwise a transient failure
- * would still read as a failure to the player. */
-#define MP_JOIN_ATTEMPTS	3
-#define MP_JOIN_RETRY_MS	1200
-
-static int gJoinAttempt;		/* 1..MP_JOIN_ATTEMPTS for the target being tried */
-static unsigned long gJoinRetryAtMs;	/* a retry is due at this time, 0 = none pending */
-
-/* The connection was accepted: the retries did their job (or none were needed), so the next
- * join starts counting from one again. Called where the join state goes READY. */
-void MpJoinRetryClear(void)
-{
-	gJoinAttempt = 0;
-	gJoinRetryAtMs = 0;
-}
-
+ * A failed attempt leaves no state behind (MpClientConnectCancel drops the socket), so a
+ * retry is safe. The toast and the permanent failure only come after the LAST attempt, so a
+ * retry is silent apart from the log -- otherwise a transient failure would still read as a
+ * failure to the player. The counter is 0-based and the guard adds one, so the total is
+ * exactly MP_JOIN_ATTEMPTS (the first version retried one time too many and logged
+ * "attempt 4 of 3"). */
 static void MpJoinFail(const char* why)
 {
 	MpClientConnectCancel();
 
-	if (gJoinAttempt < MP_JOIN_ATTEMPTS)
+	if (gJoinAttempt + 1 < MP_JOIN_ATTEMPTS)
 	{
 		gJoinAttempt++;
 		gJoinRetryAtMs = MpNowMs() + MP_JOIN_RETRY_MS;
