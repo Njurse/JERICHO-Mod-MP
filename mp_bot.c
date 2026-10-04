@@ -337,7 +337,34 @@ static int MpBotChase(int fight)
 #define MPBOT_PROBE	2400	/* how far ahead the pathfinder looks -- long, so it sees a
 				 * wall at an intersection and commits to the turn BEFORE
 				 * reaching it, instead of nosing into it */
+#define MPBOT_MID	1400	/* the middle range, used to tell a ROAD from a POCKET */
 #define MPBOT_NEAR	650	/* ... and the near probe that stops it nosing into a wall */
+
+/* How far ahead heading `a` is clear, as a count of ranges: 0 = blocked at the near probe,
+ * 3 = clear all the way to the far probe.
+ *
+ * A COUNT and not a yes/no, because "clear for 650 units" (a pocket, a corner mouth, a dead
+ * end) and "clear for 2400" (the road) are the difference between the fleeing host darting
+ * away down the street and backing itself into a corner. Asking only "is it clear?" picked
+ * whichever small deviation happened to be clear first. */
+static int MpBotClearance(CAR_DATA* mine, int a)
+{
+	static const int r[3] = { MPBOT_NEAR, MPBOT_MID, MPBOT_PROBE };
+	VECTOR p;
+	int i;
+
+	for (i = 0; i < 3; i++)
+	{
+		p.vx = mine->hd.where.t[0] + (int)(((long)rsin(a) * r[i]) >> 12);
+		p.vy = mine->hd.where.t[1];
+		p.vz = mine->hd.where.t[2] + (int)(((long)rcos(a) * r[i]) >> 12);
+
+		if (!CellEmpty(&p, 350))
+			return i;			/* clear up to here, blocked on this one */
+	}
+
+	return 3;
+}
 
 /* Is a heading's path clear at both the near and the far probe? */
 static int MpBotHeadingClear(CAR_DATA* mine, int a)
@@ -356,6 +383,24 @@ static int MpBotHeadingClear(CAR_DATA* mine, int a)
 	return CellEmpty(&p, 350);
 }
 
+/* THE FEELER: a few degrees, swept smoothly with rsin, used to REFINE a chosen heading rather
+ * than to steer with.
+ *
+ * The candidate fan works in 15-degree steps, so its answer can leave the car aimed at the edge
+ * of a gap - it then noses in, stops, re-decides, and twitches: "the chase AI quickly gets
+ * confused". Sweeping a few degrees either side of the best candidate on a slow sine finds
+ * where the road actually is, and because the result is a HELD heading the oscillation is never
+ * visible as steering. Period is a couple of seconds at 60 fps. */
+#define MPBOT_FEEL	90		/* about 8 degrees */
+static int MpBotFeeler(void)
+{
+	static unsigned long t;
+
+	t += 1;
+
+	return (int)(((long)rsin((int)((t * 40) & 0xfff)) * MPBOT_FEEL) >> 12);
+}
+
 static int MpBotClearHeading(CAR_DATA* mine, int desired)
 {
 	const int STEP = 0x1000 / 24;	/* 15 degrees -- a full fan, so a heading
@@ -367,32 +412,57 @@ static int MpBotClearHeading(CAR_DATA* mine, int desired)
 	 * while it is still clear and still points roughly the way we want; re-decide
 	 * only when it is blocked or the goal has moved a long way off it. */
 	static int held = -1;
-	int i;
+	int i, best = -1, bestClr = 0;
 
-	if (held >= 0 && MpBotHeadingClear(mine, held))
+	if (held >= 0)
 	{
+		int clr = MpBotClearance(mine, held);
 		int off = ((held - desired + 2048) & 4095) - 2048;
 
 		if (off < 0)
 			off = -off;
 
-		if (off < 900)		/* still within ~80 degrees of the goal */
+		/* keep it while it is worth keeping: clear past the middle probe (a road, not a
+		 * pocket) and still roughly the way we want to go */
+		if (clr >= 2 && off < 900)
 			return held;
 	}
 
+	/* Prefer the FARTHEST-clear candidate and take the nearest angle only as the tie-break.
+	 * The order of these two tests is the whole "runs away down the road instead of backing
+	 * into a corner" fix. */
 	for (i = 0; i < 24; i++)
 	{
 		int k = (i + 1) / 2;
 		int a = (i == 0) ? desired : ((desired + ((i & 1) ? (k * STEP) : (-k * STEP))) & 0xfff);
+		int clr = MpBotClearance(mine, a);
 
-		if (MpBotHeadingClear(mine, a))
+		if (clr > bestClr)
 		{
-			held = a;
-			return a;
+			bestClr = clr;
+			best = a;
+
+			if (clr >= 3)		/* nothing can beat this */
+				break;
 		}
 	}
 
-	return desired;
+	if (best < 0)
+		return desired;			/* boxed in on every heading we try: keep going */
+
+	/* refine it with the feeler, so the choice lands in the middle of the gap */
+	if (bestClr < 3)
+	{
+		int f = MpBotFeeler();
+		int a = (best + f) & 0xfff;
+
+		if (MpBotClearance(mine, a) > bestClr)
+			best = a;
+	}
+
+	held = best;
+
+	return best;
 }
 
 /* Returns 0 (coast) when there is nobody else to chase. */
