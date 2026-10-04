@@ -2827,23 +2827,30 @@ static void MpTestOnFootTick(void)
 	ChangeCarPlayerToPed(0);
 }
 
-/* MP_TEST_PAUSECAR=<secs>[,<city>,<model>] -- run the pause menu's Change car
- * path that many seconds into a match, exactly as pressing Apply does.
+/* MP_TEST_PAUSECAR=<secs>[,<city>,<model>][;<secs>[,<city>,<model>]...] -- run the
+ * pause menu's Change car path that many seconds into a match, exactly as pressing
+ * Apply does. A `;`-separated LIST runs several switches, each once and in order; every
+ * <secs> counts from the moment the lever armed (not from the previous switch), so
+ * `30,2,1;45,3,1` switches to VEGAS 1 at 30 s and RIO 1 at 45 s. The single form is
+ * the one-entry list and behaves as it always did.
  *
  * The picker itself needs a human at a menu, so without this the one part of the
- * feature that can go wrong quietly -- the swap and its replication -- would only
- * ever be looked at by hand. <city> defaults to the session's own and <model> to
- * the SECOND car in that city's roster (the first is usually the one already
- * being driven, which would make the run say nothing). Inert unless set. */
+ * feature that can go wrong quietly -- the swap and its replication, and (with a
+ * list) whether each switch gives the previous car's slot back -- would only ever be
+ * looked at by hand. <city> defaults to the session's own and <model> to the SECOND
+ * car in that city's roster (the first is usually the one already being driven,
+ * which would make the run say nothing). Inert unless set. */
 static void MpTestPauseCarTick(void)
 {
-	static int done, noted;
+	static int next, noted;
 	static unsigned long startMs;
 	const char* s;
+	const char* e;
+	const char* end;
 	unsigned long now;
-	int secs, city, model = -1;
+	int secs, city, model = -1, idx, total = 1;
 
-	if (done || !gMp.running)
+	if (!gMp.running)
 		return;
 
 	s = getenv("MP_TEST_PAUSECAR");
@@ -2851,39 +2858,60 @@ static void MpTestPauseCarTick(void)
 	if (s == NULL)
 		return;
 
+	for (e = s; *e != '\0'; e++)
+	{
+		if (*e == ';' && e[1] != '\0')
+			total++;
+	}
+
 	if (!noted)
 	{
 		noted = 1;
 
 		if (gMpCtx != NULL)
-			gMpCtx->jer_log(gMpCtx, "[mp] test: MP_TEST_PAUSECAR=%s armed (frame %lu)\n",
-				s, gMp.frame);
+			gMpCtx->jer_log(gMpCtx, "[mp] test: MP_TEST_PAUSECAR=%s armed - %d switch(es) (frame %lu)\n",
+				s, total, gMp.frame);
 	}
 
 	if (startMs == 0)
 		startMs = MpNowMs();
 
+	/* the entry to run next */
+	e = s;
+
+	for (idx = 0; idx < next && e != NULL; idx++)
+	{
+		e = strchr(e, ';');
+
+		if (e != NULL)
+			e++;
+	}
+
+	if (e == NULL || *e == '\0')
+		return;			/* every entry has run */
+
 	now = MpNowMs();
-	secs = atoi(s);
+	secs = atoi(e);
 
 	if ((int)((now - startMs) / 1000) < secs)
 		return;
 
-	done = 1;
+	next++;
 
 	city = (gMp.city >= 0 && gMp.city < 4) ? gMp.city : 0;
+	end = strchr(e, ';');
 
 	{
-		const char* c1 = strchr(s, ',');
+		const char* c1 = strchr(e, ',');
 
-		if (c1 != NULL)
+		if (c1 != NULL && (end == NULL || c1 < end))
 		{
 			const char* c2;
 
 			city = atoi(c1 + 1);
 			c2 = strchr(c1 + 1, ',');
 
-			if (c2 != NULL)
+			if (c2 != NULL && (end == NULL || c2 < end))
 				model = atoi(c2 + 1);
 		}
 	}
@@ -2910,8 +2938,8 @@ static void MpTestPauseCarTick(void)
 	}
 
 	if (gMpCtx != NULL)
-		gMpCtx->jer_log(gMpCtx, "[mp] test: PAUSECAR change now to city %d model %d\n",
-			city, model);
+		gMpCtx->jer_log(gMpCtx, "[mp] test: PAUSECAR change %d of %d now to city %d model %d\n",
+			next, total, city, model);
 
 	MpChangeCar(city, model);
 }
