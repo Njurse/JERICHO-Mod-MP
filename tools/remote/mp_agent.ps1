@@ -636,10 +636,30 @@ function Invoke-Start {
     if (-not (Test-Path -LiteralPath $Exe)) { return "ERR no game exe in $Root" }
     if (Test-GameRunning) { Invoke-Stop | Out-Null }
 
+    # `+K=V` tokens are ENVIRONMENT for the game, not arguments: a remote seat needs its
+    # own MP_BOT (the rig drives the client to chase and the host to flee), and there is
+    # deliberately no way to push a config file to this machine. `+` cannot begin one of
+    # the engine's own arguments, so the two cannot be confused.
     $argv = @()
-    if (-not [string]::IsNullOrWhiteSpace($ArgsLine)) { $argv = $ArgsLine -split '\s+' }
+    $envPairs = @{}
 
-    Write-Own ("start: {0} {1}" -f $Exe, ($argv -join ' '))
+    if (-not [string]::IsNullOrWhiteSpace($ArgsLine)) {
+        foreach ($tok in @($ArgsLine -split '\s+' | Where-Object { $_ })) {
+            if ($tok.StartsWith('+') -and $tok.Contains('=')) {
+                $kv = $tok.Substring(1).Split('=', 2)
+                $envPairs[$kv[0]] = $kv[1]
+            } else {
+                $argv += $tok
+            }
+        }
+    }
+
+    $envNote = if ($envPairs.Count -gt 0) {
+        '  [env: ' + (($envPairs.GetEnumerator() |
+                      ForEach-Object { $_.Key + '=' + $_.Value }) -join ' ') + ']'
+    } else { '' }
+
+    Write-Own ("start: {0} {1}{2}" -f $Exe, ($argv -join ' '), $envNote)
     $script:LastArgs = $ArgsLine
 
     # -ArgumentList is OMITTED when there is nothing to pass, by SPLATTING the
@@ -655,7 +675,24 @@ function Invoke-Start {
     $sp = @{ FilePath = $Exe; WorkingDirectory = $Root; PassThru = $true }
     if ($argv.Count -gt 0) { $sp['ArgumentList'] = $argv }
 
-    $script:Game = Start-Process @sp
+    # Start-Process has no -Environment on 5.1, and the child inherits THIS process's
+    # environment: set them, launch, then put ours back so the next start is not quietly
+    # driven by the last one.
+    $saved = @{}
+    foreach ($k in $envPairs.Keys) {
+        $saved[$k] = [Environment]::GetEnvironmentVariable($k)
+        Set-Item -Path "env:$k" -Value $envPairs[$k]
+    }
+
+    try {
+        $script:Game = Start-Process @sp
+    } finally {
+        foreach ($k in $saved.Keys) {
+            if ($null -eq $saved[$k]) { Remove-Item -Path "env:$k" -ErrorAction SilentlyContinue }
+            else { Set-Item -Path "env:$k" -Value $saved[$k] }
+        }
+    }
+
     return ("OK started (pid {0}) on build {1}" -f $script:Game.Id, (Get-BuildStamp))
 }
 

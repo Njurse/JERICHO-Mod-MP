@@ -190,13 +190,16 @@ def do_update(agent, tag):
 
 # ------------------------------------------------------------------ seats
 
-def local_start(args):
+def local_start(args, bot=None):
     exe = os.path.join(GAME_DIR, EXE_NAME)
     if not os.path.isfile(exe):
         raise SystemExit(f"no {EXE_NAME} in {GAME_DIR} -- build first (build_dev.bat)")
     argv = [exe] + (args.split() if args else [])
     env = dict(os.environ)
     env.setdefault("MP_DEBUG", "1")     # local runs keep the verbose log
+
+    if bot:
+        env["MP_BOT"] = bot           # the same lever the peer's seat gets, so both cars drive
     # Keep the output: a game that dies in a second says why on stdout, and
     # discarding it turns "it exited" into a mystery.
     os.makedirs(WORK, exist_ok=True)
@@ -205,12 +208,19 @@ def local_start(args):
     return p
 
 
-def seat_args(seat, host_ip, port, extra):
+def seat_args(seat, host_ip, port, extra, bot=None):
     if seat == "host":
         base = f"-nointro -nofmv -host {port}"
     else:
         base = f"-nointro -nofmv -join {host_ip}:{port}"
-    return (base + " " + extra).strip()
+
+    # `+K=V` is ENVIRONMENT on the far end -- the agent parses leading +tokens as env for
+    # the game (there is deliberately no way to push files to that machine), which is how
+    # a remote seat gets MP_BOT. MP_BOT=chase is mp_localpair's default and means the
+    # HOST FLEES while every joiner CHASES, so an unattended pair actually moves.
+    prefix = f"+MP_BOT={bot} " if bot else ""
+
+    return (prefix + base + " " + extra).strip()
 
 
 def default_ip():
@@ -274,19 +284,23 @@ def cmd_deploy(a):
     print(f"  local runs: {open(vp).read().strip() if os.path.isfile(vp) else 'unknown (no VERSION.txt)'}")
 
     print("2. start")
-    remote_args = seat_args("client" if a.seat == "host" else "host", host_ip, a.port_game, a.extra)
-    local_args = seat_args(a.seat, host_ip, a.port_game, a.extra)
+    bot = None if a.bot == "off" else a.bot
+    remote_args = seat_args("client" if a.seat == "host" else "host", host_ip, a.port_game, a.extra, bot)
+    local_args = seat_args(a.seat, host_ip, a.port_game, a.extra, None)
+
+    if bot:
+        print(f"  bot: {bot} on both seats (the host flees, every joiner chases)")
 
     if a.seat == "host":
         # the host first: it must be listening before the client dials
-        local_proc = local_start(local_args)
+        local_proc = local_start(local_args, bot)
         print(f"  local  HOST  pid {local_proc.pid}: {local_args}")
         time.sleep(a.lead)
         print(f"  remote CLIENT: {agent.start(remote_args)}")
     else:
         print(f"  remote HOST : {agent.start(remote_args)}")
         time.sleep(a.lead)
-        local_proc = local_start(local_args)
+        local_proc = local_start(local_args, bot)
         print(f"  local  CLIENT pid {local_proc.pid}: {local_args}")
 
     os.makedirs(WORK, exist_ok=True)
@@ -472,7 +486,14 @@ def main():
     ap.add_argument("--host-ip", default=None,
                     help="the host's address for the joining seat (default: this machine)")
     ap.add_argument("--extra", default="-mp 1 -level rio",
-                    help="extra game arguments for both seats")
+                    help="extra game arguments for both seats. Default is the rig's arena; "
+                         "for a Take a Ride pair pass \"--extra '-level vegas'\" (the "
+                         "gamemode defaults to takeadrive when -mp is not given)")
+    ap.add_argument("--bot", default="chase", choices=["off", "chase", "pursuit", "random"],
+                    help="drive BOTH player cars with the mp test bot. 'chase' (the "
+                         "default, same as mp_localpair) makes the host FLEE and every "
+                         "joiner CHASE, so an unattended pair moves; 'pursuit' has both "
+                         "hunt; 'off' leaves the cars to whoever is at the keyboard")
     ap.add_argument("--lead", type=int, default=4,
                     help="seconds between starting the host and the client")
     ap.add_argument("--seconds", type=int, default=90, help="how long `run` waits")
