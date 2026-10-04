@@ -35,7 +35,12 @@
 #  include <arpa/inet.h>
 #  include <unistd.h>
 #  include <fcntl.h>
-#  include <time.h>
+#  include <sys/time.h>	/* gettimeofday for MpClockMs - NOT <time.h>, see there */
+   /* NO <time.h> HERE. The game ships Game/C/time.h (GetTimeStamp) and Game/C is
+    * on the include path, so an angle-bracket time.h resolves to THAT and
+    * clock_gettime/CLOCK_MONOTONIC are never declared. Worse, that shadow also
+    * breaks a C++ header which pulls <ctime> - chrono, say - on Windows, whose
+    * internal <time.h> is hijacked the same way. MpClockMs sidesteps both. */
 #  include <errno.h>
 #  include <ifaddrs.h>
 #  include <net/if.h>
@@ -44,6 +49,20 @@
 #  define SOCKET_ERROR   (-1)
 #  define closesocket close
 #  define ioctlsocket(s, cmd, argp) ioctl((s), (cmd), (argp))
+#endif
+
+/* Last socket error and the two connection-reset codes, spelled once so the
+ * call sites do not have to know which platform they are on. Windows reports
+ * these through Winsock's WSA* codes, POSIX through errno; the POSIX build does
+ * not compile while a call site names the Windows spelling directly. */
+#ifdef _WIN32
+#  define MP_LAST_ERROR()	WSAGetLastError()
+#  define MP_ECONNRESET		WSAECONNRESET
+#  define MP_ECONNABORTED	WSAECONNABORTED
+#else
+#  define MP_LAST_ERROR()	errno
+#  define MP_ECONNRESET		ECONNRESET
+#  define MP_ECONNABORTED	ECONNABORTED
 #endif
 
 #include "jericho.h"
@@ -163,9 +182,17 @@ static unsigned long MpClockMs(void)
 #ifdef _WIN32
 	return GetTickCount();
 #else
-	struct timespec ts;
-	clock_gettime(CLOCK_MONOTONIC, &ts);
-	return (unsigned long)(ts.tv_sec * 1000ULL + ts.tv_nsec / 1000000ULL);
+	/* Milliseconds. NOT via <time.h>: the game's Game/C/time.h shadows it on
+	 * this include path, so clock_gettime/CLOCK_MONOTONIC are not declared, and a
+	 * C++ header that pulls <ctime> breaks on Windows for the same reason (see
+	 * the include note above). gettimeofday is wall-clock rather than monotonic,
+	 * which is a caveat for a timeout clock, but it is what this platform offers
+	 * without the shadowed header. */
+	struct timeval tv;
+
+	gettimeofday(&tv, NULL);
+
+	return (unsigned long)(tv.tv_sec * 1000ULL + tv.tv_usec / 1000);
 #endif
 }
 
@@ -1422,7 +1449,7 @@ static void MpProcessConn(int idx)
 
 		if (n < 0)
 		{
-			int err = WSAGetLastError();
+			int err = MP_LAST_ERROR();
 
 			/* "No data right now" is not a failure: on a non-blocking socket it
 			 * is the normal state, and the select() guard above cannot make that
@@ -1434,7 +1461,7 @@ static void MpProcessConn(int idx)
 			 * with ECONNRESET means the far end or something in between RST
 			 * the connection -- a different event from a hangup, and the one
 			 * that a filtering middlebox produces. */
-			if (err == WSAECONNRESET || err == WSAECONNABORTED)
+			if (err == MP_ECONNRESET || err == MP_ECONNABORTED)
 			{
 				MpDropConn(idx, "connection reset (WSAECONNRESET)");
 				return;
