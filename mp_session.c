@@ -397,14 +397,32 @@ static void MpLaunchLocal(void)
 		 * this player, so every machine agrees on who drives what. Leaving this to
 		 * the engine's level default is what made the machines disagree (the
 		 * client saw the host as slot 0, with a palette that matched a different
-		 * model) and could make both cars identical. */
+		 * model) and could make both cars identical.
+		 *
+		 * BUT ONLY IF THE LEVEL ACTUALLY HAS IT. wantedCar is the engine's LAST word
+		 * before the level runs, so a number this level's pool does not carry does not
+		 * stay a number: it becomes the level's own car of that number - the "it only
+		 * did chicago 2 (domestic)" report - or a fallback to resident slot 0. The
+		 * assignment is a position in the session (player 1 -> model 1), not a claim
+		 * about this level, so leave wantedCar alone when the level cannot build it and
+		 * let the level's own car stand in until the player picks. */
 		int me = (gMp.localPlayerId >= 0) ? gMp.localPlayerId : 0;
+		int assigned = MpAssignedCarModel(me);
 
-		wantedCar[0] = MpAssignedCarModel(me);
+		if (assigned >= 0 && assigned < MAX_CAR_RESIDENT_MODELS && gCarCleanModelPtr[assigned] != NULL)
+		{
+			wantedCar[0] = assigned;
 
-		if (gMpCtx != NULL)
-			gMpCtx->jer_log(gMpCtx, "[mp] no car chosen -> assigned model %d (player %d, city %d)\n",
-				wantedCar[0], me, GameLevel);
+			if (gMpCtx != NULL)
+				gMpCtx->jer_log(gMpCtx, "[mp] no car chosen -> assigned model %d (player %d, city %d)\n",
+					wantedCar[0], me, GameLevel);
+		}
+		else if (gMpCtx != NULL)
+		{
+			gMpCtx->jer_log(gMpCtx,
+				"[mp] no car chosen and the session's model %d is not in this level - the level's own car stands in until they pick\n",
+				assigned);
+		}
 	}
 
 	/* The pick is only known NOW, so this is the first moment it can be sent.
@@ -822,21 +840,47 @@ void MpHostSendRoster(void)
 static int MpSetStartCar(int slot, MP_PLAYER* p)
 {
 	int cid = MpPlayerCarModel(p->car, p->carIsSlot);
+	int chosen = (p->carConfirmed || p->id == 0);	/* the host is the authority for its own car */
 
 	if (cid < 0)
 		cid = MpAssignedCarModel(p->id);
 
-	PlayerStartInfo[slot]->model = (u_char)cid;
-	PlayerStartInfo[slot]->palette = (u_char)(p->palette >= 0 ? p->palette : 0);
+	/* A GUESS IS NOT A CHOICE, and a guess must never beat the level.
+	 *
+	 * When this player has not chosen yet, cid came from MpAssignedCarModel and is a
+	 * position in the SESSION, not a claim about this level: player 1 -> model 1, which
+	 * VEGAS has and CHICAGO does not. Writing that into the start record (and into
+	 * wantedCar[slot] below, which the engine applies as its last word before the level
+	 * runs) does not stay a number - the engine's own guard swaps it for resident slot 0
+	 * ("car model 1 has no data in this level"), or silently hands the player the level's
+	 * own car of that number, which is exactly "it only did chicago 2 (domestic)".
+	 *
+	 * A CHOICE is left alone whatever the level holds: carhacks is responsible for
+	 * holding a picked car, that is the import/hotload path. */
+	if (!chosen && (cid < 0 || cid >= MAX_CAR_RESIDENT_MODELS || gCarCleanModelPtr[cid] == NULL))
+	{
+		if (gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx,
+				"[mp] player %d has not chosen a car and the session's model %d is not in this level - leaving the level's own car\n",
+				p->id, cid);
+
+		cid = -1;		/* the record keeps its own start car */
+	}
+
+	if (cid >= 0)
+	{
+		PlayerStartInfo[slot]->model = (u_char)cid;
+		PlayerStartInfo[slot]->palette = (u_char)(p->palette >= 0 ? p->palette : 0);
+	}
 
 	/* wantedCar is 2 entries -- the local players' -- so only slots 0..1 fit. It is
 	 * the channel the engine re-applies as its LAST word before the level runs, and
 	 * the only place a remote slot's model can be corrected after something resets
-	 * it. */
-	if (slot >= 0 && slot < 2)
+	 * it. Only a real choice goes in: see the guard above. */
+	if (chosen && slot >= 0 && slot < 2)
 		wantedCar[slot] = cid;
 
-	return cid;
+	return (cid >= 0) ? cid : (int)PlayerStartInfo[slot]->model;
 }
 
 /* Is this player's vehicle ready to be built?
