@@ -137,14 +137,37 @@ function Get-InstalledRelease {
     try { return (Get-Content -LiteralPath $p -Raw | ConvertFrom-Json) } catch { return $null }
 }
 
+function Get-OurGames {
+    # Games running THIS agent's exe -- not every process on the machine that happens to
+    # be called JERICHO_dev. Matching the name alone reaches a session started from
+    # somewhere else: a second install, another agent's seat, or a hand-started copy in
+    # a different folder. On a machine somebody is also working on, that is their
+    # session, and a remote command must not be able to close it. A game the user
+    # double-clicked from THIS folder still matches, which is the case the name test
+    # was there for.
+    $ours = @()
+
+    foreach ($p in @(Get-Process -Name 'JERICHO_dev' -ErrorAction SilentlyContinue)) {
+        try {
+            if ($p.Path -and ($p.Path -ieq $Exe)) { $ours += $p }
+        } catch {
+            # .Path is denied for a process we cannot open: leave it alone, always
+        }
+    }
+
+    return $ours
+}
+
 function Test-GameRunning {
     if ($null -ne $script:Game) {
         try { if (-not $script:Game.HasExited) { return $true } } catch { }
         $script:Game = $null
     }
-    # also notice a game the user started by hand (double-clicking PLAY_*.bat)
-    $p = Get-Process -Name 'JERICHO_dev' -ErrorAction SilentlyContinue
-    if ($null -ne $p) { return $true }
+    # also notice a game the user started by hand (double-clicking PLAY_*.bat) from
+    # THIS folder -- see Get-OurGames for why the exe path, not the process name.
+    # @(...) because a function that returns an empty array hands back $null, and
+    # $null.Count is an error under Set-StrictMode.
+    if (@(Get-OurGames).Count -gt 0) { return $true }
     return $false
 }
 
@@ -637,14 +660,13 @@ function Invoke-Start {
 }
 
 function Invoke-Stop {
-    $p = Get-Process -Name 'JERICHO_dev' -ErrorAction SilentlyContinue
-    if ($null -eq $p) { $script:Game = $null; return 'OK nothing was running' }
+    $p = @(Get-OurGames)
+    if ($p.Count -eq 0) { $script:Game = $null; return 'OK nothing was running' }
     foreach ($proc in $p) { try { $proc.CloseMainWindow() | Out-Null } catch { } }
     Start-Sleep -Milliseconds 800
-    $p = Get-Process -Name 'JERICHO_dev' -ErrorAction SilentlyContinue
-    foreach ($proc in $p) { try { Stop-Process -Id $proc.Id -Force } catch { } }
+    foreach ($proc in @(Get-OurGames)) { try { Stop-Process -Id $proc.Id -Force } catch { } }
     $script:Game = $null
-    Write-Own 'stop: closed the game'
+    Write-Own ('stop: closed {0} game process(es) from {1}' -f $p.Count, $Root)
     return 'OK stopped'
 }
 
@@ -677,7 +699,14 @@ function Invoke-Log {
     }
 
     $dump = ''
-    if (Test-Path -LiteralPath $DmpFile) { $dump = ' + JERICHO.dmp present' }
+    if (Test-Path -LiteralPath $DmpFile) {
+        # Reported with the dump's LAST WRITE time, because this folder is reused: a dump
+        # left by an earlier session would otherwise read as this run's crash. Epoch
+        # seconds so the far end can compare it against when its run started.
+        $epoch = [int](((Get-Item -LiteralPath $DmpFile).LastWriteTimeUtc -
+                        [datetime]'1970-01-01Z').TotalSeconds)
+        $dump = " + JERICHO.dmp present t=$epoch"
+    }
     Send-Line $S ("OK {0}{1}" -f $bytes.Length, $dump)
     Send-Bytes $S $bytes
     Write-Own ("log: sent {0:N0} bytes (of {1:N0})" -f $bytes.Length, $total)

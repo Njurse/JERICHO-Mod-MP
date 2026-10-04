@@ -28,6 +28,7 @@ the local seat is reliable and the remote seat goes through the agent.
 import argparse
 import json
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -328,7 +329,7 @@ def verdict_args(a, dirs):
     return names, {"a": dirs["peer"], "b": dirs["local"]}
 
 
-def pull_logs(a):
+def pull_logs(a, since=None):
     agent = Agent(a.peer, a.port, a.token)
     os.makedirs(os.path.join(WORK, "local"), exist_ok=True)
     os.makedirs(os.path.join(WORK, "peer"), exist_ok=True)
@@ -338,18 +339,31 @@ def pull_logs(a):
         f.write(data)
     print(f"  peer  log: {len(data)} bytes  ({header})")
 
-    # The peer's DUMP has to be asked for; the log header only says it exists.
-    # Pulled before the local one so a crash on the other PC is always in hand --
-    # and so a later run starting on that PC cannot overwrite it first.
-    if "JERICHO.dmp" in header:
-        blob, dheader = agent.dump()
+    # A crash is a different animal from a clean exit, so say which. But a dump on disk
+    # may be from an EARLIER session: both folders are reused, and the run dirs persist.
+    # It is therefore judged against `since` (when this run started) and a stale one is
+    # NOT put in the run dirs at all -- mp_localpair's verdict triages whatever dumps it
+    # finds there, so a stale dump became "*** A CRASHED ***" for a run that never
+    # crashed. An undateable dump (an agent too old to report t=) is kept.
+    m = re.search(r"t=(\d+)", header)
+    peer_dump_t = int(m.group(1)) if m else None
+    peer_fresh = (since is None) or (peer_dump_t is None) or (peer_dump_t >= since)
 
-        if blob:
-            with open(os.path.join(WORK, "peer", "JERICHO.dmp"), "wb") as f:
-                f.write(blob)
-            print(f"  peer  DUMP: {len(blob)} bytes ({dheader})")
+    if "JERICHO.dmp" in header:
+        if peer_fresh:
+            blob, dheader = agent.dump()
+
+            if blob:
+                with open(os.path.join(WORK, "peer", "JERICHO.dmp"), "wb") as f:
+                    f.write(blob)
+                print(f"  peer: CRASH DUMP from this run -- {len(blob)} bytes (an access "
+                      f"violation, not an Alt+F4)")
+            else:
+                print(f"  peer: a dump was announced but the agent sent nothing ({dheader})")
         else:
-            print(f"  peer  dump: asked for it, got nothing ({dheader})")
+            age = (time.time() - peer_dump_t) / 60.0 if peer_dump_t else 0.0
+            print(f"  peer: a crash dump is present but is {age:.1f} min old, so NOT from "
+                  "this run - not pulled, and kept out of the verdict")
 
     src = os.path.join(GAME_DIR, "JERICHO.log")
     if os.path.isfile(src):
@@ -358,13 +372,18 @@ def pull_logs(a):
     else:
         print("  local log: none yet")
 
-    # a crash is a different animal from a clean exit -- say which, always
-    for name, d in (("peer", os.path.join(WORK, "peer")), ("local", os.path.join(WORK, "local"))):
-        dmp = os.path.join(GAME_DIR, "JERICHO.dmp") if name == "local" else None
-        if dmp and os.path.isfile(dmp):
-            shutil.copyfile(dmp, os.path.join(d, "JERICHO.dmp"))
-        if os.path.isfile(os.path.join(d, "JERICHO.dmp")):
-            print(f"  {name}: HAS A CRASH DUMP (an access violation -- not an Alt+F4)")
+    local_dump = os.path.join(GAME_DIR, "JERICHO.dmp")
+
+    if os.path.isfile(local_dump):
+        mtime = os.path.getmtime(local_dump)
+
+        if (since is None) or (mtime >= since):
+            shutil.copyfile(local_dump, os.path.join(WORK, "local", "JERICHO.dmp"))
+            print("  local: CRASH DUMP from this run (an access violation, not an Alt+F4)")
+        else:
+            print(f"  local: a crash dump is present but is {(time.time() - mtime) / 60.0:.1f}"
+                  " min old, so NOT from this run - kept out of the verdict")
+
     return {"local": os.path.join(WORK, "local"), "peer": os.path.join(WORK, "peer")}
 
 
@@ -379,6 +398,7 @@ def cmd_logs(a):
 
 
 def cmd_run(a):
+    t0 = time.time()        # the cutoff a crash dump is judged against
     proc = cmd_deploy(a)
     print(f"3. running for {a.seconds}s")
     deadline = time.time() + a.seconds
@@ -394,9 +414,16 @@ def cmd_run(a):
     finally:
         print("4. pulling logs")
         try:
-            dirs = pull_logs(a)
+            dirs = pull_logs(a, since=t0)
             if lp is not None:
-                print(f"  verdict: {lp.verdict(verdict_dirs(a, dirs))}")
+                # exactly what cmd_logs does: verdict_args() returns (names, logs) and
+                # verdict() takes them as two arguments. This line used to name
+                # verdict_dirs(), which does not exist, so `run` always died here and
+                # never printed a verdict at all.
+                names, vdirs = verdict_args(a, dirs)
+                print(f"  verdict: {lp.verdict(names, vdirs)}")
+            else:
+                print("  (mp_localpair not importable -- logs are in .mp-remote/)")
         except AgentError as e:
             print(f"  could not pull the peer's log: {e}")
 
