@@ -97,6 +97,19 @@ in (`-1` = on foot) and their ping. The order is the roster's, so it reads the w
 the match was built. `MP_PAUSE=1` holds the pause menu open for testing and
 `MP_DEBUG` logs each row.
 
+The engine's own pause menu keeps working, and the module adds a `Multiplayer`
+page to it with three rows:
+
+| Row | What it does |
+| --- | --- |
+| `Change car` | pick a city and one of its cars, then "Respawn as this car": your vehicle is replaced in place, and every peer re-models its copy of you. The city row offers the whole session when carhacks is installed (a session can mix cities' car data), and the session's own city alone when it is not |
+| `My colour` | your character's suit colour, on or off, plus RGB. Off (the default) keeps the game's own colours |
+| `Write diagnostics now` | writes `mp_diag.txt` next to the game |
+
+`Restart` is handled specially in a match: instead of rebuilding the level under
+everyone else, it puts YOU back at the world start, in your car, repaired and with
+no wanted level, and the session carries on.
+
 ## Config (`JERICHO/CONFIG/mp.ini`)
 
 | Key | Default | Meaning |
@@ -162,6 +175,20 @@ Use it for anything that needs two real engines: a car that never appears, a mod
 that launches wrong on one side, a connection that drops. `--clean` (and the
 automatic cleanup) unlinks the junctions before deleting anything, so it can
 never follow one into the real game tree.
+
+### Test levers for the on-foot and mid-match paths
+
+Set these on the harness (they are read from the environment, so every seat gets
+them):
+
+| Lever | What it exercises |
+| --- | --- |
+| `MP_TEST_ONFOOT=<secs>` | get out of the car that many seconds in, so the on-foot path runs at all |
+| `MP_BOT=pursuit` | drives the cars AND the on-foot Tanner (see `mp_bot.c`), so a run has motion without a human |
+| `MP_TEST_PAUSECAR=<secs>[,<city>,<model>]` | runs the pause menu's `Change car` apply path, so a mid-match vehicle change (including a cross-city one, with carhacks) is reproducible headlessly |
+| `MP_TEST_RESTART=<secs>` | fires the engine's own pause-menu answer, so a pass means the multiplayer soft restart is wired end to end |
+
+A run wants `lost=0` and `dumps=0`.
 
 `tools/mp_test.py` is a headless protocol harness (the game writes its log
 relative to the CWD, so two live instances cannot share a folder). It drives

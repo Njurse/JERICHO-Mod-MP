@@ -478,6 +478,21 @@ These have each cost real time. They are not hypothetical.
    which NOTHING arrived from that peer, sampled ONCE per sim frame — `MpNetPoll`
    runs several times a frame (frame hook, overlay, lockstep) and per-poll sampling
    counted the extra calls as "nothing arrived" (a phantom 77% on a healthy link).
+15. **A timeout must never compare `now` against a stamp taken later in the same
+   poll.** `MpNetPoll` reads the clock ONCE at its top, and the receive path stamps
+   each arrival as it happens, several steps later — and `GetTickCount` moves in
+   ~15 ms steps, so an arrival is regularly stamped a tick AHEAD of that `now`.
+   `(now - lastRecvMs)` is then a small NEGATIVE number, which in unsigned
+   arithmetic is enormous, so `> idle_drop_ms` was true in the very poll that heard
+   from the peer: the connection was dropped for `timeout` immediately after a
+   successful read (its own `mp_diag` said `heard 31ms ago`). That is the
+   long-standing "it disconnects after about a minute" report — it needed the poll
+   to straddle a tick, so it landed at 61-66 s, and at 114 s on a later run, and a
+   control run with NO on-foot state reproduced it, so it was never an on-foot bug.
+   All such comparisons now go through `MpElapsedMs`, which clamps a negative
+   difference to 0. (This also LOOKED like a socket failure: whoever dropped first
+   made the other side's next `send` fail — `WSAECONNABORTED`/`WSAECONNRESET` — with
+   a wedged send queue, which is why the send path now logs its error code.)
 
 ---
 
@@ -846,3 +861,97 @@ default token was looking at the wrong value.
 * The log is read with `FileShare.ReadWrite`. The game holds `JERICHO.log` open
 while it runs, and pulling a LIVE log is the point -- `ReadAllBytes` fails with
 "being used by another process" exactly when the log matters most.
+
+---
+
+## 17. Changing car, and restarting, mid-match
+
+Both of these are things the ENGINE does not know how to do in a match, and both
+are reachable from the Multiplayer pause page.
+
+### Change car
+
+`Multiplayer` -> `Change car` is a two-row cycler and an apply row (`mp.c`,
+mirroring the colour editor): a city, one of that city's cars, then "Respawn as
+this car". A row is a CYCLER and not a list because the pause menu's item set is
+fixed when the page opens and a module menu cannot nest a second level
+(`jer_pause_menu.h`) -- so a 12-car roster is reached by cycling.
+
+Applying it calls `MpChangeCar(city, model)` (`mp_session.c`), which does the
+SAME in-place re-model a peer's car goes through (`MpAdoptRemoteCar`): only the
+cosmetic model and the mesh change, on the slot we already drive, so nothing
+about this world's car slots -- and so nothing about anybody else's car -- is
+disturbed. On foot, the player is put into their parked car first, because
+"change car" from the pavement has to end with a car. The choice then travels the
+ordinary way: our carstate carries the new `(city, model)` from that frame on, so
+every peer re-models its copy of us, and a client also tells the host so the
+host's roster names the car it is really driving.
+
+**Where the cities come from.** mp can only offer what this machine can actually
+hold, and a second city's car data is carhacks' business, so mp ASKS:
+`mp_carquery.h` is a two-event contract (custom JERICHO event ids, so no shared
+header needed beyond that one file) answered by `carhacks/mplive.c`:
+
+| event | question | answer |
+| --- | --- | --- |
+| `MP_CARQ_CITIES` | which cities can this session offer? | 0..3 indices, or 0 = "nobody knows" |
+| `MP_CARQ_LOAD` | make `(city, model)` available here and in the session | `ok` |
+
+No answer is not an error: mp falls back to the session's own city and its
+frontend roster (`CarAvailability[city][slot]` + `carNumLookup[city][slot]`,
+the same two arrays the stock car screen and carhacks' own picker read), which is
+the whole feature minus the cross-city half.
+
+`MP_CARQ_LOAD` is not new machinery on carhacks' side either: it is the sequence a
+mid-match peer pick already goes through -- put the car in the session's canonical
+spare slot, then `chkImportHotLoad`, which reads that city in, builds the slot's
+geometry in the engine's own pool, applies its cosmetics and records its texture
+pages -- plus `chkNetAdvertisePick` (and `chkNetPublishSet` on the host) so every
+other machine loads it too. mp only swaps once `MpResidentSlotForCar` finds the
+car AND its mesh is built (`gCarCleanModelPtr`), because pointing a car at an
+unbuilt slot is a crash, not a cosmetic glitch.
+
+Test lever: `MP_TEST_PAUSECAR=<secs>[,<city>,<model>]` runs the same call the
+Apply row does, so a mid-match change is reproducible headlessly.
+
+### Restart is a soft reset
+
+The stock Restart calls `EndGame(GAMEMODE_RESTART)` and rebuilds the level
+(`main.c`). In a match that is not one player's to do: everybody else is in that
+same level and their session is not ours to reset. So JERICHO now hands a module
+the pause menu's ANSWER before acting on it -- `JER_EVENT_GAME_QUIT`, fired in
+`main.c` with the engine's `MENU_QUIT_*` code -- and `JER_RESULT_STOP` means "I
+handled it", so the engine runs none of its endings.
+
+mp claims RESTART and runs `MpSoftRestart()` instead: the player is put back at
+the level's own start (`PlayerStartInfo[0]`, x/z only with `t[1] = 0` so the
+engine resolves the ground, exactly as a car created at level init), velocities
+and speed zeroed, the handling matrix rebuilt for the new spot (a teleport that
+leaves it behind collides at the OLD place), the car REPAIRED (`totalDamage = 0`,
+`ap.damage[]` zeroed, `CreateDentableCar` -- the only thing that rebuilds the
+drawn vertices from the clean model -- and `JER_EVENT_RESET_CAR`), and the wanted
+level cleared (`felonyRating` AND `pedestrianFelony`, because `GetPlayerFelony`
+picks between them). On foot the player is put back into their parked car first.
+Then mp unpauses: claiming the code means the engine does not, and the pause menu
+has already closed itself.
+
+The others see the car arrive at the start, because the owner-authoritative
+carstate carries the pose like any other move. Quit and the other codes are left
+alone -- leaving a match is a real thing a player should be able to do.
+
+Test lever: `MP_TEST_RESTART=<secs>` fires the SAME event the engine fires, so a
+pass means the hook, mp's claim and the reset are all wired.
+
+### The on-foot bot
+
+The test bot drives the on-foot Tanner as well as a car (`mp_bot.c`). Tanner is
+tank-steered (`TANNER_PAD_GOFORWARD`/`GOBACK` walk him, `TURNLEFT`/`TURNRIGHT`
+rotate him, `pad.h`), which is close enough to a car that the SAME logic works:
+probe the scenery with the engine's own `CellEmpty`, pick a clear heading, steer
+at it. Only the body read (our `player[0].pPed`) and the pad emitted change, and
+a pedestrian needs a shorter probe and a smaller clearance than a car
+(`MPBOT_PED_*` / `MPBOT_PED_CLEAR`). He walks at the nearest other player and
+presses `TANNER_PAD_ACTION` when he reaches a car, so the whole get-out -> walk ->
+get-back-in loop runs without a human. It reaches the engine through
+`JER_EVENT_PED_INPUT`, which fires immediately before `ProcessTannerPad` -- the
+on-foot twin of the car's `JER_EVENT_NET_INPUT`.
