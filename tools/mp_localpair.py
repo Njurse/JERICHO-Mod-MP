@@ -409,11 +409,13 @@ def main():
                          "(PLAY_HOST.bat / PLAY_JOIN.bat) do, so it is the only way to test "
                          "what a player actually runs -- a bug that only appears without "
                          "MP_DEBUG is invisible otherwise.")
-    ap.add_argument("--bot", default="off", choices=["off", "random", "chase", "fight", "pursuit"],
-                    help="drive the player cars with the mp test bot: random / chase (host flees, "
-                         "joiner chases) / fight (both charge) / pursuit (BOTH hunt each other, so "
-                         "they reliably meet and collide). OFF by default -- this drives a real "
-                         "player's car.")
+    ap.add_argument("--bot", default="chase", choices=["off", "random", "chase", "fight", "pursuit"],
+                    help="drive the player cars with the mp test bot: random / chase (HOST FLEES, "
+                         "every joiner chases the host - the default, because it is what makes the "
+                         "cars actually meet and collide, which is what the collision, palette and "
+                         "catch-up work needs) / fight (both charge) / pursuit (BOTH hunt each "
+                         "other) / off (drive nothing: this drives a real player's car, so a "
+                         "reproduction of a human report should use it)")
     ap.add_argument("--level", default="rio",
                     help="city for the host to host (default rio)")
     ap.add_argument("--mp-arena", default="1",
