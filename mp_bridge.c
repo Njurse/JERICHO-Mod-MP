@@ -111,6 +111,20 @@ int jer_net_peer_count(void) { return MpPeerCount(); }
 int jer_net_local_player(void) { return MpIsActive() ? gMp.localPlayerId : -1; }
 int jer_net_local_car_chosen(void) { return MpIsActive() ? MpLocalCarChosen() : 0; }
 
+int jer_net_player_present(int id)
+{
+	MP_PLAYER* p;
+
+	/* No session: nobody is present. A module that holds per-player resources uses this
+	 * to notice a departure, so "no session" must not read as "still here". */
+	if (!MpIsActive() || id < 0)
+		return 0;
+
+	p = MpGetPlayer(id);
+
+	return (p != NULL && p->active && p->connected) ? 1 : 0;
+}
+
 /* Called by mp_session.c for each inbound MP_CHANNEL. */
 void MpBridgeDeliver(const char* channel, int peer, const void* data, int len)
 {
