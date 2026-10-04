@@ -778,20 +778,75 @@ if ($InstallRelease -or $Rollback) {
     exit 1
 }
 
+# Every IPv4 address this PC actually has. -Bind is checked against these BEFORE the
+# socket is asked for it, because .NET's answer to a non-local address is a bare
+#   Exception calling "Start" with "0" argument(s): "The requested address is not
+#   valid in its context"
+# (WSAEADDRNOTAVAIL) that says nothing about which addresses WOULD have worked. The
+# usual cause is an address copied from the OTHER PC, so the message has to list
+# this one's.
+function Get-LocalIPv4 {
+    $addrs = @()
+
+    try {
+        $addrs = @(Get-NetIPAddress -AddressFamily IPv4 -ErrorAction Stop |
+                   Select-Object -ExpandProperty IPAddress)
+    } catch {
+        # no Get-NetIPAddress (older PowerShell): ask DNS for this host's addresses
+        foreach ($ip in [System.Net.Dns]::GetHostAddresses([System.Net.Dns]::GetHostName())) {
+            if ($ip.AddressFamily -eq 'InterNetwork') { $addrs += $ip.ToString() }
+        }
+    }
+
+    $addrs += '127.0.0.1'
+
+    return @($addrs | Sort-Object -Unique)
+}
+
+# A listener that cannot come up must say why in one readable line and stop. `throw`
+# here printed a PowerShell stack trace AND the message three times, which is not
+# something to hand to whoever is sitting at the other PC.
+function Stop-WithMessage {
+    param([string] $Message)
+
+    Write-Host ''
+    Write-Host ('  ' + $Message) -ForegroundColor Yellow
+    Write-Host ''
+    exit 1
+}
+
 $script:AgentToken = Resolve-AgentToken
 
 $bindAddr = $null
 if (-not [System.Net.IPAddress]::TryParse($Bind, [ref]$bindAddr)) {
-    throw "-Bind must be an IP address of this PC, got '$Bind'"
+    Stop-WithMessage "-Bind must be an IP address of this PC, got '$Bind'"
 }
 if ($bindAddr.Equals([System.Net.IPAddress]::Any) -or $bindAddr.Equals([System.Net.IPAddress]::IPv6Any)) {
-    throw "refusing to listen on every interface ($Bind). Pass this PC's LAN address, e.g. -Bind 192.168.1.20"
+    Stop-WithMessage "refusing to listen on every interface ($Bind). Pass this PC's LAN address, e.g. -Bind 192.168.1.20"
 }
 
-Write-Own ("agent up: {0}:{1}, root {2}, build {3}, releases from {4}" -f $Bind, $Port, $Root, (Get-BuildStamp), $Repo)
+# An address this PC does not have can never be bound. Say so -- and say what it DOES
+# have -- instead of dying inside TcpListener.Start() with WSAEADDRNOTAVAIL.
+$local4 = Get-LocalIPv4
+
+if ($Bind -ne '127.0.0.1' -and ($local4 -notcontains $Bind)) {
+    # 169.254.x.x is a link-local address Windows makes up when a NIC has no DHCP
+    # lease: valid to bind, useless advice, so it is left out of the list shown.
+    $shown = @($local4 | Where-Object { $_ -notlike '169.254.*' })
+
+    Stop-WithMessage ("-Bind {0} is not an address on THIS PC, so nothing here can listen on it.
+  This PC's IPv4 address(es): {1}
+  Use the LAN one (192.168.x.x or 10.x.x.x) to accept the other PC; 127.0.0.1 only
+  works for commands from this machine itself." -f $Bind, ($shown -join ', '))
+}
 
 $listener = [System.Net.Sockets.TcpListener]::new($bindAddr, $Port)
 $listener.Start()
+
+# Logged only once the listener is actually up: a bind that fails must never have
+# claimed "agent up" first, which is what made this look like a crash after success.
+Write-Own ("agent up: {0}:{1}, root {2}, build {3}, releases from {4}" -f $Bind, $Port, $Root, (Get-BuildStamp), $Repo)
+
 Write-Host ''
 Write-Host "  mp agent listening on ${Bind}:$Port -- leave this window open." -ForegroundColor Green
 if ($bindAddr.Equals([System.Net.IPAddress]::Loopback)) {
