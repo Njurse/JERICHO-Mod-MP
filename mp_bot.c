@@ -1309,11 +1309,35 @@ static int MpBotAimPoint(const MPBOT_AI* ai, CAR_DATA* mine, int* outX, int* out
 	return 1;
 }
 
+/* Past this angle the car is not merely mis-aimed, it is OFF COURSE and needs a manoeuvre
+ * rather than more steering. About 97 degrees. */
+#define MPBOT_COURSE_ANGLE	1100
+
+/* How far directly behind the car is checked before reversing to get back on course. */
+#define MPBOT_BACK_LOOK		1400
+
+/* Is there room directly BEHIND the car? Asked of the GRID rather than with a scenery probe,
+ * because the grid is what the route was planned over: "the plan could use that ground" is
+ * the question that matters when deciding whether reversing will help, not "is this one
+ * point clear". */
+static int MpBotBehindClear(const AIMAP* map, CAR_DATA* mine)
+{
+	int behind = (mine->hd.direction + 2048) & 0xfff;
+	int bx = mine->hd.where.t[0] + (int)(((long)rsin(behind) * MPBOT_BACK_LOOK) >> 12);
+	int bz = mine->hd.where.t[2] + (int)(((long)rcos(behind) * MPBOT_BACK_LOOK) >> 12);
+	int ix, iz;
+
+	if (!AiMapSampleIndex(map, bx, bz, &ix, &iz))
+		return 0;		/* off the window: cannot promise anything */
+
+	return !AiMapBlocked(map, ix, iz);
+}
+
 /* Steer at a POINT with the same thresholds the heading code uses, because it is the same
  * car and the same handling: never reverse to correct, handbrake only while rolling, and
  * keep the throttle on when badly off line or a slow car can never turn. */
-static int MpBotSteerToPoint(CAR_DATA* mine, int aimX, int aimZ, int* turnFrames, int* turnPulse,
-	int* turnDir, int* backFrames, int* backDir)
+static int MpBotSteerToPoint(const AIMAP* map, CAR_DATA* mine, int aimX, int aimZ,
+	int* turnFrames, int* turnPulse, int* turnDir, int* backFrames, int* backDir, int* courseFrames)
 {
 	int dx = aimX - mine->hd.where.t[0];
 	int dz = aimZ - mine->hd.where.t[2];
@@ -1324,6 +1348,9 @@ static int MpBotSteerToPoint(CAR_DATA* mine, int aimX, int aimZ, int* turnFrames
 
 	if (spd < 0) spd = -spd;
 
+	if (*courseFrames > 0)
+		(*courseFrames)--;	/* counting down an active course correction */
+
 	if (*backFrames > 0)
 	{
 		(*backFrames)--;
@@ -1333,14 +1360,50 @@ static int MpBotSteerToPoint(CAR_DATA* mine, int aimX, int aimZ, int* turnFrames
 	if (*turnFrames > 0)
 		return MpBotTurnPad(turnFrames, turnPulse, *turnDir, mine->hd.speed);
 
-	if (adiff > 1500)
+	if (adiff > MPBOT_COURSE_ANGLE)
 	{
-		/* the target is behind us: turn round, never reverse - and note that with a
-		 * route this happens at the START of a leg, not every time the car passes
-		 * something, which is what the heading version got wrong */
+		/* OFF COURSE: getting back on it is a MANOEUVRE, and which one is decided from the
+		 * geometry rather than from a rule of thumb.
+		 *
+		 *   - the route is reachable in a straight line from here, so the car only has to
+		 *     point at it: a handbrake CUT does that in one movement;
+		 *   - the route is not directly reachable, but there is room BEHIND: reversing back
+		 *     towards the route is cheaper than sweeping the nose through space the car does
+		 *     not have. This is the case that earns a reverse - overshot a turning, or
+		 *     nose-in to a gap it has to back out of - and it steers while reversing so the
+		 *     nose comes onto the route on the way out;
+		 *   - neither: the contact policy above owns the problem, and this returns the turn.
+		 *
+		 * Both are bounded and neither alternates (a back-out is followed by a turn the OTHER
+		 * way), which is what keeps this from becoming the reversing shuffle that
+		 * never-reverse was introduced to kill in the first place. */
+		int toRoute = AiStarLineClear(map, mine->hd.where.t[0], mine->hd.where.t[2], aimX, aimZ);
+		int starting = (*courseFrames <= 0);	/* log the decision, not every frame of it */
+
+		if (!toRoute && MpBotBehindClear(map, mine))
+		{
+			*backDir = (diff > 0) ? 0 : 1;	/* steer so the nose comes onto the route */
+			*backFrames = MPBOT_BACK_FRAMES;
+			*turnDir = !(*backDir);
+			*courseFrames = 30;
+
+			if (starting && gMpCtx != NULL)
+				gMpCtx->jer_log(gMpCtx,
+					"[mp] catmouse: off course %d deg and the route is not directly reachable - reversing onto it (dir %d)\n",
+					(adiff * 360) / 4096, *backDir);
+
+			return CAR_PAD_BRAKE | (*backDir ? CAR_PAD_LEFT : CAR_PAD_RIGHT);
+		}
+
 		*turnFrames = MPBOT_TURN_FRAMES + 20;
 		*turnPulse = MPBOT_TURN_FRAMES;
 		*turnDir = diff;
+		*courseFrames = 30;
+
+		if (starting && toRoute && gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx,
+				"[mp] catmouse: off course %d deg with a clear line to the route - handbrake cut (dir %d)\n",
+				(adiff * 360) / 4096, *turnDir);
 
 		return MpBotTurnPad(turnFrames, turnPulse, *turnDir, mine->hd.speed);
 	}
@@ -1468,7 +1531,7 @@ static int MpBotCatMouse(void)
 {
 	MP_PLAYER* me = MpLocalPlayer();
 	static MPBOT_AI ai;
-	static int stuckFrames, turnFrames, turnPulse, turnDir, backFrames, backDir;
+	static int stuckFrames, turnFrames, turnPulse, turnDir, backFrames, backDir, courseFrames;
 	CAR_DATA* mine;
 	CAR_DATA* tgt = NULL;
 	int k, pad, aimX, aimZ;
@@ -1556,7 +1619,8 @@ static int MpBotCatMouse(void)
 	if (!MpBotAimPoint(&ai, mine, &aimX, &aimZ))
 		return MpBotChase(0);
 
-	pad = MpBotSteerToPoint(mine, aimX, aimZ, &turnFrames, &turnPulse, &turnDir, &backFrames, &backDir);
+	pad = MpBotSteerToPoint(&ai.map, mine, aimX, aimZ, &turnFrames, &turnPulse, &turnDir,
+		&backFrames, &backDir, &courseFrames);
 
 	/* the plan log, rate-limited: a run should read as a story, not a wall of lines */
 	if ((gMp.frame % 60) == 0 && gMpCtx != NULL)
