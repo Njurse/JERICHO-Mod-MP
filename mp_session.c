@@ -1161,6 +1161,47 @@ static void MpHandleRoster(const unsigned char* p, int len)
 				gMp.pendingSpawn = 1;
 		}
 	}
+
+	/* AND REMOVE THE ONES THE ROSTER NO LONGER NAMES - they have left.
+	 *
+	 * This was the whole of "cars still dont disappear when the clients disconnect": the
+	 * adopt pass above only ever ADDED players, and the one function that puts a remote car
+	 * back in the world (MpReleaseRemoteCar) was only reached for a player who went ON FOOT
+	 * (MP_CARSTATE_NO_CAR), never for one who left the session. So on every machine that
+	 * was not the host, a departed player's car stood there parked with nobody driving it,
+	 * for the rest of the match.
+	 *
+	 * The roster is the right place: it is the host's list of who is in the match, so
+	 * "not named" is exactly "gone". MpRemovePlayer does the world-side work (the car goes
+	 * back to the world, the slot is recycled, the row is dropped so nothing re-pastes a
+	 * transform onto it) - see mp_players.c. */
+	for (i = 0; i < MP_MAX_PLAYERS; i++)
+	{
+		MP_PLAYER* pl = &gMp.players[i];
+		int j, named = 0;
+
+		if (!pl->active || pl->isLocal)
+			continue;
+
+		for (j = 0; j < n; j++)
+		{
+			if ((int)r.entries[j].id == pl->id)
+			{
+				named = 1;
+				break;
+			}
+		}
+
+		if (named)
+			continue;
+
+		if (gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx,
+				"[mp] player %d is no longer in the roster - taking their car out of the world\n",
+				pl->id);
+
+		MpRemovePlayer(pl->id);
+	}
 }
 
 int MpStartMatch(void)
