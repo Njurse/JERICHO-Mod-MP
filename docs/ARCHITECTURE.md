@@ -800,6 +800,9 @@ this is ever rewritten:
 * **It pulls a published build; nothing is pushed to it.** `update [tag]` makes
 the agent fetch that GitHub release (the rolling `alpha` pre-release CI refreshes
 from main, by default) over HTTPS, and the command carries nothing but the tag. It
+installs only the Release_dev Windows asset (`JERICHO_Release_dev_win64.zip`, which
+carries `JERICHO_dev.exe`); the plain Release assets are refused, by name and by
+content (an archive carrying `JERICHO.exe`), until they count as real releases. It
 replaces only the exe, its `.pdb`/`.map`, `SDL2.dll`, `OpenAL32.dll`, `JERICHO`
 (keeping the live `CONFIG` files) and `VERSION.txt`. The game data (1.6 GB) and
 `config.ini` are deliberately outside that set because they do not change between

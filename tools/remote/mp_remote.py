@@ -12,8 +12,9 @@
 The other PC runs `mp_agent.ps1` (START_AGENT.bat -Bind <its LAN address>) once
 and is then hands-free: `update`/`deploy`/`run` tell it which GitHub RELEASE to
 install (the rolling 'alpha' pre-release unless --tag says otherwise), and the
-agent downloads it from GitHub itself, verifies it, stops any running game,
-installs the build and starts it again on its own. Nothing is pushed from here:
+agent downloads that release's Release_dev build (JERICHO_Release_dev_win64.zip;
+the plain Release assets are refused) from GitHub itself, verifies it, stops any
+running game, installs the build and starts it again on its own. Nothing is pushed from here:
 the only thing an update carries is the release tag.
 
 The agent's token is printed on that PC the first time it starts (and kept in its

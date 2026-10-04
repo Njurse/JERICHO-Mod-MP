@@ -36,6 +36,10 @@
 #   * The token is random: generated on the first run and kept in
 #     mp_agent.config.json next to the game (never committed). The old published
 #     default 'jericho-mp' is refused. The token is never written to mp_agent.log.
+#   * Only the Release_dev Windows build (JERICHO_Release_dev_win64.zip, which
+#     carries JERICHO_dev.exe) is ever installed. The plain Release assets that CI
+#     publishes beside it are not considered real releases yet and are refused, by
+#     name and again by what the archive contains.
 #   * A build is only ever taken from the releases of -Repo. The trust root is
 #     GitHub's TLS and that repository's release permissions: whoever can publish a
 #     release there can ship code here. (Signing the archives with a pinned key
@@ -52,7 +56,7 @@ param(
     [string] $Root  = '',              # defaults to the folder this script sits in
     [string] $Repo  = 'Njurse/JERICHO',                  # owner/name the releases come from
     [string] $Tag   = 'alpha',                           # the release `update` installs by default
-    [string] $Asset = 'JERICHO_Release_dev_win64.zip',   # the release asset to install
+    [string] $Asset = 'JERICHO_Release_dev_win64.zip',   # the ONLY asset accepted: the Release_dev build
     [switch] $InstallRelease,          # one-shot: install -Tag, then exit (no listener)
     [switch] $Rollback,                # one-shot: restore the previous build, then exit
     [switch] $Force,                   # reinstall even when that exact archive is already installed
@@ -97,7 +101,14 @@ $SwapSet    = $InstallSet + @('VERSION.txt', $StateFile)
 # URL, and the repository is owner/name -- so neither can point a download elsewhere.
 $TagPattern   = '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$'
 $RepoPattern  = '^[A-Za-z0-9-]{1,39}/[A-Za-z0-9._-]{1,100}$'
-$AssetPattern = '^[A-Za-z0-9][A-Za-z0-9._-]{0,127}\.zip$'
+
+# The one asset this agent installs. build.yml publishes Release AND Release_dev
+# archives for each platform; only the Release_dev Windows build (JERICHO_dev.exe)
+# counts for now -- the plain Release ones are not treated as real releases yet,
+# and their exe (JERICHO.exe) is not what this agent starts or stops anyway.
+$DevAsset   = 'JERICHO_Release_dev_win64.zip'
+$DevExe     = 'JERICHO_dev.exe'
+$NonDevExe  = 'JERICHO.exe'     # the plain Release exe: an archive carrying it is refused
 
 $script:Game      = $null   # the running game process, or $null
 $script:LastArgs  = $null   # its arguments, so an update can put it back exactly
@@ -318,9 +329,9 @@ function Expand-ZipSafely {
 function Find-BuildFolder {
     # The archive keeps the build at its root today; tolerate one wrapping folder.
     param([string] $Unpacked)
-    if (Test-Path -LiteralPath (Join-Path $Unpacked 'JERICHO_dev.exe')) { return $Unpacked }
+    if (Test-Path -LiteralPath (Join-Path $Unpacked $DevExe)) { return $Unpacked }
     $dirs = @(Get-ChildItem -LiteralPath $Unpacked -Directory)
-    if ($dirs.Count -eq 1 -and (Test-Path -LiteralPath (Join-Path $dirs[0].FullName 'JERICHO_dev.exe'))) {
+    if ($dirs.Count -eq 1 -and (Test-Path -LiteralPath (Join-Path $dirs[0].FullName $DevExe))) {
         return $dirs[0].FullName
     }
     return $null
@@ -420,7 +431,11 @@ function Install-Release {
         $release = Invoke-GitHubApi ('repos/{0}/releases/tags/{1}' -f $Repo, [uri]::EscapeDataString($ReleaseTag))
 
         $assetObj = @($release.assets | Where-Object { $_.name -eq $Asset })
-        if ($assetObj.Count -ne 1) { return "ERR release '$ReleaseTag' has no asset named $Asset" }
+        if ($assetObj.Count -ne 1) {
+            $others = @($release.assets | ForEach-Object { $_.name } | Where-Object { $_ -like '*.zip' })
+            $seen = if ($others.Count) { ' (it has: ' + ($others -join ', ') + ')' } else { '' }
+            return "ERR release '$ReleaseTag' has no $Asset -- only the Release_dev build is installed, Release assets are refused$seen"
+        }
         $assetObj = $assetObj[0]
 
         if (Test-Path -LiteralPath $Staging) { Remove-Item -LiteralPath $Staging -Recurse -Force }
@@ -451,7 +466,12 @@ function Install-Release {
         Expand-ZipSafely $zipPath $unpacked
         $build = Find-BuildFolder $unpacked
         if ($null -eq $build -or -not (Test-Path -LiteralPath (Join-Path $build 'JERICHO') -PathType Container)) {
-            return "ERR $Asset does not look like a game build (no JERICHO_dev.exe + JERICHO\) -- nothing installed"
+            return "ERR $Asset does not look like a game build (no $DevExe + JERICHO\) -- nothing installed"
+        }
+        if (Test-Path -LiteralPath (Join-Path $build $NonDevExe)) {
+            # A Release_dev archive never carries the plain Release exe; one that does
+            # is mislabelled, and is refused rather than half-installed.
+            return "ERR $Asset carries $NonDevExe (a Release build, not Release_dev) -- nothing installed"
         }
 
         # Stage ONLY the install set, so nothing else in the archive (DRIVER2\,
@@ -733,7 +753,9 @@ if (-not $PSBoundParameters.ContainsKey('Repo')) {
     }
 }
 if ($Tag -notmatch $TagPattern) { throw "-Tag is not a valid release tag: '$Tag'" }
-if ($Asset -notmatch $AssetPattern) { throw "-Asset must be a .zip file name, got '$Asset'" }
+if ($Asset -ne $DevAsset) {
+    throw "only the Release_dev build is installed: -Asset must be $DevAsset (got '$Asset'). The plain Release assets are refused."
+}
 
 if ($InstallRelease -or $Rollback) {
     if ($Rollback) { $reply = Invoke-Rollback } else { $reply = Install-Release $Tag -Reinstall:$Force }

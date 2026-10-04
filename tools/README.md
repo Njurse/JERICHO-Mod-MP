@@ -285,9 +285,11 @@ everything below happens from here, and you never touch it again.
     stop     close the game on both machines (PID-scoped: only the one we started)
 
 **Nothing is pushed to the agent.** An update carries only a release tag; the agent
-downloads that release from GitHub over HTTPS itself, checks the zip's SHA256
-against the digest GitHub publishes for the asset (or, failing that, the
-`SHA256SUMS` asset published beside it — never a manifest inside the zip),
+downloads that release's **Release_dev** Windows zip (`JERICHO_Release_dev_win64.zip`,
+the only asset it accepts; the plain Release assets are refused) from GitHub over
+HTTPS itself, checks the zip's SHA256 against the digest GitHub publishes for the
+asset (or, failing that, the `SHA256SUMS` asset published beside it — never a
+manifest inside the zip),
 unpacks it in a staging folder, and only then swaps the exe, its DLLs and `JERICHO`
 in, keeping what they replaced in `_mp_previous` for `rollback`. A bad download
 can never leave a half-applied build, and the 1.6 GB of game data is never touched.
