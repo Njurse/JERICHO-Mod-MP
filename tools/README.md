@@ -266,44 +266,56 @@ if you want to test mismatched builds deliberately.
 
 ## Testing on the other PC without touching it (the agent)
 
-    JERICHO\MODS\mp\tools\remote\START_AGENT.bat      <- run ONCE on the other PC
+    JERICHO\MODS\mp\tools\remote\START_AGENT.bat -Bind <its LAN ip>   <- run ONCE on the other PC
+    set MP_AGENT_TOKEN=<the token it printed>
     python JERICHO\MODS\mp\tools\remote\mp_remote.py run --peer 192.168.50.244 --seat host
 
 Copy the two files in `tools\remote\` (they already ride along in the LAN package)
-next to `JERICHO_dev.exe` on the other machine, double-click `START_AGENT.bat`
-once, and leave the window open. That machine is then a **fixture**, not a
-chore: everything below happens from here, and you never touch it again.
+next to `JERICHO_dev.exe` on the other machine, run `START_AGENT.bat` once with that
+machine's LAN address (as administrator the first time, for the firewall rules),
+and leave the window open. That machine is then a **fixture**, not a chore:
+everything below happens from here, and you never touch it again.
 
-    status   what build it is on, whether the game is up, how many files differ
-    deploy   send only what CHANGED, then start both seats on the same build
+    status   what build/release it is on, whether a rollback exists, whether the game is up
+    update   install a GitHub release there: the rolling 'alpha' by default, or --tag v0.9.1
+    deploy   update (skip with --no-update), then start both seats
     run      deploy, wait, pull BOTH logs back, print a PASS/FAIL verdict
     logs     pull both logs and give the verdict
+    rollback put back the build the last update replaced
     stop     close the game on both machines (PID-scoped: only the one we started)
 
-`deploy`/`run` send the exe, `JERICHO` and `VERSION.txt` — a few MB — and never
-the 1.6 GB of game data, because only those files ever change between builds. The
-agent verifies every file's SHA256 against the manifest inside the package and
-refuses the WHOLE update if one file disagrees, so a bad transfer can never leave
-a half-applied build.
+**Nothing is pushed to the agent.** An update carries only a release tag; the agent
+downloads that release from GitHub over HTTPS itself, checks the zip's SHA256
+against the digest GitHub publishes for the asset (or, failing that, the
+`SHA256SUMS` asset published beside it — never a manifest inside the zip),
+unpacks it in a staging folder, and only then swaps the exe, its DLLs and `JERICHO`
+in, keeping what they replaced in `_mp_previous` for `rollback`. A bad download
+can never leave a half-applied build, and the 1.6 GB of game data is never touched.
+Because the peer runs a PUBLISHED build, push to main (or tag) and let CI publish
+before testing a change on two machines.
 
-**Hands-free** means the agent is resident: if a sync arrives while a game is
-running it stops the game, updates, and starts it AGAIN with the same arguments.
-Leave that PC running a client, push a build from here, and watch the new build
-come up on its own. Its log of every command and what it did is `mp_agent.log`
-next to the game.
+**Hands-free** means the agent is resident: if an update arrives while a game is
+running it stops the game, installs, and starts it AGAIN with the same arguments.
+Leave that PC running a client, ask for an update from here, and watch the new
+build come up on its own. Its log of every command and what it did is
+`mp_agent.log` next to the game.
 
 Two things the loopback dry run taught us, worth knowing because they look like
 the agent is broken:
 
-* **A game started by the agent is stopped when a later `start`/`sync` arrives.**
+* **A game started by the agent is stopped when a later `start`/`update` arrives.**
   It checks "is a game running" by process name, so on ONE machine the two seats
   cannot coexist — that is only an artifact of testing both halves locally, and is
   exactly what you want on two machines.
 * **The first run needs the firewall.** `START_AGENT.bat` as administrator, once,
-  or the connection is refused (it says so).
+  or the connection is refused (it says so). The rules only cover the Private
+  network profile and the local subnet.
 
-The token (`-Token`, default `jericho-mp`) is not a security boundary: it stops a
-stray program on the same LAN from driving that machine by accident.
+**Security.** The agent listens on 127.0.0.1 unless given `-Bind <LAN address>`, and
+refuses to bind every interface. Its token is random, generated on first start and
+kept in `mp_agent.config.json` beside the game (gitignored, never logged); the old
+default `jericho-mp` is refused. It is still a plain-text protocol meant for a LAN
+you trust: do not forward port 1401 to the internet.
 
 ## A crash is not an Alt+F4
 

@@ -1,33 +1,37 @@
 #!/usr/bin/env python3
 """Drive a second PC through its mp agent, so a two-machine test is one command.
 
-    python mp_remote.py status  --peer 192.168.50.244
-    python mp_remote.py deploy  --peer 192.168.50.244 --seat host
-    python mp_remote.py run     --peer 192.168.50.244 --seat host --seconds 90
-    python mp_remote.py logs    --peer 192.168.50.244
-    python mp_remote.py stop    --peer 192.168.50.244
+    python mp_remote.py status   --peer 192.168.50.244
+    python mp_remote.py update   --peer 192.168.50.244 [--tag v0.9.1]
+    python mp_remote.py deploy   --peer 192.168.50.244 --seat host
+    python mp_remote.py run      --peer 192.168.50.244 --seat host --seconds 90
+    python mp_remote.py logs     --peer 192.168.50.244
+    python mp_remote.py rollback --peer 192.168.50.244
+    python mp_remote.py stop     --peer 192.168.50.244
 
-The other PC runs `mp_agent.ps1` (START_AGENT.bat) once and is then hands-free:
-`deploy`/`run` sends it only the FILES THAT CHANGED (the exe, JERICHO, VERSION.txt
--- not the 1.6 GB of game data), and the agent stops any running game, applies the
-build and starts it again on its own.
+The other PC runs `mp_agent.ps1` (START_AGENT.bat -Bind <its LAN address>) once
+and is then hands-free: `update`/`deploy`/`run` tell it which GitHub RELEASE to
+install (the rolling 'alpha' pre-release unless --tag says otherwise), and the
+agent downloads it from GitHub itself, verifies it, stops any running game,
+installs the build and starts it again on its own. Nothing is pushed from here:
+the only thing an update carries is the release tag.
+
+The agent's token is printed on that PC the first time it starts (and kept in its
+mp_agent.config.json). Pass it with --token or the MP_AGENT_TOKEN environment
+variable.
 
 This machine is driven directly (Popen, so a real PID we can kill), which is why
 the local seat is reliable and the remote seat goes through the agent.
 """
 
 import argparse
-import hashlib
 import json
 import os
 import shutil
 import socket
-import struct
 import subprocess
 import sys
 import time
-import zipfile
-import io
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 TOOLS = os.path.dirname(HERE)                       # JERICHO/MODS/mp/tools
@@ -36,10 +40,9 @@ GAME_DIR = os.path.join(REPO, "src_rebuild", "bin", "Release_dev")
 EXE_NAME = "JERICHO_dev.exe"
 WORK = os.path.join(GAME_DIR, ".mp-remote")          # logs pulled from both seats
 DEFAULT_PORT = 1401
-DEFAULT_TOKEN = "jericho-mp"
-# What a sync may replace. Deliberately NOT DRIVER2/ -- 1.6 GB that never changes
-# between builds.
-SYNC_SET = (EXE_NAME, "VERSION.txt", "JERICHO")
+DEFAULT_TAG = "alpha"               # the rolling pre-release build.yml refreshes from main
+# An update downloads ~20 MB from GitHub and installs it before it answers.
+UPDATE_TIMEOUT = 900
 
 sys.path.insert(0, TOOLS)
 try:
@@ -55,7 +58,7 @@ class AgentError(RuntimeError):
 class Agent:
     """A tiny client for mp_agent.ps1: one line in, one line out."""
 
-    def __init__(self, host, port=DEFAULT_PORT, token=DEFAULT_TOKEN, timeout=30):
+    def __init__(self, host, port=DEFAULT_PORT, token=None, timeout=30):
         self.host, self.port, self.token = host, port, token
         self.timeout = timeout
 
@@ -80,8 +83,10 @@ class Agent:
             buf += ch
         return buf.decode("ascii", "replace").rstrip("\r\n")
 
-    def _command(self, cmd, rest="", keep_open=False):
+    def _command(self, cmd, rest="", keep_open=False, timeout=None):
         s = self._connect()
+        if timeout is not None:
+            s.settimeout(timeout)
         line = f"{cmd} {self.token}" + (f" {rest}" if rest else "")
         s.sendall(line.encode("ascii") + b"\n")
         reply = self._read_line(s)
@@ -112,19 +117,13 @@ class Agent:
     def start(self, args):
         return self._command("start", args)
 
-    def sync(self, blob, name):
-        # No "ready" handshake: the agent reads <name>\n<length>\n<payload> as the
-        # FIRST thing it does for a sync, so waiting for a reply line before sending
-        # the payload deadlocks both ends. Send it straight away and read once.
-        s = self._connect()
-        s.sendall(f"sync {self.token}\n".encode("ascii"))
-        s.sendall(f"{name}\n{len(blob)}\n".encode("ascii"))
-        s.sendall(blob)
-        reply = self._read_line(s)
-        s.close()
-        if reply.startswith("ERR "):
-            raise AgentError(f"the agent refused the sync: {reply[4:]}")
-        return reply
+    def update(self, tag):
+        """Have the agent install release `tag` from GitHub. Only the TAG goes over
+        the wire; the agent fetches and verifies the build itself."""
+        return self._command("update", tag, timeout=UPDATE_TIMEOUT)
+
+    def rollback(self):
+        return self._command("rollback")
 
     def log(self):
         s, header = self._command("log", keep_open=True)
@@ -170,79 +169,21 @@ class Agent:
         return data, header
 
 
-# ------------------------------------------------------------------ delta sync
+# ------------------------------------------------------------------ release install
 
-def hash_file(path):
-    h = hashlib.sha256()
-    with open(path, "rb") as f:
-        for block in iter(lambda: f.read(1 << 20), b""):
-            h.update(block)
-    return h.hexdigest()
-
-
-def local_files():
-    """{relative path -> sha256} for everything a sync may replace."""
-    out = {}
-    for name in SYNC_SET:
-        p = os.path.join(GAME_DIR, name)
-        if os.path.isfile(p):
-            out[name] = hash_file(p)
-        elif os.path.isdir(p):
-            for root, _dirs, files in os.walk(p):
-                for fn in files:
-                    full = os.path.join(root, fn)
-                    rel = os.path.relpath(full, GAME_DIR).replace("\\", "/")
-                    out[rel] = hash_file(full)
-    return out
+def describe_release(st):
+    """One line for what the peer has installed, from its status reply."""
+    rel = st.get("release") or {}
+    if not rel:
+        return "no release installed by the agent"
+    return (f"{rel.get('tag')} ({rel.get('commit') or '?'}) sha256 "
+            f"{str(rel.get('sha256', ''))[:12].lower()}  [{rel.get('verifiedBy')}]")
 
 
-def make_delta(local, remote):
-    """A zip of just the files whose hash differs, plus a manifest to verify."""
-    changed = [rel for rel, h in sorted(local.items()) if remote.get(rel) != h]
-    gone = [rel for rel in remote if rel not in local]
-    if not changed and not gone:
-        return None, [], []
-
-    buf = io.BytesIO()
-    manifest = []
-    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
-        for rel in changed:
-            z.write(os.path.join(GAME_DIR, rel), rel)
-            manifest.append(f"{local[rel]}  {rel}")
-        z.writestr("manifest.sha256", "\n".join(manifest) + "\n")
-    return buf.getvalue(), changed, gone
-
-
-def do_sync(agent, quiet=False):
-    st = agent.status()
-    # Get-FileHash gives UPPERCASE hex and Python gives lowercase; without this the
-    # comparison never matches and every sync resends the whole tree.
-    remote = {k: v.lower() for k, v in st.get("files", {}).items()}
-    local = local_files()
-    blob, changed, gone = make_delta(local, remote)
-
-    if blob is None:
-        if not quiet:
-            print(f"  peer already matches (build {st.get('build')}) -- nothing to send")
-        return st, 0
-
-    mb = len(blob) / 1048576
-    print(f"  sending {len(changed)} changed file(s), {mb:.2f} MB "
-          f"(peer was build {st.get('build')})")
-    for rel in changed[:12]:
-        print(f"    ~ {rel}")
-    if len(changed) > 12:
-        print(f"    ... and {len(changed) - 12} more")
-    if gone:
-        # We never delete on the peer: a leftover file is harmless, a wrong delete
-        # is not. Say so rather than silently leaving it.
-        print(f"  note: {len(gone)} file(s) exist there but not here -- left alone:")
-        for rel in gone[:6]:
-            print(f"    - {rel}")
-
-    reply = agent.sync(blob, "JERICHO_mp_lan")
+def do_update(agent, tag):
+    reply = agent.update(tag)
     print(f"  {reply}")
-    return agent.status(), len(changed)
+    return agent.status()
 
 
 # ------------------------------------------------------------------ seats
@@ -288,19 +229,29 @@ def default_ip():
 def cmd_status(a):
     agent = Agent(a.peer, a.port, a.token)
     st = agent.status()
-    local = local_files()
-    remote = {k: v.lower() for k, v in st.get("files", {}).items()}
-    changed = [r for r, h in local.items() if remote.get(r) != h]
     here = "unknown"
     vp = os.path.join(GAME_DIR, "VERSION.txt")
     if os.path.isfile(vp):
         here = open(vp).read().strip()
     print(f"peer {a.peer}:{a.port}")
     print(f"  build there : {st.get('build')}")
+    print(f"  release     : {describe_release(st)}  (from {st.get('repo')})")
+    print(f"  rollback    : {'available' if st.get('previous') else 'none'}")
     print(f"  build here  : {here}")
     print(f"  game running: {st.get('running')}" + (f"  args: {st.get('args')}" if st.get('running') else ""))
     print(f"  log         : {st.get('logBytes')} bytes    crash dump: {st.get('dump')}")
-    print(f"  would sync  : {len(changed)} file(s)")
+
+
+def cmd_update(a):
+    agent = Agent(a.peer, a.port, a.token)
+    print(f"asking {a.peer}:{a.port} to install release '{a.tag}'")
+    st = do_update(agent, a.tag)
+    print(f"  now on: {st.get('build')}")
+
+
+def cmd_rollback(a):
+    agent = Agent(a.peer, a.port, a.token)
+    print(f"  {agent.rollback()}")
 
 
 def cmd_deploy(a):
@@ -308,8 +259,17 @@ def cmd_deploy(a):
     host_ip = a.host_ip or default_ip()
     print(f"deploying to {a.peer}:{a.port}   (local seat = {a.seat}, host is {host_ip})")
 
-    print("1. sync")
-    do_sync(agent)
+    if a.no_update:
+        print("1. update: skipped (--no-update)")
+        st = agent.status()
+    else:
+        print(f"1. update (release '{a.tag}')")
+        st = do_update(agent, a.tag)
+    # The peer runs a RELEASE build and this seat runs the local one; with
+    # strict_version on they must be the same build or the join is refused.
+    print(f"  peer runs : {st.get('build')}")
+    vp = os.path.join(GAME_DIR, "VERSION.txt")
+    print(f"  local runs: {open(vp).read().strip() if os.path.isfile(vp) else 'unknown (no VERSION.txt)'}")
 
     print("2. start")
     remote_args = seat_args("client" if a.seat == "host" else "host", host_ip, a.port_game, a.extra)
@@ -443,12 +403,18 @@ def cmd_run(a):
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("action", choices=["status", "deploy", "run", "logs", "stop"])
+    ap.add_argument("action", choices=["status", "update", "deploy", "run", "logs", "rollback", "stop"])
     ap.add_argument("--peer", required=True, help="the other PC's IP")
     ap.add_argument("--port", type=int, default=DEFAULT_PORT, help="the AGENT's port")
     ap.add_argument("--game-port", type=int, default=1400, dest="port_game",
                     help="the GAME's port")
-    ap.add_argument("--token", default=DEFAULT_TOKEN)
+    ap.add_argument("--token", default=os.environ.get("MP_AGENT_TOKEN"),
+                    help="the agent's token (printed on that PC at first start; "
+                         "default: $MP_AGENT_TOKEN)")
+    ap.add_argument("--tag", default=DEFAULT_TAG,
+                    help="the GitHub release the peer installs (default: alpha)")
+    ap.add_argument("--no-update", action="store_true",
+                    help="deploy/run: start the peer on whatever build it already has")
     ap.add_argument("--seat", choices=["host", "client"], default="host",
                     help="what THIS machine should be")
     ap.add_argument("--host-ip", default=None,
@@ -459,10 +425,15 @@ def main():
                     help="seconds between starting the host and the client")
     ap.add_argument("--seconds", type=int, default=90, help="how long `run` waits")
     a = ap.parse_args()
+    if not a.token:
+        ap.error("no agent token: pass --token or set MP_AGENT_TOKEN (START_AGENT.bat "
+                 "prints it on the other PC the first time it runs, and keeps it in "
+                 "mp_agent.config.json there)")
 
     try:
-        {"status": cmd_status, "deploy": cmd_deploy, "run": cmd_run,
-         "logs": cmd_logs, "stop": cmd_stop}[a.action](a)
+        {"status": cmd_status, "update": cmd_update, "deploy": cmd_deploy,
+         "run": cmd_run, "logs": cmd_logs, "rollback": cmd_rollback,
+         "stop": cmd_stop}[a.action](a)
     except AgentError as e:
         print(f"\nERROR: {e}", file=sys.stderr)
         return 2

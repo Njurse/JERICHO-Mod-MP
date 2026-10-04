@@ -780,48 +780,66 @@ gets out afterwards. It fires on every machine the env var reaches.
 
 A two-machine bug is diagnosed from two logs, so the rig exists to get both logs
 with one command -- but it is built as a resident **agent** rather than a one-shot
-push, because a test machine you have to visit between iterations is the thing
+copy, because a test machine you have to visit between iterations is the thing
 that makes two-machine testing not happen.
 
 `tools/remote/mp_agent.ps1` runs on the other PC (`START_AGENT.bat`, once, in its
-own window) and serves a fixed command set over TCP: `ping`, `status`, `sync`,
-`start`, `stop`, `log`, `quit`. It is PowerShell because that is already on every
-Windows box -- no Python, no install, no admin beyond the firewall rule -- and it
-only ever writes inside the folder it is pointed at. The token is a courtesy
-label, not a security boundary.
+own window) and serves a fixed command set over TCP: `ping`, `status`, `update
+[tag]`, `rollback`, `start`, `stop`, `log`, `dump`, `quit`. It is PowerShell
+because that is already on every Windows box -- no Python, no install, no admin
+beyond the firewall rule -- and it only ever writes inside the folder it is
+pointed at.
 
-`tools/remote/mp_remote.py` is the client: `status`, `deploy`, `run`, `logs`,
-`stop`. It drives the LOCAL seat directly (`Popen`, so a real PID we can kill
-without guessing) and the remote seat through the agent.
+`tools/remote/mp_remote.py` is the client: `status`, `update`, `deploy`, `run`,
+`logs`, `rollback`, `stop`. It drives the LOCAL seat directly (`Popen`, so a real
+PID we can kill without guessing) and the remote seat through the agent.
 
 The two properties that make it hands-free, both of which are worth keeping if
 this is ever rewritten:
 
-* **It syncs what changed, not the build.** `status` returns a SHA256 map of the
-exe, `VERSION.txt` and `JERICHO`; the client sends a zip of just the differing
-files plus a manifest. The game data (1.6 GB) is deliberately outside that set
-because it does not change between builds.
-* **The agent is resident and restarts the game itself.** A sync that arrives while
-a game is running stops it, applies the build and starts it again with the same
-arguments. Leave the other PC running a seat, push a build, and the new build comes
-up on its own.
+* **It pulls a published build; nothing is pushed to it.** `update [tag]` makes
+the agent fetch that GitHub release (the rolling `alpha` pre-release CI refreshes
+from main, by default) over HTTPS, and the command carries nothing but the tag. It
+replaces only the exe, its `.pdb`/`.map`, `SDL2.dll`, `OpenAL32.dll`, `JERICHO`
+(keeping the live `CONFIG` files) and `VERSION.txt`. The game data (1.6 GB) and
+`config.ini` are deliberately outside that set because they do not change between
+builds.
+* **The agent is resident and restarts the game itself.** An update that arrives
+while a game is running stops it, installs the build and starts it again with the
+same arguments. Leave the other PC running a seat, ask for an update, and the new
+build comes up on its own.
+
+Why pull and not push (issue #1): the push version unpacked whatever zip arrived
+on the port and checked it against a manifest inside that same zip, so anyone who
+could reach port 1401 -- with a published default token -- could replace the exe.
+Now the zip's SHA256 must match a digest from a separate source: GitHub's per-asset
+`digest` field, or failing that a `SHA256SUMS` asset published beside the zips
+(for a release that has one). With neither, the agent refuses to install. The listener binds
+127.0.0.1 unless given `-Bind <LAN address>` (never 0.0.0.0), refuses the old
+`jericho-mp` token, generates a random one into `mp_agent.config.json` on first
+start and never writes it to `mp_agent.log`; the firewall rules cover only the
+Private profile and the local subnet. That is still a LAN tool, not something to
+expose to the internet. A later step could sign the archives and pin the public
+key in the agent, which would also cover a compromised release.
 
 Traps found by actually running it (each one defeated the rig until fixed):
 
-* A package is **verified before it is applied** and refused whole if any file
-disagrees -- unpack to staging, check every hash, then copy. A half-applied build
-is worse than a failed sync.
-* `Get-FileHash` returns **UPPERCASE** hex and Python's `hexdigest()` lowercase, so
-the two ends must agree on case or every sync resends the whole tree (and the loss
-is silent: it just looks slow). Paths likewise: the agent must report forward
-slashes or nothing ever matches.
-* `sync` has no ready handshake -- the agent reads the payload as its first action,
-so a client that waits for a reply line before sending it **deadlocks both ends**.
-Read and write the raw stream; a `StreamReader` would also buffer away the
-payload that follows a command line.
+* A build is **verified before it is applied** and refused whole if anything
+disagrees -- download and unpack to `_mp_staging`, check the hash (and that no zip
+entry escapes the staging folder), then swap. The swap is a set of renames on one
+volume, undone completely if any of them fails, and what it replaced goes to
+`_mp_previous` for `rollback`. A half-applied build is worse than a failed update.
+* `Get-FileHash` returns **UPPERCASE** hex while GitHub's digest and `sha256sum`
+are lowercase, so normalise case before comparing or every verification fails.
+* The rolling `alpha` git TAG does not move when CI refreshes the release (only the
+assets are replaced), so the commit an alpha build came from is read from the
+release body ("Rolling alpha build from `main` at <sha>"), not from the tag.
 * Never derive control flow from a function's return value in PowerShell: every
 helper emits its own output, so `$quit = Invoke-Command ...` read "OK stopped" as
 "quit" and shut the agent down on the first sync.
+* Don't name a script-scope variable after a parameter: `$script:Token = ...` in
+the agent silently overwrote the `-Token` parameter, so the check that refuses the
+default token was looking at the wrong value.
 * The log is read with `FileShare.ReadWrite`. The game holds `JERICHO.log` open
 while it runs, and pulling a LIVE log is the point -- `ReadAllBytes` fails with
 "being used by another process" exactly when the log matters most.
