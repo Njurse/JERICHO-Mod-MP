@@ -778,30 +778,30 @@ int MpClientConnectBegin(const char* host, int port)
 	if (!gNetStarted && !MpNetStart())
 		return 0;
 
-	/* A MACHINE THAT IS HOSTING MUST NOT JOIN. Doing both at once makes the instance
-	 * discover and connect to ITSELF, and the only symptom is "Lost the server (... WELCOME
-	 * received, awaiting the level)" -- measured, on a run whose own diagnostic showed one
-	 * process with a listeners=1 socket AND an outbound connection:
+	/* A JOIN IS A HANDOVER, NOT A CONFLICT.
 	 *
-	 *   conn 0  peer 127.0.0.1:62598  stage WELCOME received  hostSide 1
-	 *   conn 1  peer 127.0.0.1:1318   stage HELLO sent         hostSide 0
-	 *   events: accepted a peer . connected (outbound) . sent HELLO . disconnecting (client side)
+	 * This refused outright at first, and that broke a legitimate reconnect: once an
+	 * instance has hosted, `listenersUp` stays set (nothing closes the listener on the
+	 * way back to the frontend), so every later join was turned away with "this machine
+	 * is already hosting" - an instance that had ever hosted could never join again.
+	 * Measured by the user: "the first join worked correctly but i couldnt reconnect".
 	 *
-	 * The host is the authority for a match; a second, joining copy of it on the same port
-	 * can never be that. Say so on screen instead of failing at the handshake, because "lost
-	 * the server" points at the network when the real answer is "you are the server, use the
-	 * other machine". */
+	 * Stopping the local hosting first also removes the self-join this guard exists for:
+	 * an instance cannot connect to a listener of its own that is no longer there, so
+	 * "Lost the server (WELCOME received, awaiting the level)" - one process hosting and
+	 * joining itself - cannot happen either. */
 	if (gMp.listenersUp || gMp.role == MP_ROLE_HOST)
 	{
-		jer_error("This machine is already hosting - join from the other player's machine");
-
 		if (gMpCtx != NULL)
 			gMpCtx->jer_log(gMpCtx,
-				"[mp] refusing to join %s:%d - this instance is HOSTING (port %d); a host that also joins itself\n"
-				"     is what 'Lost the server (awaiting the level)' looks like in the log\n",
-				host != NULL ? host : "?", port, gMp.config.port);
+				"[mp] joining %s:%d - stopping the local hosting first (a join takes over from it)\n",
+				host != NULL ? host : "?", port);
 
-		return 0;
+		MpHostEnd();
+		MpDiscoveryStop();
+
+		gMp.role = MP_ROLE_NONE;
+		gMp.connected = 0;
 	}
 
 	MpClientDisconnect();	/* also cancels any earlier attempt */
