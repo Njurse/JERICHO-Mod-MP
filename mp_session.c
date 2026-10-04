@@ -3177,6 +3177,14 @@ static void MpFollowLocalCar(void)
 	{
 		CAR_DATA* cp = &car_data[driven];
 
+		/* Back in a car after being ON FOOT (the flag is set below, when we got out): the
+		 * player chose this car by walking up to it, so it is what the session must be
+		 * told we drive - possibly not the car we left. The FIRST seat of a match (and a
+		 * late joiner's) never comes through here with the flag set, which is what keeps
+		 * the engine's seat from replacing a chosen identity (carhacks/net.c,
+		 * chkNetLocalCar). */
+		int reentry = me->onFoot;
+
 		if (gMpCtx != NULL)
 			gMpCtx->jer_log(gMpCtx,
 				"[mp] car change: now driving slot %d model %d (was slot %d)\n",
@@ -3188,6 +3196,10 @@ static void MpFollowLocalCar(void)
 		me->carIsSlot = 0;		/* 'car' is a real model NUMBER now, not a slot */
 		me->carCity = GetCarModelSourceCity(cp->ap.model);
 		me->palette = cp->ap.palette;
+		me->onFoot = 0;
+
+		if (reentry)
+			MpCarQueryChosen(me->carCity, me->car, 1);
 	}
 	else if (me->carId >= 0)
 	{
@@ -3226,6 +3238,7 @@ static void MpFollowLocalCar(void)
 
 		me->carId = -1;
 		me->car = -1;
+		me->onFoot = 1;		/* OUR row: the next car we get into is a choice (above) */
 	}
 }
 
@@ -4042,6 +4055,30 @@ int MpCarQueryLoad(int city, int model)
 	return a.ok ? 1 : 0;
 }
 
+/* Tell whoever keeps the session's car identity (carhacks) how a switch ended: the local
+ * player now drives (city, model) - city -1 for the level's own car - or (changed = 0) the
+ * switch to it did not happen. A notice, not a question: nobody answering is fine. This is
+ * what lets the identity move only after a SUCCESSFUL switch, and the car the player left
+ * be given back (carhacks/net.c, chkNetReleaseSlotIfUnused). */
+void MpCarQueryChosen(int city, int model, int changed)
+{
+	MP_CARQ_CHOSEN_ARGS a;
+
+	if (model < 0)
+		return;
+
+	memset(&a, 0, sizeof(a));
+	a.city = city;
+	a.model = model;
+	a.changed = changed ? 1 : 0;
+
+	if (gMpCtx != NULL)
+		gMpCtx->jer_log(gMpCtx, "[mp] car chosen: %s model %d (%s)\n",
+			MpCarCityName(city), model, changed ? "driving it now" : "the switch did not happen");
+
+	jer_fire(MP_CARQ_CHOSEN, &a);
+}
+
 /* Change OUR OWN car, mid-match, from the pause menu.
  *
  * Replace the vehicle we are driving with another one -- the "Change car" row in
@@ -4122,6 +4159,17 @@ int MpChangeCar(int city, int model)
 		MpCarQueryLoad(city, model);
 
 	changed = MpAdoptRemoteCar(me, city, model);
+
+	/* Report the OUTCOME (MP_CARQ_CHOSEN). "Driving it" is read off the car on the road, so
+	 * "already that car" counts as driving it, and the city is the one the slot's data came
+	 * from (-1 = the level's own car) - the identity the other machines must draw. */
+	{
+		int want = MpResidentSlotForCar(city, model);
+		int onIt = (want >= 0 && me->carId >= 0 && me->carId < MAX_CARS &&
+			car_data[me->carId].ap.model == want);
+
+		MpCarQueryChosen(onIt ? GetCarModelSourceCity(want) : city, model, onIt);
+	}
 
 	/* Publish the choice. A client's pick goes to the HOST alone, which
 	 * republishes the roster naming it; the host does that itself. Our carstate

@@ -5,7 +5,7 @@
  * mp_carquery.h — the mp <-> carhacks LIVE CAR query contract.
  *
  * mp's "Change car" pause row asks two questions the JERICHO hook
- * surface has no place for:
+ * surface has no place for (and reports one outcome, MP_CARQ_CHOSEN):
  *
  *   - which CITIES can this session offer? A city's car data is one
  *     level's own; letting a session mix them (so a Rio car can be
@@ -30,6 +30,7 @@
 
 #define MP_CARQ_CITIES	(JER_EVENT_MODULE_CUSTOM + 40)	/* "which cities?" */
 #define MP_CARQ_LOAD	(JER_EVENT_MODULE_CUSTOM + 41)	/* "make (city,model) available" */
+#define MP_CARQ_CHOSEN	(JER_EVENT_MODULE_CUSTOM + 42)	/* "this is what we drive now" */
 
 /* Handlers fill the result field of the struct and return
  * JER_RESULT_CONTINUE; the caller reads it. */
@@ -60,5 +61,26 @@ typedef struct MP_CARQ_LOAD_ARGS
 	int  model;	/* in: model number */
 	int  ok;	/* out: 1 = held (or being loaded) here */
 } MP_CARQ_LOAD_ARGS;
+
+/* MP_CARQ_CHOSEN -> nothing to fill in: a NOTICE, fired by mp AFTER a switch
+ * attempt (the Change car row, MP_TEST_PAUSECAR) and when the local player gets
+ * into a car again after being on foot.
+ *
+ * LOAD only makes a car available; whether the player ends up driving it is
+ * decided afterwards (the swap can still refuse). So the session must not be
+ * told about the car at load time - it is told here, once the car on the road
+ * really is (city, model). This is also the moment the car the player LEFT can
+ * be given back (carhacks' release routine), which LOAD cannot know.
+ *
+ *   changed = 1: the local player's car on the road is now (city, model), where
+ *                city is the source city of the slot it is drawn from, or -1 for
+ *                the level's own car. Also 1 when it already was that car.
+ *   changed = 0: the switch to (city, model) did not happen (city as requested). */
+typedef struct MP_CARQ_CHOSEN_ARGS
+{
+	int  city;	/* in: 0..3, or -1 = the level's own car */
+	int  model;	/* in: model number */
+	int  changed;	/* in: 1 = driving it now, 0 = the switch did not happen */
+} MP_CARQ_CHOSEN_ARGS;
 
 #endif /* MP_CARQUERY_H */

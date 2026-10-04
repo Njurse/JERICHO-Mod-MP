@@ -92,7 +92,10 @@ typedef struct MP_PLAYER
 	 * for a player who was standing on the pavement -- every roster (every
 	 * 120 frames), so the stand-in pedestrian appeared and vanished in a loop.
 	 * Set by the carstate (which arrives every frame); consulted by the roster's
-	 * spawn request and by MpSpawnLateJoiners. */
+	 * spawn request and by MpSpawnLateJoiners.
+	 *
+	 * On OUR OWN row it is set by MpFollowLocalCar when we get out, so that getting
+	 * into a car again is reported as a choice (MP_CARQ_CHOSEN) - and only then. */
 	int   onFoot;
 
 	/* That player's chosen colour, as THEIR machine reported it. Off means their
@@ -346,6 +349,7 @@ const char* MpCarCityName(int city);
  * better, and the caller falls back to the session's own city. */
 int MpCarQueryCities(int* out, int max);	/* out: 0..3 city indices; returns the count */
 int MpCarQueryLoad(int city, int model);	/* 1 = this machine holds it now */
+void MpCarQueryChosen(int city, int model, int changed);	/* notice: what we drive now (mp_carquery.h) */
 
 /* The multiplayer meaning of Restart: put this player back at the level's own
  * start, in their car, repaired, with no felony, and KEEP the session (the
