@@ -55,12 +55,48 @@ static int MpBotCanned(void)
 	return cur;
 }
 
+/* The fleeing host's two distance thresholds, in world units, from
+ * MP_BOT_GAP=<ease>,<turnback> (default 2500,5000). Runtime levers on purpose: how
+ * close the pair should stay is a feel question, and feel should not need a rebuild.
+ * Resolved once, like MP_BOT itself. */
+static int gBotGapEase = 2500;
+static int gBotGapTurnback = 5000;
+static int gBotGapResolved;
+
+static void MpBotResolveGap(void)
+{
+	const char* v;
+
+	if (gBotGapResolved)
+		return;
+
+	gBotGapResolved = 1;
+
+	v = getenv("MP_BOT_GAP");
+
+	if (v == NULL)
+		return;
+
+	gBotGapEase = atoi(v);
+
+	{
+		const char* comma = strchr(v, ',');
+
+		gBotGapTurnback = (comma != NULL) ? atoi(comma + 1) : gBotGapEase * 2;
+	}
+
+	if (gBotGapTurnback < gBotGapEase)
+		gBotGapTurnback = gBotGapEase;
+}
+
 /* Which bot, if any. OFF unless MP_BOT says otherwise -- these levers drive a
  * real player's car, so nothing here may be on by default. Returns 0 (none),
  * 1 (random), 2 (chase), 3 (fight) or 4 (pursuit: host hunts, joiner runs). */
 static int MpBotMode(void)
 {
 	const char* m = getenv("MP_BOT");
+
+	MpBotResolveGap();
 
 	if (m == NULL)
 		return (getenv("MP_TESTDRIVE") != NULL) ? 1 : 0;
@@ -132,6 +168,30 @@ static int MpBotChase(int fight)
 		int diff, adiff;
 		long dist;
 		int pad;
+		int easeOff = 0;
+		int looping = 0;	/* the flee gave up running and is coming back */
+
+		/* The flee has no business opening the gap forever: measured, the host ran
+		 * to 38,000 units and stayed there, so the pair never met and nothing was
+		 * exercised. Two thresholds, from MP_BOT_GAP=<ease>,<turnback> (default
+		 * 2500,5000): beyond `ease` the host lifts the throttle so it stops
+		 * widening the gap, and beyond `turnback` it stops fleeing and drives AT
+		 * the chasers instead - a meeting from both ends, which is what keeps the
+		 * pair close enough to actually collide. */
+		dist = (long)dx * (long)dx + (long)dz * (long)dz;
+
+		if (flee && gBotGapTurnback > 0 &&
+			dist > (long)gBotGapTurnback * (long)gBotGapTurnback)
+		{
+			looping = 1;
+			flee = 0;			/* from here it is a chaser: same steering, closing */
+			want = ratan2(dx, dz) & 0xfff;
+		}
+		else if (flee && gBotGapEase > 0 &&
+			dist > (long)gBotGapEase * (long)gBotGapEase)
+		{
+			easeOff = 1;
+		}
 
 		/* Scenery awareness, using the engine's OWN test: CellEmpty is what the
 		 * civ AI uses to know a spot is clear. Probe ALONG THE CAR'S VELOCITY
@@ -224,13 +284,14 @@ static int MpBotChase(int fight)
 			 * correction is what made them bobble and slide into the scenery. */
 			pad = (diff > 0) ? CAR_PAD_LEFT : CAR_PAD_RIGHT;
 		else if (adiff > 120)
-			pad = CAR_PAD_ACCEL | ((diff > 0) ? CAR_PAD_LEFT : CAR_PAD_RIGHT);
+			pad = (easeOff ? 0 : CAR_PAD_ACCEL) | ((diff > 0) ? CAR_PAD_LEFT : CAR_PAD_RIGHT);
 		else
-			pad = CAR_PAD_ACCEL;
+			pad = easeOff ? 0 : CAR_PAD_ACCEL;	/* coasting IS the ease-off: the flee stops widening the gap while the chasers close it */
 
 		if ((gMp.frame % 60) == 0 && gMpCtx != NULL)
 			gMpCtx->jer_log(gMpCtx, "[mp] chase: %s d=%d,%d want=%d dir=%d diff=%d pad=%#x stuck=%d\n",
-				flee ? "flee" : "chase", dx, dz, want, mine->hd.direction, diff, pad, stuckFrames);
+				looping ? "loop" : (flee ? (easeOff ? "flee-hold" : "flee") : (fight ? "fight" : "chase")),
+				dx, dz, want, mine->hd.direction, diff, pad, stuckFrames);
 
 		return pad;
 	}
