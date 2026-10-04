@@ -393,9 +393,13 @@ def main():
     ap.add_argument("--game-dir", default=DEFAULT_GAME_DIR)
     ap.add_argument("--exe", default="REDRIVER2_dev.exe")
     ap.add_argument("--port", type=int, default=1400)
-    ap.add_argument("--seconds", type=int, default=60, help="how long to let them run")
-    ap.add_argument("--settle", type=int, default=7,
-                    help="seconds to wait before the client joins")
+    ap.add_argument("--seconds", type=int, default=40,
+                    help="how long to let them run (default 40; the shapes that need a level "
+                         "rebuild -- a city change, a car change -- want more)")
+    ap.add_argument("--settle", type=int, default=4,
+                    help="seconds to wait before the client joins (default 4; the join itself "
+                         "takes a few seconds more, which is why the first joiner is still in "
+                         "time to be in the match from the start)")
     ap.add_argument("--keep", action="store_true", help="leave the run dirs behind")
     ap.add_argument("--clean", action="store_true",
                     help="remove the run dirs and exit (never follows a junction)")
@@ -419,9 +423,12 @@ def main():
                          "joiner arrives before the match starts, so the ones after it join a "
                          "LIVE match -- which is the only way the late-join spawn path and the "
                          "host's relay get exercised at all (default 2).")
-    ap.add_argument("--stagger", type=int, default=14, metavar="SECS",
+    ap.add_argument("--stagger", type=int, default=8, metavar="SECS",
                     help="gap between the late joiners, so each one really does join a match "
-                         "that is already running (default 14; a level takes ~10s to load).")
+                         "that is already running (default 8; a level takes ~10s to load from "
+                         "a cold cache, less once it is warm -- a smaller gap is the fastest "
+                         "way to shorten a run, but too small and the joiner arrives before "
+                         "the host's match has started, which is a different path).")
     ap.add_argument("--host-car", default="slot1",
                     help="the host's car: a model number, slotN, 'random', or 'default' "
                          "(= pass NO -mpcar, so the level chooses -- what a player who just "
