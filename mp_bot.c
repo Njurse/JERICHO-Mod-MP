@@ -18,6 +18,7 @@
 #include "ai/aimap.h"	/* the AI's world model */
 #include "ai/aistar.h"	/* the pathfinder */
 #include "ai/ailocal.h"	/* the local road / flee-goal search */
+#include "jer_hud.h"	/* MP_BOT_DRAW: the live readout */
 
 #include <string.h>
 #include <stdlib.h>
@@ -1152,6 +1153,28 @@ static int MpBotNowMs(void)
 	return (int)((long)gMp.frame * 1000L / 60L);
 }
 
+/* MP_BOT_DRAW=1 shows the AI's thinking on the HUD, so the pathing can be WATCHED
+ * happening rather than reconstructed from the log afterwards. Resolved once, like every
+ * other lever here, and off unless asked for. The SDK has no world-space line primitive,
+ * so this is a live readout - goal, route shape, aim point, gap, search cost - rather than
+ * lines drawn on the ground; drawing the route in the world wants a new engine hook. */
+static int MpBotDraw(void)
+{
+	static int on = -1;
+
+	if (on < 0)
+	{
+		const char* v = getenv("MP_BOT_DRAW");
+
+		on = (v != NULL && v[0] != '0') ? 1 : 0;
+	}
+
+	return on;
+}
+
+static void MpBotDrawPlan(const char* what, const AIGOAL* goal, const struct MPBOT_AI* ai,
+	int aimX, int aimZ, long gap2, unsigned int pad);
+
 /* Plan a route to a world point, or keep the one we have. Returns 1 when there is a route
  * to follow at all. */
 static int MpBotRouteTo(MPBOT_AI* ai, CAR_DATA* mine, int goalX, int goalZ, int force)
@@ -1420,8 +1443,20 @@ static int MpBotCatMouse(void)
 
 	if (isMouse)
 	{
-		/* where to RUN to: away from the cat, preferring the road, and REACHABLE */
-		if (!AiLocalFleeGoal(&ai.map, mine->hd.where.t[0], mine->hd.where.t[2],
+		int onRoad = JerRoadAt(mine->hd.where.t[0], mine->hd.where.t[1], mine->hd.where.t[2]);
+
+		if (!onRoad)
+		{
+			/* GET BACK ON THE ROAD FIRST. Running for the furthest open point scored
+			 * well between houses - far from the cat, and "open" to the probe - and the
+			 * car then wedged in a gap it could not get out of, which is the "turns left
+			 * between the houses instead of right, back to the road" complaint. A mouse
+			 * that is not on a road has exactly one sensible destination: the nearest road
+			 * it can actually reach. The running starts once it is back on one. */
+			if (!AiLocalGoal(&ai.map, mine->hd.where.t[0], mine->hd.where.t[2], &goal))
+				return MpBotChase(0);
+		}
+		else if (!AiLocalFleeGoal(&ai.map, mine->hd.where.t[0], mine->hd.where.t[2],
 				tgt->hd.where.t[0], tgt->hd.where.t[2], &goal))
 		{
 			/* nothing in the ring is worth running to: the nearest road, or failing that
@@ -1471,7 +1506,51 @@ static int MpBotCatMouse(void)
 			pad);
 	}
 
+	{
+		/* the live readout: the route shape and where the car is aiming, a few times a
+		 * second, straight onto the HUD */
+		long rgx = tgt->hd.where.t[0] - mine->hd.where.t[0];
+		long rgz = tgt->hd.where.t[2] - mine->hd.where.t[2];
+
+		MpBotDrawPlan(isMouse ? "MOUSE" : "CAT", &goal, &ai, aimX, aimZ,
+			rgx * rgx + rgz * rgz, pad);
+	}
+
 	return pad;
+}
+
+static void MpBotDrawPlan(const char* what, const AIGOAL* goal, const struct MPBOT_AI* ai,
+	int aimX, int aimZ, long gap2, unsigned int pad)
+{
+	char line[220];
+	int k, j;
+
+	if (!MpBotDraw())
+		return;
+
+	if ((gMp.frame % 20) != 0)
+		return;		/* about three times a second: readable, not a wall */
+
+	j = snprintf(line, sizeof(line), "%s GOAL %d,%d %s | wp %d:",
+		what, goal->x, goal->z, (goal->kind == AIGOAL_ROAD) ? "ROAD" : "open",
+		ai->path.waypoints);
+
+	for (k = 0; k < ai->path.waypoints && j > 0 && j < (int)sizeof(line) - 26; k++)
+	{
+		int n = snprintf(line + j, sizeof(line) - j, " (%d,%d)",
+			ai->path.wx[k], ai->path.wz[k]);
+
+		if (n < 0)
+			break;
+
+		j += n;
+	}
+
+	if (j > 0 && j < (int)sizeof(line) - 80)
+		snprintf(line + j, sizeof(line) - j, " | aim %d,%d gap %d exp %d pad %#x",
+			aimX, aimZ, (int)gap2, ai->path.expanded, pad);
+
+	jer_hud_message(line, 30);
 }
 
 int MpBotPadForLocalCar(void)

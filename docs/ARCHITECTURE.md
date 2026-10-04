@@ -616,8 +616,51 @@ Matchmaking beyond LAN, host migration, traffic/police replication. Chat is
 implemented (open on `T`, send on Enter, received as a notify). The lobby's
 "Enforce Mods" policy is implemented; nothing exercises it yet.
 
-#### Traffic and police sync — implementation ideas (NOT started)
+#### The AI (`MODS/mp/ai/`)
 
+The mp bots are a testing component, but "drive to a place" is a general problem and the
+pieces are therefore kept out of the session code entirely: `ai/` is compiled into the mod
+(`premake5.lua:419` globs `MODS/<mod>/**.c`, so a new file there needs no premake project
+edit beyond a regeneration) and depends on nothing but the engine queries below.
+
+The split matters more than the code. `aimap.c` FILLS the grid and is nothing but engine
+probes; `aimapgrid.c` (queries and cost), `aistar.c` (the pathfinder) and `ailocal.c` (the
+local road/flee search) are PURE, which is what lets
+`src_rebuild/Game/C/JERICHO/test/test_ai_path.c` build a grid by hand and exercise the real
+cost model and the real A* with no game running - the same trick `carpinref.h` uses for the
+car-switch release logic. That test is not decoration: writing it found two bugs in the
+pathfinder and one bad budget.
+
+Engine dependencies, and the traps in them:
+
+- **`CellEmpty(pos, radius)`** (objcoll.c) is the scenery test. It anchors its CELL LOOKUP at
+  the probe point and the radius only widens the box test - so a wall the car is already
+  touching sits behind the first probe and reads clear. That is why the grid also tests the
+  car's own position, and why a car parked against a wall is "inside a blocked sample" by its
+  own probe radius. It also skips `MODEL_FLAG_SMASHABLE` and chairs by design (objcoll.c:49),
+  which is the whole reason fences are drive-through;
+- **`JerRoadAt` / `JerRoadInfoAt`** (dr2roads.c, added by this work) expose the road network:
+  the surface at a point, its lanes and AI-lane bits, and `connect[4]`, the road GRAPH. Two
+  traps are written down in the code because both cost time: `roadbits.h`'s
+  `ROADS_GetRouteData` is a stub that always returns 1, so it would call every heading a road;
+  and `GetSurfaceIndex` returns the GROUND surface minus 32, whereas the road tables are
+  indexed by `plane->surface - 32` as returned by `RoadInCell` (dr2roads.c:276-279,
+  :530-537), which also reports -1 for an unstreamed region - i.e. the map edge;
+- **`MapHeight(pos)`** so each sample is probed at the ground height THERE. `CellEmpty`
+  compares heights, so probing a distant sample at the car's own height would invent walls
+  and lose real ones.
+
+Nothing in the library divides by `MAP_CELL_SIZE` or `MAP_REGION_SIZE`: those are level-header
+fields (map.h) that are ZERO in the frontend, and this module has crashed on them before. The
+grid is positioned in world units, and the world is only sampled once `cells_across` says a
+level is loaded.
+
+`connect[4]` is deliberately NOT used for routing yet, even though it is exposed: the slots
+are frequently -1 and the Chicago/Vegas loaders hand-patch missing links (dr2roads.c:174-257),
+so it is a sparse, directional graph and not a navigable mesh. The grid is the substrate; the
+graph is there for a future route-follower that starts and ends on a road.
+
+#### Traffic and police sync — implementation ideas (NOT started)
 Neither is replicated today: each machine spawns and drives its own civs from the
 level data, so a car you hit on one screen may not be there on the other. Notes
 for whoever picks it up, because the obvious approach is the wrong one.

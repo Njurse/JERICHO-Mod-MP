@@ -184,7 +184,7 @@ them):
 | Lever | What it exercises |
 | --- | --- |
 | `MP_TEST_ONFOOT=<secs>` | get out of the car that many seconds in, so the on-foot path runs at all |
-| `MP_BOT` | drives the cars AND the on-foot Tanner (see `mp_bot.c`), so a run has motion without a human. `mp_localpair.py` defaults it to `chase` (the host flees, every joiner chases); `pursuit` hunts mutually; `off` leaves a real player's car alone |
+| `MP_BOT` | drives the cars AND the on-foot Tanner (see `mp_bot.c`), so a run has motion without a human. `mp_localpair.py` defaults it to `chase` (the host flees, every joiner chases); `pursuit` hunts mutually; `catmouse` is the same pair DRIVEN BY THE PATHFINDER - the mouse runs to a place it chooses (far from the cat, preferring the road, reachable) and the cat plans to where the mouse is; `off` leaves a real player's car alone |
 | `MP_TEST_PAUSECAR=<secs>[,<city>[,<model>]][;...]` | runs the pause menu's `Change car` apply path, so a mid-match vehicle change (including a cross-city one, with carhacks) is reproducible headlessly. A `;`-separated list (`30,3,1;45,1,2`) makes one change per entry, in order, each at its own time, counted in seconds from when the session starts running - enough to switch until the spare slots would run out |
 | `MP_TEST_RESTART=<secs>` | fires the engine's own pause-menu answer, so a pass means the multiplayer soft restart is wired end to end |
 
@@ -221,6 +221,68 @@ panic-turn at close range is gone. The same run: 18 recoveries, down from 31 ove
 None of this is a pathfinder. It is a greedy, reactive probe with no lookahead, so it still
 cannot plan around a building - 10 of those 18 recoveries were wedges. A real fix wants a
 lookahead or a coarse route, and that is a separate unit, not a tweak.
+
+### The AI library (`ai/`), and the `catmouse` behaviour set
+
+That "separate unit" now exists. `JERICHO/MODS/mp/ai/` is a small, self-contained
+collection of pieces that need no engine to be tested:
+
+- `aimap` - the world model. A fixed 33x33 window of samples, re-probed around whoever
+  asks, filled by one `CellEmpty` call per sample. That is why **fences and barrels are not
+  walls**: `CellEmpty` skips `MODEL_FLAG_SMASHABLE` and chairs by design (objcoll.c:49), so
+  the grid sees through exactly what a player drives through, without a special case. The
+  road network is recorded as a PREFERENCE (cost, never a wall), and wall clearance is
+  measured so a route hugs the middle of a street instead of grazing its edge;
+- `aistar` - A* over that grid: fixed node pool, bounded expansions (the grid itself), no
+  allocation, deterministic tie-breaking, an 8-connected neighbourhood with a corner-cut
+  rule, and the path is SMOOTHED into straight runs by line of sight so a driver steers at
+  turning points. Two cases are handled rather than refused: the start sample being blocked
+  (which is what happens whenever a car is parked against a wall, because our probe radius
+  is a car's width) and an unreachable goal (the path comes back INCOMPLETE with the best
+  partial route, which is what a car that needs to be somewhere else actually wants);
+- `ailocal` - the different KIND of search: one flood of the window answering "where is the
+  nearest place worth being". The road rung is breadth-first, so it is the nearest road
+  along ground the car can DRIVE - a road across a wall is not a way out, and a
+  line-of-sight search would pick one. The fallback rung is the most open reachable ground,
+  and if even that fails the caller keeps its own behaviour;
+- `JERICHO/test/test_ai_path.c` (in the engine's excluded test directory, so it costs the
+  exe nothing) drives the real cost model and the real A* against hand-built grids, in both
+  C and C++: **125 checks, 0 failed**. It found two real bugs in the library and one bad
+  budget while being written - a truncating sample index that pulled a point a whole step
+  outside the window back onto its edge, an `onRoad` count that missed the first waypoint,
+  and a 900-node expansion ceiling that a winding route exhausted, so the pathfinder
+  reported "cannot reach" for a goal that was merely round the corner.
+
+`MP_BOT=catmouse` is the behaviour set built on it. Measured over a 55 s city pair: the two
+cars were a **median 12,390 world units apart** (about three map cells, up to 17,858), the
+plans came back as 2-3 waypoints after 146-211 node expansions, and the mouse's chosen goal
+was on the ROAD network - the road preference working in a real level. That is cat and
+mouse, where `chase` is the pair closing on each other.
+
+The `catmouse` recovery is one policy in one place: DRIVE when moving; TURN when something
+the probes can see is in front; and PUSH - throttle only, no reversing - when the car is
+stopped, in contact, and nothing is visible ahead. That last case is a fence or a barrel the
+engine deliberately hides from every probe while the physics still stops the car on it, and
+backing away from something the engine says is not there is exactly how a car ends up stuck
+on it for the rest of a match. A real wall lands in PUSH too, so PUSH is bounded: after
+~900 ms of shoving the car backs out and turns the OTHER way.
+
+The other sets - `chase`, `fight`, `pursuit`, `random` - are deliberately untouched, so the
+collision tests and the `mp_tries` verdicts do not move; a `--bot chase` pair run confirms
+it (zero AI activity in the log, its own 137 flee-scan lines still there).
+
+`MP_BOT_DRAW=1` puts the AI's thinking on the HUD while it runs - the goal and whether it is
+a road, the route as its waypoint chain, where the car is aiming, the gap to the other car,
+how many nodes the plan expanded and the pad - so the pathing can be watched happening
+instead of reconstructed from the log afterwards. (The SDK has no world-space line
+primitive, so this is a readout rather than lines drawn on the ground; drawing the route in
+the world wants a new engine hook.)
+
+One rule in the mouse's goal choice is worth knowing, because it is what fixed the most
+visible complaint: **a mouse that is not on a road heads for the nearest road it can
+reach**, and only starts running for distance once it is back on the network. Choosing the
+furthest open point instead scored well between houses - far from the cat, and "open" to the
+probe - and the car then wedged in a gap it could not leave.
 
 A run wants `lost=0` and `dumps=0`.
 
