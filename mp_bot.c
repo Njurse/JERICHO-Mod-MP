@@ -337,14 +337,21 @@ static int MpBotChase(int fight)
 			{
 				if (++stuckFrames > 40)
 				{
+					/* WHY the recovery fired, and whether there is anything in front of the
+					 * car: a wall dead ahead is the one case a reverse is actually the right
+					 * move, so the line has to carry it. One line per decision, not per
+					 * frame, so a pair run can be read for it. */
+					int ahead = MpBotSpotClear(mine, mine->hd.direction, 1100);
+
 					turnFrames = MPBOT_TURN_FRAMES + 40;
 					turnPulse = MPBOT_TURN_FRAMES;
 					turnDir ^= 1;
 					stuckFrames = 0;
 
 					if (gMpCtx != NULL)
-						gMpCtx->jer_log(gMpCtx, "[mp] chase: stuck, handbrake turn (dir %d)\n",
-							turnDir);
+						gMpCtx->jer_log(gMpCtx,
+							"[mp] chase: recover - wedged (speed %d), ahead clear=%d, handbrake turn (dir %d)\n",
+							mine->hd.speed, ahead, turnDir);
 				}
 			}
 			else
@@ -367,6 +374,11 @@ static int MpBotChase(int fight)
 			 * rear locked for the first frames brings the nose round, and the
 			 * throttle then drives us out of it - a reverse moved us AWAY from
 			 * them, which is what made the pair shuffle instead of meet. */
+			if (turnFrames <= 0 && gMpCtx != NULL)
+				gMpCtx->jer_log(gMpCtx,
+					"[mp] chase: recover - peer behind (adiff %d, ahead clear=%d), handbrake turn\n",
+					adiff, MpBotSpotClear(mine, mine->hd.direction, 1100));
+
 			turnFrames = MPBOT_TURN_FRAMES + 20;
 			turnPulse = MPBOT_TURN_FRAMES;
 			turnDir = diff;
@@ -582,14 +594,17 @@ static int MpBotPursuit(void)
 		{
 			if (++stuckFrames > 20)
 			{
+				int ahead = MpBotSpotClear(mine, mine->hd.direction, 1100);
+
 				turnFrames = MPBOT_TURN_FRAMES + 20;
 				turnPulse = MPBOT_TURN_FRAMES;
 				turnDir ^= 1;
 				stuckFrames = 0;
 
 				if (gMpCtx != NULL)
-					gMpCtx->jer_log(gMpCtx, "[mp] bot: %s stuck, handbrake turn (dir %d)\n",
-						evade ? "evade" : "pursue", turnDir);
+					gMpCtx->jer_log(gMpCtx,
+						"[mp] bot: %s recover - wedged (speed %d), ahead clear=%d, handbrake turn (dir %d)\n",
+						evade ? "evade" : "pursue", mine->hd.speed, ahead, turnDir);
 			}
 		}
 		else
@@ -624,8 +639,9 @@ static int MpBotPursuit(void)
 				noProg = 0;
 
 				if (gMpCtx != NULL)
-					gMpCtx->jer_log(gMpCtx, "[mp] bot: no progress for 150 frames, turning round (dir %d)\n",
-						turnDir);
+					gMpCtx->jer_log(gMpCtx,
+						"[mp] bot: no progress for 150 frames (gap %d), turning round (dir %d)\n",
+						(int)dist, turnDir);
 			}
 		}
 
@@ -638,6 +654,11 @@ static int MpBotPursuit(void)
 		{
 			/* a real U-turn: turn hard, with the handbrake for the first frames,
 			 * and drive out of it. Never a reverse - see the note on MpBotTurnPad. */
+			if (turnFrames <= 0 && gMpCtx != NULL)
+				gMpCtx->jer_log(gMpCtx,
+					"[mp] bot: recover - peer behind (adiff %d, ahead clear=%d), handbrake turn\n",
+					adiff, MpBotSpotClear(mine, mine->hd.direction, 1100));
+
 			turnFrames = MPBOT_TURN_FRAMES + 20;
 			turnPulse = MPBOT_TURN_FRAMES;
 			turnDir = diff;
