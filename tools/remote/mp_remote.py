@@ -33,7 +33,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 TOOLS = os.path.dirname(HERE)                       # JERICHO/MODS/mp/tools
 REPO = os.path.abspath(os.path.join(TOOLS, "..", "..", "..", ".."))
 GAME_DIR = os.path.join(REPO, "src_rebuild", "bin", "Release_dev")
-EXE_NAME = "REDRIVER2_dev.exe"
+EXE_NAME = "JERICHO_dev.exe"
 WORK = os.path.join(GAME_DIR, ".mp-remote")          # logs pulled from both seats
 DEFAULT_PORT = 1401
 DEFAULT_TOKEN = "jericho-mp"
@@ -240,7 +240,7 @@ def do_sync(agent, quiet=False):
         for rel in gone[:6]:
             print(f"    - {rel}")
 
-    reply = agent.sync(blob, "REDRIVER2_mp_lan")
+    reply = agent.sync(blob, "JERICHO_mp_lan")
     print(f"  {reply}")
     return agent.status(), len(changed)
 

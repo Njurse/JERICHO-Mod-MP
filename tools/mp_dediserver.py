@@ -10,8 +10,8 @@ game. It also beacons on UDP so the in-game LAN browser lists it.
 
 Then point a client at it:
 
-    REDRIVER2_dev.exe -nointro -nofmv -join 127.0.0.1
-    REDRIVER2_dev.exe -nointro -nofmv -join 127.0.0.1:1400
+    JERICHO_dev.exe -nointro -nofmv -join 127.0.0.1
+    JERICHO_dev.exe -nointro -nofmv -join 127.0.0.1:1400
 
 The wire format lives in mp_test.py, which is imported so there is only one
 copy of it.

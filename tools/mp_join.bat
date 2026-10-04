@@ -4,7 +4,7 @@ rem mp_join.bat [ip[:port]] [dry]
 rem
 rem   Join a LAN game and go straight into it -- no frontend walking.
 rem
-rem       REDRIVER2_dev.exe -nointro -nofmv -join [ip[:port]]
+rem       JERICHO_dev.exe -nointro -nofmv -join [ip[:port]]
 rem
 rem       mp_join.bat 192.168.1.42          the host's LAN address
 rem       mp_join.bat 192.168.1.42:1400     ... on a non-default port
@@ -22,8 +22,8 @@ rem ============================================================================
 setlocal
 set "EXEDIR=%~dp0\..\..\..\..\src_rebuild\bin\Release_dev"
 if not "%MP_EXEDIR%"=="" set "EXEDIR=%MP_EXEDIR%"
-if not exist "%EXEDIR%\REDRIVER2_dev.exe" (
-echo echo mp: no REDRIVER2_dev.exe in "%EXEDIR%"
+if not exist "%EXEDIR%\JERICHO_dev.exe" (
+echo echo mp: no JERICHO_dev.exe in "%EXEDIR%"
     echo     build it, or set MP_EXEDIR to the directory that has it
     exit /b 1
 )
@@ -33,7 +33,7 @@ if "%ADDR%"=="" set "ADDR=127.0.0.1:1400"
 set "MP_AUTOSTART="
 echo mp: joining %ADDR%
 cd /d "%EXEDIR%"
-start "" "REDRIVER2_dev.exe" -nointro -nofmv -join %ADDR%
+start "" "JERICHO_dev.exe" -nointro -nofmv -join %ADDR%
 endlocal
 exit /b 0
 
@@ -41,6 +41,6 @@ exit /b 0
 set "ADDR=%~2"
 if "%ADDR%"=="" set "ADDR=127.0.0.1:1400"
 echo mp: would run, in "%EXEDIR%"
-echo   REDRIVER2_dev.exe -nointro -nofmv -join %ADDR%
+echo   JERICHO_dev.exe -nointro -nofmv -join %ADDR%
 endlocal
 exit /b 0

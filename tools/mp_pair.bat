@@ -11,7 +11,7 @@ rem   Thin wrapper around mp_localpair.py, which does the work:
 rem     * two throwaway run directories beside the game, built from directory
 rem       junctions so the big trees are shared and nothing is copied. Separate
 rem       working directories are the whole trick -- they are what stop the two
-rem       REDRIVER2.log files and the two mp.ini files fighting;
+rem       JERICHO.log files and the two mp.ini files fighting;
 rem     * the host instance gets MP_AUTOSTART=host, the client does not;
 rem     * both executables are launched directly, so the PIDs are real and the
 rem       cleanup stops exactly what it started -- unlike the launchers above,
@@ -27,8 +27,8 @@ rem ============================================================================
 setlocal
 set "EXEDIR=%~dp0\..\..\..\..\src_rebuild\bin\Release_dev"
 if not "%MP_EXEDIR%"=="" set "EXEDIR=%MP_EXEDIR%"
-if not exist "%EXEDIR%\REDRIVER2_dev.exe" (
-echo echo mp: no REDRIVER2_dev.exe in "%EXEDIR%"
+if not exist "%EXEDIR%\JERICHO_dev.exe" (
+echo echo mp: no JERICHO_dev.exe in "%EXEDIR%"
     echo     build it, or set MP_EXEDIR to the directory that has it
     exit /b 1
 )

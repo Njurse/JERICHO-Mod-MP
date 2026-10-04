@@ -4,7 +4,7 @@ rem mp_host.bat [port] [lobby] [dry]
 rem
 rem   Host a LAN game and go straight into hosting -- no frontend walking.
 rem
-rem       REDRIVER2_dev.exe -nointro -nofmv -host [port]      (default 1400)
+rem       JERICHO_dev.exe -nointro -nofmv -host [port]      (default 1400)
 rem
 rem   MP_AUTOSTART=host is set for you, so the match starts as soon as a player is
 rem   in. Pass "lobby" instead of a port to sit and wait for somebody to press
@@ -25,8 +25,8 @@ rem ============================================================================
 setlocal
 set "EXEDIR=%~dp0\..\..\..\..\src_rebuild\bin\Release_dev"
 if not "%MP_EXEDIR%"=="" set "EXEDIR=%MP_EXEDIR%"
-if not exist "%EXEDIR%\REDRIVER2_dev.exe" (
-echo echo mp: no REDRIVER2_dev.exe in "%EXEDIR%"
+if not exist "%EXEDIR%\JERICHO_dev.exe" (
+echo echo mp: no JERICHO_dev.exe in "%EXEDIR%"
     echo     build it, or set MP_EXEDIR to the directory that has it
     exit /b 1
 )
@@ -37,7 +37,7 @@ if not defined MP_AUTOSTART set "MP_AUTOSTART=host"
 if /i "%~2"=="lobby" set "MP_AUTOSTART="
 echo mp: hosting on port %PORT%, autostart "%MP_AUTOSTART%"
 cd /d "%EXEDIR%"
-start "" "REDRIVER2_dev.exe" -nointro -nofmv -host %PORT%
+start "" "JERICHO_dev.exe" -nointro -nofmv -host %PORT%
 endlocal
 exit /b 0
 
@@ -46,7 +46,7 @@ set "PORT=%~2"
 if "%PORT%"=="" set "PORT=1400"
 if not defined MP_AUTOSTART set "MP_AUTOSTART=host"
 echo mp: would run, in "%EXEDIR%"
-echo   REDRIVER2_dev.exe -nointro -nofmv -host %PORT%
+echo   JERICHO_dev.exe -nointro -nofmv -host %PORT%
 echo   with MP_AUTOSTART=%MP_AUTOSTART%
 endlocal
 exit /b 0

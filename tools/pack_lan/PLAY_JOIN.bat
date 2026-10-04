@@ -13,5 +13,5 @@ if "%ADDR%"=="" set "ADDR=127.0.0.1"
 rem must never be told to host as well
 set "MP_AUTOSTART="
 echo mp: joining %ADDR% ...
-start "" "REDRIVER2_dev.exe" -nointro -nofmv -join %ADDR%
+start "" "JERICHO_dev.exe" -nointro -nofmv -join %ADDR%
 endlocal

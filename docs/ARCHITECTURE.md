@@ -493,7 +493,7 @@ two logs and the two `mp.ini` files fighting), direct launches so the PIDs are r
 Read runs with:
 
 ```sh
-grep -a "\[mp\]\|\[error\]" REDRIVER2.log | grep -av "JPPN\|JPPO\|pose:\|JPIN\|JPCS"
+grep -a "\[mp\]\|\[error\]" JERICHO.log | grep -av "JPPN\|JPPO\|pose:\|JPIN\|JPCS"
 ```
 
 Markers worth knowing: `launching: city N mode M` (mode 0 = the mission ladder, so
@@ -634,7 +634,7 @@ attempt had cainescrossfire enabled by accident, which rewrites car handling):**
 
 - **`PingInCivCar` faults again, and it is not the `possibleLanes` overflow this
   time.** A two-seat run with `MP_TEST_ONFOOT=7` (get out at 7s) crashed BOTH seats
-  with `EXCEPTION_ACCESS_VIOLATION`, both at `REDRIVER2_dev.exe+0x102A0` =
+  with `EXCEPTION_ACCESS_VIOLATION`, both at `JERICHO_dev.exe+0x102A0` =
   `?PingInCivCar@@YAHH@Z (+0x100)` — dumps in `.mp-pair/a/` and `.mp-pair/b/`, no
   stall, so the world was running. `possibleLanes` is already 32, so 0..30 lanes fit
   and this is a different fault at (or very near) the old address.
@@ -727,7 +727,7 @@ One command produces the package:
 
     JERICHO\MODS\mp\tools\pack_lan\sync_lan.bat
 
-(regenerate -> build -> `REDRIVER2_mp_lan_<build>.7z`: the exe, the DLLs,
+(regenerate -> build -> `JERICHO_mp_lan_<build>.7z`: the exe, the DLLs,
 `config.ini`, `VERSION.txt`, `DRIVER2` minus the FMV, `JERICHO` with `modlist.ini`
 `mp = 1`, an `mp.ini` with `strict_version = 1`, and the launchers.) Two traps live
 in that script: `build_dev.bat` hands msbuild a RELATIVE project path, so it needs

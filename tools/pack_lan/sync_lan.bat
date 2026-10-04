@@ -3,7 +3,7 @@ rem Build AND package the LAN test build in ONE step, stamped with the build has
 rem
 rem   sync_lan.bat
 rem
-rem Produces  REDRIVER2_mp_lan_<build>.7z  in the project root. Copy that ONE file
+rem Produces  JERICHO_mp_lan_<build>.7z  in the project root. Copy that ONE file
 rem to the other PC and extract it over the existing folder -- no Visual Studio,
 rem no git and no dependencies are needed there.
 rem
@@ -45,7 +45,7 @@ if errorlevel 1 (
 popd
 
 rem ------------------------------------------------------------------- 3) build
-rem build_dev.bat passes msbuild a RELATIVE path (build\REDRIVER2.vcxproj), so it
+rem build_dev.bat passes msbuild a RELATIVE path (build\JERICHO.vcxproj), so it
 rem must be invoked with src_rebuild as the current directory.
 echo [sync_lan] building Release_dev (this takes a few minutes)...
 pushd "%SRC%" || exit /b 1
@@ -61,7 +61,7 @@ rem ------------------------------------------------------------------ 4) stamp 
 > "%EXEDIR%\VERSION.txt" echo %BUILD%
 
 rem ------------------------------------------------------------------ 5) package
-call "%HERE%make_lan_package.bat" "%ROOT%\REDRIVER2_mp_lan_%BUILD%.7z"
+call "%HERE%make_lan_package.bat" "%ROOT%\JERICHO_mp_lan_%BUILD%.7z"
 if errorlevel 1 (
     echo [sync_lan] packaging FAILED
     exit /b 1
@@ -69,7 +69,7 @@ if errorlevel 1 (
 
 echo.
 echo [sync_lan] done.  Copy this ONE file to the other PC and extract it over the
-echo            game folder:  %ROOT%\REDRIVER2_mp_lan_%BUILD%.7z
+echo            game folder:  %ROOT%\JERICHO_mp_lan_%BUILD%.7z
 echo            Then check both games report "build" %BUILD% (startup log, or the
 echo            pause-menu scoreboard).
 endlocal

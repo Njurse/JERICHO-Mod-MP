@@ -12,7 +12,7 @@ one real engine in the room.
 This builds two throwaway run directories beside the game and launches the real
 executable in each. Directory junctions mean the big trees are shared, so it costs
 almost nothing on disk, and each instance gets its own working directory -- which
-is what keeps the two REDRIVER2.log files and the two JERICHO/CONFIG/mp.ini from
+is what keeps the two JERICHO.log files and the two JERICHO/CONFIG/mp.ini from
 fighting each other.
 
     python mp_localpair.py                  # host + join, report, clean up
@@ -48,10 +48,10 @@ DEFAULT_GAME_DIR = os.path.join("src_rebuild", "bin", "Release_dev")
 # needs somewhere to put its LATE JOINERS, and a late join is a different spawn
 # path from the one a pair exercises.
 SEAT_NAMES = ("a", "b", "c", "d", "e", "f", "g", "h")
-# The game writes its log as JERICHO.log -- the LOADER owns the file. REDRIVER2.log
+# The game writes its log as JERICHO.log -- the LOADER owns the file. JERICHO.log
 # is kept as a fallback for a build that writes that name instead. Reporting the
-# wrong one made every run print "no REDRIVER2.log" even when the game logged fine.
-GAME_LOGS = ("JERICHO.log", "REDRIVER2.log")
+# wrong one made every run print "no JERICHO.log" even when the game logged fine.
+GAME_LOGS = ("JERICHO.log", "JERICHO.log")
 
 
 def log(msg):
@@ -89,7 +89,7 @@ def stale_instances():
     try:
         out = subprocess.run(
             ["powershell", "-NoProfile", "-Command",
-             "Get-Process REDRIVER2_dev -ErrorAction SilentlyContinue | "
+             "Get-Process JERICHO_dev -ErrorAction SilentlyContinue | "
              "Where-Object { $_.Path -like '*mp-pair*' } | ForEach-Object { $_.Id }"],
             capture_output=True, text=True)
     except Exception:
@@ -395,7 +395,7 @@ def verdict(names, dirs, stopped=None, requires=()):
     dumps = crash_dumps(dirs)
 
     for side, dump in sorted(dumps.items()):
-        mapfile = os.path.join(os.path.dirname(dump), "REDRIVER2_dev.map")
+        mapfile = os.path.join(os.path.dirname(dump), "JERICHO_dev.map")
         log(f"*** {side.upper()} CRASHED -- an access violation, not a clean exit ***")
         for line in triage_crash(dump, mapfile):
             log(f"    {line}")
@@ -461,7 +461,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--game-dir", default=DEFAULT_GAME_DIR)
-    ap.add_argument("--exe", default="REDRIVER2_dev.exe")
+    ap.add_argument("--exe", default="JERICHO_dev.exe")
     ap.add_argument("--port", type=int, default=1400)
     ap.add_argument("--seconds", type=int, default=40,
                     help="how long to let them run (default 40; the shapes that need a level "

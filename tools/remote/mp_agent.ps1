@@ -44,7 +44,7 @@ if ([string]::IsNullOrWhiteSpace($Root)) {
 $Root = $Root.TrimEnd('\', '/', '"')
 $Root = (Resolve-Path -LiteralPath $Root).Path
 
-$Exe     = Join-Path $Root 'REDRIVER2_dev.exe'
+$Exe     = Join-Path $Root 'JERICHO_dev.exe'
 $LogFile = Join-Path $Root 'JERICHO.log'
 $DmpFile = Join-Path $Root 'JERICHO.dmp'
 $OwnLog  = Join-Path $Root 'mp_agent.log'
@@ -76,7 +76,7 @@ function Test-GameRunning {
         $script:Game = $null
     }
     # also notice a game the user started by hand (double-clicking PLAY_*.bat)
-    $p = Get-Process -Name 'REDRIVER2_dev' -ErrorAction SilentlyContinue
+    $p = Get-Process -Name 'JERICHO_dev' -ErrorAction SilentlyContinue
     if ($null -ne $p) { return $true }
     return $false
 }
@@ -86,7 +86,7 @@ function Get-Hashes {
     # changed. The game data is deliberately NOT in this list: it is 1.6 GB and
     # does not change between builds.
     $out = @{}
-    $sets = @('REDRIVER2_dev.exe', 'VERSION.txt', 'JERICHO')
+    $sets = @('JERICHO_dev.exe', 'VERSION.txt', 'JERICHO')
     foreach ($s in $sets) {
         $p = Join-Path $Root $s
         if (Test-Path -LiteralPath $p -PathType Leaf) {
@@ -237,11 +237,11 @@ function Invoke-Start {
 }
 
 function Invoke-Stop {
-    $p = Get-Process -Name 'REDRIVER2_dev' -ErrorAction SilentlyContinue
+    $p = Get-Process -Name 'JERICHO_dev' -ErrorAction SilentlyContinue
     if ($null -eq $p) { $script:Game = $null; return 'OK nothing was running' }
     foreach ($proc in $p) { try { $proc.CloseMainWindow() | Out-Null } catch { } }
     Start-Sleep -Milliseconds 800
-    $p = Get-Process -Name 'REDRIVER2_dev' -ErrorAction SilentlyContinue
+    $p = Get-Process -Name 'JERICHO_dev' -ErrorAction SilentlyContinue
     foreach ($proc in $p) { try { Stop-Process -Id $proc.Id -Force } catch { } }
     $script:Game = $null
     Write-Own 'stop: closed the game'

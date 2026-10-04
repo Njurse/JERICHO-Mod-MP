@@ -1,5 +1,5 @@
 @echo off
-rem Build the LAN test package (REDRIVER2_mp_lan.7z in the project root).
+rem Build the LAN test package (JERICHO_mp_lan.7z in the project root).
 rem
 rem   make_lan_package.bat [output.7z]
 rem
@@ -12,7 +12,7 @@ set "HERE=%~dp0"
 set "ROOT=%HERE%..\..\..\..\.."
 set "EXEDIR=%ROOT%\src_rebuild\bin\Release_dev"
 set "OUT=%~1"
-if "%OUT%"=="" set "OUT=%ROOT%\REDRIVER2_mp_lan.7z"
+if "%OUT%"=="" set "OUT=%ROOT%\JERICHO_mp_lan.7z"
 
 set "SEVENZ=%ProgramFiles%\7-Zip\7z.exe"
 if not exist "%SEVENZ%" set "SEVENZ=%ProgramFiles(x86)%\7-Zip\7z.exe"
@@ -25,7 +25,7 @@ if not exist "%SEVENZ%" (
 echo packaging %EXEDIR% -^> %OUT%
 pushd "%EXEDIR%" || exit /b 1
 "%SEVENZ%" a -t7z -mx=5 "-xr!FMV" "%OUT%" ^
-    REDRIVER2_dev.exe SDL2.dll OpenAL32.dll soft_oal.dll config.ini ^
+    JERICHO_dev.exe SDL2.dll OpenAL32.dll soft_oal.dll config.ini ^
     VERSION.txt DRIVER2 JERICHO
 popd
 

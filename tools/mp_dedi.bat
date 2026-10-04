@@ -15,8 +15,8 @@ rem ============================================================================
 setlocal
 set "EXEDIR=%~dp0\..\..\..\..\src_rebuild\bin\Release_dev"
 if not "%MP_EXEDIR%"=="" set "EXEDIR=%MP_EXEDIR%"
-if not exist "%EXEDIR%\REDRIVER2_dev.exe" (
-echo echo mp: no REDRIVER2_dev.exe in "%EXEDIR%"
+if not exist "%EXEDIR%\JERICHO_dev.exe" (
+echo echo mp: no JERICHO_dev.exe in "%EXEDIR%"
     echo     build it, or set MP_EXEDIR to the directory that has it
     exit /b 1
 )

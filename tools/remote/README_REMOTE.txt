@@ -8,7 +8,7 @@ fixture you set up once and then stop thinking about.
 ONE-TIME SETUP ON THE OTHER PC
 ------------------------------
 1. Put START_AGENT.bat, mp_agent.ps1 and this file in the game folder -- the one
-   with REDRIVER2_dev.exe in it. (The LAN package already puts them there.)
+   with JERICHO_dev.exe in it. (The LAN package already puts them there.)
 2. Right-click START_AGENT.bat -> Run as administrator, ONCE, so it can be
    allowed through the firewall (TCP 1401). After the first time you can just
    double-click it.

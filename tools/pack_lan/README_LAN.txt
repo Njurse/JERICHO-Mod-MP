@@ -6,7 +6,7 @@ exe will not talk to it). Unzip it anywhere -- the game writes its log and
 config next to the exe, so it does not need to be installed.
 
 WHAT IS IN HERE
-   REDRIVER2_dev.exe, the DLLs        the game
+   JERICHO_dev.exe, the DLLs        the game
    DRIVER2\                           the game data (the intro/mission FMV
                                       videos are left out; both launchers pass
                                       -nofmv, which the game supports)
@@ -51,7 +51,7 @@ STAYING ON THE SAME BUILD
        JERICHO\MODS\mp\tools\pack_lan\sync_lan.bat
 
    It regenerates the project files (so the build stamp is current), builds, and
-   writes REDRIVER2_mp_lan_<build>.7z in the project root. Copy that ONE file to
+   writes JERICHO_mp_lan_<build>.7z in the project root. Copy that ONE file to
    the other machine and extract it over this folder -- nothing else is needed
    there (no Visual Studio, no git).
 

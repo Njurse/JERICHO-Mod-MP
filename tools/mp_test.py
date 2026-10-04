@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """mp_test.py -- headless protocol harness for the JERICHO Multiplayer module.
 
-The game writes REDRIVER2.log relative to its CWD, so two live instances
+The game writes JERICHO.log relative to its CWD, so two live instances
 cannot run from one folder. Instead this harness drives the real module
 against a scriptable Python peer, exercising the actual wire protocol on
 whichever side the game is playing:

@@ -245,7 +245,7 @@ about who drives what (see trap 12 in `docs/ARCHITECTURE.md`).
 
 Regenerates the project files (so the build stamp is current — `premake5 vs2019`
 bakes `git describe --tags --always --dirty` in as `JERICHO_BUILD_VERSION`),
-builds `Release_dev`, and writes `REDRIVER2_mp_lan_<build>.7z` in the project
+builds `Release_dev`, and writes `JERICHO_mp_lan_<build>.7z` in the project
 root. Copy that ONE file to the other machine and extract it over the folder; that
 machine needs neither Visual Studio nor git.
 
@@ -270,7 +270,7 @@ if you want to test mismatched builds deliberately.
     python JERICHO\MODS\mp\tools\remote\mp_remote.py run --peer 192.168.50.244 --seat host
 
 Copy the two files in `tools\remote\` (they already ride along in the LAN package)
-next to `REDRIVER2_dev.exe` on the other machine, double-click `START_AGENT.bat`
+next to `JERICHO_dev.exe` on the other machine, double-click `START_AGENT.bat`
 once, and leave the window open. That machine is then a **fixture**, not a
 chore: everything below happens from here, and you never touch it again.
 
@@ -314,7 +314,7 @@ exit — leaves none, and the log simply stops. So:
     python tools/dmp_fault.py JERICHO.dmp         # exception + module + RVA
     python tools/map_lookup.py <exe>.map 0xC961   # RVA -> the function
 
-`dmp_fault.py` prints `in module REDRIVER2_dev.exe at rva 0x....`; give that RVA to
+`dmp_fault.py` prints `in module JERICHO_dev.exe at rva 0x....`; give that RVA to
 `map_lookup.py` together with the `.map` beside the exe and it names the function.
 Correlate with the log's own tail: the last `[mp]` lines are what it was doing. A log
 written without `JERICHO_LOG_FLUSH=1` can lose its tail, which turns the last line

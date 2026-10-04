@@ -118,9 +118,9 @@ Unknown arguments no longer dump the list or open a modal dialog: they raise a
 toast in the frontend (`jer_error`, gentle red, left side, ~5 s) and the game
 carries on.
 
-    REDRIVER2_dev.exe -help
-    REDRIVER2_dev.exe -host 1318
-    REDRIVER2_dev.exe -join 192.168.1.20:1318
+    JERICHO_dev.exe -help
+    JERICHO_dev.exe -host 1318
+    JERICHO_dev.exe -join 192.168.1.20:1318
 
 ## If nobody can see your game
 
@@ -151,7 +151,7 @@ instances on one PC), `mp_host.bat` / `mp_join.bat` (two machines), and
 `tools/mp_localpair.py` runs **two real instances on one PC** — one hosting, one
 joining — and prints both sides' logs. Each instance gets its own working
 directory (built from junctions, so nothing is copied) which is what keeps the
-two `REDRIVER2.log` files and the two `mp.ini` files apart. It launches the
+two `JERICHO.log` files and the two `mp.ini` files apart. It launches the
 executables directly and kills exactly the PIDs it started.
 
     python tools/mp_localpair.py                # host + join, report, clean up

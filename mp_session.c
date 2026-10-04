@@ -3623,7 +3623,7 @@ static void MpSendOwnCarState(void)
  * (InitPlayer), so its civil-AI state was never set up; flipping its controlType
  * to CIV_AI hands it to the engine's traffic AI, which then steers a car with no
  * AI data -- an access violation inside CivSteerAngle (found from a dump:
- * REDRIVER2_dev.exe rva 0xC961). Leaving it a player car and simply never sending
+ * JERICHO_dev.exe rva 0xC961). Leaving it a player car and simply never sending
  * it anything again does what was asked for ANYWAY: it stays put (the engine's
  * input fallback coasts it to a stop) instead of an AI driving it away. */
 static void MpReleaseRemoteCar(MP_PLAYER* p)
