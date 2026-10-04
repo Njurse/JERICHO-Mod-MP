@@ -185,7 +185,7 @@ them):
 | --- | --- |
 | `MP_TEST_ONFOOT=<secs>` | get out of the car that many seconds in, so the on-foot path runs at all |
 | `MP_BOT=pursuit` | drives the cars AND the on-foot Tanner (see `mp_bot.c`), so a run has motion without a human |
-| `MP_TEST_PAUSECAR=<secs>[,<city>,<model>]` | runs the pause menu's `Change car` apply path, so a mid-match vehicle change (including a cross-city one, with carhacks) is reproducible headlessly |
+| `MP_TEST_PAUSECAR=<secs>[,<city>[,<model>]][;...]` | runs the pause menu's `Change car` apply path, so a mid-match vehicle change (including a cross-city one, with carhacks) is reproducible headlessly. A `;`-separated list (`30,3,1;45,1,2`) makes one change per entry, in order, each at its own time, counted in seconds from when the session starts running - enough to switch until the spare slots would run out |
 | `MP_TEST_RESTART=<secs>` | fires the engine's own pause-menu answer, so a pass means the multiplayer soft restart is wired end to end |
 
 A run wants `lost=0` and `dumps=0`.

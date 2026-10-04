@@ -890,13 +890,14 @@ host's roster names the car it is really driving.
 
 **Where the cities come from.** mp can only offer what this machine can actually
 hold, and a second city's car data is carhacks' business, so mp ASKS:
-`mp_carquery.h` is a two-event contract (custom JERICHO event ids, so no shared
+`mp_carquery.h` is a three-event contract (custom JERICHO event ids, so no shared
 header needed beyond that one file) answered by `carhacks/mplive.c`:
 
 | event | question | answer |
 | --- | --- | --- |
 | `MP_CARQ_CITIES` | which cities can this session offer? | 0..3 indices, or 0 = "nobody knows" |
-| `MP_CARQ_LOAD` | make `(city, model)` available here and in the session | `ok` |
+| `MP_CARQ_LOAD` | make `(city, model)` available here | `ok` |
+| `MP_CARQ_CHOSEN` | (notice) the local player now drives `(city, model)`, or the switch did not happen | none - carhacks tells the session and releases the old car's slot |
 
 No answer is not an error: mp falls back to the session's own city and its
 frontend roster (`CarAvailability[city][slot]` + `carNumLookup[city][slot]`,
@@ -907,13 +908,25 @@ the whole feature minus the cross-city half.
 mid-match peer pick already goes through -- put the car in the session's canonical
 spare slot, then `chkImportHotLoad`, which reads that city in, builds the slot's
 geometry in the engine's own pool, applies its cosmetics and records its texture
-pages -- plus `chkNetAdvertisePick` (and `chkNetPublishSet` on the host) so every
-other machine loads it too. mp only swaps once `MpResidentSlotForCar` finds the
-car AND its mesh is built (`gCarCleanModelPtr`), because pointing a car at an
-unbuilt slot is a crash, not a cosmetic glitch.
+pages. mp only swaps once `MpResidentSlotForCar` finds the car AND its mesh is
+built (`gCarCleanModelPtr`), because pointing a car at an unbuilt slot is a
+crash, not a cosmetic glitch.
 
-Test lever: `MP_TEST_PAUSECAR=<secs>[,<city>,<model>]` runs the same call the
-Apply row does, so a mid-match change is reproducible headlessly.
+After the swap, `MpChangeCar` fires `MP_CARQ_CHOSEN` (`changed = 1` when our car
+really is on the new car's slot, `0` when it is not), and `MpFollowLocalCar`
+fires it when the player gets back into a car on foot. That notice is when
+carhacks learns which car this player drives: it advertises the car
+(`chkNetAdvertisePick`, and `chkNetPublishSet` on the host) so every other
+machine loads it, and releases the old car's slot -- only once no player names
+that car and no car is still on the slot (`carhacks/MP_ADAPTER.md`, "Releasing a
+slot"). Advertising after the swap rather than in `MP_CARQ_LOAD` means nobody is
+told about a car that never got driven. A direct car-to-car move (`CARCHANGE`,
+without leaving a car) does not fire it.
+
+Test lever: `MP_TEST_PAUSECAR=<secs>[,<city>[,<model>]][;...]` runs the same
+call the Apply row does, so a mid-match change is reproducible headlessly; a
+`;`-separated list makes several timed changes, each counted from when the
+session starts running (`tools/mp_tries.py --scenario T2` uses seven).
 
 ### Restart is a soft reset
 
