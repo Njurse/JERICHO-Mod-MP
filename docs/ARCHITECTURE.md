@@ -616,6 +616,53 @@ Matchmaking beyond LAN, host migration, traffic/police replication. Chat is
 implemented (open on `T`, send on Enter, received as a notify). The lobby's
 "Enforce Mods" policy is implemented; nothing exercises it yet.
 
+#### Traffic and police sync — implementation ideas (NOT started)
+
+Neither is replicated today: each machine spawns and drives its own civs from the
+level data, so a car you hit on one screen may not be there on the other. Notes
+for whoever picks it up, because the obvious approach is the wrong one.
+
+**The prerequisite is a slot agreement, not a wire format.** Every option below
+needs both machines to agree that "traffic car X" lives in the same `car_data`
+slot on both sides, or the state on the wire lands on the wrong car. That is the
+resident-slot pool `carhacks` already owns (`CarPageFindSlot`, the pin/owner
+tracking #12/#14 added) — reuse it rather than inventing a second allocator, for
+the same reason the texture import does.
+
+**Authority per car, not per feature.** Pick one owner per car and have only that
+owner simulate it, everywhere, including traffic. Mixed ownership is what makes
+this look easy and then desync in a corner.
+
+**The options, cheapest first:**
+
+- *Cosmetic parity only* — replicate the **consequences** (a hit, a knock, a
+  wreck) and let each machine keep its own traffic motion. Cheap, exercises the
+  same wire path, and fixes the complaint that actually gets noticed ("I hit a car
+  and nothing happened on your screen"). Good first step.
+- *Suppress-and-draw* — the host owns traffic inside a radius of any player and
+  sends compact state (position, velocity, model, damage — a car's state is small);
+  the client hides its own traffic in that radius and draws the host's. Needs a
+  stable slot for the incoming cars, i.e. the prerequisite above, and a fade at the
+  radius edge so cars do not pop.
+- *Full lockstep* — the engine is already a fixed-step simulator and the mp module
+  already steps the world deterministically for player cars, so traffic would follow
+  for free **if** both machines start from the same state and consume the same
+  random stream. `Random2` is frame-deterministic (combatd2 relies on it), so a
+  shared seed is possible — but any divergence compounds silently and there is no
+  cheap way to detect it. Attractive, and the reason it is last.
+
+**Police are a separate problem from traffic**, even though they share the machinery:
+a cop's *target* is chosen per-machine, so replication has to carry a **player id**,
+not a local pointer or a car slot — the machine that receives it may resolve that id
+to a different `CAR_DATA*`. Police also change behaviour on contact with a player,
+which is exactly where a desync becomes visible. Do traffic first.
+
+**Do not hand a synced car to the traffic AI.** `players.c:164` will put our cars
+under `CONTROL_TYPE_CIV_AI`, and `PingInCivCar` then reads AI data a
+module-created car never had — this already cost one access violation and has a
+guard (commit `4c79e966`). Any replication that puts cars into the civ population
+must keep that guard meaningful.
+
 ---
 
 ## 13. Unverified
