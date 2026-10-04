@@ -85,6 +85,16 @@ typedef struct MP_PLAYER
 	int   pedSpeed;
 	unsigned long pedLastMs;	/* when we last heard a pose for it */
 
+	/* The owner's carstate says this player is ON FOOT (MP_CARSTATE_NO_CAR).
+	 * carId < 0 says the same thing, but only until the next roster arrives:
+	 * the roster names the car a player OWNS, so it cannot be used to decide
+	 * whether they are driving it. Without this flag a peer re-spawned a car
+	 * for a player who was standing on the pavement -- every roster (every
+	 * 120 frames), so the stand-in pedestrian appeared and vanished in a loop.
+	 * Set by the carstate (which arrives every frame); consulted by the roster's
+	 * spawn request and by MpSpawnLateJoiners. */
+	int   onFoot;
+
 	/* That player's chosen colour, as THEIR machine reported it. Off means their
 	 * character keeps the colours the game gave it. */
 	int   colorOn;
@@ -322,6 +332,26 @@ void MpUiTick(void);			/* refresh the live lobby menu when needed */
 /* Lower-left info overlay (who joined/left) + the chat prompt. */
 void MpNotify(const char* text);	/* queue a line for the overlay */
 void MpNotifyf(const char* fmt, ...);	/* printf-style MpNotify */
+
+/* Replace OUR OWN vehicle with another one, mid-match (the pause menu's Change
+ * car). (city, model) is the pair the wire carries; the model must be one this
+ * machine can hold. Returns 1 if the car on the road changed. */
+int MpChangeCar(int city, int model);
+
+/* A city's display name (a 0..3 index, or -1 for the session's own city). */
+const char* MpCarCityName(int city);
+
+/* The live-car questions mp puts to other modules (carhacks) -- see
+ * mp_carquery.h. Both are "no answer is not an error": 0 means nobody knew
+ * better, and the caller falls back to the session's own city. */
+int MpCarQueryCities(int* out, int max);	/* out: 0..3 city indices; returns the count */
+int MpCarQueryLoad(int city, int model);	/* 1 = this machine holds it now */
+
+/* The multiplayer meaning of Restart: put this player back at the level's own
+ * start, in their car, repaired, with no felony, and KEEP the session (the
+ * engine's own restart rebuilds the level, which is not one player's to do in a
+ * match). Returns 1 when the reset was applied. */
+int MpSoftRestart(void);
 void MpChatOpen(void);			/* open the chat prompt (bound to a key in mp.c) */
 void MpChatSendText(const char* text);	/* send + locally echo a chat line */
 void MpSendChat(const char* text);	/* put a chat line on the wire */

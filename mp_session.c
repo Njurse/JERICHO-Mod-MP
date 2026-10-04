@@ -6,7 +6,9 @@
  */
 #include "jericho.h"
 #include "jer_events.h"
+#include "jer_pause_menu.h"	/* JER_PAUSE_QUIT_*: the pause menu's codes (mirror MENU_QUIT_*) */
 #include "mp.h"
+#include "mp_carquery.h"	/* the mp <-> carhacks live-car query contract */
 
 #include "driver2.h"
 #include "mission.h"
@@ -17,6 +19,7 @@
 #include "convert.h"	/* _RotMatrixY: a car's box is built from its matrix */
 #include "cosmetic.h"	/* car_cosmetics[slot]: the box a rebuilt car needs */
 #include "denting.h"	/* CreateDentableCar: the only writer of the drawn vertex dump */
+#include "felony.h"	/* felonyRating / pedestrianFelony: what a restart clears */
 extern int gBootMpLevel;	/* main.c: 1 = the small multiplayer map, 0 = the full city */
 extern int gBootMpArena;	/* main.c: which multiplayer map (0/1) */
 extern int gWantNight;		/* glaunch.c: 1 = the night take-a-ride level variant */
@@ -801,6 +804,15 @@ void MpHostSendRoster(void)
 			}
 		}
 
+		/* ON FOOT: name no car, whatever the player owns. The roster is only
+		 * refreshed every 120 frames, so a peer that seats a player from it
+		 * cannot tell "has a car" from "is driving it"; the model field is where
+		 * that is said, and 0xff is the same "no car" the carstate uses. Doing
+		 * this is what stops a peer re-spawning a car for a player who has got
+		 * out (see MP_PLAYER.onFoot). */
+		if (p->carId < 0)
+			e->model = 0xff;
+
 		e->ping = (uint16_t)(id == 0 ? 0 : MpPingForPlayer(id));
 		snprintf(e->name, sizeof(e->name), "%s", p->name);
 
@@ -960,8 +972,11 @@ void MpSpawnLateJoiners(void)
 		int rot, k;
 		char padid;
 
-		/* Only a player who has CHOSEN a car gets one -- see carConfirmed. */
-		if (p == NULL || p->isLocal || p->carId >= 0 || !MpPlayerCarReady(p))
+		/* Only a player who has CHOSEN a car gets one -- see carConfirmed. And
+		 * never one the owner has told us is ON FOOT: the request can also be
+		 * armed by the roster, and re-seating a player who is walking about is
+		 * what made the stand-in pedestrian flicker. */
+		if (p == NULL || p->isLocal || p->carId >= 0 || p->onFoot || !MpPlayerCarReady(p))
 			continue;
 
 		/* The smallest CAR_DATA slot no player is already driving. Counting the
@@ -1162,7 +1177,14 @@ static void MpHandleRoster(const unsigned char* p, int len)
 		{
 			pl->carConfirmed = 1;
 
-			if (gMp.running && pl->carId < 0)
+			/* ...but do NOT ask for a car for someone the owner has told us is
+			 * ON FOOT. The host's roster names the car a player OWNS, which is
+			 * still true while they are standing next to it, so without this the
+			 * request fired on every roster (every 120 frames) and re-spawned a
+			 * car for a player who had got out -- the stand-in pedestrian then
+			 * appeared and vanished in a loop. The carstate already says it in
+			 * one frame; this is the roster's copy of the same fact. */
+			if (gMp.running && pl->carId < 0 && !pl->onFoot)
 				gMp.pendingSpawn = 1;
 		}
 	}
@@ -1989,6 +2011,11 @@ int MpOnNetSpawn(void* userdata, void* args)
 /* Input lockstep                                                      */
 /* ------------------------------------------------------------------ */
 
+/* Declared here because MpLockstepFrame runs before its body below (the test
+ * levers are all one tick, and this one has to sit with the others). */
+static void MpTestPauseCarTick(void);
+static void MpTestRestartTick(void);
+
 int MpInputForPlayer(int id)
 {
 	if (id < 0 || id >= MP_MAX_PLAYERS)
@@ -2594,6 +2621,15 @@ void MpLockstepFrame(void)
 	 * so the on-foot path has a way to be exercised at all. */
 	MpTestOnFootTick();
 
+	/* test lever: run the pause menu's Change car path (inert unless
+	 * MP_TEST_PAUSECAR), so a mid-match vehicle change is reproducible headlessly
+	 * rather than only by a human at the menu. */
+	MpTestPauseCarTick();
+
+	/* test lever: ask for the multiplayer Restart (inert unless MP_TEST_RESTART),
+	 * through the engine's own event so the whole chain is under test. */
+	MpTestRestartTick();
+
 	/* tell everyone where our wheel is pointing before anything is simulated */
 	MpSendInput(MpLocalPad());
 
@@ -2789,6 +2825,147 @@ static void MpTestOnFootTick(void)
 	 * it. Mirror the engine: activate the ped, then step out. */
 	ActivatePlayerPedestrian(&car_data[me->carId], NULL, 0, NULL, TANNER_MODEL);
 	ChangeCarPlayerToPed(0);
+}
+
+/* MP_TEST_PAUSECAR=<secs>[,<city>,<model>] -- run the pause menu's Change car
+ * path that many seconds into a match, exactly as pressing Apply does.
+ *
+ * The picker itself needs a human at a menu, so without this the one part of the
+ * feature that can go wrong quietly -- the swap and its replication -- would only
+ * ever be looked at by hand. <city> defaults to the session's own and <model> to
+ * the SECOND car in that city's roster (the first is usually the one already
+ * being driven, which would make the run say nothing). Inert unless set. */
+static void MpTestPauseCarTick(void)
+{
+	static int done, noted;
+	static unsigned long startMs;
+	const char* s;
+	unsigned long now;
+	int secs, city, model = -1;
+
+	if (done || !gMp.running)
+		return;
+
+	s = getenv("MP_TEST_PAUSECAR");
+
+	if (s == NULL)
+		return;
+
+	if (!noted)
+	{
+		noted = 1;
+
+		if (gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx, "[mp] test: MP_TEST_PAUSECAR=%s armed (frame %lu)\n",
+				s, gMp.frame);
+	}
+
+	if (startMs == 0)
+		startMs = MpNowMs();
+
+	now = MpNowMs();
+	secs = atoi(s);
+
+	if ((int)((now - startMs) / 1000) < secs)
+		return;
+
+	done = 1;
+
+	city = (gMp.city >= 0 && gMp.city < 4) ? gMp.city : 0;
+
+	{
+		const char* c1 = strchr(s, ',');
+
+		if (c1 != NULL)
+		{
+			const char* c2;
+
+			city = atoi(c1 + 1);
+			c2 = strchr(c1 + 1, ',');
+
+			if (c2 != NULL)
+				model = atoi(c2 + 1);
+		}
+	}
+
+	if (model < 0)
+	{
+		extern int CarAvailability[4][10];
+		extern char carNumLookup[4][10];
+		int slot, seen = 0;
+
+		if (city < 0 || city > 3)
+			city = 0;
+
+		for (slot = 0; slot < 10; slot++)
+		{
+			if (CarAvailability[city][slot] == 0)
+				continue;
+
+			model = (int)(unsigned char)carNumLookup[city][slot];
+
+			if (++seen >= 2)
+				break;
+		}
+	}
+
+	if (gMpCtx != NULL)
+		gMpCtx->jer_log(gMpCtx, "[mp] test: PAUSECAR change now to city %d model %d\n",
+			city, model);
+
+	MpChangeCar(city, model);
+}
+
+/* MP_TEST_RESTART=<secs> -- ask for the multiplayer Restart that many seconds
+ * into a match, exactly as pressing Restart in the pause menu does.
+ *
+ * It FIRES THE ENGINE'S EVENT rather than calling the reset directly, so it can
+ * only pass when the whole chain is wired: the hook in main.c, mp's claim, and
+ * MpSoftRestart. Inert unless set. */
+static void MpTestRestartTick(void)
+{
+	static int done, noted;
+	static unsigned long startMs;
+	const char* s;
+	unsigned long now;
+
+	if (done || !gMp.running)
+		return;
+
+	s = getenv("MP_TEST_RESTART");
+
+	if (s == NULL)
+		return;
+
+	if (!noted)
+	{
+		noted = 1;
+
+		if (gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx, "[mp] test: MP_TEST_RESTART=%s armed (frame %lu)\n",
+				s, gMp.frame);
+	}
+
+	if (startMs == 0)
+		startMs = MpNowMs();
+
+	now = MpNowMs();
+
+	if ((int)((now - startMs) / 1000) < atoi(s))
+		return;
+
+	done = 1;
+
+	if (gMpCtx != NULL)
+		gMpCtx->jer_log(gMpCtx, "[mp] test: pressing RESTART now\n");
+
+	{
+		JER_ARGS_GAME_QUIT q;
+
+		q.code = JER_PAUSE_QUIT_RESTART;
+
+		jer_fire(JER_EVENT_GAME_QUIT, &q);
+	}
 }
 
 static void MpTestCarChangeTick(void)
@@ -3150,8 +3327,6 @@ static void MpHandlePedState(int connIndex, const unsigned char* p, int len)
 	MP_PEDSTATE h;
 	int i, n;
 
-	(void)connIndex;
-
 	if (len < (int)sizeof(MP_PEDSTATE))
 		return;
 
@@ -3184,6 +3359,14 @@ static void MpHandlePedState(int connIndex, const unsigned char* p, int len)
 		pl->pedSpeed = e.speed;
 		pl->pedLastMs = MpNowMs();
 	}
+
+	/* The host is the hub, and this needs relaying exactly as the carstate does:
+	 * a client sends its pedestrian to the host alone, so without this only the
+	 * host ever sees an on-foot CLIENT -- every other client sees a gap where a
+	 * person should be, which reads as "I can see the host on foot but not each
+	 * other". The carstate relay (MpHandleCarState) is the same rule. */
+	if (MpIsHost() && connIndex >= 0)
+		MpHostRelay(connIndex, MP_TAG_PED, 0, p, len);
 }
 
 /* Keep the pedestrian we are standing in for a REMOTE on-foot player in step,
@@ -3650,7 +3833,9 @@ static void MpReleaseRemoteCar(MP_PLAYER* p)
 	}
 }
 
-static const char* MpCarCityName(int city)
+/* A city's name, for logs and menu labels. `city` is a 0..3 index or -1 for the
+ * session's own city (the value the wire uses for "the level's own car data"). */
+const char* MpCarCityName(int city)
 {
 	static const char* names[4] = { "CHICAGO", "HAVANA", "VEGAS", "RIO" };
 
@@ -3812,6 +3997,257 @@ static int MpAdoptRemoteCar(MP_PLAYER* p, int city, int model)
 	return 0;
 }
 
+/* ------------------------------------------------------------------ */
+/* Asking the other modules about live cars                            */
+/* ------------------------------------------------------------------ */
+/* mp_carquery.h is the contract: a custom JERICHO event, so this works whether
+ * carhacks is compiled in beside us or loaded as a dll, and degrades to "nobody
+ * knows" when it is not there at all. */
+
+/* Which cities this session can offer. Fills `out` with 0..3 city indices and
+ * returns how many were written; 0 means nobody answered, and the caller should
+ * offer the session's own city alone. */
+int MpCarQueryCities(int* out, int max)
+{
+	MP_CARQ_CITIES_ARGS a;
+
+	if (out == NULL || max <= 0)
+		return 0;
+
+	memset(&a, 0, sizeof(a));
+	a.cities = out;
+	a.max = max;
+
+	jer_fire(MP_CARQ_CITIES, &a);
+
+	if (a.count < 0)
+		return 0;
+
+	return (a.count > max) ? max : a.count;
+}
+
+/* Ask whoever can to make (city, model) available on THIS machine and in the
+ * session (carhacks' import/hotload). The holder decides -- a refusal is reported
+ * to the player rather than driven into a model this machine cannot render. */
+int MpCarQueryLoad(int city, int model)
+{
+	MP_CARQ_LOAD_ARGS a;
+
+	memset(&a, 0, sizeof(a));
+	a.city = city;
+	a.model = model;
+
+	jer_fire(MP_CARQ_LOAD, &a);
+
+	return a.ok ? 1 : 0;
+}
+
+/* Change OUR OWN car, mid-match, from the pause menu.
+ *
+ * Replace the vehicle we are driving with another one -- the "Change car" row in
+ * the Multiplayer pause page (mp.c), which is also the path a carhacks live pick
+ * drives. On foot the player is put into their parked car first: "change car" from
+ * the pavement has to produce a car, not a new pedestrian.
+ *
+ * THE SLOT IS STILL OUR OWN and only the cosmetic model changes, through the SAME
+ * function a peer's car goes through (MpAdoptRemoteCar) -- so nothing about this
+ * world's car slots, and so nothing about anyone else's car, is disturbed, and a
+ * change we make and a change a peer makes read identically in the log.
+ *
+ * The choice then travels the ordinary way: our carstate carries the new
+ * (city, model) from this frame on, so every peer re-models its copy of us, and a
+ * client also tells the host so the host's roster names the car it is really
+ * driving. Whether a machine HOLDS the car is not this function's business -- a
+ * car the level does not carry is what the carhacks import is for. Returns 1 if
+ * the car on the road changed (0 when we were already driving it, or there was
+ * nothing to change). */
+int MpChangeCar(int city, int model)
+{
+	MP_PLAYER* me = MpLocalPlayer();
+	int changed;
+
+	if (me == NULL || !gMp.running || model < 0)
+		return 0;
+
+	if (me->carId < 0)
+	{
+		int seat = -1;
+		int s;
+
+		/* Get back into a car OF OURS -- one the module made, left parked and
+		 * enterable (see MpFollowLocalCar). Never a live traffic car: taking one
+		 * over and vacating it hands the traffic AI a car it cannot steer, which
+		 * is the crash that note exists to prevent. */
+		for (s = 0; s < MAX_CARS; s++)
+		{
+			if (!gMpOurCars[s] || MpGetPlayerByCar(s) != NULL)
+				continue;
+
+			if (car_data[s].controlType == CONTROL_TYPE_CIV_AI)
+			{
+				seat = s;
+				break;
+			}
+		}
+
+		if (seat < 0)
+		{
+			if (gMpCtx != NULL)
+				gMpCtx->jer_log(gMpCtx,
+					"[mp] change car: on foot and no car of ours to get back into\n");
+
+			MpNotify("Change car: you are on foot with no car to change");
+			return 0;
+		}
+
+		ChangePedPlayerToCar(0, &car_data[seat]);
+
+		/* Adopt the move NOW, so the re-model below lands on the car we just got
+		 * into instead of waiting a frame for the poll in MpSendOwnCarState. */
+		MpFollowLocalCar();
+	}
+
+	if (me->carId < 0 || me->carId >= MAX_CARS)
+		return 0;
+
+	if (gMpCtx != NULL)
+		gMpCtx->jer_log(gMpCtx, "[mp] change car: we asked for %s model %d (slot %d)\n",
+			MpCarCityName(city), model, me->carId);
+
+	/* Not a car this machine holds? Ask whoever can to make it available (carhacks'
+	 * import + hotload), which is also what tells the other machines to fold it in.
+	 * Only THEN try the swap: pointing the car at a mesh that is not loaded is a
+	 * crash, not a cosmetic glitch (see MpAdoptRemoteCar). */
+	if (MpResidentSlotForCar(city, model) < 0)
+		MpCarQueryLoad(city, model);
+
+	changed = MpAdoptRemoteCar(me, city, model);
+
+	/* Publish the choice. A client's pick goes to the HOST alone, which
+	 * republishes the roster naming it; the host does that itself. Our carstate
+	 * carries the model either way. */
+	if (MpIsHost())
+		MpHostSendRoster();
+	else
+		MpSendPickedCar(model, city);
+
+	if (changed)
+		MpNotifyf("Changed car: %s model %d", MpCarCityName(city), model);
+	else
+		MpNotifyf("Change car: %s model %d is not loaded here", MpCarCityName(city), model);
+
+	return changed;
+}
+
+/* Put OUR player back at the level's own start, in their car, repaired and with
+ * no felony -- the MULTIPLAYER meaning of Restart (see MpOnGameQuit in mp.c).
+ *
+ * The ENGINE's restart throws the level away and rebuilds it, which in a match is
+ * not one player's to do: everyone else is in that same level and their session
+ * is not ours to reset. So the local player is put back at the start instead, and
+ * the others simply see their car arrive there -- the owner-authoritative
+ * carstate carries the new pose like any other move.
+ *
+ * Returns 1 when the reset was applied. */
+int MpSoftRestart(void)
+{
+	MP_PLAYER* me = MpLocalPlayer();
+	CAR_DATA* cp;
+
+	if (me == NULL || !gMp.running)
+		return 0;
+
+	/* Being in a vehicle is the point of the request, so on foot we get back into
+	 * our parked car first -- the same rule a car change uses. */
+	if (me->carId < 0)
+	{
+		int seat = -1;
+		int s;
+
+		for (s = 0; s < MAX_CARS; s++)
+		{
+			if (!gMpOurCars[s] || MpGetPlayerByCar(s) != NULL)
+				continue;
+
+			if (car_data[s].controlType == CONTROL_TYPE_CIV_AI)
+			{
+				seat = s;
+				break;
+			}
+		}
+
+		if (seat < 0)
+		{
+			MpNotify("Restart: you are on foot with no car to get back into");
+			return 0;
+		}
+
+		ChangePedPlayerToCar(0, &car_data[seat]);
+		MpFollowLocalCar();
+	}
+
+	if (me->carId < 0 || me->carId >= MAX_CARS)
+		return 0;
+
+	cp = &car_data[me->carId];
+
+	/* The level's own start for this player (PlayerStartInfo[0] is us), placed the
+	 * engine's own way: only x and z, with t[1] = 0 so the engine resolves the
+	 * ground under the car -- exactly what a car created at level init relies on
+	 * (see MpSpawnLateJoiners). */
+	if (PlayerStartInfo[0] != NULL)
+	{
+		MATRIX m;
+
+		cp->hd.where.t[0] = PlayerStartInfo[0]->position.vx;
+		cp->hd.where.t[1] = 0;
+		cp->hd.where.t[2] = PlayerStartInfo[0]->position.vz;
+		cp->hd.direction = PlayerStartInfo[0]->rotation;
+
+		/* A teleport has to carry the handling matrix with it: leaving it behind
+		 * makes the car collide at the spot it used to be. */
+		_RotMatrixY(&m, (short)cp->hd.direction);
+		memcpy(cp->hd.where.m, m.m, sizeof(cp->hd.where.m));
+	}
+
+	/* Stopped dead: a restart is not a momentum transfer. */
+	cp->hd.speed = 0;
+	cp->wheel_angle = 0;
+	memset(cp->st.n.linearVelocity, 0, sizeof(cp->st.n.linearVelocity));
+	memset(cp->st.n.angularVelocity, 0, sizeof(cp->st.n.angularVelocity));
+
+	/* REPAIRED -- the fields a repair touches (the same set sandbox's repair uses),
+	 * plus CreateDentableCar, which is the only thing that rebuilds the DRAWN
+	 * vertices from the clean model. Without it the car is undamaged and still
+	 * looks caved in. */
+	cp->totalDamage = 0;
+	memset(cp->ap.damage, 0, sizeof(cp->ap.damage));
+	CreateDentableCar(cp);
+	cp->ap.needsDenting = 0;
+
+	{
+		JER_ARGS_RESET_CAR rc;
+
+		rc.carId = me->carId;
+		jer_fire(JER_EVENT_RESET_CAR, &rc);
+	}
+
+	/* NO FELONY. GetPlayerFelony picks the car's rating or the pedestrian's, so
+	 * clear both: leaving the other one set would put the cops straight back on us
+	 * the moment we stepped out. */
+	cp->felonyRating = 0;
+	pedestrianFelony = 0;
+
+	if (gMpCtx != NULL)
+		gMpCtx->jer_log(gMpCtx,
+			"[mp] soft restart: back at the level start %d,%d in slot %d, repaired, felony cleared\n",
+			cp->hd.where.t[0], cp->hd.where.t[2], me->carId);
+
+	MpNotify("Restarted: back at the start, car repaired, wanted level cleared");
+
+	return 1;
+}
+
 static void MpHandleCarState(int connIndex, const unsigned char* p, int len)
 {
 	MP_CARSTATE h;
@@ -3863,6 +4299,7 @@ static void MpHandleCarState(int connIndex, const unsigned char* p, int len)
 			 * which is exactly right for someone who is on foot. */
 			pl->carId = -1;
 			pl->car = -1;
+			pl->onFoot = 1;
 
 			continue;
 		}
@@ -3996,6 +4433,7 @@ static void MpHandleCarState(int connIndex, const unsigned char* p, int len)
 		}
 
 		cp->hd.direction = e.heading;
+		pl->onFoot = 0;			/* driving again: the roster may seat them */
 		pl->lastStateFrame = gMp.frame;	/* the fallback gate in MpOnNetInput reads this */
 
 		/* The OWNER is the colour authority: paint its car the colour the owner

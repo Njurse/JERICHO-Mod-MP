@@ -1387,6 +1387,178 @@ static int MpColorAdjustR(void* ud, int dir) { (void)ud; return MpColorAdjust(&g
 static int MpColorAdjustG(void* ud, int dir) { (void)ud; return MpColorAdjust(&gMp.config.colorG, dir); }
 static int MpColorAdjustB(void* ud, int dir) { (void)ud; return MpColorAdjust(&gMp.config.colorB, dir); }
 
+/* ------------------------------------------------------------------ */
+/* Change car: the Multiplayer pause page's vehicle picker             */
+/* ------------------------------------------------------------------ */
+/* Two round-robin rows and an apply row, the same shape as mpColorMenu. A row is
+ * a cycler, not a list, because the pause menu's item set is fixed when the page
+ * is built and a module menu cannot nest a second level (jer_pause_menu.h) -- so
+ * a long roster is reached by cycling, not by listing.
+ *
+ * The CARS are a city's frontend roster, read from the same two engine arrays the
+ * stock car screen and carhacks' own picker use: CarAvailability[city][slot] says
+ * whether the slot is offered, carNumLookup[city][slot] is its MODEL NUMBER.
+ *
+ * The CITIES come from carhacks when it is installed (a session can legitimately
+ * mix cities' car data; that is what carhacks is for) and from the session's own
+ * city alone when it is not. */
+#define MPCC_MAX_CITIES	6
+#define MPCC_MAX_CARS	12
+#define MPCC_SLOTS	10		/* frontend slots per city (carNumLookup[city][0..9]) */
+
+static int mpCcCities[MPCC_MAX_CITIES];
+static int mpCcCityCount;
+static int mpCcCityIdx;
+static int mpCcModels[MPCC_MAX_CARS];
+static int mpCcModelCount;
+static int mpCcModelIdx;
+
+/* Which city the picker is showing: an index into mpCcCities. -1 (or an empty
+ * list) means the session's own city. */
+static int MpCcCity(void)
+{
+	if (mpCcCityCount <= 0)
+		return gMp.city;
+
+	if (mpCcCityIdx < 0 || mpCcCityIdx >= mpCcCityCount)
+		mpCcCityIdx = 0;
+
+	return mpCcCities[mpCcCityIdx];
+}
+
+/* Fill the roster for the currently selected city. Safe to call any time; called
+ * when the page opens and after the city row changes. */
+static void MpCcRebuild(void)
+{
+	extern int CarAvailability[4][10];
+	extern char carNumLookup[4][10];
+	int city, slot;
+
+	/* The city list: carhacks' answer when it has one, else just the session
+	 * city. Rebuilt every time so a carhacks set that lands mid-session shows up. */
+	{
+		int was = MpCcCity();
+		int n;
+
+		mpCcCityCount = 0;
+		n = MpCarQueryCities(mpCcCities, MPCC_MAX_CITIES);
+
+		if (n <= 0)
+		{
+			mpCcCities[0] = (gMp.city >= 0 && gMp.city < 4) ? gMp.city : 0;
+			mpCcCityCount = 1;
+			mpCcCityIdx = 0;
+		}
+		else
+		{
+			mpCcCityCount = (n > MPCC_MAX_CITIES) ? MPCC_MAX_CITIES : n;
+			mpCcCityIdx = 0;
+
+			/* keep showing the same city across a rebuild when we still can */
+			for (slot = 0; slot < mpCcCityCount; slot++)
+			{
+				if (mpCcCities[slot] == was)
+				{
+					mpCcCityIdx = slot;
+					break;
+				}
+			}
+		}
+	}
+
+	city = MpCcCity();
+	mpCcModelCount = 0;
+
+	for (slot = 0; slot < MPCC_SLOTS && mpCcModelCount < MPCC_MAX_CARS; slot++)
+	{
+		/* `== 0` is carhacks' and the stock screen's own test for "not offered
+		 * in this city"; -1 is a slot the level has no car for. */
+		if (CarAvailability[city][slot] == 0)
+			continue;
+
+		mpCcModels[mpCcModelCount++] = (int)(unsigned char)carNumLookup[city][slot];
+	}
+
+	if (mpCcModelIdx < 0 || mpCcModelIdx >= mpCcModelCount)
+		mpCcModelIdx = 0;
+}
+
+static void MpCcLabelCity(void* ud, char* out, int max)
+{
+	(void)ud;
+	snprintf(out, max, "City: %s", MpCarCityName(MpCcCity()));
+}
+
+static int MpCcAdjustCity(void* ud, int dir)
+{
+	(void)ud;
+
+	if (mpCcCityCount > 0)
+		mpCcCityIdx = (mpCcCityIdx + dir + mpCcCityCount) % mpCcCityCount;
+
+	mpCcModelIdx = 0;
+	MpCcRebuild();		/* the new city brings its own cars */
+
+	return JER_PAUSE_QUIT_NONE;
+}
+
+static void MpCcLabelCar(void* ud, char* out, int max)
+{
+	(void)ud;
+
+	if (mpCcModelCount <= 0)
+	{
+		snprintf(out, max, "Car: (no cars offered for this city)");
+		return;
+	}
+
+	snprintf(out, max, "Car: %d/%d  (%s model %d)",
+		mpCcModelIdx + 1, mpCcModelCount,
+		MpCarCityName(MpCcCity()), mpCcModels[mpCcModelIdx]);
+}
+
+static int MpCcAdjustCar(void* ud, int dir)
+{
+	(void)ud;
+
+	if (mpCcModelCount > 0)
+		mpCcModelIdx = (mpCcModelIdx + dir + mpCcModelCount) % mpCcModelCount;
+
+	return JER_PAUSE_QUIT_NONE;
+}
+
+static int MpCcApply(void* ud, int dir)
+{
+	(void)ud;
+	(void)dir;
+
+	if (mpCcModelCount <= 0)
+		return JER_PAUSE_QUIT_NONE;
+
+	MpChangeCar(MpCcCity(), mpCcModels[mpCcModelIdx]);
+
+	return JER_PAUSE_QUIT_NONE;
+}
+
+static const JER_PAUSE_MENU_ITEM mpChangeCarItems[] =
+{
+	/* label, get_label, on_activate, userdata, submenu, adjust */
+	{ NULL, MpCcLabelCity, MpCcAdjustCity, NULL, NULL, 1 },
+	{ NULL, MpCcLabelCar, MpCcAdjustCar, NULL, NULL, 1 },
+	{ "Respawn as this car", NULL, MpCcApply, NULL, NULL, 0 },
+};
+
+/* A JER_PAUSE_MENU's item_count, taken FROM the array.
+ *
+ * The count is a separate field and the engine builds the submenu EAGERLY, so a
+ * count larger than the array walks off its end -- the documented way opening the
+ * Multiplayer page access-violates. Deriving it makes that unrepresentable rather
+ * than something a later edit has to remember. */
+#define MP_MENU_ITEMS(a)	(int)(sizeof(a) / sizeof((a)[0]))
+
+static const JER_PAUSE_MENU mpChangeCarMenu =
+{ "Change car", mpChangeCarItems, MP_MENU_ITEMS(mpChangeCarItems) };
+
 static const JER_PAUSE_MENU_ITEM mpColorItems[] =
 {
 	/* label, get_label, on_activate, userdata, submenu, adjust */
@@ -1397,7 +1569,7 @@ static const JER_PAUSE_MENU_ITEM mpColorItems[] =
 };
 
 static const JER_PAUSE_MENU mpColorMenu =
-{ "My colour", mpColorItems, 4 };
+{ "My colour", mpColorItems, MP_MENU_ITEMS(mpColorItems) };
 
 static int MpOnPauseMenu(void* userdata, void* args)
 {
@@ -1422,6 +1594,11 @@ static int MpOnPauseMenu(void* userdata, void* args)
 	if (gMpCtx != NULL)
 		gMpCtx->jer_log(gMpCtx,
 			"[mp] pause menu opened; the world keeps running\n");
+
+	/* Refresh the Change car picker now, not while it is being drawn: the roster
+	 * reads the city list (which a carhacks set may have changed since the last
+	 * time the menu was opened) and the city's frontend car list. */
+	MpCcRebuild();
 
 	return JER_RESULT_CONTINUE;
 }
@@ -1516,6 +1693,70 @@ static int MpOnNetInput(void* userdata, void* args)
 	{
 		gMpCtx->jer_log(gMpCtx, "[mp] netinput: car %d has no player row\n", carId);
 	}
+
+	return JER_RESULT_CONTINUE;
+}
+
+/* Drive OUR OWN PEDESTRIAN with the test bot, exactly as MpOnNetInput drives our
+ * car: JER_EVENT_PED_INPUT fires right before ProcessTannerPad, so writing the
+ * pad here IS a pad press. It exists because the on-foot path otherwise has no
+ * motion at all in a headless run -- a Tanner standing at the spawn point tests
+ * the messages, not the walking, and a peer's stand-in is only ever seen
+ * standing still. */
+/* The pause menu's ANSWER, in a live match.
+ *
+ * JERICHO hands a module the action before the engine runs it (JER_EVENT_GAME_QUIT,
+ * fired in main.c), and that hook is what makes a multiplayer Restart possible at
+ * all: the stock one calls EndGame(GAMEMODE_RESTART) and rebuilds the level, which
+ * in a match takes every OTHER player's session down with it -- one player's
+ * "restart" is not theirs to do to everyone.
+ *
+ * So mp CLAIMS restart and does the soft reset instead: this player back at the
+ * level's own start, in their car, repaired, wanted level cleared, session intact.
+ * Claiming means the engine runs none of its endings, so we also unpause -- the
+ * pause menu has already closed itself by the time this fires.
+ *
+ * Quit and the rest of the codes are left alone: leaving the match is a real thing
+ * a player should be able to do from the menu. */
+static int MpOnGameQuit(void* userdata, void* args)
+{
+	JER_ARGS_GAME_QUIT* q = (JER_ARGS_GAME_QUIT*)args;
+
+	(void)userdata;
+
+	if (q == NULL || !gMp.running)
+		return JER_RESULT_CONTINUE;
+
+	/* The JER_PAUSE_QUIT_* values mirror the engine's menu quit codes
+	 * (jer_pause_menu.h), and this event carries the engine's. */
+	if (q->code != JER_PAUSE_QUIT_RESTART)
+		return JER_RESULT_CONTINUE;
+
+	if (!MpSoftRestart())
+		return JER_RESULT_CONTINUE;
+
+	pauseflag = 0;
+	UnPauseSound();
+
+	return JER_RESULT_STOP;
+}
+
+static int MpOnPedInput(void* userdata, void* args)
+{
+	JER_ARGS_PED_INPUT* in = (JER_ARGS_PED_INPUT*)args;
+
+	(void)userdata;
+
+	if (in == NULL || !gMp.running || !MpBotEnabled())
+		return JER_RESULT_CONTINUE;
+
+	/* Only OUR player's pad. player[0] is always us -- every machine runs its one
+	 * local player in engine slot 0 and the remote players live in the higher
+	 * slots the module inits (see MpFollowLocalCar). */
+	if ((PLAYER*)in->player != &player[0])
+		return JER_RESULT_CONTINUE;
+
+	in->pad = MpBotTannerPad();
 
 	return JER_RESULT_CONTINUE;
 }
@@ -1625,12 +1866,13 @@ static int MpOnLevelLaunch(void* userdata, void* args)
 static const JER_PAUSE_MENU_ITEM mpPauseItems[] =
 {
 	/* label, get_label, on_activate, userdata, submenu, adjust */
+	{ "Change car", NULL, NULL, NULL, &mpChangeCarMenu, 0 },
 	{ "My colour", NULL, NULL, NULL, &mpColorMenu, 0 },
 	{ "Write diagnostics now", NULL, MpMenuWriteDiag, NULL, NULL, 0 },
 };
 
 static const JER_PAUSE_MENU mpPauseMenu =
-{ "Multiplayer", mpPauseItems, 2 };
+{ "Multiplayer", mpPauseItems, MP_MENU_ITEMS(mpPauseItems) };
 
 JER_MODULE_ENTRY(jer_module_mp_entry)(JERICHO_CONTEXT* ctx)
 {
@@ -1682,6 +1924,12 @@ JER_MODULE_ENTRY(jer_module_mp_entry)(JERICHO_CONTEXT* ctx)
 	 * the level's spare resident slots. */
 	ctx->jer_register_hook(ctx, JER_EVENT_CAR_DATA_SOURCE, MpOnCarDataSource, NULL, 0);
 	ctx->jer_register_hook(ctx, JER_EVENT_NET_INPUT, MpOnNetInput, NULL, 0);
+	/* The same bot, for the on-foot player: JER_EVENT_PED_INPUT is the car's
+	 * NET_INPUT for Tanner (the engine fires it right before ProcessTannerPad). */
+	ctx->jer_register_hook(ctx, JER_EVENT_PED_INPUT, MpOnPedInput, NULL, 0);
+	/* The pause menu's action, before the engine runs it: a live match turns
+	 * Restart into a soft reset rather than a level reload (see MpOnGameQuit). */
+	ctx->jer_register_hook(ctx, JER_EVENT_GAME_QUIT, MpOnGameQuit, NULL, 0);
 	ctx->jer_register_hook(ctx, JER_EVENT_GAME_START, MpOnGameStart, NULL, 0);
 	ctx->jer_register_hook(ctx, JER_EVENT_DRAW_MAP, MpOnDrawMap, NULL, 0);
 	ctx->jer_register_hook(ctx, JER_EVENT_FRONTEND_IDLE, MpOnFrontendIdle, NULL, 0);

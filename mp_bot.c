@@ -12,6 +12,7 @@
 #include "driver2.h"
 #include "cars.h"
 #include "pad.h"
+#include "players.h"	/* player[]: the on-foot bot drives OUR pedestrian */
 #include "objcoll.h"	/* CellEmpty: the engine's own scenery test */
 
 #include <string.h>
@@ -20,6 +21,12 @@
 
 #include "mp.h"
 #include "mp_bot.h"
+
+/* How wide a gap each body needs when probing for scenery. A car is a car; a
+ * person fits down gaps a car does not, and the on-foot bot must use its own
+ * number or it will refuse to walk up a pavement. */
+#define MPBOT_CAR_CLEAR	350
+#define MPBOT_PED_CLEAR	90
 
 /* The canned manoeuvre: a pad that changes every 0.5-4 s (steer left/right,
  * reverse, wheelspin, handbrake). Because the local car is what we replicate,
@@ -115,16 +122,23 @@ static int MpBotMode(void)
 
 /* Is the spot `len` units along heading `dir` clear of scenery? The engine's own test
  * (CellEmpty, what the civ AI uses), with the same clearance -- so this asks the game,
- * not a private model of it. */
-static int MpBotSpotClear(CAR_DATA* mine, int dir, int len)
+ * not a private model of it. Shared by the car and the pedestrian bots: only the body's
+ * position and how wide a gap it needs differ. */
+static int MpBotSpotClearAt(int x, int y, int z, int dir, int len, int radius)
 {
 	VECTOR p;
 
-	p.vx = mine->hd.where.t[0] + (int)(((long)rsin(dir) * len) >> 12);
-	p.vy = mine->hd.where.t[1];
-	p.vz = mine->hd.where.t[2] + (int)(((long)rcos(dir) * len) >> 12);
+	p.vx = x + (int)(((long)rsin(dir) * len) >> 12);
+	p.vy = y;
+	p.vz = z + (int)(((long)rcos(dir) * len) >> 12);
 
-	return CellEmpty(&p, 350);
+	return CellEmpty(&p, radius);
+}
+
+static int MpBotSpotClear(CAR_DATA* mine, int dir, int len)
+{
+	return MpBotSpotClearAt(mine->hd.where.t[0], mine->hd.where.t[1], mine->hd.where.t[2],
+		dir, len, MPBOT_CAR_CLEAR);
 }
 
 /* chase/fight: drive the LOCAL car at (or, for the fleeing host, away from) the
@@ -346,41 +360,26 @@ static int MpBotChase(int fight)
  * A COUNT and not a yes/no, because "clear for 650 units" (a pocket, a corner mouth, a dead
  * end) and "clear for 2400" (the road) are the difference between the fleeing host darting
  * away down the street and backing itself into a corner. Asking only "is it clear?" picked
- * whichever small deviation happened to be clear first. */
-static int MpBotClearance(CAR_DATA* mine, int a)
+ * whichever small deviation happened to be clear first.
+ *
+ * Shared by the car and the pedestrian: pass the body's position, the clearance radius it
+ * needs, and its own three probe ranges. */
+static int MpBotClearanceAt(int x, int y, int z, int a, int radius, const int* r)
 {
-	static const int r[3] = { MPBOT_NEAR, MPBOT_MID, MPBOT_PROBE };
 	VECTOR p;
 	int i;
 
 	for (i = 0; i < 3; i++)
 	{
-		p.vx = mine->hd.where.t[0] + (int)(((long)rsin(a) * r[i]) >> 12);
-		p.vy = mine->hd.where.t[1];
-		p.vz = mine->hd.where.t[2] + (int)(((long)rcos(a) * r[i]) >> 12);
+		p.vx = x + (int)(((long)rsin(a) * r[i]) >> 12);
+		p.vy = y;
+		p.vz = z + (int)(((long)rcos(a) * r[i]) >> 12);
 
-		if (!CellEmpty(&p, 350))
+		if (!CellEmpty(&p, radius))
 			return i;			/* clear up to here, blocked on this one */
 	}
 
 	return 3;
-}
-
-/* Is a heading's path clear at both the near and the far probe? */
-static int MpBotHeadingClear(CAR_DATA* mine, int a)
-{
-	VECTOR p;
-
-	p.vx = mine->hd.where.t[0] + (int)(((long)rsin(a) * MPBOT_NEAR) >> 12);
-	p.vy = mine->hd.where.t[1];
-	p.vz = mine->hd.where.t[2] + (int)(((long)rcos(a) * MPBOT_NEAR) >> 12);
-	if (!CellEmpty(&p, 350))
-		return 0;
-
-	p.vx = mine->hd.where.t[0] + (int)(((long)rsin(a) * MPBOT_PROBE) >> 12);
-	p.vz = mine->hd.where.t[2] + (int)(((long)rcos(a) * MPBOT_PROBE) >> 12);
-
-	return CellEmpty(&p, 350);
 }
 
 /* THE FEELER: a few degrees, swept smoothly with rsin, used to REFINE a chosen heading rather
@@ -401,7 +400,11 @@ static int MpBotFeeler(void)
 	return (int)(((long)rsin((int)((t * 40) & 0xfff)) * MPBOT_FEEL) >> 12);
 }
 
-static int MpBotClearHeading(CAR_DATA* mine, int desired)
+/* Pick a heading for a body at (x,y,z) to move along, near `desired`, that is as
+ * far clear as possible. `radius` and `r` are the body's clearance radius and its
+ * three probe ranges, and `heldp` is the caller's hysteresis slot -- one per body,
+ * so the car and the pedestrian keep their own chosen heading. */
+static int MpBotClearHeadingAt(int x, int y, int z, int desired, int radius, const int* r, int* heldp)
 {
 	const int STEP = 0x1000 / 24;	/* 15 degrees -- a full fan, so a heading
 					 * AROUND a wall (up to a U-turn) is
@@ -411,12 +414,12 @@ static int MpBotClearHeading(CAR_DATA* mine, int desired)
 	 * and -30 and the car twitched left/right. Once we have a heading, KEEP it
 	 * while it is still clear and still points roughly the way we want; re-decide
 	 * only when it is blocked or the goal has moved a long way off it. */
-	static int held = -1;
+	int held = *heldp;
 	int i, best = -1, bestClr = 0;
 
 	if (held >= 0)
 	{
-		int clr = MpBotClearance(mine, held);
+		int clr = MpBotClearanceAt(x, y, z, held, radius, r);
 		int off = ((held - desired + 2048) & 4095) - 2048;
 
 		if (off < 0)
@@ -435,7 +438,7 @@ static int MpBotClearHeading(CAR_DATA* mine, int desired)
 	{
 		int k = (i + 1) / 2;
 		int a = (i == 0) ? desired : ((desired + ((i & 1) ? (k * STEP) : (-k * STEP))) & 0xfff);
-		int clr = MpBotClearance(mine, a);
+		int clr = MpBotClearanceAt(x, y, z, a, radius, r);
 
 		if (clr > bestClr)
 		{
@@ -456,13 +459,22 @@ static int MpBotClearHeading(CAR_DATA* mine, int desired)
 		int f = MpBotFeeler();
 		int a = (best + f) & 0xfff;
 
-		if (MpBotClearance(mine, a) > bestClr)
+		if (MpBotClearanceAt(x, y, z, a, radius, r) > bestClr)
 			best = a;
 	}
 
-	held = best;
+	*heldp = best;
 
 	return best;
+}
+
+static int MpBotClearHeading(CAR_DATA* mine, int desired)
+{
+	static const int r[3] = { MPBOT_NEAR, MPBOT_MID, MPBOT_PROBE };
+	static int held = -1;
+
+	return MpBotClearHeadingAt(mine->hd.where.t[0], mine->hd.where.t[1], mine->hd.where.t[2],
+		desired, MPBOT_CAR_CLEAR, r, &held);
 }
 
 /* Returns 0 (coast) when there is nobody else to chase. */
@@ -607,6 +619,151 @@ static int MpBotPursuit(void)
 
 		return pad;
 	}
+}
+
+/* ------------------------------------------------------------------ */
+/* ON FOOT: the same steering, for Tanner                               */
+/*                                                                    */
+/* The engine gives Tanner TANK controls (pad.h: TANNER_PAD_GOFORWARD /  */
+/* GOBACK turn him on the spot, TANNER_PAD_TURNLEFT / TURNRIGHT rotate   */
+/* him), which is close enough to a car that the SAME driving logic      */
+/* works on him: probe the scenery with the engine's own CellEmpty, pick  */
+/* a clear heading, steer toward it. Only two things change -- the body   */
+/* whose position and heading are read (our pedestrian, not our car) and  */
+/* the pad that comes out. That is what gives an on-foot test run some    */
+/* MOTION instead of a Tanner standing at the spawn point, which is all   */
+/* the on-foot path could be tested with before.                          */
+/*                                                                    */
+/* He walks at the nearest other player -- their car if they are driving  */
+/* one, else their stand-in -- and presses ACTION when he gets there, so  */
+/* the whole get-out -> walk -> get-back-in loop runs hands-free.         */
+/* ------------------------------------------------------------------ */
+#define MPBOT_PED_NEAR	170
+#define MPBOT_PED_MID	380
+#define MPBOT_PED_PROBE	700
+
+int MpBotTannerPad(void)
+{
+	static const int r[3] = { MPBOT_PED_NEAR, MPBOT_PED_MID, MPBOT_PED_PROBE };
+	static int held = -1;
+	static int stuckFrames, backFrames;
+	LPPEDESTRIAN ped = player[0].pPed;
+	MP_PLAYER* me = MpLocalPlayer();
+	int x, y, z, dir, tgtx = 0, tgtz = 0, have = 0, k;
+	int diff = 0, adiff, pad = 0;
+	long dist = 0;
+
+	/* Not on foot (or not our ped): stand down and forget the chosen heading,
+	 * so the next time he gets out he starts fresh rather than committed to a
+	 * direction chosen in another part of the map. */
+	if (ped == NULL || me == NULL || me->carId >= 0)
+	{
+		held = -1;
+		stuckFrames = 0;
+		backFrames = 0;
+		return 0;
+	}
+
+	for (k = 0; k < MP_MAX_PLAYERS; k++)
+	{
+		MP_PLAYER* p = &gMp.players[k];
+
+		if (!p->active || p->isLocal)
+			continue;
+
+		if (p->carId >= 0 && p->carId < MAX_CARS)
+		{
+			tgtx = car_data[p->carId].hd.where.t[0];
+			tgtz = car_data[p->carId].hd.where.t[2];
+			have = 1;
+			break;
+		}
+
+		if (p->ped != NULL)
+		{
+			LPPEDESTRIAN other = (LPPEDESTRIAN)p->ped;
+
+			tgtx = other->position.vx;
+			tgtz = other->position.vz;
+			have = 1;
+			break;
+		}
+	}
+
+	x = ped->position.vx;
+	y = ped->position.vy;
+	z = ped->position.vz;
+	dir = ped->dir.vy & 0xfff;
+
+	{
+		int desired;
+
+		if (have)
+		{
+			int dx = tgtx - x;
+			int dz = tgtz - z;
+
+			dist = (long)dx * (long)dx + (long)dz * (long)dz;
+			desired = ratan2(dx, dz) & 0xfff;
+		}
+		else
+		{
+			/* nobody to walk at: keep turning the heading we came in with, so
+			 * he walks a curve rather than standing still */
+			desired = (dir + 200) & 0xfff;
+		}
+
+		{
+			int want = MpBotClearHeadingAt(x, y, z, desired, MPBOT_PED_CLEAR, r, &held);
+
+			diff = ((want - dir + 2048) & 4095) - 2048;
+		}
+	}
+
+	adiff = (diff < 0) ? -diff : diff;
+
+	/* A walker that has stopped is wedged (a wall, a fence, a kerb): back up
+	 * for a moment, which is the one thing that frees a tank-steered body. */
+	if (ped->speed == 0)
+	{
+		if (++stuckFrames > 40)
+		{
+			backFrames = 20;
+			stuckFrames = 0;
+			held = -1;
+		}
+	}
+	else
+	{
+		stuckFrames = 0;
+	}
+
+	if (backFrames > 0)
+	{
+		backFrames--;
+		return TANNER_PAD_GOBACK;
+	}
+
+	/* Tank controls: he turns FASTER while running, and PedUserRunner takes the
+	 * forward bit and the turn bit together, so hold both. Never steer-only -- a
+	 * stationary Tanner turns slowly and, worse, produces no motion to replicate,
+	 * which is the whole point of driving him. */
+	if (adiff > 80)
+		pad |= (diff > 0) ? TANNER_PAD_TURNLEFT : TANNER_PAD_TURNRIGHT;
+
+	pad |= TANNER_PAD_GOFORWARD;
+
+	/* Standing at one of their cars: press ACTION, which is how the engine's own
+	 * ped mechanic gets in. Out and back in without a human. */
+	if (have && dist < 300L * 300L)
+		pad |= TANNER_PAD_ACTION;
+
+	if ((gMp.frame % 60) == 0 && gMpCtx != NULL)
+		gMpCtx->jer_log(gMpCtx,
+			"[mp] bot: tanner at %d,%d dir=%d diff=%d spd=%d pad=%#x\n",
+			x, z, dir, diff, ped->speed, pad);
+
+	return pad;
 }
 
 int MpBotEnabled(void)

@@ -24,4 +24,10 @@ int MpBotEnabled(void);
  * caller feeds it through the same input path a human's pad takes. */
 int MpBotPadForLocalCar(void);
 
+/* The pad to apply to OUR OWN PEDESTRIAN (Tanner) this frame, or 0 when the bot
+ * is off or we are not on foot. Tanner is tank-steered, so the same "probe the
+ * scenery and steer at a clear heading" logic drives him; the caller writes it
+ * into JER_EVENT_PED_INPUT's pad. */
+int MpBotTannerPad(void);
+
 #endif
