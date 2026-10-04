@@ -106,3 +106,39 @@ void AiMapWorld(const AIMAP* map, int ix, int iz, int* x, int* z)
 	if (x != NULL) *x = map->originX + ix * AIMAP_STEP;
 	if (z != NULL) *z = map->originZ + iz * AIMAP_STEP;
 }
+
+/* Ring by ring, so the first hit is the nearest one. Shared rather than duplicated: the
+ * pathfinder and the local road search both need it, and two copies would eventually
+ * disagree about what "nearest" means. */
+int AiMapNearestOpen(const AIMAP* map, int ix, int iz, int* ox, int* oz)
+{
+	int r, dx, dz;
+
+	if (!AiMapBlocked(map, ix, iz))
+	{
+		if (ox != NULL) *ox = ix;
+		if (oz != NULL) *oz = iz;
+		return 1;
+	}
+
+	for (r = 1; r <= AIMAP_OPEN_SNAP; r++)
+	{
+		for (dz = -r; dz <= r; dz++)
+		{
+			for (dx = -r; dx <= r; dx++)
+			{
+				if ((dx < 0 ? -dx : dx) != r && (dz < 0 ? -dz : dz) != r)
+					continue;	/* the ring, not the disc */
+
+				if (!AiMapBlocked(map, ix + dx, iz + dz))
+				{
+					if (ox != NULL) *ox = ix + dx;
+					if (oz != NULL) *oz = iz + dz;
+					return 1;
+				}
+			}
+		}
+	}
+
+	return 0;
+}

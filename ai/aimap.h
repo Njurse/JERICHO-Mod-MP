@@ -84,6 +84,12 @@ int  AiMapBlocked(const AIMAP* map, int ix, int iz);
 int  AiMapRoad(const AIMAP* map, int ix, int iz);
 int  AiMapClearance(const AIMAP* map, int ix, int iz);
 
+/* The nearest sample a car could actually be: used when a probe radius leaves the car
+ * inside a "blocked" sample, which is what happens whenever it is parked against a wall.
+ * Returns 1 and writes the sample; 0 when there is nothing open within a few samples. */
+#define AIMAP_OPEN_SNAP	4	/* how far out to look, in samples */
+int  AiMapNearestOpen(const AIMAP* map, int ix, int iz, int* ox, int* oz);
+
 /* Traversal cost. Blocked samples cost AIMAP_COST_BLOCKED. */
 int  AiMapCost(const AIMAP* map, int ix, int iz);
 

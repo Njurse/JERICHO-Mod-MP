@@ -15,6 +15,9 @@
 #include "players.h"	/* player[]: the on-foot bot drives OUR pedestrian */
 #include "objcoll.h"	/* CellEmpty: the engine's own scenery test */
 #include "dr2roads.h"	/* JerRoadAt / JerRoadInfoAt: the engine's own road network */
+#include "ai/aimap.h"	/* the AI's world model */
+#include "ai/aistar.h"	/* the pathfinder */
+#include "ai/ailocal.h"	/* the local road / flee-goal search */
 
 #include <string.h>
 #include <stdlib.h>
@@ -103,7 +106,8 @@ static void MpBotResolveGap(void)
 
 /* Which bot, if any. OFF unless MP_BOT says otherwise -- these levers drive a
  * real player's car, so nothing here may be on by default. Returns 0 (none),
- * 1 (random), 2 (chase), 3 (fight) or 4 (pursuit: host hunts, joiner runs). */
+ * 1 (random), 2 (chase), 3 (fight), 4 (pursuit: host hunts, joiner runs) or
+ * 5 (catmouse: the same pair, DRIVEN by the pathfinder). */
 static int MpBotMode(void)
 {
 	const char* m = getenv("MP_BOT");
@@ -119,6 +123,8 @@ static int MpBotMode(void)
 		return 3;
 	if (strcmp(m, "pursuit") == 0)
 		return 4;
+	if (strcmp(m, "catmouse") == 0)
+		return 5;
 	if (strcmp(m, "off") == 0 || strcmp(m, "0") == 0)
 		return 0;
 
@@ -1107,11 +1113,373 @@ int MpBotEnabled(void)
 	return MpBotMode() != 0;
 }
 
+/* ------------------------------------------------------------------ */
+/* DRIVING: the shared brain                                           */
+/*                                                                     */
+/* Everything above this point decides WHERE to go, and used to steer  */
+/* straight at a heading. This decides HOW to get there, and it is the */
+/* part that was missing: a heading is not a route, so a car wedged on */
+/* the first building and then bounced off it in the same arc, and a   */
+/* pair shuffled on the spot instead of chasing across the map.        */
+/*                                                                     */
+/* The world is re-probed and the route re-planned on an interval -    */
+/* not every frame, or the car would re-decide its way down a road -   */
+/* and between plans it follows waypoints.                             */
+/* ------------------------------------------------------------------ */
+
+#define MPBOT_PLAN_MS		700	/* how often a route is refreshed */
+#define MPBOT_PLAN_GOAL_MOVE	700	/* world units the goal may drift before a replan */
+#define MPBOT_AIM_AHEAD		900	/* steer at the first waypoint at least this far out */
+#define MPBOT_PUSH_MS		900	/* shove at something invisible this long before giving up */
+#define MPBOT_CONTACT_CLEAR	1100	/* how far ahead "is anything in front" is asked */
+
+typedef struct MPBOT_AI
+{
+	AIMAP	map;
+	AIPATH	path;
+	int	plannedAt;	/* MpBotNowMs() when this route was made */
+	int	goalX, goalZ;	/* what it was made for */
+	int	plans;		/* replans, for the log */
+	int	incomplete;	/* the last plan could not reach its goal */
+	int	pushing;	/* in contact with something the probes cannot see */
+	int	pushAt;		/* ...since when */
+} MPBOT_AI;
+
+/* Milliseconds since the session started, from the frame count: the sim already counts
+ * frames, and a second clock is one more thing to get wrong. */
+static int MpBotNowMs(void)
+{
+	return (int)((long)gMp.frame * 1000L / 60L);
+}
+
+/* Plan a route to a world point, or keep the one we have. Returns 1 when there is a route
+ * to follow at all. */
+static int MpBotRouteTo(MPBOT_AI* ai, CAR_DATA* mine, int goalX, int goalZ, int force)
+{
+	int mx = goalX - ai->goalX;
+	int mz = goalZ - ai->goalZ;
+
+	if (mx < 0) mx = -mx;
+	if (mz < 0) mz = -mz;
+
+	if (!force && ai->path.waypoints > 0 &&
+		(MpBotNowMs() - ai->plannedAt) < MPBOT_PLAN_MS &&
+		mx < MPBOT_PLAN_GOAL_MOVE && mz < MPBOT_PLAN_GOAL_MOVE)
+		return 1;		/* the route we have is still the right one */
+
+	ai->plannedAt = MpBotNowMs();
+	ai->goalX = goalX;
+	ai->goalZ = goalZ;
+	ai->plans++;
+
+	/* the world is re-probed with the plan, centred on where the car is NOW */
+	AiMapBuild(&ai->map, mine->hd.where.t[0], mine->hd.where.t[1], mine->hd.where.t[2]);
+
+	if (!AiMapValid(&ai->map))
+	{
+		ai->path.waypoints = 0;
+		return 0;		/* no level: the caller falls back to what it did before */
+	}
+
+	ai->incomplete = !AiStarPlan(&ai->map, mine->hd.where.t[0], mine->hd.where.t[2],
+		goalX, goalZ, &ai->path);
+
+	return ai->path.waypoints > 0;
+}
+
+/* The point to steer at: the furthest waypoint within the aim distance, so the car drives
+ * THROUGH a corner instead of crawling to each turning point. */
+static int MpBotAimPoint(const MPBOT_AI* ai, CAR_DATA* mine, int* outX, int* outZ)
+{
+	int k, best = 1;
+
+	if (ai->path.waypoints <= 0)
+		return 0;
+
+	/* waypoint 0 is where the plan started, so the first thing to drive at is 1 - unless
+	 * that is all there was, in which case it is the goal itself */
+	if (ai->path.waypoints == 1)
+		best = 0;
+
+	for (k = 1; k < ai->path.waypoints; k++)
+	{
+		int dx = ai->path.wx[k] - mine->hd.where.t[0];
+		int dz = ai->path.wz[k] - mine->hd.where.t[2];
+
+		best = k;
+
+		if ((long)dx * (long)dx + (long)dz * (long)dz >= (long)MPBOT_AIM_AHEAD * MPBOT_AIM_AHEAD)
+			break;
+	}
+
+	*outX = ai->path.wx[best];
+	*outZ = ai->path.wz[best];
+
+	return 1;
+}
+
+/* Steer at a POINT with the same thresholds the heading code uses, because it is the same
+ * car and the same handling: never reverse to correct, handbrake only while rolling, and
+ * keep the throttle on when badly off line or a slow car can never turn. */
+static int MpBotSteerToPoint(CAR_DATA* mine, int aimX, int aimZ, int* turnFrames, int* turnPulse,
+	int* turnDir, int* backFrames, int* backDir)
+{
+	int dx = aimX - mine->hd.where.t[0];
+	int dz = aimZ - mine->hd.where.t[2];
+	int want = ratan2(dx, dz) & 0xfff;
+	int diff = ((want - mine->hd.direction + 2048) & 0xfff) - 2048;
+	int adiff = (diff < 0) ? -diff : diff;
+	int spd = mine->hd.speed;
+
+	if (spd < 0) spd = -spd;
+
+	if (*backFrames > 0)
+	{
+		(*backFrames)--;
+		return CAR_PAD_BRAKE | (*backDir ? CAR_PAD_LEFT : CAR_PAD_RIGHT);
+	}
+
+	if (*turnFrames > 0)
+		return MpBotTurnPad(turnFrames, turnPulse, *turnDir, mine->hd.speed);
+
+	if (adiff > 1500)
+	{
+		/* the target is behind us: turn round, never reverse - and note that with a
+		 * route this happens at the START of a leg, not every time the car passes
+		 * something, which is what the heading version got wrong */
+		*turnFrames = MPBOT_TURN_FRAMES + 20;
+		*turnPulse = MPBOT_TURN_FRAMES;
+		*turnDir = diff;
+
+		return MpBotTurnPad(turnFrames, turnPulse, *turnDir, mine->hd.speed);
+	}
+
+	if (adiff > 700)
+		/* badly off line: steer, and keep the throttle on unless already moving well */
+		return ((diff > 0) ? CAR_PAD_LEFT : CAR_PAD_RIGHT) | ((spd < 40) ? CAR_PAD_ACCEL : 0);
+
+	return CAR_PAD_ACCEL | ((diff > 0) ? CAR_PAD_LEFT : CAR_PAD_RIGHT);
+}
+
+/* ------------------------------------------------------------------ */
+/* THE CONTACT POLICY                                                  */
+/*                                                                     */
+/* One place, three answers. Every ad-hoc "back out" / "spin round" /  */
+/* "wedged, ahead clear=N" branch the bots used to have is one of      */
+/* these:                                                              */
+/*                                                                     */
+/*   DRIVE  nothing is in the way: follow the route                    */
+/*   TURN   something the engine CAN see is in front: turn out of it   */
+/*   PUSH   stopped, in contact, and nothing visible ahead: KEEP THE    */
+/*          THROTTLE ON. CellEmpty skips MODEL_FLAG_SMASHABLE (and     */
+/*          chairs) by design - objcoll.c:49 - so a fence, a barrel or */
+/*          a bollard is invisible to every probe we have, while the   */
+/*          physics stops the car dead on it. A player drives through  */
+/*          those; so do we. Backing away from something the engine    */
+/*          says is not there is exactly how a car ends up stuck on a  */
+/*          fence for the rest of the match.                           */
+/*                                                                     */
+/* A real wall lands in PUSH too, because no probe can see the one the */
+/* car is already inside, so PUSH is BOUNDED: after MPBOT_PUSH_MS of   */
+/* shoving, back out. That is the one reverse the bots use, and it does */
+/* not alternate.                                                      */
+/* ------------------------------------------------------------------ */
+
+/* Returns the pad to use, or 0 when the car is free to drive its route. */
+static int MpBotContact(MPBOT_AI* ai, CAR_DATA* mine, int* turnFrames, int* turnPulse,
+	int* turnDir, int* backFrames, int* backDir, int* stuckFrames)
+{
+	int spd = mine->hd.speed;
+
+	if (spd < 0) spd = -spd;
+
+	if (spd >= 4)
+	{
+		*stuckFrames = 0;
+		ai->pushing = 0;
+		return 0;			/* moving: nothing to do here */
+	}
+
+	if (++(*stuckFrames) <= 24)
+		return 0;			/* not stopped long enough to be a wedge */
+
+	*stuckFrames = 0;
+
+	{
+		int ahead = MpBotSpotClear(mine, mine->hd.direction, MPBOT_CONTACT_CLEAR);
+		int contact = MpBotContacted(mine);
+		int pushMs = MpBotNowMs() - ai->pushAt;
+
+		if (ahead && contact)
+		{
+			/* in contact with something no probe can see: shove it */
+			if (!ai->pushing)
+			{
+				ai->pushing = 1;
+				ai->pushAt = MpBotNowMs();
+
+				if (gMpCtx != NULL)
+					gMpCtx->jer_log(gMpCtx,
+						"[mp] catmouse: in contact with something the probes cannot see (a fence?) - pushing through\n");
+			}
+			else if (pushMs < MPBOT_PUSH_MS)
+			{
+				return CAR_PAD_ACCEL;	/* still shoving */
+			}
+			else
+			{
+				/* it did not give way, so it is a wall the probe cannot see: the one case
+				 * a bounded reverse is right, and it turns out the OTHER way so the car
+				 * does not drive back into what it just left */
+				if (gMpCtx != NULL)
+					gMpCtx->jer_log(gMpCtx,
+						"[mp] catmouse: pushed for %d ms and it did not give - backing out\n", pushMs);
+
+				ai->pushing = 0;
+				*backDir = (mine->hd.direction >> 6) & 1;
+				*backFrames = MPBOT_BACK_FRAMES;
+				*turnDir = !(*backDir);
+				*turnFrames = MPBOT_TURN_FRAMES + 40;
+				*turnPulse = MPBOT_TURN_FRAMES;
+
+				return CAR_PAD_BRAKE | (*backDir ? CAR_PAD_LEFT : CAR_PAD_RIGHT);
+			}
+		}
+
+		/* something visible is in front, or we are not in contact at all: turn out */
+		*turnDir = (mine->hd.direction >> 6) & 1;
+		*turnFrames = MPBOT_TURN_FRAMES + 40;
+		*turnPulse = MPBOT_TURN_FRAMES;
+
+		if (gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx,
+				"[mp] catmouse: wedged (speed %d, ahead clear=%d, contact=%d) - turning out (dir %d)\n",
+				mine->hd.speed, ahead, contact, *turnDir);
+
+		return MpBotTurnPad(turnFrames, turnPulse, *turnDir, mine->hd.speed);
+	}
+}
+
+/* ------------------------------------------------------------------ */
+/* CAT AND MOUSE: the pair, actually driving                           */
+/*                                                                     */
+/* The same roles as chase - the host runs, the joiners chase - but    */
+/* the MOUSE picks a place to run TO (far from the cat, preferring the */
+/* road, with room to move) and the CAT plans to where the mouse is.   */
+/* Both follow a route instead of a heading, which is what turns "both */
+/* cars shuffle" into a pursuit.                                       */
+/*                                                                     */
+/* If the world cannot be sampled, or no route exists at all, the car  */
+/* is handed straight back to the old heading logic: the last rung of  */
+/* the ladder is the behaviour that was already there, unchanged.      */
+/* ------------------------------------------------------------------ */
+static int MpBotCatMouse(void)
+{
+	MP_PLAYER* me = MpLocalPlayer();
+	static MPBOT_AI ai;
+	static int stuckFrames, turnFrames, turnPulse, turnDir, backFrames, backDir;
+	CAR_DATA* mine;
+	CAR_DATA* tgt = NULL;
+	int k, pad, aimX, aimZ;
+	AIGOAL goal;
+	int isMouse;
+
+	if (me == NULL || me->carId < 0)
+		return 0;
+
+	for (k = 0; k < MP_MAX_PLAYERS; k++)
+	{
+		MP_PLAYER* p = &gMp.players[k];
+
+		if (p == me || p->carId < 0)
+			continue;
+
+		if (!p->connected)
+			continue;
+
+		tgt = &car_data[p->carId];
+		break;
+	}
+
+	if (tgt == NULL)
+		return 0;
+
+	mine = &car_data[me->carId];
+
+	if (!AiMapWorldLoaded())
+		return MpBotChase(0);		/* no level: the old logic, unchanged */
+
+	isMouse = MpIsHost();
+
+	/* the world has to exist before a goal can be chosen from it */
+	if (ai.map.sampled == 0)
+		AiMapBuild(&ai.map, mine->hd.where.t[0], mine->hd.where.t[1], mine->hd.where.t[2]);
+
+	if (!AiMapValid(&ai.map))
+		return MpBotChase(0);
+
+	if (isMouse)
+	{
+		/* where to RUN to: away from the cat, preferring the road, and REACHABLE */
+		if (!AiLocalFleeGoal(&ai.map, mine->hd.where.t[0], mine->hd.where.t[2],
+				tgt->hd.where.t[0], tgt->hd.where.t[2], &goal))
+		{
+			/* nothing in the ring is worth running to: the nearest road, or failing that
+			 * the most open ground, will do */
+			if (!AiLocalGoal(&ai.map, mine->hd.where.t[0], mine->hd.where.t[2], &goal))
+				return MpBotChase(0);
+		}
+	}
+	else
+	{
+		/* the cat drives at the mouse. When the route cannot reach it, the pathfinder
+		 * hands back the best partial one - heading the right way down the road - and
+		 * that is still better than pointing at a heading and hoping. */
+		goal.x = tgt->hd.where.t[0];
+		goal.z = tgt->hd.where.t[2];
+		goal.kind = AIGOAL_OPEN;
+		goal.samples = 0;
+		goal.clearance = 0;
+	}
+
+	if (!MpBotRouteTo(&ai, mine, goal.x, goal.z, 0))
+		return MpBotChase(0);		/* no route: the old logic, unchanged */
+
+	pad = MpBotContact(&ai, mine, &turnFrames, &turnPulse, &turnDir, &backFrames, &backDir, &stuckFrames);
+
+	if (pad != 0)
+		return pad;
+
+	if (!MpBotAimPoint(&ai, mine, &aimX, &aimZ))
+		return MpBotChase(0);
+
+	pad = MpBotSteerToPoint(mine, aimX, aimZ, &turnFrames, &turnPulse, &turnDir, &backFrames, &backDir);
+
+	/* the plan log, rate-limited: a run should read as a story, not a wall of lines */
+	if ((gMp.frame % 60) == 0 && gMpCtx != NULL)
+	{
+		gMpCtx->jer_log(gMpCtx,
+			"[mp] catmouse: %s goal=(%d,%d) %s waypoints=%d aim=(%d,%d) age=%dms expanded=%d gap2=%ld pad=%#x\n",
+			isMouse ? "MOUSE running to" : "CAT driving to",
+			goal.x, goal.z,
+			(goal.kind == AIGOAL_ROAD) ? "road" : "open",
+			ai.path.waypoints, aimX, aimZ,
+			MpBotNowMs() - ai.plannedAt, ai.path.expanded,
+			/* the GAP, squared: no square root in the frame path is worth the instruction */
+			(long)(tgt->hd.where.t[0] - mine->hd.where.t[0]) * (tgt->hd.where.t[0] - mine->hd.where.t[0]) +
+			(long)(tgt->hd.where.t[2] - mine->hd.where.t[2]) * (tgt->hd.where.t[2] - mine->hd.where.t[2]),
+			pad);
+	}
+
+	return pad;
+}
+
 int MpBotPadForLocalCar(void)
 {
 	switch (MpBotMode())
 	{
 	case 4:  return MpBotPursuit();
+	case 5:  return MpBotCatMouse();
 	case 3:  return MpBotChase(1);
 	case 2:  return MpBotChase(0);
 	case 1:  return MpBotCanned();

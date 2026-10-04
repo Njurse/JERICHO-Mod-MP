@@ -108,41 +108,6 @@ int AiStarLineClear(const AIMAP* map, int fromX, int fromZ, int toX, int toZ)
 	return 1;
 }
 
-/* Walk out to the nearest open sample, so a car the probe radius sits inside a
- * "blocked" sample is not declared trapped. */
-static int AiStarNearestOpen(const AIMAP* map, int ix, int iz, int* ox, int* oz)
-{
-	int r, dx, dz;
-
-	if (!AiMapBlocked(map, ix, iz))
-	{
-		*ox = ix;
-		*oz = iz;
-		return 1;
-	}
-
-	for (r = 1; r <= 4; r++)
-	{
-		for (dz = -r; dz <= r; dz++)
-		{
-			for (dx = -r; dx <= r; dx++)
-			{
-				if ((dx < 0 ? -dx : dx) != r && (dz < 0 ? -dz : dz) != r)
-					continue;	/* ring only */
-
-				if (!AiMapBlocked(map, ix + dx, iz + dz))
-				{
-					*ox = ix + dx;
-					*oz = iz + dz;
-					return 1;
-				}
-			}
-		}
-	}
-
-	return 0;
-}
-
 /* Reconstruct from a node back to the start, then smooth: keep a waypoint only
  * where the straight run to the following kept one stops being clear. */
 static int AiStarBuildPath(const AIMAP* map, int goalNode, AIPATH* path)
@@ -263,11 +228,11 @@ int AiStarPlan(const AIMAP* map, int fromX, int fromZ, int toX, int toZ, AIPATH*
 	if (!AiMapSampleIndex(map, toX, toZ, &gix, &giz))
 		return 0;
 
-	if (!AiStarNearestOpen(map, six, siz, &six, &siz))
+	if (!AiMapNearestOpen(map, six, siz, &six, &siz))
 		return 0;	/* walled in: genuinely nowhere to go */
 
 	if (AiMapBlocked(map, gix, giz))
-		AiStarNearestOpen(map, gix, giz, &gix, &giz);
+		AiMapNearestOpen(map, gix, giz, &gix, &giz);
 
 	startNode = AiStarIndex(six, siz);
 	goalNode = AiStarIndex(gix, giz);

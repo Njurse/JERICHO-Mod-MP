@@ -541,7 +541,7 @@ def main():
                     help="extra game arguments for both seats. Default is the rig's arena; "
                          "for a Take a Ride pair pass \"--extra '-level vegas'\" (the "
                          "gamemode defaults to takeadrive when -mp is not given)")
-    ap.add_argument("--bot", default="chase", choices=["off", "chase", "pursuit", "random"],
+    ap.add_argument("--bot", default="chase", choices=["off", "chase", "pursuit", "random", "catmouse"],
                     help="drive BOTH player cars with the mp test bot. 'chase' (the "
                          "default, same as mp_localpair) makes the host FLEE and every "
                          "joiner CHASE, so an unattended pair moves; 'pursuit' has both "
