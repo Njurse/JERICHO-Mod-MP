@@ -331,6 +331,17 @@ def verdict_args(a, dirs):
 
 def pull_logs(a, since=None):
     agent = Agent(a.peer, a.port, a.token)
+
+    def clear_stale_dump(seat):
+        """A dump COPY left in the run dirs by an earlier pull poisons every later
+        verdict: mp_localpair triages whatever dumps it finds there. So a dump judged
+        not to be this run's has to be removed from them, not merely not-refreshed --
+        keeping it out of the pull is only half the job."""
+        p = os.path.join(WORK, seat, "JERICHO.dmp")
+        if os.path.isfile(p):
+            os.remove(p)
+            print(f"  {seat}: removed a stale dump copy from the run dirs "
+                  "(it predates this run, so the verdict must not see it)")
     os.makedirs(os.path.join(WORK, "local"), exist_ok=True)
     os.makedirs(os.path.join(WORK, "peer"), exist_ok=True)
 
@@ -364,6 +375,9 @@ def pull_logs(a, since=None):
             age = (time.time() - peer_dump_t) / 60.0 if peer_dump_t else 0.0
             print(f"  peer: a crash dump is present but is {age:.1f} min old, so NOT from "
                   "this run - not pulled, and kept out of the verdict")
+            clear_stale_dump("peer")
+    else:
+        clear_stale_dump("peer")
 
     src = os.path.join(GAME_DIR, "JERICHO.log")
     if os.path.isfile(src):
@@ -390,6 +404,9 @@ def pull_logs(a, since=None):
         else:
             print(f"  local: a crash dump is present but is {(time.time() - mtime) / 60.0:.1f}"
                   " min old, so NOT from this run - kept out of the verdict")
+            clear_stale_dump("local")
+    else:
+        clear_stale_dump("local")
 
     return {"local": os.path.join(WORK, "local"), "peer": os.path.join(WORK, "peer")}
 
