@@ -61,6 +61,44 @@ EVIDENCE = {
 EVIDENCE_LIMIT = 6
 
 
+def identity_check(host_text, client_text):
+    """The two identity assertions from the plan, on the seat that matters.
+
+    Both come from measured failures, not theory:
+
+    1. THE PICKER'S OWN SEAT. A client that picks a guest car must not be sitting in the
+       session city's car of that number. Measured (try 2, vegas:1):
+
+         [carhacks/net] told the session: VEGAS model 2
+         [carhacks] import: the pick (VEGAS model 2) -> resident slot 7
+         [mp] player 0 changed car: slot 0 -> 1 (the session city model 2)
+
+       the import is right, the advert is right, and the picker is in CHICAGO's model 2 -
+       "the client was still rio car 1", one city along.
+
+    2. CROSS-SEAT AGREEMENT. What the picker says it drives and what the host says it
+       drives must be the same car. When they disagree, each machine is internally
+       consistent and the match still shows the wrong vehicle to somebody.
+    """
+    problems = []
+
+    for m in re.finditer(r"\[mp\] player \d+ changed car: slot \d+ -> \d+ "
+                         r"\(the session city model (\d+)\)", client_text):
+        problems.append(f"the picker's own car is the SESSION city's model {m.group(1)}")
+
+    told = set(re.findall(r"\[carhacks/net\] told the session: (\w+) model (\d+)", client_text))
+    seen = set(re.findall(r"\[carhacks/net\] peer \d+ drives (\w+) model (\d+)", host_text))
+
+    if told and seen and not (told & seen):
+        problems.append(f"the picker says it drives {sorted(told)}; the host says {sorted(seen)}")
+
+    # A player who chose a car must never be described by the level's own numbers.
+    for m in re.finditer(r"\[carhacks/net\] (?:player|peer) \d+ drives level model (\d+)", host_text):
+        problems.append(f"a seat reports the picker as the level's own model {m.group(1)}")
+
+    return problems
+
+
 def parse_try(spec):
     """`city:model` -> (city, model, city_index)."""
     if ":" not in spec:
@@ -141,6 +179,7 @@ def run_try(index, spec, args):
     pair_dir = os.path.abspath(os.path.join(game_dir, ".mp-pair"))
 
     identity, pages = [], []
+    host_text = client_text = ""
 
     for seat in ("a", "b"):
         log_path = os.path.join(pair_dir, seat, "JERICHO.log")
@@ -150,6 +189,11 @@ def run_try(index, spec, args):
                 text = fh.read()
         except OSError:
             continue
+
+        if seat == "a":
+            host_text = text
+        else:
+            client_text = text
 
         if args.keep:
             os.makedirs(run_dir, exist_ok=True)
@@ -166,12 +210,19 @@ def run_try(index, spec, args):
                   for l in grep(text, EVIDENCE["pages"])]
 
     passed = proc.returncode == 0
+    problems = identity_check(host_text, client_text)
+
+    # An identity problem fails the try even when the harness said PASS: "correct on the
+    # host but the client was still the old car" is exactly the failure a verdict cannot see.
+    if problems:
+        passed = False
 
     return {
         "try": index,
         "pick": f"{city}:{model}",
         "pass": passed,
         "verdict": verdict_line,
+        "problems": problems,
         "identity": identity,
         "pages": pages,
         "dir": run_dir if args.keep else "",
@@ -230,6 +281,9 @@ def main():
 
         if r["dir"]:
             print(f"    logs: {r['dir']}")
+
+        for problem in r["problems"]:
+            print(f"    [identity PROBLEM] {problem}")
 
         for label, key in (("identity", "identity"), ("pages", "pages")):
             for line in r[key] or ["<nothing matched>"]:
