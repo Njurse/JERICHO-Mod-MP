@@ -203,6 +203,11 @@ int MpBeginJoinAsync(const char* host, int port)
 	gMp.role = MP_ROLE_CLIENT;
 	gMp.localPlayerId = -1;
 
+	/* A fresh join gets the full set of connection attempts (see MP_JOIN_ATTEMPTS in
+	 * mp_net.c: the user asked for three, after a launch where one failed and had to be
+	 * fixed by hand in the menu). */
+	MpJoinRetryClear();
+
 	if (!MpClientConnectBegin(host, port))
 	{
 		gMp.role = MP_ROLE_NONE;

@@ -198,6 +198,11 @@ int  MpClientConnectBegin(const char* host, int port);
 void MpClientConnectPoll(unsigned long now);	/* now = the caller's poll clock */
 int  MpJoinState(void);			/* MP_JOIN_* */
 void MpJoinStateSet(int state);		/* mp_session.c: WELCOME / REJECT */
+
+/* mp_net.c: a fresh, user-initiated join gets its full set of attempts again. The RETRY path
+ * must not clear the count (it goes through MpClientConnectBegin), or the retries never end -
+ * so the reset lives here, called from the join entry point, and not in the connect itself. */
+void MpJoinRetryClear(void);
 const char* MpJoinTarget(void);		/* host of the current attempt */
 int  MpJoinTargetPort(void);
 
