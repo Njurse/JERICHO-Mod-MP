@@ -207,6 +207,38 @@ static int MpBotTurnPad(int* frames, int* pulse, int dir, int spd)
 	return pad;
 }
 
+/* FLEE SCANNING. Running exactly 180 degrees from the pursuer is ONE fixed heading:
+ * when that heading is a wall the fleer has nothing else in mind, so it circles in
+the corner it just ran into. Instead, sweep a fan of headings that all still gain
+ground on the pursuer and take the one with the most room ahead - the flee then heads
+for open space rather than for whatever happens to be behind it. Cheaper than a route
+and it fixes the symptom that is actually visible. */
+#define MPBOT_FLEE_FAN	256	/* 22.5 deg steps, so the fan spans +/- 90 deg */
+
+static int MpBotFleeWant(CAR_DATA* mine, int away)
+{
+	int best = away, bestScore = -9999, i;
+
+	for (i = -4; i <= 4; i++)
+	{
+		int d = (away + i * MPBOT_FLEE_FAN) & 0xfff;
+		int near = MpBotSpotClear(mine, d, 1400) ? 1 : 0;
+		int far = MpBotSpotClear(mine, d, 2800) ? 1 : 0;
+
+		/* openness first, then how much of "away" it keeps: a clear heading 45
+		 * degrees off still beats a blocked one straight back. */
+		int score = near * 4 + far * 2 - (i < 0 ? -i : i);
+
+		if (score > bestScore)
+		{
+			bestScore = score;
+			best = d;
+		}
+	}
+
+	return best;
+}
+
 static int MpBotChase(int fight)
 {
 	MP_PLAYER* me = MpLocalPlayer();
@@ -256,7 +288,8 @@ static int MpBotChase(int fight)
 		int dx = tgt->hd.where.t[0] - mine->hd.where.t[0];
 		int dz = tgt->hd.where.t[2] - mine->hd.where.t[2];
 		int flee = (!fight && MpIsHost());	/* chase: the host runs, the joiner chases. fight: both charge. */
-		int want = flee ? ((ratan2(dx, dz) + 2048) & 0xfff) : (ratan2(dx, dz) & 0xfff);
+		int want = flee ? MpBotFleeWant(mine, (ratan2(dx, dz) + 2048) & 0xfff)
+		                : (ratan2(dx, dz) & 0xfff);
 		int diff, adiff;
 		long dist;
 		int pad;
@@ -376,6 +409,13 @@ static int MpBotChase(int fight)
 						 * the old shuffle. */
 						backDir = turnDir;
 						backFrames = MPBOT_BACK_FRAMES;
+
+						/* and turn the OTHER way out of it. Backing out and then steering
+						 * the way we were already going drives the car straight back into
+						 * the wall it just left - the "same arc" bounce. */
+						turnDir = !backDir;
+						turnFrames = MPBOT_TURN_FRAMES + 40;
+						turnPulse = MPBOT_TURN_FRAMES;
 
 						if (gMpCtx != NULL)
 							gMpCtx->jer_log(gMpCtx,

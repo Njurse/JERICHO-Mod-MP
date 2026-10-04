@@ -188,12 +188,26 @@ them):
 | `MP_TEST_PAUSECAR=<secs>[,<city>[,<model>]][;...]` | runs the pause menu's `Change car` apply path, so a mid-match vehicle change (including a cross-city one, with carhacks) is reproducible headlessly. A `;`-separated list (`30,3,1;45,1,2`) makes one change per entry, in order, each at its own time, counted in seconds from when the session starts running - enough to switch until the spare slots would run out |
 | `MP_TEST_RESTART=<secs>` | fires the engine's own pause-menu answer, so a pass means the multiplayer soft restart is wired end to end |
 
-The driving bots **never select reverse**. A wedged car, or one with the peer behind it,
-turns round under power with a short handbrake pulse while the wheels are rolling
-(`MpBotTurnPad`, `mp_bot.c`). The old "backing out" recovery put the car back where the
-wedge started - and a stopped car given steer-only cannot turn at all - which is what made
-a pair shuffle on the spot instead of chasing across the map. Reverse is still exercised
-by `MP_BOT=random`, whose whole job is to cover every control.
+The driving bots work from what the engine's own scenery test can see and have **no route
+planner**: a straight line at the peer, a fan of headings probed with `CellEmpty`, and a
+dodge they commit to for about a second (`MPBOT_DODGE_FRAMES` - re-deciding every half
+second read as indecision). They never select reverse except in one case: a car wedged with
+a wall DEAD AHEAD, where turning under power cannot move a car that cannot move. That case
+backs off the wall briefly (`MPBOT_BACK_FRAMES`) and then turns out the OTHER way, so it
+does not drive straight back into the wall it just left. Everywhere else a wedge is cleared
+by turning round under power, with a short handbrake pulse while the wheels are rolling
+(`MpBotTurnPad`), and a wedge is noticed after ~0.4 s of being stopped rather than 0.7 s.
+The old unconditional "backing out" recovery put the car back where the wedge started - and
+a stopped car given steer-only cannot turn at all - which is what made a pair shuffle on
+the spot instead of chasing across the map.
+
+The fleeing side scans rather than running blind. 180 degrees from the pursuer is one fixed
+heading, so when a wall is there the fleer has nothing else in mind and circles the corner
+it just ran into; `MpBotFleeWant` sweeps a fan of headings that all still gain ground and
+takes the one with the most room, which is what "flee towards something open" has to mean
+without a route. This is still a greedy, reactive probe: it cannot plan around a building,
+and a pair measured 30 recoveries in 40 s even with the changes above. A real fix wants a
+lookahead or a coarse route, and that is a separate unit, not a tweak.
 
 A run wants `lost=0` and `dumps=0`.
 
