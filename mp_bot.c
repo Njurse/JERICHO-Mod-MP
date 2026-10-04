@@ -66,8 +66,12 @@ static int MpBotCanned(void)
  * MP_BOT_GAP=<ease>,<turnback> (default 2500,5000). Runtime levers on purpose: how
  * close the pair should stay is a feel question, and feel should not need a rebuild.
  * Resolved once, like MP_BOT itself. */
-static int gBotGapEase = 2500;
-static int gBotGapTurnback = 5000;
+/* How far the fleer runs before it stops widening the gap (ease) and before it gives up and
+drives back at the chasers (turnback). Both were 2500/5000, which a pair hits almost at once -
+the host was looping back before the chaser had closed any distance at all, so the chase never
+really happened. Extended 3x, for the same reason the thresholds exist in the first place. */
+static int gBotGapEase = 7500;
+static int gBotGapTurnback = 15000;
 static int gBotGapResolved;
 
 static void MpBotResolveGap(void)
@@ -577,9 +581,13 @@ static int MpBotChase(int fight)
 			pad = MpBotTurnPad(&turnFrames, &turnPulse, turnDir, mine->hd.speed);
 		}
 		else if (adiff > 700)
-			/* Badly off line: EASE OFF and steer. Powering through a big
-			 * correction is what made them bobble and slide into the scenery. */
-			pad = (diff > 0) ? CAR_PAD_LEFT : CAR_PAD_RIGHT;
+			/* Badly off line: EASE OFF and steer. Powering through a big correction is
+			 * what made them bobble and slide into the scenery - but steer ALONE cannot
+			 * move a car, so a chaser that was stopped or barely rolling here just pivoted
+			 * on the spot and never closed the gap, which is what "it does not really
+			 * target the host" looks like. Below a walking pace it turns AND goes. */
+			pad = ((diff > 0) ? CAR_PAD_LEFT : CAR_PAD_RIGHT) |
+				(((mine->hd.speed < 40) && (mine->hd.speed > -40)) ? CAR_PAD_ACCEL : 0);
 		else if (adiff > 120)
 			pad = (easeOff ? 0 : CAR_PAD_ACCEL) | ((diff > 0) ? CAR_PAD_LEFT : CAR_PAD_RIGHT);
 		else

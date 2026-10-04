@@ -190,6 +190,27 @@ def do_update(agent, tag):
 
 # ------------------------------------------------------------------ seats
 
+# The car cycle for a multi-client smoke test: at every switch each client picks a
+# DIFFERENT car, and the cities shuffle between them, so one pair exercises two cross-city
+# imports at once instead of the same one twice - which is the only way a slot clash between
+# two guests shows up. The city walk is offset per seat and the model uses a different
+# stride, which keeps the seats off the same car without needing a shared RNG.
+CYCLE_CITIES = ("0", "1", "2", "3")			# chicago, havana, vegas, rio
+CYCLE_MODELS = ("1", "2", "3", "4", "8", "9", "10", "11", "12")
+
+
+def cycle_list(switches, seed, first=25, step=10):
+    """`MP_TEST_PAUSECAR` entries for one seat, distinct from the other seat's."""
+    out = []
+
+    for i in range(switches):
+        city = CYCLE_CITIES[(i + seed) % len(CYCLE_CITIES)]
+        model = CYCLE_MODELS[(i * 3 + seed * 4) % len(CYCLE_MODELS)]
+        out.append(f"{first + i * step},{city},{model}")
+
+    return ";".join(out)
+
+
 def local_start(args, bot=None, env_extra=None):
     exe = os.path.join(GAME_DIR, EXE_NAME)
     if not os.path.isfile(exe):
@@ -301,7 +322,19 @@ def cmd_deploy(a):
         k, v = pair.split("=", 1)
         env_extra[k] = v
 
-    remote_args = seat_args("client" if a.seat == "host" else "host", host_ip, a.port_game, a.extra, bot, env_extra)
+    remote_seat = "client" if a.seat == "host" else "host"
+    remote_env = dict(env_extra)
+    local_env = dict(env_extra)
+
+    if a.cycle:
+        local_env["MP_TEST_PAUSECAR"] = cycle_list(a.cycle, 0 if a.seat == "host" else 1)
+        remote_env["MP_TEST_PAUSECAR"] = cycle_list(a.cycle, 0 if remote_seat == "host" else 1)
+
+        print(f"  cycle: {a.cycle} switch(es) per seat, a different car on each seat")
+        print(f"    {a.seat:6s} {local_env['MP_TEST_PAUSECAR']}")
+        print(f"    {remote_seat:6s} {remote_env['MP_TEST_PAUSECAR']}")
+
+    remote_args = seat_args(remote_seat, host_ip, a.port_game, a.extra, bot, remote_env)
     local_args = seat_args(a.seat, host_ip, a.port_game, a.extra, None)
 
     if bot:
@@ -312,14 +345,14 @@ def cmd_deploy(a):
 
     if a.seat == "host":
         # the host first: it must be listening before the client dials
-        local_proc = local_start(local_args, bot, env_extra)
+        local_proc = local_start(local_args, bot, local_env)
         print(f"  local  HOST  pid {local_proc.pid}: {local_args}")
         time.sleep(a.lead)
         print(f"  remote CLIENT: {agent.start(remote_args)}")
     else:
         print(f"  remote HOST : {agent.start(remote_args)}")
         time.sleep(a.lead)
-        local_proc = local_start(local_args, bot, env_extra)
+        local_proc = local_start(local_args, bot, local_env)
         print(f"  local  CLIENT pid {local_proc.pid}: {local_args}")
 
     os.makedirs(WORK, exist_ok=True)
@@ -518,6 +551,12 @@ def main():
                          "how the MP_TEST_* levers reach a seat, e.g. "
                          "--env 'MP_TEST_PAUSECAR=25,3,1;35,1,2' to make both players "
                          "cycle cars across cities mid-match")
+    ap.add_argument("--cycle", type=int, default=0, metavar="N",
+                    help="have BOTH seats change car N times mid-match, with a DIFFERENT "
+                         "car on each seat at every switch and the cities shuffled between "
+                         "them (overrides --env MP_TEST_PAUSECAR). This is the cross-city "
+                         "smoke test: it exercises two imports, two sets of palette rows "
+                         "and two slot releases at once")
     ap.add_argument("--lead", type=int, default=4,
                     help="seconds between starting the host and the client")
     ap.add_argument("--seconds", type=int, default=90, help="how long `run` waits")
