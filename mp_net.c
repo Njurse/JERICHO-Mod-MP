@@ -1805,8 +1805,11 @@ void MpNetPoll(int waitMs)
 		}
 
 		/* ...but not while a level is loading: both sides go silent for the whole
-		 * load, and that is longer than the idle timeout. */
-		if (gConn[i].used && (now - gConn[i].lastRecvMs) > MP_CONN_TIMEOUT_MS && !MpBusy())
+		 * load, and that is longer than the idle timeout. And not before the match
+		 * starts: a player still in the car select is legitimately quiet (or slow to
+		 * pick), so "silence == dead" only holds once the match is running. This is
+		 * the "client was kicked for taking a few seconds to choose a car" fix. */
+		if (gConn[i].used && (now - gConn[i].lastRecvMs) > MP_CONN_TIMEOUT_MS && !MpBusy() && gMp.running)
 			MpDropConn(i, "timeout");
 	}
 
