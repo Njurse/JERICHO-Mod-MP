@@ -238,18 +238,22 @@ static int MpBotCorridorClear(CAR_DATA* mine, int dir, int len)
  * heading still clear at 4800 units is a street, one that clears 1200 and then stops is a
  * driveway into a wall. The flee wants the road even when the road is not straight back
  * the way it came. */
-#define MPBOT_FLEE_REACH	4	/* ranges the corridor is probed over */
-#define MPBOT_FLEE_ROAD		3	/* depth that counts as a road rather than a gap */
-
-static const int MpBotFleeRange[MPBOT_FLEE_REACH] = { 1200, 2400, 3600, 4800 };
+#define MPBOT_FLEE_STEP		350	/* a probe every car-radius, so coverage is CONTINUOUS */
+#define MPBOT_FLEE_REACH	14	/* 14 * 350 = ~4900 units of look-ahead */
+#define MPBOT_FLEE_ROAD		8	/* open for ~2800 units counts as a road, not a gap */
 
 static int MpBotCorridorDepth(CAR_DATA* mine, int dir)
 {
 	int k, depth = 0;
 
-	for (k = 0; k < MPBOT_FLEE_REACH; k++)
+	/* DENSE SAMPLING IS THE POINT. These were four widely spaced probes, so a light
+	 * post or a bollard between two of them was invisible until the car was on top of
+	 * it, and a thin obstacle slightly off the line read as clear ground. At one probe
+	 * per probe-radius the corridor is swept rather than dotted. The early break keeps
+	 * the usual cost at two or three samples. */
+	for (k = 1; k <= MPBOT_FLEE_REACH; k++)
 	{
-		if (!MpBotCorridorClear(mine, dir, MpBotFleeRange[k]))
+		if (!MpBotCorridorClear(mine, dir, k * MPBOT_FLEE_STEP))
 			break;
 
 		depth++;
@@ -303,7 +307,7 @@ static int MpBotChase(int fight)
 	MP_PLAYER* me = MpLocalPlayer();
 	CAR_DATA* mine;
 	CAR_DATA* tgt = NULL;
-	static int stuckFrames, turnFrames, turnDir, turnPulse, backFrames, backDir, holding;
+	static int stuckFrames, turnFrames, turnDir, turnPulse, backFrames, backDir, holding, everMoved;
 	int k;
 
 	if (me == NULL || me->carId < 0)
@@ -388,7 +392,9 @@ static int MpBotChase(int fight)
 		 * (the swinging `diff` in the log) and the car went nowhere. The hold is
 		 * dropped the moment the way it actually wants is clear again. */
 		{
-			static const int ranges[2] = { 1100, 2200 };
+			/* same reason as the flee's sampling: two probes let a thin obstacle sit
+			 * between them and read as open ground */
+			static const int ranges[4] = { 550, 1100, 1650, 2200 };
 			static const int step[6] = { 448, -448, 896, -896, 1344, -1344 };	/* nearest angle first */
 			static int holdDir = -1;
 			static int holdFrames = 0;
@@ -403,15 +409,16 @@ static int MpBotChase(int fight)
 			{
 				holdFrames--;
 
-				/* the way it wants is clear again: stop dodging */
-				if (MpBotSpotClear(mine, want, ranges[0]))
+				/* the way it wants is clear again: stop dodging. Corridor, not centre
+				 * line, so a post just off the line counts too. */
+				if (MpBotCorridorClear(mine, want, ranges[1]))
 					holdFrames = 0;
 				else
 					pdir = holdDir;		/* committed: keep going round the same side */
 			}
 
-			if (!MpBotSpotClear(mine, pdir, ranges[0]) ||
-				!MpBotSpotClear(mine, pdir, ranges[1]))
+			if (!MpBotCorridorClear(mine, pdir, ranges[1]) ||
+				!MpBotCorridorClear(mine, pdir, ranges[3]))
 			{
 				int i, chosen = -1;
 
@@ -419,7 +426,7 @@ static int MpBotChase(int fight)
 				{
 					int d = (pdir + step[i]) & 0xfff;
 
-					if (MpBotSpotClear(mine, d, ranges[0]) && MpBotSpotClear(mine, d, ranges[1]))
+					if (MpBotCorridorClear(mine, d, ranges[1]) && MpBotCorridorClear(mine, d, ranges[3]))
 					{
 						chosen = d;
 						break;
@@ -444,10 +451,18 @@ static int MpBotChase(int fight)
 			if (spd < 0)
 				spd = -spd;
 
+			/* A car that has NEVER MOVED is not wedged - it is a car that has just
+			 * spawned. Calling that wedged made the bot do a full handbrake donut on
+			 * the spot and then drive off into whatever was behind it, which is exactly
+			 * what a client was seen doing while facing the host at spawn. The wedge
+			 * test only arms once the car has actually been rolling. */
+			if (spd > 20)
+				everMoved = 1;
+
 			/* Wedged counts whether we are trying to go forward or just sitting
 			 * there facing away: a car stopped against a wall with the peer behind
 			 * it never moves, and a throttle-only test missed exactly that. */
-			if (spd < 4)
+			if (spd < 4 && everMoved)
 			{
 				if (++stuckFrames > MPBOT_STUCK_FRAMES)
 				{
