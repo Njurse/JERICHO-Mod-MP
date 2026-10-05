@@ -2939,6 +2939,24 @@ static void MpTestPauseCarTick(void)
 			if (++seen >= 2)
 				break;
 		}
+
+		/* Name what the search walked past. The table is complete for all four cities now
+		 * (carhacks fills it per level), so a search that finds nothing here means the
+		 * picker would find nothing either - and that is worth a line rather than a
+		 * silent fall through to whatever model was already set. */
+		{
+			int offered = 0;
+
+			for (slot = 0; slot < 10; slot++)
+			{
+				if (CarAvailability[city][slot] != 0)
+					offered++;
+			}
+
+			if (gMpCtx != NULL)
+				gMpCtx->jer_log(gMpCtx,
+					"[mp] test: PAUSECAR city %d offers %d of 10 slot(s)\n", city, offered);
+		}
 	}
 
 	if (gMpCtx != NULL)

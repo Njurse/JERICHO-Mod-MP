@@ -1412,6 +1412,8 @@ static int mpCcCityIdx;
 static int mpCcModels[MPCC_MAX_CARS];
 static int mpCcModelCount;
 static int mpCcModelIdx;
+static int mpCcLoggedCity = -1;	/* the city this picker last described */
+static int mpCcLoggedCount = -1;	/* ...and how many slots it offered then */
 
 /* Which city the picker is showing: an index into mpCcCities. -1 (or an empty
  * list) means the session's own city. */
@@ -1477,6 +1479,41 @@ static void MpCcRebuild(void)
 			continue;
 
 		mpCcModels[mpCcModelCount++] = (int)(unsigned char)carNumLookup[city][slot];
+	}
+
+	/* What the picker had to leave out, logged when it changes. The TABLE is carhacks' to fill
+	 * (it owns cross-city, and its JER_EVENT_CAR_AVAILABILITY answer now covers all four
+	 * cities) - this line says what the mp picker did with it, because "I cannot pick that
+	 * car" is the report this whole path exists to answer, and a silent `continue` is what
+	 * made it need answering twice. */
+	if (mpCcLoggedCity != city || mpCcLoggedCount != mpCcModelCount)
+	{
+		char hidden[96];
+		int h = 0;
+
+		mpCcLoggedCity = city;
+		mpCcLoggedCount = mpCcModelCount;
+
+		strcpy(hidden, "; hidden:");
+
+		for (slot = 0; slot < MPCC_SLOTS; slot++)
+		{
+			size_t used;
+
+			if (CarAvailability[city][slot] != 0)
+				continue;
+
+			used = strlen(hidden);
+
+			if (used < sizeof(hidden) - 16)
+				snprintf(hidden + used, sizeof(hidden) - used, " [%d]", slot);
+
+			h++;
+		}
+
+		if (gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx, "[mp] car select: %s offers %d of %d slot(s)%s\n",
+				MpCarCityName(city), mpCcModelCount, MPCC_SLOTS, (h > 0) ? hidden : "");
 	}
 
 	if (mpCcModelIdx < 0 || mpCcModelIdx >= mpCcModelCount)
