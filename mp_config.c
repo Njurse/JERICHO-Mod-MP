@@ -8,6 +8,8 @@
 /* A stored colour must survive being hand-edited: 0..255 or it is not a colour. */
 #define MP_CLAMP_CONFIG_COLOR(v) do { if ((v) < 0) (v) = 0; if ((v) > 255) (v) = 255; } while (0)
 #include "mp.h"
+#include "driver2.h"
+#include "system.h"		/* CITY_COUNT: car_city is a CITY, not a Driver 2 level */
 
 #include <string.h>
 #include <stdio.h>
@@ -61,7 +63,7 @@ void MpConfigLoad(void)
 	/* The city `car`'s model number belongs to, for a cross-city pick (a slot is
 	 * always the session's city, so it does not apply then). -1 = the session's. */
 	gMp.config.carCity = jer_config_get_int("mp", "car_city", -1);
-	if (gMp.config.carCity < -1 || gMp.config.carCity > 3)
+	if (gMp.config.carCity < -1 || gMp.config.carCity >= CITY_COUNT)
 		gMp.config.carCity = -1;
 
 	/* 1 = `car` is a 1..10 frontend SLOT to resolve per city, not a model number

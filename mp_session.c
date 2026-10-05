@@ -1651,7 +1651,7 @@ static void MpHandleHello(int connIndex, const unsigned char* p, int len)
 		{
 			pl->car = (h.car == 0xFFFF) ? -1 : (int)h.car;
 			pl->carIsSlot = h.reserved[0] ? 1 : 0;
-			pl->carCity = (h.reserved[2] < 4) ? (int)h.reserved[2] : -1;
+			pl->carCity = (h.reserved[2] < CITY_COUNT) ? (int)h.reserved[2] : -1;
 			pl->palette = (int)h.reserved[1];
 
 			if (gMpCtx)
@@ -2954,7 +2954,7 @@ static void MpTestPauseCarTick(void)
 		size_t used;
 		int n, k;
 
-		if (city < 0 || city > 3)
+		if (city < 0 || city >= CITY_COUNT)
 			city = 0;
 
 		/* The SAME answer the pause picker builds its menu from (MpCarListForCity), so a
@@ -3379,7 +3379,7 @@ static void MpTestCarCycleTick(void)
 		built = 1;
 		seed = (int)(0x2545F491u * (unsigned)(me->id + 1));	/* per seat: different orders */
 
-		for (city = 0; city < 4 && total < MP_TEST_CYCLE_MAX_CARS; city++)
+		for (city = 0; city < CITY_COUNT && total < MP_TEST_CYCLE_MAX_CARS; city++)
 		{
 			int models[MP_CAR_LIST_MAX];
 			int slots[MP_CAR_LIST_MAX];
@@ -4443,7 +4443,7 @@ int MpCarQuerySlots(int city, int* slots, int* models, int max)
  * own frontend table - see mp.h for why that table is the wrong question IN A SESSION. */
 int MpCarListForCity(int city, int* slots, int* models, int max)
 {
-	extern int CarAvailability[4][10];
+	extern int CarAvailability[CITY_COUNT][10];    /* grown with the registry */
 	extern char carNumLookup[CITY_COUNT][10];
 	int n, slot;
 

@@ -430,7 +430,7 @@ static int MpOnCmdLine(void* userdata, void* args)
 					{
 						city = atoi(v);
 
-						if (city < 0 || city > 3)
+						if (city < 0 || city >= CITY_COUNT)
 							city = -1;
 
 						sel = q + 1;
