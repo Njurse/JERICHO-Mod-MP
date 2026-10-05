@@ -190,6 +190,19 @@ used / 28 free, 0 row(s) reclaimed". `tools/mpshots.py` does the same on its own
 photographs a running game once, `watch` is the log-driven kind), which is what makes it
 usable on a hand-played session as well as a harness run.
 
+### Stress: every car, as fast as it can
+
+    python tools/mp_carstress.py                 # 3 seats, 60 s, a change every 700 ms
+    python tools/mp_carstress.py --seconds 30    # quick
+
+One host plus N-1 clients on this machine, each cycling **every car the session can offer**
+(`MP_TEST_CARCYCLE`, in its own random order), then a per-seat report: changes, distinct
+cars (so "every car" is measured, not assumed), passes, and every sign of trouble - a car
+whose mesh is not built, a refused change, a peer's car this machine could not hold. Three
+seats at 700 ms is a change somewhere in the session every ~230 ms, which is past anything a
+player does and is where the resident pool, the palette rows and the pages either hold or
+start to thrash.
+
 ### Test levers for the on-foot and mid-match paths
 
 Set these on the harness (they are read from the environment, so every seat gets
