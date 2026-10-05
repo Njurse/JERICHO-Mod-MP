@@ -319,6 +319,8 @@ unsigned short MpModHash(void);
 /* Session sync / start (mp_session.c)                                 */
 /* ------------------------------------------------------------------ */
 void MpSessionReset(void);
+void MpTrafficBandClear(void);		/* release the slots we reserved (session teardown) */
+int  MpTrafficBand(int* first, int* last);	/* this machine's traffic slot band, 0 = none */
 int  MpStartMatch(void);		/* host: launch the agreed level for all players */
 int  MpOnNetSpawn(void* userdata, void* args);	/* add remote player cars */
 int  MpOnCarContact(void* userdata, void* args);	/* JER_EVENT_COLLISION: relay a car-to-car contact */

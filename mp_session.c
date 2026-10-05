@@ -20,6 +20,7 @@
 #include "cosmetic.h"	/* car_cosmetics[slot]: the box a rebuilt car needs */
 #include "system.h"	/* CITY_COUNT and LevelNames: the city registry MpCarCityName reads */
 #include "denting.h"	/* CreateDentableCar: the only writer of the drawn vertex dump */
+#include "civ_ai.h"	/* reservedSlots: the array PingInCivCar's free-slot scan reads */
 #include "felony.h"	/* felonyRating / pedestrianFelony: what a restart clears */
 extern int gBootMpLevel;	/* main.c: 1 = the small multiplayer map, 0 = the full city */
 extern int gBootMpArena;	/* main.c: which multiplayer map (0/1) */
@@ -261,6 +262,12 @@ void MpLeaveSession(void)
 	 * does: a stale mark would make the next match take a STOCK traffic car for
 	 * one of ours and break the traffic instead of protecting it. */
 	memset(gMpOurCars, 0, sizeof(gMpOurCars));
+
+	/* ...and the traffic bands stop being ours too: the engine's reservedSlots must
+	 * go back to the engine once we are not replicating traffic (see the band
+	 * section below). Leaving them set would keep stock traffic out of six slots
+	 * for no reason after the session. */
+	MpTrafficBandClear();
 }
 
 /* Launch the agreed level locally: set the pending globals from the session
@@ -2600,6 +2607,325 @@ static void MpHeartbeatTick(void)
 		gMp.frame, gMp.running, gMp.role);
 }
 
+/* ------------------------------------------------------------------ */
+/* Traffic slot bands: the car_data slots THIS machine owns traffic in
+ *
+ * Player cars are replicated by MODEL (MP_CARSTATE_ENTRY carries no carSlot,
+ * because a slot number means a different car on two machines). That trick only
+ * works because there are a handful of players. Civilians are many, and each
+ * machine grows its OWN population from its own random stream (PingInCivCar is
+ * live because a match holds NumPlayers at 1), so before any state can be sent
+ * the two machines must agree on WHERE a car lives -- and the only way to make
+ * that agreement hold is to make sure the two spawners can never pick the same
+ * slot.
+ *
+ * The foundation is a DISJOINT band per machine: machine `rank` may only spawn
+ * traffic into [first..last], and every other traffic slot is kept reserved so
+ * its own civ spawner cannot reach it. The peer then mirrors a car straight into
+ * the slot its owner named.
+ *
+ * car_data[0..MP_MAX_PLAYERS-1] stays with the players (player id == car slot;
+ * see MpOnNetSpawn), so the bands live above them. Bands are sized by how many
+ * machines share the match: two split the pool in half, four in quarters, and the
+ * last machine takes the remainder so no slot is orphaned.
+ *
+ * RE-ASSERTED EVERY FRAME, not set once: a level load ClearMem()s the engine's
+ * reservedSlots (mission.c:301) out from under us, and the engine's own cutscene
+ * recorder reserves from the low end -- so we manage ONLY the traffic band, and
+ * only the bits WE set, never the engine's. */
+#define MP_TRAFFIC_SLOT_FIRST	MP_MAX_PLAYERS				/* 8: below this is the players' */
+#define MP_TRAFFIC_SLOT_COUNT	(MAX_CARS - MP_TRAFFIC_SLOT_FIRST)	/* 12 traffic slots */
+
+static unsigned char gMpBandReserved[MAX_CARS];	/* slots WE turned on, so we clear only ours */
+static int gMpBandFirst = -1;			/* this machine's band, inclusive; -1 = none */
+static int gMpBandLast = -1;
+
+/* How many machines share the traffic pool. OUR OWN rank must always have a band,
+ * so the count is never below rank+1: a client that has just joined and not yet
+ * seen the roster still gets a private band rather than clamping onto the host's. */
+static int MpTrafficMachineCount(void)
+{
+	int n = gMp.playerCount;
+
+	if (n < gMp.localPlayerId + 1)
+		n = gMp.localPlayerId + 1;
+
+	if (n < 1)
+		n = 1;
+
+	if (n > MP_MAX_PLAYERS)
+		n = MP_MAX_PLAYERS;
+
+	return n;
+}
+
+/* The inclusive band for machine `rank` of `nMachines`. The last machine takes
+ * the remainder so the whole pool is covered even when it does not divide. */
+static void MpTrafficBandFor(int rank, int nMachines, int* first, int* last)
+{
+	int per = MP_TRAFFIC_SLOT_COUNT / nMachines;
+	int f, l;
+
+	if (per < 1)
+		per = 1;
+
+	f = MP_TRAFFIC_SLOT_FIRST + rank * per;
+	l = f + per - 1;
+
+	if (rank == nMachines - 1)
+		l = MAX_CARS - 1;
+
+	if (f > MAX_CARS - 1)
+		f = MAX_CARS - 1;
+
+	if (l > MAX_CARS - 1)
+		l = MAX_CARS - 1;
+
+	if (l < f)
+		l = f;
+
+	*first = f;
+	*last = l;
+}
+
+/* Release every slot WE reserved. Called when the session ends, so the engine's
+ * traffic is untouched once we are not replicating it. */
+void MpTrafficBandClear(void)
+{
+	int i;
+
+	for (i = 0; i < MAX_CARS; i++)
+	{
+		if (gMpBandReserved[i])
+		{
+			reservedSlots[i] = 0;
+			gMpBandReserved[i] = 0;
+		}
+	}
+
+	gMpBandFirst = -1;
+	gMpBandLast = -1;
+}
+
+/* This machine's traffic band, or 0 when no session is live. */
+int MpTrafficBand(int* first, int* last)
+{
+	if (gMpBandFirst < 0)
+		return 0;
+
+	if (first != NULL)
+		*first = gMpBandFirst;
+
+	if (last != NULL)
+		*last = gMpBandLast;
+
+	return 1;
+}
+
+/* Once per sim frame, before anything spawns. Sets the ONE bit of state the two
+ * machines have to agree on before traffic can be replicated at all: which
+ * car_data slots this machine may put a civilian in. */
+static void MpTrafficBandRefresh(void)
+{
+	int n, rank, f, l, i, changed;
+
+	if (!gMp.running)
+	{
+		MpTrafficBandClear();
+		return;
+	}
+
+	n = MpTrafficMachineCount();
+	rank = (gMp.localPlayerId > 0) ? gMp.localPlayerId : 0;
+
+	MpTrafficBandFor(rank, n, &f, &l);
+
+	changed = (f != gMpBandFirst || l != gMpBandLast);
+
+	/* Everything OUTSIDE our band is kept off our spawner: the player reserve
+	 * [0..7) because a civilian there would squat on a slot a player (or a late
+	 * joiner) needs, and every other machine's band because its cars get mirrored
+	 * into those slots and OUR spawner must never race the peer for one.
+	 *
+	 * reservedSlots is the array PingInCivCar's free-slot scan consults
+	 * (civ_ai.c:2058; the two collider indices are already outside that scan's
+	 * bound), so this is the one bit of state that keeps the two spawners apart.
+	 * We set only the bits we own and clear only those, so a level load dropping
+	 * them is simply re-asserted on the next frame. */
+	for (i = 0; i < MAX_CARS; i++)
+	{
+		int want = (i < f || i > l);
+
+		if (want)
+		{
+			if (!gMpBandReserved[i])
+			{
+				reservedSlots[i] = 1;
+				gMpBandReserved[i] = 1;
+			}
+		}
+		else if (gMpBandReserved[i])
+		{
+			reservedSlots[i] = 0;
+			gMpBandReserved[i] = 0;
+		}
+	}
+
+	gMpBandFirst = f;
+	gMpBandLast = l;
+
+	if (changed && gMpCtx != NULL)
+		gMpCtx->jer_log(gMpCtx,
+			"[mp] traffic band: machine %d of %d owns car_data slots %d..%d\n",
+			rank, n, f, l);
+}
+
+/* ------------------------------------------------------------------ */
+/* The spawn CLAIM: a patch of world belongs to the nearest player
+ *
+ * Each machine spawns civilians around ITS OWN player (PingInCivCar anchors on
+ * MainPlayer.spoolXZ), so two players standing together would both grow a
+ * population in the same place. The band keeps the two spawners in different
+ * car_data SLOTS; it does not keep them out of the same PLACE.
+ *
+ * The rule that does: a car belongs to whichever player is nearest to it. A
+ * machine KEEPS a civilian in its band only while its own player is that nearest
+ * player; if a peer's player is nearer, the peer owns that patch and we ping our
+ * copy out -- the loser pings its copy out. Both machines evaluate the SAME
+ * positions (every player's car is replicated, so car_data holds them all), so
+ * they agree; a DEADBAND plus a lowest-player-id tie-break stops a car sitting on
+ * the midpoint from flapping between owners.
+ *
+ * Until traffic state is mirrored between the machines (the next phase), a culled
+ * car is not replaced by the peer's copy yet, so a shared patch is briefly thinner
+ * than it will be -- the claim is what makes the two populations disjoint in the
+ * first place. */
+#define MP_TRAFFIC_CLAIM_DEADBAND	2000	/* world units: closer than this, the lower player id wins */
+
+static int gMpClaimCulled;		/* cars pinged out by the claim this reporting window */
+
+/* A squared world distance must be 64-BIT: coordinates reach six figures, so the
+ * 32-bit square wraps negative and a far car reads as the nearest. */
+static long long MpDistSq64(int dx, int dz)
+{
+	long long a = dx, b = dz;
+
+	return a * a + b * b;
+}
+
+/* The player nearest to (x,z), the lowest player id winning a tie, or -1 when no
+ * player has a car to measure from. *outSq receives that player's squared distance. */
+static int MpTrafficClaimOwner(int x, int z, long long* outSq)
+{
+	long long d[MP_MAX_PLAYERS];
+	int id[MP_MAX_PLAYERS];
+	int n = 0, pi, k, best = -1;
+	long long dMin = 0;
+	long long marginSq = (long long)MP_TRAFFIC_CLAIM_DEADBAND * MP_TRAFFIC_CLAIM_DEADBAND;
+
+	for (pi = 0; pi < MP_MAX_PLAYERS; pi++)
+	{
+		MP_PLAYER* p = &gMp.players[pi];
+
+		if (!p->active || p->carId < 0 || p->carId >= MAX_CARS)
+			continue;
+
+		d[n] = MpDistSq64(x - car_data[p->carId].hd.where.t[0],
+				  z - car_data[p->carId].hd.where.t[2]);
+		id[n] = p->id;
+		n++;
+	}
+
+	if (n == 0)
+		return -1;
+
+	dMin = d[0];
+
+	for (k = 1; k < n; k++)
+	{
+		if (d[k] < dMin)
+			dMin = d[k];
+	}
+
+	/* Within the DEADBAND of the nearest, the LOWEST player id owns the car -- not an
+	 * exact tie, which real positions never produce. That gives both machines the
+	 * same answer AND a stable one: a car drifting a few units either way does not
+	 * change who owns it, which is what stops the boundary flapping (and the
+	 * spawn/cull churn it caused when the test was exact equality). */
+	for (k = 0; k < n; k++)
+	{
+		if (d[k] <= dMin + marginSq && (best < 0 || id[k] < best))
+			best = id[k];
+	}
+
+	if (outSq != NULL)
+		*outSq = dMin;
+
+	return best;
+}
+
+/* Once per sim frame: give up any civilian in OUR band that a peer's player owns.
+ *
+ * Note the direction of the rule: every machine KEEPS its nearer half, so both
+ * machines still have traffic -- an earlier version made the higher-id machine stop
+ * spawning entirely when a peer was close, which (before state is mirrored between
+ * the machines) simply left it with no traffic at all. */
+static void MpTrafficClaimPass(void)
+{
+	MP_PLAYER* me = MpLocalPlayer();
+	int first, last, i, local = gMp.localPlayerId;
+	int culled = 0, census = 0;
+	long long nearSq = -1;
+
+	if (!MpTrafficBand(&first, &last))
+		return;
+
+	/* A player on foot owns no car, so the claim has nothing to measure from and
+	 * every car would look like a peer's -- leave the traffic alone instead. */
+	if (me == NULL || me->carId < 0 || me->carId >= MAX_CARS)
+		return;
+
+	for (i = first; i <= last; i++)
+	{
+		CAR_DATA* cp = &car_data[i];
+		int owner;
+
+		if (cp->controlType != CONTROL_TYPE_CIV_AI)
+			continue;
+
+		census++;
+		{
+			long long dSq = MpDistSq64(cp->hd.where.t[0] - car_data[me->carId].hd.where.t[0],
+						  cp->hd.where.t[2] - car_data[me->carId].hd.where.t[2]);
+
+			if (nearSq < 0 || dSq < nearSq)
+				nearSq = dSq;
+		}
+
+		owner = MpTrafficClaimOwner(cp->hd.where.t[0], cp->hd.where.t[2], NULL);
+
+		if (owner >= 0 && owner != local)
+		{
+			PingOutCar(cp);
+			culled++;
+		}
+	}
+
+	gMpClaimCulled += culled;
+
+	/* A CENSUS, so "there is no traffic" is a number and not an impression -- how
+	 * many civilians our band actually holds right now, and how many the claim gave
+	 * away this window. The engine's own spawn rate is elsewhere (JERICHO_DIAG_PINGIN
+	 * in civ_ai.c); this is the half that is OURS. */
+	if ((gMp.frame % 120) == 0 && gMpCtx != NULL)
+	{
+		gMpCtx->jer_log(gMpCtx,
+			"[mp] traffic: %d civ car(s) in our band %d..%d, nearest %d, culled %d this window\n",
+			census, first, last, (nearSq < 0) ? -1 : (int)sqrt((double)nearSq), gMpClaimCulled);
+		gMpClaimCulled = 0;
+	}
+}
+
 /* One network tick (per simulation frame). Each machine owns ITS OWN car and
  * broadcasts that; everyone else adopts it, so nobody blocks on the network and
  * every car you see is the truth of the machine driving it. */
@@ -2609,6 +2935,15 @@ void MpLockstepFrame(void)
 		return;
 
 	++gMp.frame;
+
+	/* Re-assert the traffic slot bands FIRST, before anything spawns this frame. A
+	 * level load clears the engine's reservedSlots out from under us, so this is
+	 * not a one-time setup -- see MpTrafficBandRefresh. */
+	MpTrafficBandRefresh();
+
+	/* ...and then give up any civilian of ours that a peer's player now owns, so
+	 * two players standing together do not both grow traffic in the same patch. */
+	MpTrafficClaimPass();
 
 	/* the test levers are read from the environment ONCE, not every frame (see
 	 * MpResolveTestLevers); the ticks below then only consult the cache */
