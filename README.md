@@ -254,7 +254,8 @@ lookahead or a coarse route, and that is a separate unit, not a tweak.
 That "separate unit" now exists. `JERICHO/MODS/mp/ai/` is a small, self-contained
 collection of pieces that need no engine to be tested:
 
-- `aimap` - the world model. A fixed 33x33 window of samples, re-probed around whoever
+- `aimap` - the world model. A fixed 49x49 window of samples (about +/- 6 map cells),
+  re-probed around whoever
   asks, filled by one `CellEmpty` call per sample. That is why **fences and barrels are not
   walls**: `CellEmpty` skips `MODEL_FLAG_SMASHABLE` and chairs by design (objcoll.c:49), so
   the grid sees through exactly what a player drives through, without a special case. The
@@ -267,24 +268,32 @@ collection of pieces that need no engine to be tested:
   (which is what happens whenever a car is parked against a wall, because our probe radius
   is a car's width) and an unreachable goal (the path comes back INCOMPLETE with the best
   partial route, which is what a car that needs to be somewhere else actually wants);
-- `ailocal` - the different KIND of search: one flood of the window answering "where is the
-  nearest place worth being". The road rung is breadth-first, so it is the nearest road
+- `ailocal` - the different KIND of search: one shared FLOOD of the window answering "where is
+  the nearest place worth being". The road rung is breadth-first, so it is the nearest road
   along ground the car can DRIVE - a road across a wall is not a way out, and a
-  line-of-sight search would pick one. The fallback rung is the most open reachable ground,
-  and if even that fails the caller keeps its own behaviour;
+  line-of-sight search would pick one. Both rungs read the same flood, so "reachable" means
+  one thing, and the flee rung gates on it too: a road the car can only reach by driving
+  AROUND a corner is a goal, which a line-of-sight test wrongly rejected. The fallback rung
+  is the most open reachable ground, and if even that fails the caller keeps its own
+  behaviour;
 - `JERICHO/test/test_ai_path.c` (in the engine's excluded test directory, so it costs the
   exe nothing) drives the real cost model and the real A* against hand-built grids, in both
-  C and C++: **125 checks, 0 failed**. It found two real bugs in the library and one bad
+  C and C++: **128 checks, 0 failed**. It found two real bugs in the library and one bad
   budget while being written - a truncating sample index that pulled a point a whole step
   outside the window back onto its edge, an `onRoad` count that missed the first waypoint,
   and a 900-node expansion ceiling that a winding route exhausted, so the pathfinder
   reported "cannot reach" for a goal that was merely round the corner.
 
-`MP_BOT=catmouse` is the behaviour set built on it. Measured over a 55 s city pair: the two
-cars were a **median 12,390 world units apart** (about three map cells, up to 17,858), the
-plans came back as 2-3 waypoints after 146-211 node expansions, and the mouse's chosen goal
-was on the ROAD network - the road preference working in a real level. That is cat and
-mouse, where `chase` is the pair closing on each other.
+`MP_BOT=catmouse` is the behaviour set built on it. The mouse runs to a place it chooses
+(far from the cat, preferring the road, reachable) and the cat plans to where the mouse is -
+and, when the mouse is off the road, to the nearest road the mouse would have to use to get
+back, so the cat does not cut across gardens. Measured over a 55 s city pair: the two cars
+were a **median 12,390 world units apart** (about three map cells, up to 17,858), the plans
+came back as 2-3 waypoints after 146-211 node expansions, and the mouse's chosen goal was on
+the ROAD network - the road preference working in a real level. After the junction fix (an
+intersection IS a road) and the cat's road goal, a 50 s city pair stayed much closer - about
+**2,600-3,400 world units** apart, the cat right behind the mouse - with the mouse's goal on
+a road in 16 of 16 plans and the cat's in 19 of 20.
 
 The `catmouse` recovery is one policy in one place: DRIVE when moving; TURN when something
 the probes can see is in front; and PUSH - throttle only, no reversing - when the car is
@@ -294,9 +303,18 @@ backing away from something the engine says is not there is exactly how a car en
 on it for the rest of a match. A real wall lands in PUSH too, so PUSH is bounded: after
 ~900 ms of shoving the car backs out and turns the OTHER way.
 
-The other sets - `chase`, `fight`, `pursuit`, `random` - are deliberately untouched, so the
-collision tests and the `mp_tries` verdicts do not move; a `--bot chase` pair run confirms
-it (zero AI activity in the log, its own 137 flee-scan lines still there).
+A JUNCTION IS A ROAD, and that took a while to get right: `JerRoadInfoAt` used to report
+every intersection as "no road", because the engine's `GetSurfaceRoadInfo` fills lane data
+only for straights and curves (civ_ai.c treats a junction as a special node). The hook now
+answers driveability itself, so the grid no longer has a hole at every crossing and a car
+standing on one stops reading as off-road.
+
+The `chase`, `fight`, `pursuit` and `random` sets share the same contact policy now - the
+bounded PUSH, and a back-out when a U-turn finds its nose against a wall - and their own
+haltes: one target picker that requires the peer to still be CONNECTED, a flee whose chosen
+heading is HELD rather than re-decided every frame, and no distance rule that cuts the
+throttle mid-run. They are still separate behaviour sets (`chase` is a chase, `catmouse` is
+a pursuit over a plan); what they share is the recovery, so the two do not drift apart.
 
 `MP_BOT_DRAW=1` puts the AI's thinking on the HUD while it runs - the goal and whether it is
 a road, the route as its waypoint chain, where the car is aiming, the gap to the other car,

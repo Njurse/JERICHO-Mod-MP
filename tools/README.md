@@ -363,9 +363,13 @@ pair covers "scroll the cars", "scroll the cities" and the pick that follows.
 ## The driving bot, and the proximity it keeps
 
 The bot (mp/mp_bot.c, on only when `MP_BOT` says so) is a **sparring partner, not a
-navigator**: it probes for scenery with the engine's own `CellEmpty` and steers around what
-it sees, but it does not know the roads and will not drive a route. Its job is to make two
-(or three) real player cars meet, collide and hand those collisions to their owners.
+navigator**: `chase`/`fight`/`pursuit` probe for scenery with the engine's own `CellEmpty`
+and steer around what it sees, with no route. `catmouse` is the exception and the reason
+the roadmap's "a real fix wants a lookahead" item closed: it drives the same pair from a
+real pathfinder (`MODS/mp/ai/` - an occupancy grid, A*, and a local road search), so at
+least one behaviour set DOES know the roads and drives a route. Whichever set is running,
+its job is to make two (or three) real player cars meet, collide and hand those collisions
+to their owners.
 
 `--bot chase` (the rig's default) is the shape that does it: **the host flees and every
 joiner chases the host**. Two rules keep the pair close enough to actually touch, because
@@ -373,15 +377,19 @@ the flee has no business opening the gap forever:
 
 | gap | what the fleeing host does |
 |---|---|
-| under 2500 | full pace, proper running away |
-| 2500 to 5000 | lifts the throttle - it stops widening the gap and lets the chasers close it |
-| over 5000 | stops fleeing and drives BACK at the chasers, so they meet from both ends |
+| under 7500 | full pace, proper running away |
+| 7500 to 15000 | runs on (the old "lift the throttle" ease is gone - see below) |
+| over 15000 | stops fleeing and drives BACK at the chasers, so they meet from both ends |
 
-`MP_BOT_GAP=<ease>,<turnback>` moves both thresholds (defaults `2500,5000`) without a
-rebuild - how close the pair should stay is a feel question. The chase log line names the
-branch it took: `flee` / `flee-hold` (easing) / `loop` (coming back) / `chase` / `fight`,
-printed once a second with the gap as `d=x,z`, `diff` (steering error), the pad bytes and
-the stuck count.
+`MP_BOT_GAP=<ease>,<turnback>` moves both thresholds (defaults `7500,15000`) without a
+rebuild - how close the pair should stay is a feel question. **Distance no longer
+interrupts the driving**: the ease threshold only labels the branch in the log, because
+lifting the throttle read as the car giving up mid-flee when its line was good; the
+chaser also presses to 450 units before it pauses rather than idling 900 out. The chase log
+line names the branch it took: `flee` / `flee-hold` (easing, no longer a throttle cut) /
+`loop` (coming back) / `chase` / `fight`, printed once a second with the gap as `d=x,z`,
+`diff` (steering error), the pad bytes and the stuck count. Measured on a 50 s city pair
+with the current logic: neither threshold fired at all and the two stayed in contact.
 
 Measured before and after the proximity rule (3 seats, chase):
 

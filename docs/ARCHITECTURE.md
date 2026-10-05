@@ -544,17 +544,19 @@ the launch went wrong), `car: player N slot S`, `added N remote player car(s)`,
 
 `--bot chase` on the pair rig puts the player cars under mp's own test bot
 (`mp_bot.c`, live only when `MP_BOT` says so) so that a run has two cars that actually
-meet. It is deliberately not navigation: it probes for scenery with the engine's own
-`CellEmpty` and steers around what it sees - no road knowledge, no route, and nothing
-to build on if the requirement ever becomes "drive to a place". What it does have is
-PROXIMITY, because a flee that runs away forever produces no collisions at all:
-measured, the host used to reach d=38246 and wedge there. It now eases off past 2500
-units and, past 5000, turns round and drives back at its pursuers
-(`MP_BOT_GAP=<ease>,<turnback>`), which is what keeps the pair inside a few thousand
-units so contacts happen. `tools/README.md` has the table and the assertion regexes;
-a PASS from that rig wants `lost=0` and `dumps=0`. The `lost=2` that run used to
-report was the clock-underflow disconnect (trap 15) and is gone; a `lost=N` now
-means a real drop, which is what makes the verdict worth reading.
+meet. `chase`/`fight`/`pursuit` are deliberately not navigation: they probe for scenery
+with the engine's own `CellEmpty` and steer around what they see - no road knowledge, no
+route. `catmouse` is the set that DOES navigate, driven by the `ai/` library below. What
+every set has is PROXIMITY, because a flee that runs away forever produces no collisions
+at all: measured, the host used to reach d=38246 and wedge there. The fleeing host now
+simply RUNS - the old ease-off no longer lifts its throttle, so distance never interrupts
+the driving - and only past `turnback` does it reverse roles and drive back at its
+pursuers (`MP_BOT_GAP=<ease>,<turnback>`, defaults `7500,15000`), while the chaser presses
+to 450 units before it pauses. On a 50 s city pair neither threshold fired and the two
+stayed in contact, which is what makes contacts happen. `tools/README.md` has the table
+and the assertion regexes; a PASS from that rig wants `lost=0` and `dumps=0`. The `lost=2`
+that run used to report was the clock-underflow disconnect (trap 15) and is gone; a
+`lost=N` now means a real drop, which is what makes the verdict worth reading.
 
 ---
 
@@ -665,12 +667,19 @@ Engine dependencies, and the traps in them:
   own probe radius. It also skips `MODEL_FLAG_SMASHABLE` and chairs by design (objcoll.c:49),
   which is the whole reason fences are drive-through;
 - **`JerRoadAt` / `JerRoadInfoAt`** (dr2roads.c, added by this work) expose the road network:
-  the surface at a point, its lanes and AI-lane bits, and `connect[4]`, the road GRAPH. Two
-  traps are written down in the code because both cost time: `roadbits.h`'s
+  the surface at a point, its lanes and AI-lane bits, and `connect[4]`, the road GRAPH. Three
+  traps are written down in the code because each cost time: `roadbits.h`'s
   `ROADS_GetRouteData` is a stub that always returns 1, so it would call every heading a road;
-  and `GetSurfaceIndex` returns the GROUND surface minus 32, whereas the road tables are
+  `GetSurfaceIndex` returns the GROUND surface minus 32, whereas the road tables are
   indexed by `plane->surface - 32` as returned by `RoadInCell` (dr2roads.c:276-279,
-  :530-537), which also reports -1 for an unstreamed region - i.e. the map edge;
+  :530-537), which also reports -1 for an unstreamed region - i.e. the map edge; and, found
+  last and the reason the "stays on the roads" item finally moved, **`GetSurfaceRoadInfo`
+  returns 0 for a JUNCTION surface** (it fills the lane data only for straights and curves,
+  because `civ_ai.c` treats a junction as a special node). So `JerRoadInfoAt` used to report
+  EVERY intersection as "no road" - a hole in the network at exactly the places the AI has to
+  cross, which made a car standing on a junction read as off-road. The hook now answers
+  driveability itself (`kind=2`, `connect[]` from `ExitIdx`) and leaves `GetSurfaceRoadInfo`
+  untouched for the engine's own users;
 - **`MapHeight(pos)`** so each sample is probed at the ground height THERE. `CellEmpty`
   compares heights, so probing a distant sample at the car's own height would invent walls
   and lose real ones.
