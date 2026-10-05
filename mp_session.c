@@ -280,7 +280,7 @@ static void MpSendPickedCar(int model, int city)
 
 	memset(&c, 0, sizeof(c));
 	c.model = (model >= 0 && model < 0xFF) ? (uint8_t)model : 0xFF;
-	c.city = (city >= 0 && city < 4) ? (uint8_t)city : 0xFF;
+	c.city = (city >= 0 && city < CITY_COUNT) ? (uint8_t)city : 0xFF;
 
 	MpSendToHost(MP_TAG_CAR, 0, &c, sizeof(c));
 
@@ -311,7 +311,7 @@ static void MpLaunchLocal(void)
 		if (s != NULL)
 		{
 			extern int carSelection;
-			extern char carNumLookup[4][10];
+			extern char carNumLookup[CITY_COUNT][10];
 			int slotNo = atoi(s);
 			int idx = (slotNo >= 1 && slotNo <= 10) ? slotNo - 1 : 0;
 			int lvl = (GameLevel >= 0 && GameLevel < 4) ? GameLevel : 0;
@@ -387,7 +387,7 @@ static void MpLaunchLocal(void)
 
 		if (gMp.config.carIsSlot)
 		{
-			extern char carNumLookup[4][10];
+			extern char carNumLookup[CITY_COUNT][10];
 			int lvl = (GameLevel >= 0 && GameLevel < 4) ? GameLevel : 0;
 			int slotNo = (car >= 1 && car <= 10) ? car : 1;
 
@@ -498,7 +498,7 @@ static void MpLaunchLocal(void)
  * same model on the other. */
 static int MpPlayerCarModel(int car, int isSlot)
 {
-	extern char carNumLookup[4][10];
+	extern char carNumLookup[CITY_COUNT][10];
 
 	if (car < 0)
 		return -1;
@@ -520,7 +520,7 @@ static int MpPlayerCarModel(int car, int isSlot)
  * city:model). Either way the default is MP_CAR_CITY_SESSION -- the level's own. */
 static int MpPlayerCarCity(int city, int isSlot)
 {
-	if (isSlot || city < 0 || city >= 4)
+	if (isSlot || city < 0 || city >= CITY_COUNT)
 		return MP_CAR_CITY_SESSION;
 
 	return city;
@@ -721,7 +721,7 @@ int MpOnCarDataSource(void* userdata, void* args)
  * with one of the assigned ones. */
 static int MpAssignedCarModel(int playerId)
 {
-	extern char carNumLookup[4][10];
+	extern char carNumLookup[CITY_COUNT][10];
 	int lvl = (GameLevel >= 0 && GameLevel < 4) ? GameLevel : 0;
 
 	if (playerId <= 0)
@@ -1536,7 +1536,7 @@ static void MpHandleCar(int connIndex, const unsigned char* p, int len)
 
 	pl->car = (c.model == 0xFF) ? -1 : (int)c.model;
 	pl->carIsSlot = 0;
-	pl->carCity = (c.city < 4) ? (int)c.city : -1;
+	pl->carCity = (c.city < CITY_COUNT) ? (int)c.city : -1;
 	pl->carConfirmed = 1;
 
 	if (gMpCtx != NULL)
@@ -3211,7 +3211,7 @@ static void MpTestCityChangeTick(void)
 	static unsigned long startMs;
 	const char* s;
 	const char* comma;
-	extern char carNumLookup[4][10];
+	extern char carNumLookup[CITY_COUNT][10];
 	int secs, city, slot = 0, i, n, model;
 	int cities[8];
 	MP_PLAYER* me;
@@ -3259,7 +3259,7 @@ static void MpTestCityChangeTick(void)
 	/* Only a city the mods know, and only an index the engine's own model table has:
 	 * MpChangeCar resolves the pair against resident slots, so anything else is a failed
 	 * switch reported as if it were a real one. */
-	if (city < 0 || city > 3)
+	if (city < 0 || city >= CITY_COUNT)
 	{
 		if (gMpCtx != NULL)
 			gMpCtx->jer_log(gMpCtx,
@@ -4444,13 +4444,13 @@ int MpCarQuerySlots(int city, int* slots, int* models, int max)
 int MpCarListForCity(int city, int* slots, int* models, int max)
 {
 	extern int CarAvailability[4][10];
-	extern char carNumLookup[4][10];
+	extern char carNumLookup[CITY_COUNT][10];
 	int n, slot;
 
 	if (slots == NULL || models == NULL || max <= 0)
 		return 0;
 
-	if (city < 0 || city > 3)
+	if (city < 0 || city >= CITY_COUNT)
 		city = 0;
 
 	n = MpCarQuerySlots(city, slots, models, max);
