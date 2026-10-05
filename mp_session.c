@@ -52,6 +52,8 @@ static unsigned char gMpOurCars[MAX_CARS];
  * spawners in disjoint slots, but a mirror must ALSO be remembered as not-ours so
  * teardown removes exactly what we built and nothing of the engine's. */
 static unsigned char gMpPeerTraffic[MAX_CARS];	/* 1 = we built a peer's car here */
+static unsigned gMpPeerTrafficSeen[MAX_CARS];	/* frame we last heard about a mirror */
+static unsigned char gMpTrafficSent[MAX_CARS];	/* slots WE published last frame */
 
 /* Last reported palette value LOGGED per player, so the continuous carstate
  * stream logs a correction once per reported value instead of every packet.
@@ -2051,6 +2053,7 @@ static void MpSendOwnCarState(void);
 static void MpSendOwnPedState(void);
 static void MpSendTrafficState(void);
 static void MpTrafficMirrorsClear(void);
+static void MpTrafficMirrorAgeTick(void);
 static void MpDriveRemotePed(MP_PLAYER* p);
 static void MpKeepOurCarsFromTrafficAi(void);
 static void MpSendColors(int whole);
@@ -2878,6 +2881,32 @@ static int MpTrafficClaimOwner(int x, int z, long long* outSq)
 	return best;
 }
 
+/* Is one of the PEER's mirrors already near (x,z)? The claim must only remove OUR
+ * copy of a car the peer actually has HERE -- otherwise culling would leave a gap:
+ * the machine that owns this patch has no car to show yet, so the car simply
+ * vanishes until its owner's next spawn. Requiring the peer's car to be on our
+ * screen first is what makes the handoff gap-free -- we stay until theirs arrives. */
+static int MpPeerMirrorNear(int x, int z)
+{
+	long long best = -1;
+	int i;
+
+	for (i = 0; i < MAX_CARS; i++)
+	{
+		long long d;
+
+		if (!gMpPeerTraffic[i])
+			continue;
+
+		d = MpDistSq64(x - car_data[i].hd.where.t[0], z - car_data[i].hd.where.t[2]);
+
+		if (best < 0 || d < best)
+			best = d;
+	}
+
+	return best >= 0 && best <= (long long)MP_TRAFFIC_CLAIM_DEADBAND * MP_TRAFFIC_CLAIM_DEADBAND;
+}
+
 /* Once per sim frame: give up any civilian in OUR band that a peer's player owns.
  *
  * Note the direction of the rule: every machine KEEPS its nearer half, so both
@@ -2918,7 +2947,11 @@ static void MpTrafficClaimPass(void)
 
 		owner = MpTrafficClaimOwner(cp->hd.where.t[0], cp->hd.where.t[2], NULL);
 
-		if (owner >= 0 && owner != local)
+		/* Hand off ONLY when the peer's copy is already on our screen. Culling our
+		 * car while the owner has not spawned theirs yet is the gap the census used to
+		 * show as a car blinking out and a different one taking its place. */
+		if (owner >= 0 && owner != local &&
+		    MpPeerMirrorNear(cp->hd.where.t[0], cp->hd.where.t[2]))
 		{
 			PingOutCar(cp);
 			culled++;
@@ -2958,6 +2991,9 @@ void MpLockstepFrame(void)
 	/* ...and then give up any civilian of ours that a peer's player now owns, so
 	 * two players standing together do not both grow traffic in the same patch. */
 	MpTrafficClaimPass();
+
+	/* ...and collect any mirror its owner has stopped speaking about. */
+	MpTrafficMirrorAgeTick();
 
 	/* the test levers are read from the environment ONCE, not every frame (see
 	 * MpResolveTestLevers); the ticks below then only consult the cache */
@@ -4507,6 +4543,7 @@ static void MpSendOwnCarState(void)
 static void MpSendTrafficState(void)
 {
 	unsigned char buf[sizeof(MP_TRAFFIC) + MAX_CARS * sizeof(MP_TRAFFIC_ENTRY)];
+	unsigned char live[MAX_CARS];
 	MP_TRAFFIC h;
 	MP_TRAFFIC_ENTRY e;
 	int first, last, i, count = 0, len;
@@ -4514,6 +4551,7 @@ static void MpSendTrafficState(void)
 	if (!MpTrafficBand(&first, &last))
 		return;
 
+	memset(live, 0, sizeof(live));
 	memset(&h, 0, sizeof(h));
 	h.frame = gMp.frame;
 
@@ -4558,7 +4596,25 @@ static void MpSendTrafficState(void)
 
 		memcpy(buf + sizeof(h) + count * sizeof(e), &e, sizeof(e));
 		count++;
+		live[i] = 1;
 	}
+
+	/* DESPAWN: a car we published last frame that is NOT in this frame's rows has
+	 * left our band (pinged out, wrecked, taken by a player). Tell the peer to drop
+	 * its mirror now, rather than leaving a ghost for its staleness backstop. */
+	for (i = first; i <= last && count < MAX_CARS; i++)
+	{
+		if (!gMpTrafficSent[i] || live[i])
+			continue;
+
+		memset(&e, 0, sizeof(e));
+		e.carSlot = (uint8_t)i;
+		e.flags = MP_TRAFFIC_REMOVE;
+		memcpy(buf + sizeof(h) + count * sizeof(e), &e, sizeof(e));
+		count++;
+	}
+
+	memcpy(gMpTrafficSent, live, sizeof(gMpTrafficSent));
 
 	h.count = (uint8_t)count;
 	memcpy(buf, &h, sizeof(h));
@@ -5621,6 +5677,28 @@ static void MpTrafficMirrorsClear(void)
 
 	for (i = 0; i < MAX_CARS; i++)
 		MpRemoveTrafficMirror(i);
+
+	memset(gMpTrafficSent, 0, sizeof(gMpTrafficSent));
+}
+
+/* A mirror the owner has stopped speaking about is gone: the owning machine sends
+ * its whole band every frame, so silence means the car left the world (or the peer
+ * dropped). The explicit REMOVE row is the fast path; this is the backstop that
+ * keeps a lost packet from leaving a ghost car standing forever. */
+#define MP_TRAFFIC_STALE_FRAMES	60	/* ~2 s at 30 fps */
+
+static void MpTrafficMirrorAgeTick(void)
+{
+	int i;
+
+	for (i = 0; i < MAX_CARS; i++)
+	{
+		if (!gMpPeerTraffic[i])
+			continue;
+
+		if ((unsigned)(gMp.frame - gMpPeerTrafficSeen[i]) > MP_TRAFFIC_STALE_FRAMES)
+			MpRemoveTrafficMirror(i);
+	}
 }
 
 static void MpHandleTraffic(int connIndex, const unsigned char* p, int len)
@@ -5668,6 +5746,7 @@ static void MpHandleTraffic(int connIndex, const unsigned char* p, int len)
 		}
 
 		MpApplyTrafficPose(&car_data[slot], &e[i]);
+		gMpPeerTrafficSeen[slot] = gMp.frame;	/* seen now: do not age it out */
 	}
 
 	/* The host is the hub: relay a client's traffic to the other clients, exactly
