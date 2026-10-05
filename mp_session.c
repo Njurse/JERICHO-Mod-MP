@@ -2033,6 +2033,7 @@ static void MpKeepOurCarsFromTrafficAi(void);
 static void MpSendColors(int whole);
 static void MpTestCarChangeTick(void);
 static void MpTestCityChangeTick(void);
+static void MpTestCarCycleTick(void);
 static void MpTestLeaveTick(void);
 static void MpTestOnFootTick(void);
 
@@ -2514,6 +2515,7 @@ static const char* gTestLeaveStr;
 static const char* gTestOnFootStr;
 static const char* gTestCarChangeStr;
 static const char* gTestCityChangeStr;
+static const char* gTestCarCycleStr;
 static const char* gTestChatKeyStr;
 static const char* gTestCarSelectStr;
 static const char* gTestFrontendJoinStr;
@@ -2532,6 +2534,7 @@ static void MpResolveTestLevers(void)
 	gTestOnFootStr = getenv("MP_TEST_ONFOOT");
 	gTestCarChangeStr = getenv("MP_TEST_CARCHANGE");
 	gTestCityChangeStr = getenv("MP_TEST_CITYCHANGE");
+	gTestCarCycleStr = getenv("MP_TEST_CARCYCLE");
 	gTestChatKeyStr = getenv("MP_TEST_CHATKEY");
 	gTestCarSelectStr = getenv("MP_TEST_CARSELECT");
 	gTestFrontendJoinStr = getenv("MP_TEST_FRONTEND_JOIN");
@@ -2615,6 +2618,7 @@ void MpLockstepFrame(void)
 	/* test lever: a scripted mid-session car change (inert unless MP_TEST_CARCHANGE) */
 	MpTestCarChangeTick();
 	MpTestCityChangeTick();
+	MpTestCarCycleTick();
 
 	/* test lever: a clean leave part-way through (inert unless MP_TEST_LEAVE), so
 	 * that "a deliberate quit" and "a connection died" can be told apart in a
@@ -3271,6 +3275,145 @@ static void MpTestCityChangeTick(void)
 
 	MpChangeCar(city, model);
 }
+
+/* MP_TEST_CARCYCLE=<interval_ms>[,<passes>]
+ *
+ * Drive this seat through EVERY car the session can offer, in a random order, as fast as
+ * asked - the stress rig for the whole car path. Three seats on one machine at 700 ms each
+ * is a car change somewhere in the session every ~230 ms, far past anything a player does,
+ * and it is where slot reuse, the palette rows, the texture pages and the peer folds either
+ * hold or start to leak, go invisible or refuse.
+ *
+ * The list comes from MpCarListForCity - the SAME answer the pause picker builds its menu
+ * from - so "every car" is every car this session would let a player pick, rather than a
+ * guess at model numbers that the level may not hold. Each seat shuffles with its own seed
+ * (its player id), so the seats walk the same list in different orders: one is importing a
+ * car while another is switching away from it, which is the interesting overlap.
+ *
+ * Every change goes through MpChangeCar, the call the pause menu's Apply row makes, so this
+ * exercises the real path and not a shortcut. Each completed pass is logged, and so is every
+ * change, because the rig counts them.
+ *
+ * passes = 0 (the default) keeps reshuffling until the run ends. */
+static void MpTestShuffle(int (*items)[2], int count, int* seed)
+{
+	int i;
+
+	for (i = count - 1; i > 0; i--)
+	{
+		int j, a, b;
+
+		*seed = *seed * 1103515245 + 12345;
+		j = (int)(((unsigned)(*seed >> 8)) % (unsigned)(i + 1));
+
+		if (j == i)
+			continue;
+
+		a = items[i][0];
+		b = items[i][1];
+		items[i][0] = items[j][0];
+		items[i][1] = items[j][1];
+		items[j][0] = a;
+		items[j][1] = b;
+	}
+}
+
+#define MP_TEST_CYCLE_MAX_CARS (MP_CAR_LIST_MAX * 4)
+
+static void MpTestCarCycleTick(void)
+{
+	static int built;
+	static int intervalMs = -1;
+	static int passes;
+	static unsigned long nextAt;
+	static int idx, total, pass, seed;
+	static int cars[MP_TEST_CYCLE_MAX_CARS][2];
+	MP_PLAYER* me;
+
+	if (gTestCarCycleStr == NULL || !gMp.running)
+		return;
+
+	me = MpLocalPlayer();
+
+	if (me == NULL || me->carId < 0)
+		return;
+
+	if (intervalMs < 0)
+	{
+		const char* comma = strchr(gTestCarCycleStr, ',');
+
+		intervalMs = atoi(gTestCarCycleStr);
+
+		if (intervalMs < 50)
+			intervalMs = 50;		/* below this a car cannot be built before the next ask */
+
+		passes = (comma != NULL) ? atoi(comma + 1) : 0;
+	}
+
+	if (!built)
+	{
+		int city;
+
+		built = 1;
+		seed = (int)(0x2545F491u * (unsigned)(me->id + 1));	/* per seat: different orders */
+
+		for (city = 0; city < 4 && total < MP_TEST_CYCLE_MAX_CARS; city++)
+		{
+			int models[MP_CAR_LIST_MAX];
+			int slots[MP_CAR_LIST_MAX];
+			int count = MpCarListForCity(city, slots, models, MP_CAR_LIST_MAX);
+			int i;
+
+			for (i = 0; i < count && total < MP_TEST_CYCLE_MAX_CARS; i++)
+			{
+				cars[total][0] = city;
+				cars[total][1] = models[i];
+				total++;
+			}
+		}
+
+		if (total == 0)
+		{
+			if (gMpCtx != NULL)
+				gMpCtx->jer_log(gMpCtx, "[mp] test: car cycle: no car is offered - nothing to cycle\n");
+
+			gTestCarCycleStr = NULL;
+			return;
+		}
+
+		MpTestShuffle(cars, total, &seed);
+		nextAt = MpNowMs();
+
+		if (gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx,
+				"[mp] test: car cycle: %d car(s), a change every %d ms, %s\n",
+				total, intervalMs, (passes > 0) ? "a fixed number of passes" : "until the run ends");
+	}
+
+	if (MpNowMs() < nextAt)
+		return;
+
+	nextAt = MpNowMs() + (unsigned long)intervalMs;
+
+	MpChangeCar(cars[idx][0], cars[idx][1]);
+	idx++;
+
+	if (idx < total)
+		return;
+
+	pass++;
+	idx = 0;
+	MpTestShuffle(cars, total, &seed);
+
+	if (gMpCtx != NULL)
+		gMpCtx->jer_log(gMpCtx,
+			"[mp] test: car cycle PASS %d done - every one of the %d car(s) has been driven\n",
+			pass, total);
+
+	if (passes > 0 && pass >= passes)
+		gTestCarCycleStr = NULL;		/* asked for a number of passes and they are done */
+}
+
 
 /* A SATURATING cast to int16, for the wire fields that are still 16-bit.
  *
