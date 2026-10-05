@@ -1054,6 +1054,13 @@ slot"). Advertising after the swap rather than in `MP_CARQ_LOAD` means nobody is
 told about a car that never got driven. A direct car-to-car move (`CARCHANGE`,
 without leaving a car) does not fire it.
 
+That advert is re-sent every few seconds even when the car has not changed
+(`CHK_NET_ADVERT_FRAMES`, carhacks' FRAME watcher). It is the session's only
+one-shot announcement -- everything else is re-broadcast by the host on a timer --
+so a lost advert, or an import it triggered that failed, would otherwise leave the
+host drawing that player's old car for the rest of the match. `CHK_DROP_ADVERT=<n>`
+on a seat throws its first `n` adverts away, which is how the recovery is tested.
+
 Test lever: `MP_TEST_PAUSECAR=<secs>[,<city>[,<model>]][;...]` runs the same
 call the Apply row does, so a mid-match change is reproducible headlessly; a
 `;`-separated list makes several timed changes, each counted from when the
