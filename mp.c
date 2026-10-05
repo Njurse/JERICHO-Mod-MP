@@ -1691,7 +1691,17 @@ static int MpOnNetInput(void* userdata, void* args)
 	{
 		if (p->isLocal)
 		{
-			if (MpBotEnabled())
+			if (pauseflag != 0)
+			{
+				/* The pause menu owns the pad: swallow it so navigating the menu
+				 * (D-pad / buttons) never reaches the car. The engine keeps
+				 * running StepSim while mp pauses (see MpOnPauseMenu, below) and
+				 * re-reads the pad with no pause guard, so zero it and mark it
+				 * handled rather than letting the stock pad leak through. */
+				in->pad = 0;
+				in->handled = 1;
+			}
+			else if (MpBotEnabled())
 			{
 				if ((gMp.frame % 60) == 0 && gMpCtx != NULL)
 				{
@@ -1793,7 +1803,19 @@ static int MpOnPedInput(void* userdata, void* args)
 
 	(void)userdata;
 
-	if (in == NULL || !gMp.running || !MpBotEnabled())
+	if (in == NULL || !gMp.running)
+		return JER_RESULT_CONTINUE;
+
+	/* The pause menu owns the pad while it is up: hold the ped still too, so
+	 * menu navigation never walks the player. (No `handled` field on this hook,
+	 * so zeroing the bits is the swallow.) */
+	if (pauseflag != 0 && (PLAYER*)in->player == &player[0])
+	{
+		in->pad = 0;
+		return JER_RESULT_CONTINUE;
+	}
+
+	if (!MpBotEnabled())
 		return JER_RESULT_CONTINUE;
 
 	/* Only OUR player's pad. player[0] is always us -- every machine runs its one
