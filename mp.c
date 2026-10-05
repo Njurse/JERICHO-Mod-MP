@@ -46,6 +46,7 @@ extern MpTextInputFn g_cfg_gameOnTextInput;
 #define MP_KEY_CHAT_CANCEL	41	/* SDL_SCANCODE_ESCAPE */
 
 #include "driver2.h"
+#include "system.h"		/* CITY_COUNT: the city registry MPCC_MAX_CITIES tracks */
 #include "main.h"
 #include "mission.h"
 #include "pad.h"
@@ -1402,7 +1403,12 @@ static int MpColorAdjustB(void* ud, int dir) { (void)ud; return MpColorAdjust(&g
  * The CITIES come from carhacks when it is installed (a session can legitimately
  * mix cities' car data; that is what carhacks is for) and from the session's own
  * city alone when it is not. */
-#define MPCC_MAX_CITIES	6
+#define MPCC_MAX_CITIES	CITY_COUNT	/* was 6, a guess from when only Driver 2's
+					 * four cities could be offered. carhacks answers
+					 * MP_CARQ_CITIES with CITY_COUNT entries now, and the
+					 * picker TRUNCATES to this - so at 6 the D1 cities past
+					 * the first two (LA, NEWYORK, NEWCASTLE) were silently
+					 * dropped and the menu showed only MIAMI and FRISCO. */
 #define MPCC_MAX_CARS	12
 #define MPCC_SLOTS	10		/* frontend slots per city (carNumLookup[city][0..9]) */
 
