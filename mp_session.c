@@ -4024,10 +4024,26 @@ const char* MpCarCityName(int city)
  * a peer's (city, model) into a slot HERE, where the slot numbers may differ. */
 static int MpResidentSlotForCar(int city, int model)
 {
-	int slot;
+	extern char* LevelNames[];
+	int levelCity = -1;
+	int slot, i;
 
 	if (model < 0)
 		return -1;
+
+	/* WHICH CITY INDEX IS THIS LEVEL'S OWN. Needed because the two ends spell "the
+	 * level's own city" differently: a model the level ships has
+	 * GetCarModelSourceCity(slot) < 0 here, while the wire carries the owner's city by
+	 * INDEX. So the host driving its own level's car arrives as (RIO, 8) and the slot to
+	 * match has src < 0 - and without this the client resolved nothing, kept its own car
+	 * and logged "player 0 drives RIO model 8, but this machine draws ... (theirs is not
+	 * loaded here)" for exactly the cars the level DOES hold. */
+	for (i = 0; i < 4; i++)
+	{
+		if (LevelNames[i] != NULL && GameLevel >= 0 && LevelNames[GameLevel] != NULL &&
+			strcmp(LevelNames[i], LevelNames[GameLevel]) == 0)
+			levelCity = i;
+	}
 
 	for (slot = 0; slot < MAX_CAR_RESIDENT_MODELS; slot++)
 	{
@@ -4038,8 +4054,15 @@ static int MpResidentSlotForCar(int city, int model)
 
 		src = GetCarModelSourceCity(slot);
 
-		if ((city < 0) ? (src < 0) : (src == city))
-			return slot;
+		if (city < 0)
+		{
+			if (src < 0)
+				return slot;
+		}
+		else if (src == city || (src < 0 && city == levelCity))
+		{
+			return slot;		/* the same car, spelled two ways */
+		}
 	}
 
 	return -1;
