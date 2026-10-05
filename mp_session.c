@@ -48,6 +48,11 @@ extern int gWantNight;		/* glaunch.c: 1 = the night take-a-ride level variant */
  * car for one of ours on the next match, which would break the traffic instead. */
 static unsigned char gMpOurCars[MAX_CARS];
 
+/* Slots that hold a PEER's traffic mirror. The band already keeps the two
+ * spawners in disjoint slots, but a mirror must ALSO be remembered as not-ours so
+ * teardown removes exactly what we built and nothing of the engine's. */
+static unsigned char gMpPeerTraffic[MAX_CARS];	/* 1 = we built a peer's car here */
+
 /* Last reported palette value LOGGED per player, so the continuous carstate
  * stream logs a correction once per reported value instead of every packet.
  * File scope (not a function static) so the session can clear it: a leftover
@@ -231,6 +236,10 @@ int MpBeginJoinAsync(const char* host, int port)
 	return 1;
 }
 
+/* forward: session teardown takes the peer's traffic mirrors out of the world
+ * (defined with the mirror code, further down). */
+static void MpTrafficMirrorsClear(void);
+
 void MpLeaveSession(void)
 {
 	if (gMpCtx != NULL)
@@ -262,6 +271,9 @@ void MpLeaveSession(void)
 	 * does: a stale mark would make the next match take a STOCK traffic car for
 	 * one of ours and break the traffic instead of protecting it. */
 	memset(gMpOurCars, 0, sizeof(gMpOurCars));
+
+	/* ...and the peer's traffic mirrors, which are OUR builds of THEIR cars. */
+	MpTrafficMirrorsClear();
 
 	/* ...and the traffic bands stop being ours too: the engine's reservedSlots must
 	 * go back to the engine once we are not replicating traffic (see the band
@@ -2037,6 +2049,8 @@ int MpInputForPlayer(int id)
 /* forward: the owner's own-car replication (defined later) */
 static void MpSendOwnCarState(void);
 static void MpSendOwnPedState(void);
+static void MpSendTrafficState(void);
+static void MpTrafficMirrorsClear(void);
 static void MpDriveRemotePed(MP_PLAYER* p);
 static void MpKeepOurCarsFromTrafficAi(void);
 static void MpSendColors(int whole);
@@ -3036,6 +3050,12 @@ void MpLockstepFrame(void)
 	/* ...and the pedestrian, if we are not in a car: the same owner-authoritative
 	 * rule, for a thing that has a heading and a speed instead of a body. */
 	MpSendOwnPedState();
+
+	/* ...and the civilians and police OUR band owns. A row names the car_data slot
+	 * the car lives in -- our band is disjoint from the peer's, so that slot IS the
+	 * shared identity here (unlike a player car, matched by model), and the peer
+	 * mirrors the row straight into it. */
+	MpSendTrafficState();
 
 	/* Keep any remote player's stand-in pedestrian in step with its owner. On a sim
 	 * frame, because this touches the ped table and the network callbacks must not. */
@@ -4472,6 +4492,87 @@ static void MpSendOwnCarState(void)
 }
 
 /* ------------------------------------------------------------------ */
+/* Traffic state: publish the civilians and police OUR band owns
+ *
+ * The band is a DISJOINT set of car_data slots, so -- unlike a player car, which
+ * is matched by model -- a slot NUMBER is a shared identity here: the receiver
+ * mirrors a row straight into the slot it names. One row per civilian/police car
+ * we currently hold, batched into a single message. The count is capped by the
+ * band (at most a handful), so this needs no distance throttling.
+ *
+ * A police car is carried like any other: it is the level's own police MODEL
+ * (model 0, the car CarHasSiren keys off), so the siren follows from the model at
+ * the receiver and nothing extra is needed here. A REMOVE row (the despawn half)
+ * rides the same message. */
+static void MpSendTrafficState(void)
+{
+	unsigned char buf[sizeof(MP_TRAFFIC) + MAX_CARS * sizeof(MP_TRAFFIC_ENTRY)];
+	MP_TRAFFIC h;
+	MP_TRAFFIC_ENTRY e;
+	int first, last, i, count = 0, len;
+
+	if (!MpTrafficBand(&first, &last))
+		return;
+
+	memset(&h, 0, sizeof(h));
+	h.frame = gMp.frame;
+
+	for (i = first; i <= last; i++)
+	{
+		CAR_DATA* cp = &car_data[i];
+		int slot, src;
+
+		if (cp->controlType != CONTROL_TYPE_CIV_AI &&
+		    cp->controlType != CONTROL_TYPE_PURSUER_AI)
+			continue;
+
+		if (count >= MAX_CARS)
+			break;
+
+		memset(&e, 0, sizeof(e));
+		e.carSlot = (uint8_t)i;
+
+		/* WHAT it is, as a model NUMBER plus the city that number belongs to -- the
+		 * peer resolves the pair to its own resident slot (MpResidentSlotForCar). */
+		slot = cp->ap.model;
+
+		if (slot < 0 || slot >= MAX_CAR_RESIDENT_MODELS || residentCarModels[slot] < 0)
+			continue;	/* no model -> nothing the peer could build */
+
+		src = GetCarModelSourceCity(slot);
+		e.model = (uint8_t)residentCarModels[slot];
+		e.modelCity = (uint8_t)((src >= 0) ? src : MP_CAR_CITY_SESSION);
+		e.palette = (uint8_t)cp->ap.palette;
+
+		e.x = cp->hd.where.t[0];
+		e.y = cp->hd.where.t[1];
+		e.z = cp->hd.where.t[2];
+		e.heading = cp->hd.direction;
+		e.orient[0] = MpSat16(cp->st.n.orientation[0]);
+		e.orient[1] = MpSat16(cp->st.n.orientation[1]);
+		e.orient[2] = MpSat16(cp->st.n.orientation[2]);
+		e.orient[3] = MpSat16(cp->st.n.orientation[3]);
+		e.vel[0] = cp->st.n.linearVelocity[0];
+		e.vel[1] = cp->st.n.linearVelocity[1];
+		e.vel[2] = cp->st.n.linearVelocity[2];
+
+		memcpy(buf + sizeof(h) + count * sizeof(e), &e, sizeof(e));
+		count++;
+	}
+
+	h.count = (uint8_t)count;
+	memcpy(buf, &h, sizeof(h));
+	len = (int)(sizeof(h) + count * sizeof(e));
+
+	/* The host is the hub: it broadcasts its own band, and relays each client's on
+	 * (MpHandleTraffic does the relay). A client sends its band to the host. */
+	if (MpIsHost())
+		MpHostBroadcast(MP_TAG_TRAFFIC, 0, buf, len);
+	else
+		MpSendToHost(MP_TAG_TRAFFIC, 0, buf, len);
+}
+
+/* ------------------------------------------------------------------ */
 /* The REMOTE player's car: keeping it on the vehicle its owner is driving.
  *
  * A player who gets out of one car and into another changes vehicles mid-session
@@ -5394,6 +5495,187 @@ static void MpHandlePing(int connIndex, const unsigned char* p, int len)
 		MpSendToHost(MP_TAG_PONG, 0, &pg, sizeof(pg));
 }
 
+/* ------------------------------------------------------------------ */
+/* Traffic mirrors: the peer's cars, drawn here and driven by THEM
+ *
+ * A row names the car_data slot its owner owns. Our bands are disjoint, so that
+ * slot is free on this machine and the mirror is built straight into it -- the
+ * slot IS the shared identity here, the one respect in which traffic differs from
+ * a player car (which is matched by model).
+ *
+ * The mirror is CONTROL_TYPE_PLAYER: the local civ AI must never drive it (it is
+ * the peer's car), CheckPingOut only ever recycles CIV_AI cars so it cannot take
+ * it, and our own spawner cannot reach it because the slot lies in the peer's
+ * band, which MpTrafficBandRefresh keeps reserved. The pose is written from the
+ * wire every frame, exactly as a remote player car's is.
+ *
+ * CONTROL_TYPE_PLAYER is set AFTER building the car through InitCar's CIV_AI
+ * path, deliberately: InitCar's PLAYER path writes player[cp->id] (civ_ai.c:147),
+ * and a traffic slot (>= MP_TRAFFIC_SLOT_FIRST) can run past MAX_PLAYERS -- so
+ * building it AS a player car would be an out-of-bounds write for the top slots.
+ * The CIV_AI path does not touch player[], and once the control type is flipped
+ * the civ state it set up is inert. */
+
+static int MpCreateTrafficMirror(int slot, int city, int model, int palette)
+{
+	CAR_DATA* cp;
+	EXTRA_CIV_DATA civDat;
+	LONGVECTOR4 pos;
+	int resident;
+
+	if (slot < 0 || slot >= MAX_CARS)
+		return 0;
+
+	resident = MpResidentSlotForCar(city, model);
+
+	/* Never point ap.model at a mesh this machine does not have (DrawCar would read
+	 * it) -- a car we cannot build is simply left out. */
+	if (resident < 0 || gCarCleanModelPtr[resident] == NULL)
+		return 0;
+
+	cp = &car_data[slot];
+
+	memset(&civDat, 0, sizeof(civDat));
+	civDat.distAlongSegment = -5;
+
+	memset(&pos, 0, sizeof(pos));
+
+	InitCar(cp, 0, &pos, CONTROL_TYPE_CIV_AI, resident, palette, (char*)&civDat);
+
+	/* NOW it is the peer's car, driven by the peer: our AI must not touch it and
+	 * nothing of ours may read a pad through it. */
+	cp->controlType = CONTROL_TYPE_PLAYER;
+	cp->ai.padid = &gMpQuietPad;
+	cp->hndType = 0;
+	cp->ap.palette = palette;
+	cp->lowDetail = -1;
+
+	gMpPeerTraffic[slot] = 1;
+
+	return 1;
+}
+
+/* Drop a mirror. Deliberately NOT PingOutCar: that decrements the civil counters
+ * only for a CIV_AI car and REFUSES to remove a non-CIV_AI one while PingOutCivsOnly
+ * is set (civ_ai.c), which the engine sets every frame. A mirror is a plain
+ * CONTROL_TYPE_PLAYER car of ours, so it is taken out of the world directly: the
+ * slot is left reserved against our own spawner, so nothing reuses it. */
+static void MpRemoveTrafficMirror(int slot)
+{
+	if (slot < 0 || slot >= MAX_CARS || !gMpPeerTraffic[slot])
+		return;
+
+	car_data[slot].controlType = CONTROL_TYPE_NONE;
+	gMpPeerTraffic[slot] = 0;
+}
+
+/* Is `slot` already the mirror of (city,model)? */
+static int MpTrafficMirrorMatches(int slot, int city, int model)
+{
+	int resident;
+
+	if (slot < 0 || slot >= MAX_CARS)
+		return 0;
+
+	if (!gMpPeerTraffic[slot] || car_data[slot].controlType == CONTROL_TYPE_NONE)
+		return 0;
+
+	resident = MpResidentSlotForCar(city, model);
+
+	return resident >= 0 && car_data[slot].ap.model == resident;
+}
+
+/* Write a row's whole body onto the mirror, the same way a player car's snapshot
+ * is written (hd.direction is an OUTPUT the engine re-derives, so the attitude
+ * comes from the quaternion). */
+static void MpApplyTrafficPose(CAR_DATA* cp, const MP_TRAFFIC_ENTRY* e)
+{
+	LONGQUATERNION q;
+	MATRIX m;
+	int i;
+
+	for (i = 0; i < 4; i++)
+		q[i] = e->orient[i];
+
+	for (i = 0; i < 4; i++)
+		cp->st.n.orientation[i] = q[i];
+	for (i = 0; i < 3; i++)
+		cp->st.n.linearVelocity[i] = e->vel[i];
+
+	LongQuaternion2Matrix(&q, &m);
+	m.t[0] = e->x;
+	m.t[1] = e->y;
+	m.t[2] = e->z;
+	memcpy(&cp->hd.where, &m, sizeof(m));
+
+	cp->hd.where.t[0] = e->x;
+	cp->hd.where.t[1] = e->y;
+	cp->hd.where.t[2] = e->z;
+	cp->hd.direction = e->heading;
+}
+
+/* Take every mirror out of the world (session teardown). */
+static void MpTrafficMirrorsClear(void)
+{
+	int i;
+
+	for (i = 0; i < MAX_CARS; i++)
+		MpRemoveTrafficMirror(i);
+}
+
+static void MpHandleTraffic(int connIndex, const unsigned char* p, int len)
+{
+	const MP_TRAFFIC* h;
+	const MP_TRAFFIC_ENTRY* e;
+	int i, n;
+
+	if (len < (int)sizeof(MP_TRAFFIC))
+		return;
+
+	h = (const MP_TRAFFIC*)p;
+	n = h->count;
+
+	if (n > MAX_CARS)
+		n = MAX_CARS;
+
+	if (len < (int)(sizeof(MP_TRAFFIC) + n * sizeof(MP_TRAFFIC_ENTRY)))
+		n = (len - (int)sizeof(MP_TRAFFIC)) / (int)sizeof(MP_TRAFFIC_ENTRY);
+
+	e = (const MP_TRAFFIC_ENTRY*)(p + sizeof(MP_TRAFFIC));
+
+	for (i = 0; i < n; i++)
+	{
+		int slot = e[i].carSlot;
+		/* The wire spells "the level's own city" as MP_CAR_CITY_SESSION; the resolver
+		 * wants -1 for it (see MpHandleCarState). */
+		int wantCity = (e[i].modelCity == MP_CAR_CITY_SESSION) ? -1 : (int)e[i].modelCity;
+
+		if (slot < 0 || slot >= MAX_CARS)
+			continue;
+
+		if (e[i].flags & MP_TRAFFIC_REMOVE)
+		{
+			MpRemoveTrafficMirror(slot);
+			continue;
+		}
+
+		if (!MpTrafficMirrorMatches(slot, wantCity, e[i].model))
+		{
+			MpRemoveTrafficMirror(slot);
+
+			if (!MpCreateTrafficMirror(slot, wantCity, e[i].model, e[i].palette))
+				continue;	/* cannot build their car here: leave the slot empty */
+		}
+
+		MpApplyTrafficPose(&car_data[slot], &e[i]);
+	}
+
+	/* The host is the hub: relay a client's traffic to the other clients, exactly
+	 * as it relays their carstate. */
+	if (MpIsHost() && connIndex >= 0)
+		MpHostRelay(connIndex, MP_TAG_TRAFFIC, 0, p, len);
+}
+
 void MpHandleMessage(int connIndex, const char* tag, const unsigned char* payload, int len)
 {
 	if (MpDebugOn() && gMpCtx != NULL)
@@ -5455,6 +5737,12 @@ void MpHandleMessage(int connIndex, const char* tag, const unsigned char* payloa
 	if (memcmp(tag, MP_TAG_CARSTATE, 4) == 0)
 	{
 		MpHandleCarState(connIndex, payload, len);
+		return;
+	}
+
+	if (memcmp(tag, MP_TAG_TRAFFIC, 4) == 0)
+	{
+		MpHandleTraffic(connIndex, payload, len);
 		return;
 	}
 

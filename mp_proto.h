@@ -38,7 +38,7 @@
 extern "C" {
 #endif
 
-#define MP_PROTO_VERSION	8	/* 8: MP_TAG_CAR -- a client tells the host the car it picked in the car select */
+#define MP_PROTO_VERSION	9	/* 9: MP_TAG_TRAFFIC -- replicated civilian/police cars */
 
 /* Default UDP+TCP port. 1318 is IANA-unassigned (the neighbour 1319 is
  * amx-icsp), so it is a safe, non-reserved choice for a game. Configurable
@@ -97,6 +97,7 @@ extern "C" {
 #define MP_TAG_PED	"JPPD"	/* owner -> peers: an ON-FOOT player's pose */
 #define MP_TAG_COLOR	"JPCL"	/* either side: a player's chosen colour */
 #define MP_TAG_CAR	"JPCC"	/* client -> host: the car this player picked */
+#define MP_TAG_TRAFFIC	"JPTF"	/* either side: replicated traffic/police car state (owner -> peers) */
 
 /* The 'JPSW' meeting-point message (MP_SPAWN) has been RETIRED: the two
  * machines already agree on the engine's own deterministic spawn, and a client
@@ -439,6 +440,49 @@ typedef struct MP_CARSTATE_ENTRY
 } MP_CARSTATE_ENTRY;
 
 /* ------------------------------------------------------------------ */
+/* Replicated TRAFFIC (civilians and police).
+ *
+ * Unlike a player car, this row MUST carry the car_data SLOT it lives in: the
+ * two machines hold disjoint traffic bands (see the band section in
+ * mp_session.c), so a slot number is the shared identity -- slot 9 is "the same"
+ * car on both machines by construction, and the receiver mirrors the state into
+ * exactly that slot. That is the one respect in which traffic differs from a
+ * player car, which is matched by MODEL precisely because a slot means nothing
+ * there.
+ *
+ * A police car needs no separate message: it is the level's own police MODEL
+ * (model 0, the car CarHasSiren keys off), carried here like any other, and the
+ * siren follows from the model at the receiver. Its TARGET, though, is a player
+ * id and does NOT ride this generic row. */
+#define MP_TRAFFIC_REMOVE	0x01	/* this row says "the car in carSlot is gone" */
+
+#pragma pack(push, 1)
+typedef struct MP_TRAFFIC_ENTRY
+{
+	uint8_t  carSlot;	/* the car_data slot on BOTH machines -- the shared identity */
+	uint8_t  flags;		/* MP_TRAFFIC_* */
+	uint8_t  model;		/* the vehicle (residentCarModels[ap.model]) */
+	uint8_t  modelCity;	/* city `model` belongs to; MP_CAR_CITY_SESSION = the session's */
+	uint8_t  palette;	/* cp->ap.palette -- the owner is the colour authority */
+	uint8_t  reserved[3];
+	int16_t  orient[4];	/* st.n.orientation */
+	int32_t  x, y, z;	/* world units */
+	int32_t  heading;	/* hd.direction */
+	int32_t  vel[3];	/* st.n.linearVelocity; angular velocity is not worth the bytes
+				 * for a civilian -- they do not spin like a car in a firefight */
+} MP_TRAFFIC_ENTRY;
+
+/* 'JPTF' -- header followed by count rows. Sent by the OWNER of each car (the
+ * machine whose band holds it); the host relays a client's rows on. */
+typedef struct MP_TRAFFIC
+{
+	uint32_t frame;
+	uint8_t  count;
+	uint8_t  reserved[3];
+} MP_TRAFFIC;
+#pragma pack(pop)
+
+/* ------------------------------------------------------------------ */
 /* Addon network bridge ('JPCH')                                       */
 /* ------------------------------------------------------------------ */
 
@@ -505,6 +549,8 @@ static_assert(sizeof(MP_ROSTER_ENTRY) == 29, "MP_ROSTER_ENTRY layout");
 static_assert(sizeof(MP_CARSTATE_ENTRY) == 53, "MP_CARSTATE_ENTRY layout");
 static_assert(sizeof(MP_HIT) == 16, "MP_HIT layout");
 static_assert(sizeof(MP_CARSTATE) == 8, "MP_CARSTATE layout");
+static_assert(sizeof(MP_TRAFFIC_ENTRY) == 44, "MP_TRAFFIC_ENTRY layout");
+static_assert(sizeof(MP_TRAFFIC) == 8, "MP_TRAFFIC layout");
 static_assert(sizeof(MP_CHANNEL) == 26, "MP_CHANNEL layout");
 
 #endif
