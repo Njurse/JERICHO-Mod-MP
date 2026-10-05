@@ -464,7 +464,11 @@ typedef struct MP_TRAFFIC_ENTRY
 	uint8_t  model;		/* the vehicle (residentCarModels[ap.model]) */
 	uint8_t  modelCity;	/* city `model` belongs to; MP_CAR_CITY_SESSION = the session's */
 	uint8_t  palette;	/* cp->ap.palette -- the owner is the colour authority */
-	uint8_t  reserved[3];
+	uint8_t  reserved1;
+	int16_t  damage[6];	/* cp->ap.damage[]: the zone damage the DENTED mesh is built
+				 * from -- DentCarDirectional deforms from these alone, so the
+				 * mirror can be re-dented without moving any vertices */
+	uint16_t totalDamage;	/* cp->totalDamage: the health a wreck/smoke FX keys off */
 	int16_t  orient[4];	/* st.n.orientation */
 	int32_t  x, y, z;	/* world units */
 	int32_t  heading;	/* hd.direction */
@@ -524,11 +528,20 @@ typedef struct MP_CHAT
 
 /* A contact report. Cars are owner-authoritative, so a machine can only move
  * the ONE car it owns: when MY car touches YOURS I push MINE, and I send you
- * this so you push YOURS. Both cars move, and each stays the owner's truth. */
+ * this so you push YOURS. Both cars move, and each stays the owner's truth.
+ *
+ * A TRAFFIC contact rides the same message. `targetId` names a player for a car,
+ * but a car_data SLOT when MP_HIT_F_TRAFFIC is set -- the band is disjoint, so the
+ * slot is already the shared traffic identity (see MP_TRAFFIC_ENTRY). Only the
+ * owner of that slot applies the impulse: on the observer the mirror is rewritten
+ * verbatim every frame, so a push there would be discarded. */
+#define MP_HIT_F_TRAFFIC	0x01	/* targetId is a car_data slot, not a player id */
+
 typedef struct MP_HIT
 {
 	uint8_t  targetId;	/* the player whose car should receive the impulse */
-	uint8_t  reserved[3];
+	uint8_t  flags;		/* MP_HIT_F_* */
+	uint8_t  reserved[2];
 	int32_t  impulse[3];	/* velocity delta to ADD to the target's car */
 } MP_HIT;
 
@@ -549,7 +562,7 @@ static_assert(sizeof(MP_ROSTER_ENTRY) == 29, "MP_ROSTER_ENTRY layout");
 static_assert(sizeof(MP_CARSTATE_ENTRY) == 53, "MP_CARSTATE_ENTRY layout");
 static_assert(sizeof(MP_HIT) == 16, "MP_HIT layout");
 static_assert(sizeof(MP_CARSTATE) == 8, "MP_CARSTATE layout");
-static_assert(sizeof(MP_TRAFFIC_ENTRY) == 44, "MP_TRAFFIC_ENTRY layout");
+static_assert(sizeof(MP_TRAFFIC_ENTRY) == 56, "MP_TRAFFIC_ENTRY layout");
 static_assert(sizeof(MP_TRAFFIC) == 8, "MP_TRAFFIC layout");
 static_assert(sizeof(MP_CHANNEL) == 26, "MP_CHANNEL layout");
 

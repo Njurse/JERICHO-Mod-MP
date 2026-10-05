@@ -54,6 +54,8 @@ static unsigned char gMpOurCars[MAX_CARS];
 static unsigned char gMpPeerTraffic[MAX_CARS];	/* 1 = we built a peer's car here */
 static unsigned gMpPeerTrafficSeen[MAX_CARS];	/* frame we last heard about a mirror */
 static unsigned char gMpTrafficSent[MAX_CARS];	/* slots WE published last frame */
+static unsigned gMpTrafficSelfContact[MAX_CARS];/* frame OUR engine resolved a contact with our traffic car */
+static unsigned gMpTrafficHitFrame[MAX_CARS];	/* rate limit for reporting a contact with a peer's traffic */
 
 /* Last reported palette value LOGGED per player, so the continuous carstate
  * stream logs a correction once per reported value instead of every packet.
@@ -2054,6 +2056,11 @@ static void MpSendOwnPedState(void);
 static void MpSendTrafficState(void);
 static void MpTrafficMirrorsClear(void);
 static void MpTrafficMirrorAgeTick(void);
+static int  MpSlotInOurBand(int slot);
+static int  MpTrafficSlotOwnerRank(int slot);
+static void MpTrafficContactPush(MP_PLAYER* me, int slot);
+static long long MpDistSq64(int dx, int dz);
+static void MpTestTrafficHitTick(void);
 static void MpDriveRemotePed(MP_PLAYER* p);
 static void MpKeepOurCarsFromTrafficAi(void);
 static void MpSendColors(int whole);
@@ -2380,6 +2387,35 @@ int MpOnCarContact(void* ud, void* args)
 	mineId = CAR_INDEX((CAR_DATA*)a->car0);
 	otherId = CAR_INDEX((CAR_DATA*)a->car1);
 
+	/* TRAFFIC contacts. Two things, both about cars that are not a player's own:
+	 *  - remember a contact involving OUR traffic car, so the owner's engine
+	 *    response and a peer's push do not both move it (see MpHandleHit);
+	 *  - a contact between OUR car and a PEER's traffic car (a mirror on this
+	 *    machine) must reach the slot's OWNER, where the car really is. */
+	{
+		int ourTraffic = -1;
+		int localHit = -1;
+
+		if (MpSlotInOurBand(mineId))
+			ourTraffic = mineId;
+		if (MpSlotInOurBand(otherId))
+			ourTraffic = otherId;
+
+		if (ourTraffic >= 0)
+			gMpTrafficSelfContact[ourTraffic] = gMp.frame;
+
+		if (mineId == me->carId && otherId >= 0 && otherId < MAX_CARS && gMpPeerTraffic[otherId])
+			localHit = otherId;
+		else if (otherId == me->carId && mineId >= 0 && mineId < MAX_CARS && gMpPeerTraffic[mineId])
+			localHit = mineId;
+
+		if (localHit >= 0)
+		{
+			MpTrafficContactPush(me, localHit);
+			return JER_RESULT_CONTINUE;
+		}
+	}
+
 	if (mineId == me->carId)
 		them = MpGetPlayerByCar(otherId);
 	else if (otherId == me->carId)
@@ -2471,6 +2507,57 @@ static void MpHandleHit(int connIndex, const unsigned char* p, int len)
 	memcpy(&h, p, sizeof(h));
 
 	from = MpConnPlayerId(connIndex);
+
+	/* A TRAFFIC contact: targetId is a car_data slot, not a player id. Only the
+	 * OWNER of the slot applies it (its own CIV_AI/PURSUER_AI car) -- on anyone else
+	 * it is a mirror rewritten from the wire, so a push there would be lost. Our own
+	 * engine may already have resolved the same contact against the peer's mirror
+	 * (marked in MpOnCarContact); within MP_HIT_SELF_FRAMES the push is that
+	 * duplicate and is dropped. */
+	if (h.flags & MP_HIT_F_TRAFFIC)
+	{
+		int slot = (int)h.targetId;
+
+		if (slot >= 0 && slot < MAX_CARS)
+		{
+			CAR_DATA* cp = &car_data[slot];
+
+			if (cp->controlType == CONTROL_TYPE_CIV_AI || cp->controlType == CONTROL_TYPE_PURSUER_AI)
+			{
+				if (gMpTrafficSelfContact[slot] != 0 &&
+				    (gMp.frame - gMpTrafficSelfContact[slot]) <= MP_HIT_SELF_FRAMES)
+				{
+					if (gMpCtx != NULL)
+						gMpCtx->jer_log(gMpCtx,
+							"[mp] hit: player %d bumped our traffic slot %d (our engine has it, kept)\n",
+							from, slot);
+				}
+				else
+				{
+					cp->st.n.linearVelocity[0] += h.impulse[0];
+					cp->st.n.linearVelocity[1] += h.impulse[1];
+					cp->st.n.linearVelocity[2] += h.impulse[2];
+
+					if (gMpCtx != NULL)
+						gMpCtx->jer_log(gMpCtx,
+							"[mp] hit: player %d bumped our traffic slot %d (push %ld,%ld,%ld)\n",
+							from, slot, (long)h.impulse[0], (long)h.impulse[1], (long)h.impulse[2]);
+				}
+			}
+		}
+
+		/* The host relays a traffic hit aimed at another client's band. */
+		if (MpIsHost())
+		{
+			int owner = MpTrafficSlotOwnerRank((int)h.targetId);
+			int ci = (owner >= 0) ? MpConnFindByPlayer(owner) : -1;
+
+			if (ci >= 0 && ci != connIndex)
+				MpSendConn(ci, MP_TAG_HIT, 0, p, len);
+		}
+
+		return;
+	}
 
 	if (me != NULL && h.targetId == me->id && me->carId >= 0 && me->carId < MAX_CARS)
 	{
@@ -2737,6 +2824,166 @@ int MpTrafficBand(int* first, int* last)
 		*last = gMpBandLast;
 
 	return 1;
+}
+
+/* Is `slot` a civilian a player could actually collide with -- ours or a mirror? */
+static int MpSlotInOurBand(int slot)
+{
+	int f, l;
+
+	return slot >= 0 && slot < MAX_CARS && MpTrafficBand(&f, &l) && slot >= f && slot <= l;
+}
+
+/* The machine whose band owns `slot`. Bands are cut by rank and our rank IS the
+ * player id, so this is the id of the peer to send a traffic contact to. */
+static int MpTrafficSlotOwnerRank(int slot)
+{
+	int n = MpTrafficMachineCount();
+	int r;
+
+	for (r = 0; r < n; r++)
+	{
+		int f, l;
+
+		MpTrafficBandFor(r, n, &f, &l);
+
+		if (slot >= f && slot <= l)
+			return r;
+	}
+
+	return -1;
+}
+
+/* Report a contact between OUR car and a PEER's traffic car (a mirror here). The
+ * impulse goes to the slot's OWNER: on this machine the car is a mirror rewritten
+ * from the peer's stream every frame, so a push applied here is simply discarded.
+ * One rate limit per slot, shared with the engine-contact trigger, like the players. */
+static void MpTrafficContactPush(MP_PLAYER* me, int slot)
+{
+	CAR_DATA* mine = &car_data[me->carId];
+	CAR_DATA* other = &car_data[slot];
+	long px, py, pz, closing, push;
+	MP_HIT h;
+	int owner;
+
+	if (gMp.frame - gMpTrafficHitFrame[slot] < MP_HIT_COOLDOWN_FRAMES)
+		return;
+
+	closing = MpContactNormal(mine, other, &px, &py, &pz);
+
+	if (closing < MP_HIT_MIN_CLOSING)
+		return;
+
+	push = closing * MP_HIT_PUSH / 100;
+
+	if (push > MP_HIT_MAX_PUSH)
+		push = MP_HIT_MAX_PUSH;
+
+	owner = MpTrafficSlotOwnerRank(slot);
+
+	if (owner < 0)
+		return;
+
+	gMpTrafficHitFrame[slot] = gMp.frame;
+
+	memset(&h, 0, sizeof(h));
+	h.flags = MP_HIT_F_TRAFFIC;
+	h.targetId = (uint8_t)slot;
+	h.impulse[0] = (int)(px * push);
+	h.impulse[1] = (int)(py * push);
+	h.impulse[2] = (int)(pz * push);
+
+	if (MpIsHost())
+	{
+		int ci = MpConnFindByPlayer(owner);
+
+		if (ci >= 0)
+			MpSendConn(ci, MP_TAG_HIT, 0, &h, sizeof(h));
+	}
+	else
+		MpSendToHost(MP_TAG_HIT, 0, &h, sizeof(h));
+
+	if (gMpCtx != NULL)
+		gMpCtx->jer_log(gMpCtx,
+			"[mp] hit: we bumped a player's traffic car in slot %d (push %ld,%ld,%ld) -> owner %d\n",
+			slot, (long)h.impulse[0], (long)h.impulse[1], (long)h.impulse[2], owner);
+}
+
+/* MP_TEST_TRAFFIC_HIT=<secs> -- every N seconds, send ONE synthetic traffic-contact
+ * push for the nearest PEER mirror, so the traffic-hit wire path can be exercised
+ * without a physical collision (the bots avoid traffic, so a pair run never makes
+ * one). The impulse is fixed and deliberately large so the owner's move is
+ * unambiguous. A test lever; inert unless set. */
+static void MpTestTrafficHitTick(void)
+{
+	static int secs = -2;
+	static unsigned nextFrame = 0;
+	MP_PLAYER* me = MpLocalPlayer();
+	int i, best = -1, owner;
+	long long bestD = -1;
+	MP_HIT h;
+
+	if (secs == -2)
+	{
+		const char* e = getenv("MP_TEST_TRAFFIC_HIT");
+		secs = (e != NULL) ? atoi(e) : -1;
+	}
+
+	if (secs <= 0 || !gMp.running || me == NULL || me->carId < 0 || me->carId >= MAX_CARS)
+		return;
+
+	if (nextFrame == 0)
+		nextFrame = gMp.frame + 30;	/* let the match settle first */
+
+	if (gMp.frame < nextFrame)
+		return;
+
+	nextFrame = gMp.frame + (unsigned)secs * 30;
+
+	for (i = 0; i < MAX_CARS; i++)
+	{
+		long long d;
+
+		if (!gMpPeerTraffic[i])
+			continue;
+
+		d = MpDistSq64(car_data[i].hd.where.t[0] - car_data[me->carId].hd.where.t[0],
+			       car_data[i].hd.where.t[2] - car_data[me->carId].hd.where.t[2]);
+
+		if (bestD < 0 || d < bestD)
+		{
+			bestD = d;
+			best = i;
+		}
+	}
+
+	if (best < 0)
+		return;
+
+	owner = MpTrafficSlotOwnerRank(best);
+
+	if (owner < 0)
+		return;
+
+	memset(&h, 0, sizeof(h));
+	h.flags = MP_HIT_F_TRAFFIC;
+	h.targetId = (uint8_t)best;
+	h.impulse[2] = 3000;	/* a shove along +z, big enough to see */
+
+	if (MpIsHost())
+	{
+		int ci = MpConnFindByPlayer(owner);
+
+		if (ci >= 0)
+			MpSendConn(ci, MP_TAG_HIT, 0, &h, sizeof(h));
+	}
+	else
+		MpSendToHost(MP_TAG_HIT, 0, &h, sizeof(h));
+
+	if (gMpCtx != NULL)
+		gMpCtx->jer_log(gMpCtx,
+			"[mp] TEST traffic hit: slot %d -> owner %d (impulse %ld,%ld,%ld)\n",
+			best, owner, (long)h.impulse[0], (long)h.impulse[1], (long)h.impulse[2]);
 }
 
 /* Once per sim frame, before anything spawns. Sets the ONE bit of state the two
@@ -3006,6 +3253,10 @@ void MpLockstepFrame(void)
 	MpTestCarChangeTick();
 	MpTestCityChangeTick();
 	MpTestCarCycleTick();
+
+	/* test lever: a synthetic traffic contact, to exercise the traffic-hit wire path
+	 * without a physical collision (inert unless MP_TEST_TRAFFIC_HIT). */
+	MpTestTrafficHitTick();
 
 	/* test lever: a clean leave part-way through (inert unless MP_TEST_LEAVE), so
 	 * that "a deliberate quit" and "a connection died" can be told apart in a
@@ -4582,6 +4833,16 @@ static void MpSendTrafficState(void)
 		e.modelCity = (uint8_t)((src >= 0) ? src : MP_CAR_CITY_SESSION);
 		e.palette = (uint8_t)cp->ap.palette;
 
+		/* ...and its DAMAGE, so a bent car reads the same on both screens. */
+		{
+			int z;
+
+			for (z = 0; z < 6; z++)
+				e.damage[z] = cp->ap.damage[z];
+
+			e.totalDamage = (uint16_t)cp->totalDamage;
+		}
+
 		e.x = cp->hd.where.t[0];
 		e.y = cp->hd.where.t[1];
 		e.z = cp->hd.where.t[2];
@@ -5670,6 +5931,45 @@ static void MpApplyTrafficPose(CAR_DATA* cp, const MP_TRAFFIC_ENTRY* e)
 	cp->hd.direction = e->heading;
 }
 
+/* Damage parity. The owner is the authority, so the mirror copies its zone damage
+ * and health. ap.damage[] is exactly what the deformation pass reads --
+ * DentCarDirectional deforms from those values alone (its collision point argument
+ * is unused) -- so a change is re-dented here and the mesh follows without any
+ * vertices crossing the wire. */
+static void MpApplyTrafficDamage(CAR_DATA* cp, const MP_TRAFFIC_ENTRY* e)
+{
+	VECTOR p;
+	int z, changed = 0;
+
+	for (z = 0; z < 6; z++)
+	{
+		if (cp->ap.damage[z] != e->damage[z])
+		{
+			cp->ap.damage[z] = e->damage[z];
+			changed = 1;
+		}
+	}
+
+	if (cp->totalDamage != e->totalDamage)
+	{
+		cp->totalDamage = e->totalDamage;
+		changed = 1;
+	}
+
+	if (changed)
+	{
+		p.vx = e->x;
+		p.vy = e->y;
+		p.vz = e->z;
+		DentCarDirectional(cp, p);
+
+		if (MpDebugOn() && gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx,
+				"[mp] traffic mirror slot %d re-dented (totalDamage %u)\n",
+				cp->id, (unsigned)cp->totalDamage);
+	}
+}
+
 /* Take every mirror out of the world (session teardown). */
 static void MpTrafficMirrorsClear(void)
 {
@@ -5746,6 +6046,7 @@ static void MpHandleTraffic(int connIndex, const unsigned char* p, int len)
 		}
 
 		MpApplyTrafficPose(&car_data[slot], &e[i]);
+		MpApplyTrafficDamage(&car_data[slot], &e[i]);
 		gMpPeerTrafficSeen[slot] = gMp.frame;	/* seen now: do not age it out */
 	}
 
