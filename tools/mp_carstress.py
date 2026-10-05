@@ -41,10 +41,19 @@ SEATS = ["host", "client", "client1", "client2", "client3", "client4", "client5"
 
 TROUBLE = (
     ("MISSING", re.compile(r"MISSING")),
-    ("no spare", re.compile(r"no spare resident slot")),
     ("not loaded", re.compile(r"is not loaded here")),
     ("keeping slot", re.compile(r"keeping slot \d+")),
-    ("refused", re.compile(r"could not be built|refus|cannot load the car", re.I)),
+    ("refused", re.compile(r"could not be built|cannot load the car", re.I)),
+)
+
+# Not trouble: work the session did on purpose. A pick that could not fit is remembered and
+# retried (MP_DEFER_*), and at a stress cadence most of them are superseded before a slot
+# frees - that is the mechanism working, and the numbers say whether it keeps up.
+HANDLED = (
+    ("no room", re.compile(r"no spare resident slot")),
+    ("waited", re.compile(r"is waiting for a free slot")),
+    ("landed", re.compile(r"a slot freed up after")),
+    ("gave up", re.compile(r"gave up on a resident slot")),
 )
 
 CHANGE = re.compile(r"\[mp\] change car: we asked for (\w+) model (\d+)")
@@ -77,6 +86,7 @@ def summarise(text):
     passes = [int(x) for x in PASS.findall(text)]
     started = STARTED.search(text)
     trouble = []
+    handled = []
 
     for label, rx in TROUBLE:
         hits = len(rx.findall(text))
@@ -84,12 +94,19 @@ def summarise(text):
         if hits:
             trouble.append((label, hits))
 
+    for label, rx in HANDLED:
+        hits = len(rx.findall(text))
+
+        if hits:
+            handled.append((label, hits))
+
     return {
         "changes": len(CHANGE.findall(text)),
         "distinct": len(cars),
         "passes": len(passes),
         "offered": int(started.group(1)) if started else None,
         "trouble": trouble,
+        "handled": handled,
         "missing": missing,
     }
 
@@ -136,8 +153,8 @@ def main():
     run_root = os.path.join(a.game_dir, ".mp-pair")
     names = ["a", "b", "c", "d", "e", "f", "g", "h"]
 
-    print("%-8s %8s %9s %7s %9s  %s" % ("seat", "changes", "distinct", "passes", "offered", "trouble"))
-    print("-" * 74)
+    print("%-8s %8s %9s %7s %9s  %s" % ("seat", "changes", "distinct", "passes", "offered", "handled / trouble"))
+    print("-" * 92)
 
     totals = collections.Counter()
     bad = 0
@@ -145,11 +162,13 @@ def main():
 
     for s, d in zip(seats, names):
         info = summarise(read(os.path.join(run_root, d, "JERICHO.log")))
+        handed = ", ".join("%s x%d" % t for t in info["handled"]) or "-"
         trouble = ", ".join("%s x%d" % t for t in info["trouble"]) or "-"
 
-        print("%-8s %8d %9d %7d %9s  %s" % (
+        print("%-8s %8d %9d %7d %9s  %s%s" % (
             s, info["changes"], info["distinct"], info["passes"],
-            info["offered"] if info["offered"] is not None else "?", trouble))
+            info["offered"] if info["offered"] is not None else "?",
+            handed, (" | " + trouble) if trouble else ""))
 
         totals["changes"] += info["changes"]
         totals["distinct"] = max(totals["distinct"], info["distinct"])
