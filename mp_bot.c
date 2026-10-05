@@ -227,12 +227,21 @@ and it does not alternate, so it cannot become the old reversing shuffle. */
 inside IN and only take the chase up again once the gap has reached OUT. Two thresholds,
 not a derivative, so the car cannot flicker between chasing and waiting.
  *
- * KEPT SMALL ON PURPOSE. The band used to sit at 900/2200, which had the chaser give up
- * the chase and idle a couple of car-lengths out - a distance rule interrupting a chase
- * that was otherwise working. The chaser now presses until it is nearly touching (450)
- * and resumes almost at once (1100), so distance only breaks a real nose-to-tail jam. */
-#define MPBOT_FOLLOW_IN		450L
-#define MPBOT_FOLLOW_OUT	1100L
+ * WIDE ON PURPOSE, and it was narrowed once and put back. 450/1100 was tried so the chaser
+ * would not "give up the chase" a couple of car-lengths out - but this band IS the
+ * anti-wobble hysteresis (see above), and halving it made the chaser flicker between
+ * holding and chasing near the target. The 900/2200 band stands: it is the HOLD that stops
+ * the close-range thrash. */
+#define MPBOT_FOLLOW_IN		900L
+#define MPBOT_FOLLOW_OUT	2200L
+
+/* A handbrake U-turn is a CLOSE-RANGE move: it exists for the nose-to-tail case where the
+ * other car swaps sides and the nose has to come round NOW. Past this range the same
+ * 180-degree error just means "I am pointing the wrong way", and the answer is to STEER,
+ * which the branches below do. Measured: with the fleeing host running at full throttle the
+ * gap reaches 11k-16k, and at that range the chaser was doing a handbrake turn every ~2.5 s
+ * (4 U-turns + 6 back-outs in 25 s) - the "the client wobbles about" report. */
+#define MPBOT_UTURN_RANGE	3000L
 
 /* One frame of a turn-around. `dir` uses the callers' steering convention
  * (non-zero = left). `*frames` is the manoeuvre and `*pulse` the handbrake part
@@ -717,7 +726,7 @@ static int MpBotChase(int fight)
 
 		if (holding)
 			pad = (adiff > 96) ? ((diff > 0) ? CAR_PAD_LEFT : CAR_PAD_RIGHT) : 0;
-		else if (adiff > 1500)
+		else if (adiff > 1500 && dist < MPBOT_UTURN_RANGE * MPBOT_UTURN_RANGE)
 		{
 			int ahead = MpBotSpotClear(mine, mine->hd.direction, 1100);
 			int contact = MpBotContacted(mine);
@@ -1048,7 +1057,7 @@ static int MpBotPursuit(void)
 		 * nose-first, for as long as the turn takes. So a large error BRAKES into the
 		 * turn (the move that replaces scraping along the wall), a medium one coasts
 		 * through it, and only a roughly aligned car gets full throttle. */
-		if (adiff > 1200)
+		if (adiff > 1200 && dist < MPBOT_UTURN_RANGE * MPBOT_UTURN_RANGE)
 		{
 			int ahead = MpBotSpotClear(mine, mine->hd.direction, 1100);
 			int contact = MpBotContacted(mine);
