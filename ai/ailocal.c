@@ -49,6 +49,12 @@ static int AiLocalFlood(const AIMAP* map, int sx, int sz)
 
 	memset(sSeen, 0, sizeof(sSeen));
 
+	/* the start must be a real sample: every caller feeds this AiMapSampleIndex output that
+	 * AiMapNearestOpen accepted, but the flood does not trust that - an out-of-range start
+	 * would index sSeen out of bounds on the very first write. */
+	if (sx < 0 || sz < 0 || sx >= AIMAP_SIZE || sz >= AIMAP_SIZE)
+		return 0;
+
 	sSeen[start] = 1;
 	sDist[start] = 0;
 	sQueue[tail++] = start;

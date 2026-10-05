@@ -342,7 +342,7 @@ static int MpBotFleeWant(CAR_DATA* mine, int away)
 	static int lastLogged = -1;
 	static int held = -1, heldDepth = 0;
 	int best = away, bestScore = -9999, bestDepth = 0, bestRoad = 0, i;
-	int heldScore = -9999, heldSeen = 0;
+	int heldScore = -9999, heldSeen = 0, heldRoad = 0;
 
 	for (i = -MPBOT_FLEE_SPAN; i <= MPBOT_FLEE_SPAN; i++)
 	{
@@ -381,6 +381,7 @@ static int MpBotFleeWant(CAR_DATA* mine, int away)
 				heldSeen = 1;
 				heldScore = score;
 				heldDepth = depth;
+				heldRoad = road;
 			}
 		}
 	}
@@ -393,6 +394,7 @@ static int MpBotFleeWant(CAR_DATA* mine, int away)
 	{
 		best = held;
 		bestDepth = heldDepth;
+		bestRoad = heldRoad;	/* the label must describe the heading we DRIVE */
 	}
 	else
 	{
@@ -418,11 +420,12 @@ static int MpBotFleeWant(CAR_DATA* mine, int away)
 }
 
 /* The car of the nearest OTHER player who is actually still in the match. Every driving
- * set asks this the same way, and they used to ask it differently: chase and pursuit
- * selected on `active` while the pathfinder selected on `connected`. A seat that has
- * dropped keeps its slot and its carId until the roster moves, so selecting on `active`
- * alone had the bots chase the rolling ghost of a player who had already left. `connected`
- * is the field that means "there is a peer on the other end". */
+ * set asks this the same way, and they used to ask it differently - chase and pursuit
+ * selected on `active` while the pathfinder selected on `connected` - so this is the one
+ * place that decides. BOTH are required: `active` says the slot is in use, `connected`
+ * says the peer is still on the other end, and while the two agree today (a removed player
+ * has its carId cleared - mp_players.c), a slot that is inactive but still carries a carId
+ * is exactly the rolling ghost a chaser must not follow. */
 static CAR_DATA* MpBotTargetCar(void)
 {
 	MP_PLAYER* me = MpLocalPlayer();
@@ -435,7 +438,7 @@ static CAR_DATA* MpBotTargetCar(void)
 	{
 		MP_PLAYER* p = &gMp.players[k];
 
-		if (p == me || p->carId < 0 || p->carId >= MAX_CARS)
+		if (p == me || !p->active || p->carId < 0 || p->carId >= MAX_CARS)
 			continue;
 
 		if (!p->connected)
@@ -1770,18 +1773,25 @@ static int MpBotCatMouse(void)
 	 * every frame makes the destination flicker between two nearly equal candidates - the
 	 * heading scan's wobble, one level up - and reads as the car dithering at a junction.
 	 * Hold the goal for one plan interval and only re-choose it then. */
-	if (!goalHeld || (MpBotNowMs() - goalAt) >= MPBOT_PLAN_MS)
 	{
-		if (!MpBotChooseGoal(&ai, mine, tgt, isMouse, &goal))
-			return MpBotChase(0);
+		int now = MpBotNowMs();
 
-		heldGoal = goal;
-		goalAt = MpBotNowMs();
-		goalHeld = 1;
-	}
-	else
-	{
-		goal = heldGoal;	/* between re-choices, drive the goal we committed to */
+		/* now < goalAt is a RESTARTED frame clock (a new session in the same process): the
+		 * delta goes negative, the interval test never fires, and the bot would drive the
+		 * previous city's destination forever. Treat that as stale and re-choose. */
+		if (!goalHeld || now < goalAt || (now - goalAt) >= MPBOT_PLAN_MS)
+		{
+			if (!MpBotChooseGoal(&ai, mine, tgt, isMouse, &goal))
+				return MpBotChase(0);
+
+			heldGoal = goal;
+			goalAt = now;
+			goalHeld = 1;
+		}
+		else
+		{
+			goal = heldGoal;	/* between re-choices, drive the goal we committed to */
+		}
 	}
 	if (!MpBotRouteTo(&ai, mine, goal.x, goal.z, 0))
 		return MpBotChase(0);		/* no route: the old logic, unchanged */
