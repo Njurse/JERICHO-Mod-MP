@@ -14,6 +14,8 @@
 /*   MP_BOT=random   the canned manoeuvre (MP_TESTDRIVE is its old name) */
 /*   MP_BOT=chase    the host flees, the joiner chases                   */
 /*   MP_BOT=fight    both charge each other                             */
+/*   MP_BOT=pursuit  MUTUAL chase: both hunt, so they meet and collide   */
+/*   MP_BOT=catmouse the same pair driven by the pathfinder in ai/       */
 /* ------------------------------------------------------------------ */
 
 /* 1 when the bot is asked for. OFF by default -- never enabled unless the

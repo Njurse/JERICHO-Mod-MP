@@ -68,13 +68,22 @@ static int MpBotCanned(void)
 }
 
 /* The fleeing host's two distance thresholds, in world units, from
- * MP_BOT_GAP=<ease>,<turnback> (default 2500,5000). Runtime levers on purpose: how
+ * MP_BOT_GAP=<ease>,<turnback> (default 7500,15000). Runtime levers on purpose: how
  * close the pair should stay is a feel question, and feel should not need a rebuild.
  * Resolved once, like MP_BOT itself. */
-/* How far the fleer runs before it stops widening the gap (ease) and before it gives up and
-drives back at the chasers (turnback). Both were 2500/5000, which a pair hits almost at once -
-the host was looping back before the chaser had closed any distance at all, so the chase never
-really happened. Extended 3x, for the same reason the thresholds exist in the first place. */
+/* How far the fleer runs before it THINKS about the gap (ease) and before it gives up and
+ * drives back at the chasers (turnback). Both were 2500/5000, which a pair hits almost at
+ * once - the host was looping back before the chaser had closed any distance, so the chase
+ * never really happened; 3x that is what makes the chase a chase.
+ *
+ * RE-CHECKED, and distance is now deliberately NOT allowed to interrupt the driving: the
+ * ease threshold no longer lifts the throttle (that read as the car giving up mid-flee when
+ * its line was good - easeOff survives only as a label in the chase log), so the only
+ * distance rule left is the turnback, which is the escape hatch for a flee that has
+ * genuinely outrun its pursuers. Measured on a 50 s city chase pair with the current logic:
+ * neither threshold fired at all (0 "loop", 0 "flee-hold" lines) - the chaser keeps the
+ * host in contact, which is exactly what these tests want - so they stay as a safety and
+ * not as an every-run rule. */
 static int gBotGapEase = 7500;
 static int gBotGapTurnback = 15000;
 static int gBotGapResolved;
@@ -204,6 +213,11 @@ and short enough to abandon it when it stops helping. */
 0.7 s of sitting in the corner first, which is most of why the pair looked lazy. */
 #define MPBOT_STUCK_FRAMES	24
 
+/* How long a stopped, IN-CONTACT car keeps shoving something the probes cannot see (a
+ * fence, a barrel, a chair) before it gives up and backs out. The contact policy's one
+ * bound, shared by every driving set. */
+#define MPBOT_PUSH_MS		900
+
 /* The ONE reverse the driving bots still use: backing out of a wall that is dead ahead,
 where turning on the throttle cannot work because the car cannot move at all. Bounded,
 and it does not alternate, so it cannot become the old reversing shuffle. */
@@ -211,9 +225,14 @@ and it does not alternate, so it cannot become the old reversing shuffle. */
 
 /* Following at minimum distance is not a reason to do anything dramatic: hold station
 inside IN and only take the chase up again once the gap has reached OUT. Two thresholds,
-not a derivative, so the car cannot flicker between chasing and waiting. */
-#define MPBOT_FOLLOW_IN		900L
-#define MPBOT_FOLLOW_OUT	2200L
+not a derivative, so the car cannot flicker between chasing and waiting.
+ *
+ * KEPT SMALL ON PURPOSE. The band used to sit at 900/2200, which had the chaser give up
+ * the chase and idle a couple of car-lengths out - a distance rule interrupting a chase
+ * that was otherwise working. The chaser now presses until it is nearly touching (450)
+ * and resumes almost at once (1100), so distance only breaks a real nose-to-tail jam. */
+#define MPBOT_FOLLOW_IN		450L
+#define MPBOT_FOLLOW_OUT	1100L
 
 /* One frame of a turn-around. `dir` uses the callers' steering convention
  * (non-zero = left). `*frames` is the manoeuvre and `*pulse` the handbrake part
@@ -307,56 +326,63 @@ static int MpBotOnRoadTo(CAR_DATA* mine, int dir, int len)
 					 * (depth is worth 3, the off-axis penalty 2), which is not enough -
 					 * the car then alternates between two adjacent steps and wobbles. */
 
+/* A heading whose far probe lands on the road network is worth this much ON TOP of its
+ * geometry score. It is ONE TERM IN THE ONE SCORE, not a separate pass: keeping the road
+ * preference out of the score and applying it afterwards meant the hysteresis (which
+ * compares against the geometric best) could throw the road choice away again, so the
+ * flee kept an off-road heading whenever that heading happened to be geometrically good.
+ * Folded in, `best` already means "best, roads preferred", and there is one number to
+ * compare. Sized against the geometry: a depth step is worth 3 and the whole fan spans
+ * 14 steps, so 20 is worth about seven steps - a road breaks the choice towards the
+ * network without driving into a walled-off road just because it is a road. */
+#define MPBOT_FLEE_ROAD_WANT	20
+
 static int MpBotFleeWant(CAR_DATA* mine, int away)
 {
 	static int lastLogged = -1;
 	static int held = -1, heldDepth = 0;
-	int best = away, bestScore = -9999, bestDepth = 0, i;
-	int road = away, roadScore = -9999, roadDepth = 0, foundRoad = 0;
+	int best = away, bestScore = -9999, bestDepth = 0, bestRoad = 0, i;
 	int heldScore = -9999, heldSeen = 0;
 
 	for (i = -MPBOT_FLEE_SPAN; i <= MPBOT_FLEE_SPAN; i++)
 	{
 		int d = (away + i * MPBOT_FLEE_FAN) & 0xfff;
 		int depth = MpBotCorridorDepth(mine, d);
+		int road = MpBotOnRoadTo(mine, d, MPBOT_FLEE_ROAD_AT);
 
-		/* A ROAD BEATS A GAP: depth (how far it stays open) is worth more than
-		 * pointing exactly away, so the flee turns down a street rather than running
-		 * at the wall behind it. The |i| penalty still stops it turning tail and
-		 * driving AT the pursuer just because that way happens to be a long road. */
-		int score = depth * 3 - (i < 0 ? -i : i) * 2;
+		/* ONE score. Depth (how far the corridor stays open) is the geometry, the road
+		 * bonus is the preference, and the |i| penalty keeps the flee pointing AWAY - it
+		 * stops the car turning tail and driving AT the pursuer just because that way
+		 * happens to be a long road. */
+		int score = depth * 3 - (i < 0 ? -i : i) * 2 + (road ? MPBOT_FLEE_ROAD_WANT : 0);
 
 		if (score > bestScore)
 		{
 			bestScore = score;
 			bestDepth = depth;
+			bestRoad = road;
 			best = d;
 		}
 
-		/* where the heading we are ALREADY committed to scored this frame */
-		if (held >= 0 && d == held)
+		/* Where the heading we are ALREADY committed to scored this frame, matched by
+		 * ANGLE and not by equality. The fan is centred on `away`, which moves as the
+		 * pursuer does, so the exact heading stored last frame is usually NOT one of this
+		 * frame's 13 steps - `d == held` then never fired, the hysteresis below was dead,
+		 * and the flee went back to wobbling between adjacent steps. */
+		if (held >= 0 && !heldSeen)
 		{
-			heldSeen = 1;
-			heldScore = score;
-			heldDepth = depth;
-		}
+			int hd = ((d - held + 2048) & 0xfff) - 2048;
 
-		/* a second pass for the road: any heading that is on the road network beats
-		 * any heading that is not, which is what keeps the flee on the map and moving
-		 * rather than cornering itself at the edge */
-		if (MpBotOnRoadTo(mine, d, MPBOT_FLEE_ROAD_AT) && score > roadScore)
-		{
-			foundRoad = 1;
-			roadScore = score;
-			roadDepth = depth;
-			road = d;
-		}
-	}
+			if (hd < 0)
+				hd = -hd;
 
-	if (foundRoad)
-	{
-		best = road;
-		bestDepth = roadDepth;
+			if (hd <= MPBOT_FLEE_FAN / 2)
+			{
+				heldSeen = 1;
+				heldScore = score;
+				heldDepth = depth;
+			}
+		}
 	}
 
 	/* HYSTERESIS. Re-deciding the heading every frame is what makes the car wobble down
@@ -383,7 +409,7 @@ static int MpBotFleeWant(CAR_DATA* mine, int away)
 		gMpCtx->jer_log(gMpCtx,
 			"[mp] chase: flee scan - straight back is not the way out, heading %d of 4096 (open %d range(s)%s%s)\n",
 			best, bestDepth, bestDepth >= MPBOT_FLEE_ROAD ? ", a road" : "",
-			foundRoad ? ", on the road network" : ", OFF the road network");
+			bestRoad ? ", on the road network" : ", OFF the road network");
 	}
 	else if (best == away)
 		lastLogged = -1;
@@ -391,27 +417,55 @@ static int MpBotFleeWant(CAR_DATA* mine, int away)
 	return best;
 }
 
-static int MpBotChase(int fight)
+/* The car of the nearest OTHER player who is actually still in the match. Every driving
+ * set asks this the same way, and they used to ask it differently: chase and pursuit
+ * selected on `active` while the pathfinder selected on `connected`. A seat that has
+ * dropped keeps its slot and its carId until the roster moves, so selecting on `active`
+ * alone had the bots chase the rolling ghost of a player who had already left. `connected`
+ * is the field that means "there is a peer on the other end". */
+static CAR_DATA* MpBotTargetCar(void)
 {
 	MP_PLAYER* me = MpLocalPlayer();
-	CAR_DATA* mine;
-	CAR_DATA* tgt = NULL;
-	static int stuckFrames, turnFrames, turnDir, turnPulse, backFrames, backDir, holding, everMoved, modeLogged;
 	int k;
 
-	if (me == NULL || me->carId < 0)
-		return 0;
+	if (me == NULL)
+		return NULL;
 
 	for (k = 0; k < MP_MAX_PLAYERS; k++)
 	{
 		MP_PLAYER* p = &gMp.players[k];
 
-		if (p->active && p->carId >= 0 && p->carId != me->carId)
-		{
-			tgt = &car_data[p->carId];
-			break;
-		}
+		if (p == me || p->carId < 0 || p->carId >= MAX_CARS)
+			continue;
+
+		if (!p->connected)
+			continue;
+
+		return &car_data[p->carId];
 	}
+
+	return NULL;
+}
+
+/* Milliseconds since the session started, from the frame count: the sim already counts
+ * frames, and a second clock is one more thing to get wrong. */
+static int MpBotNowMs(void)
+{
+	return (int)((long)gMp.frame * 1000L / 60L);
+}
+
+static int MpBotChase(int fight)
+{
+	MP_PLAYER* me = MpLocalPlayer();
+	CAR_DATA* mine;
+	CAR_DATA* tgt;
+	static int stuckFrames, turnFrames, turnDir, turnPulse, backFrames, backDir, holding, everMoved, modeLogged;
+	static int pushUntil;	/* while now < this, keep shoving an invisible obstacle */
+
+	if (me == NULL || me->carId < 0)
+		return 0;
+
+	tgt = MpBotTargetCar();
 
 	if (tgt == NULL)
 		return 0;
@@ -574,8 +628,33 @@ static int MpBotChase(int fight)
 					 * frame, so a pair run can be read for it. */
 					int ahead = MpBotSpotClear(mine, mine->hd.direction, 1100);
 					int contact = MpBotContacted(mine);
+					int now = MpBotNowMs();
 
 					stuckFrames = 0;
+
+					/* PUSH FIRST. Stopped, IN CONTACT, and nothing the probes can see is
+					 * ahead means a fence, a barrel or a chair - which CellEmpty hides on
+					 * purpose (objcoll.c:49) while the physics still stops the car dead on it.
+					 * Backing away from something the engine says is not there is exactly how a
+					 * car ends up parked on a fence for the rest of the match, so SHOVE it. The
+					 * shove is BOUNDED (MPBOT_PUSH_MS): a real wall also lands here, because no
+					 * probe can see the one the car is already inside, and after the bound the
+					 * back-out below takes over. This is catmouse's contact policy, shared. */
+					if (ahead && contact && now < pushUntil)
+						return CAR_PAD_ACCEL;		/* still shoving */
+
+					if (ahead && contact && pushUntil == 0)
+					{
+						pushUntil = now + MPBOT_PUSH_MS;
+
+						if (gMpCtx != NULL)
+							gMpCtx->jer_log(gMpCtx,
+								"[mp] chase: in contact with something the probes cannot see (a fence?) - pushing through\n");
+
+						return CAR_PAD_ACCEL;
+					}
+
+					pushUntil = 0;
 					turnDir ^= 1;
 
 					if (!ahead || contact)
@@ -614,6 +693,7 @@ static int MpBotChase(int fight)
 			else
 			{
 				stuckFrames = 0;
+				pushUntil = 0;	/* moving again: no push in progress */
 			}
 		}
 
@@ -636,14 +716,37 @@ static int MpBotChase(int fight)
 			pad = (adiff > 96) ? ((diff > 0) ? CAR_PAD_LEFT : CAR_PAD_RIGHT) : 0;
 		else if (adiff > 1500)
 		{
-			/* The peer is behind us: TURN ROUND, never reverse. Full lock with the
-			 * rear locked for the first frames brings the nose round, and the
-			 * throttle then drives us out of it - a reverse moved us AWAY from
-			 * them, which is what made the pair shuffle instead of meet. */
+			int ahead = MpBotSpotClear(mine, mine->hd.direction, 1100);
+			int contact = MpBotContacted(mine);
+
+			/* The peer is behind us: TURN ROUND, never reverse - EXCEPT when the NOSE is
+			 * blocked. A handbrake turn cannot move a car that cannot move, so with a wall
+			 * dead ahead (or the nose already inside scenery no probe can see) the turn just
+			 * repeats: on a real pair a fleeing host wedged on a wall with the chaser behind
+			 * logged EIGHT identical "peer behind, ahead clear=0" turns in a row while its
+			 * heading never changed - the car sat there turning on the spot forever. Backing
+			 * out first is the same bounded, non-alternating move the wedge case uses, and it
+			 * is the one place a reverse is right. */
+			if (!ahead || contact)
+			{
+				backDir = (diff > 0) ? 1 : 0;
+				backFrames = MPBOT_BACK_FRAMES;
+				turnDir = !backDir;		/* and turn out the OTHER way afterwards */
+				turnFrames = MPBOT_TURN_FRAMES + 20;
+				turnPulse = MPBOT_TURN_FRAMES;
+
+				if (gMpCtx != NULL)
+					gMpCtx->jer_log(gMpCtx,
+						"[mp] chase: recover - peer behind but the nose is blocked (adiff %d, ahead clear=%d, contact=%d) - backing out (dir %d)\n",
+						adiff, ahead, contact, backDir);
+
+				return CAR_PAD_BRAKE | (backDir ? CAR_PAD_LEFT : CAR_PAD_RIGHT);
+			}
+
 			if (turnFrames <= 0 && gMpCtx != NULL)
 				gMpCtx->jer_log(gMpCtx,
 					"[mp] chase: recover - peer behind (adiff %d, ahead clear=%d), handbrake turn\n",
-					adiff, MpBotSpotClear(mine, mine->hd.direction, 1100));
+					adiff, ahead);
 
 			turnFrames = MPBOT_TURN_FRAMES + 20;
 			turnPulse = MPBOT_TURN_FRAMES;
@@ -660,9 +763,13 @@ static int MpBotChase(int fight)
 			pad = ((diff > 0) ? CAR_PAD_LEFT : CAR_PAD_RIGHT) |
 				(((mine->hd.speed < 40) && (mine->hd.speed > -40)) ? CAR_PAD_ACCEL : 0);
 		else if (adiff > 120)
-			pad = (easeOff ? 0 : CAR_PAD_ACCEL) | ((diff > 0) ? CAR_PAD_LEFT : CAR_PAD_RIGHT);
+			pad = CAR_PAD_ACCEL | ((diff > 0) ? CAR_PAD_LEFT : CAR_PAD_RIGHT);
 		else
-			pad = easeOff ? 0 : CAR_PAD_ACCEL;	/* coasting IS the ease-off: the flee stops widening the gap while the chasers close it */
+			pad = CAR_PAD_ACCEL;	/* KEEP DRIVING even when the gap is already wide: lifting the throttle here is what
+			 * "the flee stops widening the gap" used to mean, and it read as the car giving up
+			 * mid-flee exactly when its line was good. Distance is the turnback's business now
+			 * (far enough out, the flee reverses roles and drives back, which is what makes the
+			 * pair meet) and not the throttle's; easeOff is kept for the log only. */
 
 		if ((gMp.frame % 60) == 0 && gMpCtx != NULL)
 			gMpCtx->jer_log(gMpCtx, "[mp] chase: %s d=%d,%d want=%d dir=%d diff=%d pad=%#x stuck=%d\n",
@@ -814,28 +921,26 @@ static int MpBotPursuit(void)
 {
 	MP_PLAYER* me = MpLocalPlayer();
 	CAR_DATA* mine;
-	CAR_DATA* tgt = NULL;
+	CAR_DATA* tgt;
 	static int stuckFrames, turnFrames, turnDir, turnPulse, backFrames, backDir;
-	int k;
+	static int pushUntil;
 
 	if (me == NULL || me->carId < 0)
 		return 0;
 
-	for (k = 0; k < MP_MAX_PLAYERS; k++)
-	{
-		MP_PLAYER* p = &gMp.players[k];
-
-		if (p->active && p->carId >= 0 && p->carId != me->carId)
-		{
-			tgt = &car_data[p->carId];
-			break;
-		}
-	}
+	tgt = MpBotTargetCar();
 
 	if (tgt == NULL)
 		return 0;
 
 	mine = &car_data[me->carId];
+
+	if (backFrames > 0)
+	{
+		/* the bounded back-out (see the blocked-nose case below) */
+		backFrames--;
+		return CAR_PAD_BRAKE | (backDir ? CAR_PAD_LEFT : CAR_PAD_RIGHT);
+	}
 
 	if (turnFrames > 0)
 		return MpBotTurnPad(&turnFrames, &turnPulse, turnDir, mine->hd.speed);
@@ -865,11 +970,30 @@ static int MpBotPursuit(void)
 			if (++stuckFrames > 20)
 			{
 				int ahead = MpBotSpotClear(mine, mine->hd.direction, 1100);
+				int contact = MpBotContacted(mine);
+				int now = MpBotNowMs();
 
+				stuckFrames = 0;
+
+				/* the same bounded PUSH as chase: shove a fence/barrel the probes cannot see */
+				if (ahead && contact && now < pushUntil)
+					return CAR_PAD_ACCEL;
+
+				if (ahead && contact && pushUntil == 0)
+				{
+					pushUntil = now + MPBOT_PUSH_MS;
+
+					if (gMpCtx != NULL)
+						gMpCtx->jer_log(gMpCtx,
+							"[mp] pursuit: in contact with something the probes cannot see (a fence?) - pushing through\n");
+
+					return CAR_PAD_ACCEL;
+				}
+
+				pushUntil = 0;
 				turnFrames = MPBOT_TURN_FRAMES + 20;
 				turnPulse = MPBOT_TURN_FRAMES;
 				turnDir ^= 1;
-				stuckFrames = 0;
 
 				if (gMpCtx != NULL)
 					gMpCtx->jer_log(gMpCtx,
@@ -880,6 +1004,7 @@ static int MpBotPursuit(void)
 		else
 		{
 			stuckFrames = 0;
+			pushUntil = 0;
 		}
 
 		/* NO PROGRESS = TURN ROUND. A car that is moving but NOT closing (steered
@@ -922,12 +1047,33 @@ static int MpBotPursuit(void)
 		 * through it, and only a roughly aligned car gets full throttle. */
 		if (adiff > 1200)
 		{
-			/* a real U-turn: turn hard, with the handbrake for the first frames,
-			 * and drive out of it. Never a reverse - see the note on MpBotTurnPad. */
+			int ahead = MpBotSpotClear(mine, mine->hd.direction, 1100);
+			int contact = MpBotContacted(mine);
+
+			/* a real U-turn: turn hard, with the handbrake for the first frames, and drive
+			 * out of it - never a reverse (see MpBotTurnPad), UNLESS the nose is blocked, in
+			 * which case the turn can never complete and the car turns on the spot forever.
+			 * Same bounded back-out as chase. */
+			if (!ahead || contact)
+			{
+				backDir = (diff > 0) ? 1 : 0;
+				backFrames = MPBOT_BACK_FRAMES;
+				turnDir = !backDir;
+				turnFrames = MPBOT_TURN_FRAMES + 20;
+				turnPulse = MPBOT_TURN_FRAMES;
+
+				if (gMpCtx != NULL)
+					gMpCtx->jer_log(gMpCtx,
+						"[mp] pursuit: peer behind but the nose is blocked (adiff %d, ahead clear=%d, contact=%d) - backing out (dir %d)\n",
+						adiff, ahead, contact, backDir);
+
+				return CAR_PAD_BRAKE | (backDir ? CAR_PAD_LEFT : CAR_PAD_RIGHT);
+			}
+
 			if (turnFrames <= 0 && gMpCtx != NULL)
 				gMpCtx->jer_log(gMpCtx,
 					"[mp] bot: recover - peer behind (adiff %d, ahead clear=%d), handbrake turn\n",
-					adiff, MpBotSpotClear(mine, mine->hd.direction, 1100));
+					adiff, ahead);
 
 			turnFrames = MPBOT_TURN_FRAMES + 20;
 			turnPulse = MPBOT_TURN_FRAMES;
@@ -1131,7 +1277,6 @@ int MpBotEnabled(void)
 #define MPBOT_PLAN_MS		700	/* how often a route is refreshed */
 #define MPBOT_PLAN_GOAL_MOVE	700	/* world units the goal may drift before a replan */
 #define MPBOT_AIM_AHEAD		900	/* steer at the first waypoint at least this far out */
-#define MPBOT_PUSH_MS		900	/* shove at something invisible this long before giving up */
 #define MPBOT_CONTACT_CLEAR	1100	/* how far ahead "is anything in front" is asked */
 
 typedef struct MPBOT_AI
@@ -1145,13 +1290,6 @@ typedef struct MPBOT_AI
 	int	pushing;	/* in contact with something the probes cannot see */
 	int	pushAt;		/* ...since when */
 } MPBOT_AI;
-
-/* Milliseconds since the session started, from the frame count: the sim already counts
- * frames, and a second clock is one more thing to get wrong. */
-static int MpBotNowMs(void)
-{
-	return (int)((long)gMp.frame * 1000L / 60L);
-}
 
 /* MP_BOT_DRAW=1 shows the AI's thinking on the HUD, so the pathing can be WATCHED
  * happening rather than reconstructed from the log afterwards. Resolved once, like every
@@ -1514,6 +1652,72 @@ static int MpBotContact(MPBOT_AI* ai, CAR_DATA* mine, int* turnFrames, int* turn
 	}
 }
 
+/* Pick where this seat is driving to. Split out of MpBotCatMouse so the goal can be
+ * HELD between plans: the flee goal is scored against a MOVING threat, so re-choosing it
+ * every frame makes the destination flicker between two nearly equal candidates - the
+ * heading scan's wobble, one level up - and reads as the car dithering at a junction.
+ * Returns 0 when there is no goal at all, so the caller can fall back. */
+static int MpBotChooseGoal(MPBOT_AI* ai, CAR_DATA* mine, CAR_DATA* tgt, int isMouse, AIGOAL* out)
+{
+	if (isMouse)
+	{
+		int onRoad = JerRoadAt(mine->hd.where.t[0], mine->hd.where.t[1], mine->hd.where.t[2]);
+
+		if (!onRoad)
+		{
+			/* GET BACK ON THE ROAD FIRST. Running for the furthest open point scored
+			 * well between houses - far from the cat, and "open" to the probe - and the
+			 * car then wedged in a gap it could not get out of, which is the "turns left
+			 * between the houses instead of right, back to the road" complaint. A mouse
+			 * that is not on a road has exactly one sensible destination: the nearest road
+			 * it can actually reach. The running starts once it is back on one. */
+			if (!AiLocalGoal(&ai->map, mine->hd.where.t[0], mine->hd.where.t[2], out))
+				return 0;
+		}
+		else if (!AiLocalFleeGoal(&ai->map, mine->hd.where.t[0], mine->hd.where.t[2],
+				tgt->hd.where.t[0], tgt->hd.where.t[2], out))
+		{
+			/* nothing in the ring is worth running to: the nearest road, or failing that
+			 * the most open ground, will do */
+			if (!AiLocalGoal(&ai->map, mine->hd.where.t[0], mine->hd.where.t[2], out))
+				return 0;
+		}
+	}
+	else
+	{
+		/* THE CAT DRIVES AT THE MOUSE - or at the nearest ROAD to it when the mouse is off
+		 * the network. Aiming at a mouse sitting in a garden is what sends the cat straight
+		 * across the scenery, which is the "it does not stay on the roads" complaint seen
+		 * from the chasing side. When the mouse is off-road the cat's goal becomes the road
+		 * the mouse itself would have to use to get back, which is the same rule the mouse
+		 * follows. The window is centred on the CAT, so a mouse beyond it just falls back to
+		 * its raw position. When the route cannot reach the goal, the pathfinder hands back
+		 * the best partial one - heading the right way down the road - which is still better
+		 * than pointing at a heading and hoping. */
+		out->x = tgt->hd.where.t[0];
+		out->z = tgt->hd.where.t[2];
+		out->kind = AIGOAL_OPEN;
+		out->samples = 0;
+		out->clearance = 0;
+
+		if (!JerRoadAt(out->x, tgt->hd.where.t[1], out->z))
+		{
+			AIGOAL g;
+
+			if (AiLocalGoal(&ai->map, out->x, out->z, &g) && g.kind == AIGOAL_ROAD)
+			{
+				out->x = g.x;
+				out->z = g.z;
+				out->kind = g.kind;
+				out->samples = g.samples;
+				out->clearance = g.clearance;
+			}
+		}
+	}
+
+	return 1;
+}
+
 /* ------------------------------------------------------------------ */
 /* CAT AND MOUSE: the pair, actually driving                           */
 /*                                                                     */
@@ -1531,29 +1735,19 @@ static int MpBotCatMouse(void)
 {
 	MP_PLAYER* me = MpLocalPlayer();
 	static MPBOT_AI ai;
+	static AIGOAL heldGoal;		/* the destination we are committed to between plans */
+	static int goalAt = -1000000, goalHeld;
 	static int stuckFrames, turnFrames, turnPulse, turnDir, backFrames, backDir, courseFrames;
 	CAR_DATA* mine;
-	CAR_DATA* tgt = NULL;
-	int k, pad, aimX, aimZ;
+	CAR_DATA* tgt;
+	int pad, aimX, aimZ;
 	AIGOAL goal;
 	int isMouse;
 
 	if (me == NULL || me->carId < 0)
 		return 0;
 
-	for (k = 0; k < MP_MAX_PLAYERS; k++)
-	{
-		MP_PLAYER* p = &gMp.players[k];
-
-		if (p == me || p->carId < 0)
-			continue;
-
-		if (!p->connected)
-			continue;
-
-		tgt = &car_data[p->carId];
-		break;
-	}
+	tgt = MpBotTargetCar();
 
 	if (tgt == NULL)
 		return 0;
@@ -1572,42 +1766,23 @@ static int MpBotCatMouse(void)
 	if (!AiMapValid(&ai.map))
 		return MpBotChase(0);
 
-	if (isMouse)
+	/* GOAL HYSTERESIS. The flee goal is scored against a MOVING threat, so re-choosing it
+	 * every frame makes the destination flicker between two nearly equal candidates - the
+	 * heading scan's wobble, one level up - and reads as the car dithering at a junction.
+	 * Hold the goal for one plan interval and only re-choose it then. */
+	if (!goalHeld || (MpBotNowMs() - goalAt) >= MPBOT_PLAN_MS)
 	{
-		int onRoad = JerRoadAt(mine->hd.where.t[0], mine->hd.where.t[1], mine->hd.where.t[2]);
+		if (!MpBotChooseGoal(&ai, mine, tgt, isMouse, &goal))
+			return MpBotChase(0);
 
-		if (!onRoad)
-		{
-			/* GET BACK ON THE ROAD FIRST. Running for the furthest open point scored
-			 * well between houses - far from the cat, and "open" to the probe - and the
-			 * car then wedged in a gap it could not get out of, which is the "turns left
-			 * between the houses instead of right, back to the road" complaint. A mouse
-			 * that is not on a road has exactly one sensible destination: the nearest road
-			 * it can actually reach. The running starts once it is back on one. */
-			if (!AiLocalGoal(&ai.map, mine->hd.where.t[0], mine->hd.where.t[2], &goal))
-				return MpBotChase(0);
-		}
-		else if (!AiLocalFleeGoal(&ai.map, mine->hd.where.t[0], mine->hd.where.t[2],
-				tgt->hd.where.t[0], tgt->hd.where.t[2], &goal))
-		{
-			/* nothing in the ring is worth running to: the nearest road, or failing that
-			 * the most open ground, will do */
-			if (!AiLocalGoal(&ai.map, mine->hd.where.t[0], mine->hd.where.t[2], &goal))
-				return MpBotChase(0);
-		}
+		heldGoal = goal;
+		goalAt = MpBotNowMs();
+		goalHeld = 1;
 	}
 	else
 	{
-		/* the cat drives at the mouse. When the route cannot reach it, the pathfinder
-		 * hands back the best partial one - heading the right way down the road - and
-		 * that is still better than pointing at a heading and hoping. */
-		goal.x = tgt->hd.where.t[0];
-		goal.z = tgt->hd.where.t[2];
-		goal.kind = AIGOAL_OPEN;
-		goal.samples = 0;
-		goal.clearance = 0;
+		goal = heldGoal;	/* between re-choices, drive the goal we committed to */
 	}
-
 	if (!MpBotRouteTo(&ai, mine, goal.x, goal.z, 0))
 		return MpBotChase(0);		/* no route: the old logic, unchanged */
 
