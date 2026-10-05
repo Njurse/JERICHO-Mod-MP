@@ -43,11 +43,17 @@ CHANGE_PATTERNS = (
 )
 
 # The VRAM state side of the correlation. Taken from the same log, the most recent one.
+#
+# Deliberately NOT any line containing "resident slot": the change lines themselves say
+# "-> resident slot N", so including it had the correlation reporting the car change as the
+# VRAM state - the thing it is supposed to sit next to. This list is the pool/watermark
+# reporting only.
 VRAM_PATTERNS = (
     "JERICHO-VRAM",
     "pool -",
     "pages ",
-    "resident slot",
+    "row(s) reclaimed",
+    "CLUT watermark",
 )
 
 MIN_W = 80
