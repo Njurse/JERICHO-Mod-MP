@@ -18,6 +18,7 @@
 #include "cars.h"
 #include "convert.h"	/* _RotMatrixY: a car's box is built from its matrix */
 #include "cosmetic.h"	/* car_cosmetics[slot]: the box a rebuilt car needs */
+#include "system.h"	/* CITY_COUNT and LevelNames: the city registry MpCarCityName reads */
 #include "denting.h"	/* CreateDentableCar: the only writer of the drawn vertex dump */
 #include "felony.h"	/* felonyRating / pedestrianFelony: what a restart clears */
 extern int gBootMpLevel;	/* main.c: 1 = the small multiplayer map, 0 = the full city */
@@ -4173,9 +4174,23 @@ static void MpReleaseRemoteCar(MP_PLAYER* p)
  * session's own city (the value the wire uses for "the level's own car data"). */
 const char* MpCarCityName(int city)
 {
-	static const char* names[4] = { "CHICAGO", "HAVANA", "VEGAS", "RIO" };
+	/* JERICHO: ask the ENGINE, do not keep a local copy.
+	 *
+	 * This was a hardcoded names[4] = CHICAGO/HAVANA/VEGAS/RIO, which is why the
+	 * pause menu city picker could not name a Driver 1 car-data city even once
+	 * carhacks started offering them: the COUNT already came from carhacks through
+	 * MP_CARQ_CITIES, and the NAMES did not, so the picker cycled to a real city
+	 * and displayed "the session city" instead.
+	 *
+	 * LevelNames is the engine's own registry, so it grows when the engine does -
+	 * the same reason carselect.c now reads CITY_COUNT rather than a literal 4.
+	 * A city the engine has no row for is still reported as the session city,
+	 * rather than as a name that does not exist. */
 
-	return (city >= 0 && city < 4) ? names[city] : "the session city";
+	if (city < 0 || city >= CITY_COUNT || LevelNames[city] == NULL)
+		return "the session city";
+
+	return LevelNames[city];
 }
 
 /* The local resident SLOT that holds (city, model) on THIS machine, or -1 when
@@ -4188,7 +4203,6 @@ const char* MpCarCityName(int city)
  * a peer's (city, model) into a slot HERE, where the slot numbers may differ. */
 static int MpResidentSlotForCar(int city, int model)
 {
-	extern char* LevelNames[];
 	int levelCity = -1;
 	int slot, i;
 
