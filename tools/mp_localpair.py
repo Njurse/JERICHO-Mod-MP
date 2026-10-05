@@ -40,6 +40,7 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
 import time
 
 DEFAULT_GAME_DIR = os.path.join("src_rebuild", "bin", "Release_dev")
@@ -488,6 +489,14 @@ def main():
     ap.add_argument("--clean", action="store_true",
                     help="remove the run dirs and exit (never follows a junction)")
     ap.add_argument("--map", action="store_true", help="hold the in-game map open (MP_MAP=1)")
+    ap.add_argument("--vramview", action="store_true",
+                    help="open the VRAM viewer and the console on every seat (-vramview "
+                         "-console), so a run can be WATCHED changing cars and not just "
+                         "read afterwards")
+    ap.add_argument("--shots", default=None, metavar="DIR",
+                    help="photograph every seat's windows on every car change into DIR, with "
+                         "an index.txt pairing each picture with the log line that caused "
+                         "it and the VRAM line in the same log (see tools/mpshots.py)")
     ap.add_argument("--no-debug", action="store_true",
                     help="do NOT set MP_DEBUG=1. This is what the packaged launchers "
                          "(PLAY_HOST.bat / PLAY_JOIN.bat) do, so it is the only way to test "
@@ -695,6 +704,10 @@ def main():
     host_args = ["-nointro", "-nofmv", "-level", args.level, "-mp", args.mp_arena]
     client_args = ["-nointro", "-nofmv", "-mp", args.mp_arena]
 
+    if args.vramview:
+        host_args += ["-vramview", "-console"]
+        client_args += ["-vramview", "-console"]
+
     # The car comes from the MODULE's -mpcar, not the engine's -car. -car is a
     # dependent option that requires -level, and -level boots the engine straight
     # into a city -- so the client could only ever have one or the other, and
@@ -744,6 +757,21 @@ def main():
 
     remaining = max(5, args.seconds - args.settle)
     log(f"running for {remaining}s...")
+
+    # Photograph the seats as they change cars. Started here rather than in the loop
+    # because the watcher wants the PIDs Popen gave us (the real Windows PIDs - the
+    # shell's idea of a PID is a different number) and it runs for the same window as
+    # the run itself. Not a daemon: the index it writes at the end is the deliverable.
+    if args.shots:
+        import mpshots
+
+        seats = {name: (os.path.join(dirs[name], "JERICHO.log"), p.pid)
+                 for name, p in procs.items()}
+
+        log(f"screenshots on every car change -> {args.shots}")
+        threading.Thread(target=mpshots.watch,
+                         args=(seats, args.shots, remaining + 10),
+                         kwargs={"quiet": True}, daemon=False).start()
 
     # Watch for a crash WHILE it runs, not after. An access violation ends the
     # interesting part of the run, so there is no point sitting out the rest of
