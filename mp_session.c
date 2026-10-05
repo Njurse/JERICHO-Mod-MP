@@ -1094,7 +1094,8 @@ void MpSpawnLateJoiners(void)
 		spawned++;
 
 		if (gMpCtx != NULL)
-			gMpCtx->jer_log(gMpCtx, "[mp] late joiner: player %d given car slot %d\n", id, slot);
+			gMpCtx->jer_log(gMpCtx,
+				"[mp] player %d had no car on this machine - given the free slot %d\n", id, slot);
 	}
 
 	if (spawned > 0)
@@ -2653,6 +2654,26 @@ void MpLockstepFrame(void)
 	 * misses one still ends up with everybody's colour */
 	if (MpIsHost() && (gMp.frame % 120) == 0)
 		MpSendColors(1);
+
+	/* AND RE-SEAT ANYONE WHO HAS NO CAR - a sharper reason, and a faster cadence.
+	 *
+	 * A player who gets OUT of their car and back IN keeps their identity (they still
+	 * drive the car they chose) but their CAR_DATA slot is released when they walk.
+	 * On every other machine that means carId goes to -1 and their roster row names
+	 * 0xff, so they are not drawn. Getting back in clears onFoot and re-announces the
+	 * car - but the pass that GIVES a player a car was a LATE-JOINER pass: it ran once,
+	 * from the one-shot spawn request (mp.c), so a returning player was never visited
+	 * again and stayed invisible on everybody else's screen for the rest of the match.
+	 * That is the permanent desync a two-machine LAN game reported: his car never came
+	 * back on mine, and mine never on his.
+	 *
+	 * Faster than the roster because this is a player waiting to be SEEN rather than
+	 * bookkeeping - about a second. It costs nothing when nobody needs seating: the
+	 * pass skips every seated player, and every on-foot one, on its first line. That
+	 * on-foot guard is load-bearing and must stay: re-seating a player who is walking
+	 * about is what made the stand-in pedestrian flicker. */
+	if ((gMp.frame % 30) == 0)
+		MpSpawnLateJoiners();
 
 	{
 		/* our own colour, whenever it stops matching what we last sent */
