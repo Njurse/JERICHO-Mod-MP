@@ -176,6 +176,20 @@ that launches wrong on one side, a connection that drops. `--clean` (and the
 automatic cleanup) unlinks the junctions before deleting anything, so it can
 never follow one into the real game tree.
 
+### Watching a run, not just reading it afterwards
+
+`--vramview` opens the VRAM viewer and the console on every seat, and `--shots DIR`
+photographs each seat's windows on every car change:
+
+    python tools/mp_localpair.py --vramview --shots tmp/shots --bot off
+
+Every capture is three images - the game, the VRAM viewer, the console - and
+`DIR/index.txt` pairs them with the log line that caused them **and** the VRAM line in
+that same log at that moment, so "the car went invisible" can be read next to "pages 2
+used / 28 free, 0 row(s) reclaimed". `tools/mpshots.py` does the same on its own (`grab`
+photographs a running game once, `watch` is the log-driven kind), which is what makes it
+usable on a hand-played session as well as a harness run.
+
 ### Test levers for the on-foot and mid-match paths
 
 Set these on the harness (they are read from the environment, so every seat gets

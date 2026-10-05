@@ -1059,6 +1059,11 @@ call the Apply row does, so a mid-match change is reproducible headlessly; a
 `;`-separated list makes several timed changes, each counted from when the
 session starts running (`tools/mp_tries.py --scenario T2` uses seven).
 
+To WATCH one of those changes rather than read it afterwards, run the pair with
+`--vramview --shots DIR`: each car change leaves three pictures (the game, the VRAM
+viewer, the console) and an `index.txt` row naming the line that caused them and the VRAM
+state at that moment (`tools/mpshots.py`, which also works against a hand-played session).
+
 ### Restart is a soft reset
 
 The stock Restart calls `EndGame(GAMEMODE_RESTART)` and rebuilds the level
