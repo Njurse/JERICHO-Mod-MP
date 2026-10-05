@@ -351,6 +351,26 @@ int MpCarQueryCities(int* out, int max);	/* out: 0..3 city indices; returns the 
 int MpCarQueryLoad(int city, int model);	/* 1 = this machine holds it now */
 void MpCarQueryChosen(int city, int model, int changed);	/* notice: what we drive now (mp_carquery.h) */
 
+/* Which slots a city may be offered in, and the model in each. slots[] and models[] are
+ * PARALLEL and `max` is the capacity of both. Returns the count; 0 = nobody knows. */
+int MpCarQuerySlots(int city, int* slots, int* models, int max);
+
+/* Size a roster array with this. The engine's own per-city list is 10 wide
+ * (CarAvailability[4][10], carNumLookup likewise) and a module may offer the same ten; the
+ * spare room is so a shorter list never has to be trimmed to fit a caller's buffer. */
+#define MP_CAR_LIST_MAX	12
+
+/* The car list a city may be offered - one answer for the pause picker AND the test lever,
+ * so the two can never disagree about what is on offer. Both arrays are required (parallel);
+ * `max` is their shared capacity.
+ *
+ * The car mods answer when they can. Without them this falls back to the engine's own
+ * frontend table (CarAvailability + carNumLookup), i.e. exactly the list the picker showed
+ * before - which is also all a session can honestly offer, because that table is written by
+ * the FRONTEND car screen and a session started with -host/-join never opens it. So polling
+ * it in game is what made the picker offer four cars a city. */
+int MpCarListForCity(int city, int* slots, int* models, int max);
+
 /* The multiplayer meaning of Restart: put this player back at the level's own
  * start, in their car, repaired, with no felony, and KEEP the session (the
  * engine's own restart rebuilds the level, which is not one player's to do in a

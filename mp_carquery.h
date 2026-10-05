@@ -11,6 +11,11 @@
  *     level's own; letting a session mix them (so a Rio car can be
  *     driven on a Chicago map) is what carhacks' cross-city import
  *     exists for, and only carhacks knows whether it is doing it.
+ *   - which SLOTS may a city be offered in? The engine's
+ *     CarAvailability is written by the FRONTEND car screen, which a
+ *     session started with -host/-join never reaches, so in game it
+ *     still holds its initialiser and the pause picker hides most of
+ *     the cars. The car mods know the real list.
  *   - make THIS car available: load (city, model) here and make the
  *     session agree on it, if it is not already held.
  *
@@ -31,6 +36,7 @@
 #define MP_CARQ_CITIES	(JER_EVENT_MODULE_CUSTOM + 40)	/* "which cities?" */
 #define MP_CARQ_LOAD	(JER_EVENT_MODULE_CUSTOM + 41)	/* "make (city,model) available" */
 #define MP_CARQ_CHOSEN	(JER_EVENT_MODULE_CUSTOM + 42)	/* "this is what we drive now" */
+#define MP_CARQ_SLOTS	(JER_EVENT_MODULE_CUSTOM + 43)	/* "which slots may this city offer?" */
 
 /* Handlers fill the result field of the struct and return
  * JER_RESULT_CONTINUE; the caller reads it. */
@@ -47,6 +53,31 @@ typedef struct MP_CARQ_CITIES_ARGS
 	int  max;	/* in: capacity of cities[] */
 	int  count;	/* out: how many were written; 0 = nobody knows */
 } MP_CARQ_CITIES_ARGS;
+
+/* MP_CARQ_SLOTS -> ARGS.count pairs written to slots[]/models[].
+ *
+ * "Which slots may `city` be offered in?" - the question mp's pause picker needs and the
+ * engine's CarAvailability cannot answer in a session. That table is written by the
+ * FRONTEND car screen (CarSelectScreen's setup), and a session started with -host/-join
+ * never opens it, so in game the table still holds its initialiser: four cars a city, and
+ * the picker hides everything else no matter what the car mods can serve. They know the
+ * real answer.
+ *
+ * slots[] and models[] are PARALLEL: the car in models[i] is in slot slots[i]. Both are
+ * written up to `max` entries.
+ *
+ * count = 0 means "nobody knows", the same convention as CITIES: a session with no car
+ * mods falls back to the frontend table, i.e. exactly what it does today. A handler must
+ * leave count at 0 rather than repeat a gated list, so the caller can tell "no better
+ * answer" from "the answer is short". */
+typedef struct MP_CARQ_SLOTS_ARGS
+{
+	int* slots;	/* out: slot indices, 0..9 */
+	int* models;	/* out: model numbers, parallel to slots[] */
+	int  city;	/* in: 0..3 */
+	int  max;	/* in: capacity of BOTH arrays */
+	int  count;	/* out: how many were written; 0 = nobody knows */
+} MP_CARQ_SLOTS_ARGS;
 
 /* MP_CARQ_LOAD -> ARGS.ok = 1 when this machine now holds (city, model) and the
  * session has been told, so the car can be driven here.

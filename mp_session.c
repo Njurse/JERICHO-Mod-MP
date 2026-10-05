@@ -2922,41 +2922,41 @@ static void MpTestPauseCarTick(void)
 
 	if (model < 0)
 	{
-		extern int CarAvailability[4][10];
-		extern char carNumLookup[4][10];
-		int slot, seen = 0;
+		int slots[MP_CAR_LIST_MAX];
+		int models[MP_CAR_LIST_MAX];
+		char list[192];
+		size_t used;
+		int n, k;
 
 		if (city < 0 || city > 3)
 			city = 0;
 
-		for (slot = 0; slot < 10; slot++)
+		/* The SAME answer the pause picker builds its menu from (MpCarListForCity), so a
+		 * padless run can still see what the menu would offer - and the two cannot drift,
+		 * because it is one call. Printing the roster (not just a count) is the point: the
+		 * question this lever keeps being used to answer is "which cars can players pick?". */
+		n = MpCarListForCity(city, slots, models, MP_CAR_LIST_MAX);
+
+		list[0] = 0;
+
+		for (k = 0; k < n; k++)
 		{
-			if (CarAvailability[city][slot] == 0)
-				continue;
+			used = strlen(list);
 
-			model = (int)(unsigned char)carNumLookup[city][slot];
-
-			if (++seen >= 2)
-				break;
+			if (used < sizeof(list) - 24)
+				snprintf(list + used, sizeof(list) - used, "%s[%d]=%d",
+					(k > 0) ? " " : "", slots[k], models[k]);
 		}
 
-		/* Name what the search walked past. The table is complete for all four cities now
-		 * (carhacks fills it per level), so a search that finds nothing here means the
-		 * picker would find nothing either - and that is worth a line rather than a
-		 * silent fall through to whatever model was already set. */
-		{
-			int offered = 0;
+		if (gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx,
+				"[mp] test: PAUSECAR city %d roster: %d slot(s) - %s\n",
+				city, n, (list[0] != 0) ? list : "(none)");
 
-			for (slot = 0; slot < 10; slot++)
-			{
-				if (CarAvailability[city][slot] != 0)
-					offered++;
-			}
-
-			if (gMpCtx != NULL)
-				gMpCtx->jer_log(gMpCtx,
-					"[mp] test: PAUSECAR city %d offers %d of 10 slot(s)\n", city, offered);
-		}
+		/* the SECOND car in the list, as this lever always did: a change onto a different
+		 * model, so a run can tell the switch happened */
+		if (n > 0)
+			model = models[(n > 1) ? 1 : 0];
 	}
 
 	if (gMpCtx != NULL)
@@ -4214,6 +4214,66 @@ int MpCarQueryLoad(int city, int model)
 	return a.ok ? 1 : 0;
 }
 
+/* Which slots may `city` be offered in, and the model in each (mp_carquery.h). */
+int MpCarQuerySlots(int city, int* slots, int* models, int max)
+{
+	MP_CARQ_SLOTS_ARGS a;
+
+	if (slots == NULL || models == NULL || max <= 0)
+		return 0;
+
+	memset(&a, 0, sizeof(a));
+	a.city = city;
+	a.slots = slots;
+	a.models = models;
+	a.max = max;
+
+	jer_fire(MP_CARQ_SLOTS, &a);
+
+	/* count stays 0 when nobody answered -- "no better answer", not an error: the caller
+	 * then keeps the list it already had. */
+	if (a.count < 0)
+		return 0;
+
+	return (a.count > max) ? max : a.count;
+}
+
+/* The car list a city may be offered: what the car mods say, or failing that the engine's
+ * own frontend table - see mp.h for why that table is the wrong question IN A SESSION. */
+int MpCarListForCity(int city, int* slots, int* models, int max)
+{
+	extern int CarAvailability[4][10];
+	extern char carNumLookup[4][10];
+	int n, slot;
+
+	if (slots == NULL || models == NULL || max <= 0)
+		return 0;
+
+	if (city < 0 || city > 3)
+		city = 0;
+
+	n = MpCarQuerySlots(city, slots, models, max);
+
+	if (n > 0)
+		return n;
+
+	/* Nobody knew better: the frontend table, exactly as this picker read it before there
+	 * was anything to ask. */
+	n = 0;
+
+	for (slot = 0; slot < 10 && n < max; slot++)
+	{
+		if (CarAvailability[city][slot] == 0)
+			continue;
+
+		slots[n] = slot;
+		models[n] = (int)(unsigned char)carNumLookup[city][slot];
+		n++;
+	}
+
+	return n;
+}
+
 /* Tell whoever keeps the session's car identity (carhacks) how a switch ended: the local
  * player now drives (city, model) - city -1 for the level's own car - or (changed = 0) the
  * switch to it did not happen. A notice, not a question: nobody answering is fine. This is
@@ -4342,6 +4402,38 @@ int MpChangeCar(int city, int model)
 		MpNotifyf("Changed car: %s model %d", MpCarCityName(city), model);
 	else
 		MpNotifyf("Change car: %s model %d is not loaded here", MpCarCityName(city), model);
+
+	/* THE INVISIBLE-CAR INSTRUMENT.
+	 *
+	 * A player reported cars "loading invisible" after cycling a few, and no run has
+	 * reproduced it: the lever changes 12 cars across all four cities with every switch
+	 * succeeding, the previous slot released each time (7/8 alternating) and the pool flat.
+	 * So rather than guess at a fix, this states the ONE thing that makes a car invisible -
+	 * ap.model pointing at a resident model whose mesh is not built - in the log of the
+	 * change itself. DrawCar returns without drawing when gCarCleanModelPtr[] is NULL, so
+	 * that NULL is exactly the invisible car, and a report can name the state rather than
+	 * the symptom. Logged once per change, not per frame. */
+	if (gMpCtx != NULL && me != NULL && me->carId >= 0 && me->carId < MAX_CARS)
+	{
+		CAR_DATA* cp = &car_data[me->carId];
+		int slot = cp->ap.model;
+
+		if (slot >= 0 && slot < MAX_CAR_RESIDENT_MODELS)
+		{
+			int built = (gCarCleanModelPtr[slot] != NULL);
+
+			gMpCtx->jer_log(gMpCtx,
+				"[mp] car status: driving model %d (resident %d, source %s); mesh %s\n",
+				(int)residentCarModels[slot], slot, MpCarCityName(GetCarModelSourceCity(slot)),
+				built ? "loaded" : "MISSING - this car is not drawn");
+		}
+		else
+		{
+			gMpCtx->jer_log(gMpCtx,
+				"[mp] car status: driving resident %d, which is out of range - this car is not drawn\n",
+				slot);
+		}
+	}
 
 	return changed;
 }

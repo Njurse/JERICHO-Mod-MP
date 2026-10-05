@@ -1410,6 +1410,7 @@ static int mpCcCities[MPCC_MAX_CITIES];
 static int mpCcCityCount;
 static int mpCcCityIdx;
 static int mpCcModels[MPCC_MAX_CARS];
+static int mpCcSlots[MPCC_MAX_CARS];	/* the slot each model came from, parallel to mpCcModels */
 static int mpCcModelCount;
 static int mpCcModelIdx;
 static int mpCcLoggedCity = -1;	/* the city this picker last described */
@@ -1432,8 +1433,6 @@ static int MpCcCity(void)
  * when the page opens and after the city row changes. */
 static void MpCcRebuild(void)
 {
-	extern int CarAvailability[4][10];
-	extern char carNumLookup[4][10];
 	int city, slot;
 
 	/* The city list: carhacks' answer when it has one, else just the session
@@ -1469,30 +1468,34 @@ static void MpCcRebuild(void)
 	}
 
 	city = MpCcCity();
-	mpCcModelCount = 0;
 
-	for (slot = 0; slot < MPCC_SLOTS && mpCcModelCount < MPCC_MAX_CARS; slot++)
-	{
-		/* `== 0` is carhacks' and the stock screen's own test for "not offered
-		 * in this city"; -1 is a slot the level has no car for. */
-		if (CarAvailability[city][slot] == 0)
-			continue;
+	/* Ask the car mods, not the engine's table: in a session CarAvailability is still its
+	 * initialiser (four cars a city), because the FRONTEND car screen is what writes it and
+	 * -host/-join never opens that screen. MpCarListForCity asks the mods first and only
+	 * falls back to that table when nobody answers. */
+	mpCcModelCount = MpCarListForCity(city, mpCcSlots, mpCcModels, MPCC_MAX_CARS);
 
-		mpCcModels[mpCcModelCount++] = (int)(unsigned char)carNumLookup[city][slot];
-	}
-
-	/* What the picker had to leave out, logged when it changes. The TABLE is carhacks' to fill
-	 * (it owns cross-city, and its JER_EVENT_CAR_AVAILABILITY answer now covers all four
-	 * cities) - this line says what the mp picker did with it, because "I cannot pick that
-	 * car" is the report this whole path exists to answer, and a silent `continue` is what
-	 * made it need answering twice. */
+	/* What the picker had to leave out, logged when it changes - "I cannot pick that car" is
+	 * the report this whole path exists to answer, and a silent skip is what made it need
+	 * answering twice. It is computed from the roster that was actually built, so the line
+	 * cannot claim something the menu does not show, whichever source answered. */
 	if (mpCcLoggedCity != city || mpCcLoggedCount != mpCcModelCount)
 	{
 		char hidden[96];
 		int h = 0;
+		int seen[MPCC_SLOTS];
 
 		mpCcLoggedCity = city;
 		mpCcLoggedCount = mpCcModelCount;
+
+		for (slot = 0; slot < MPCC_SLOTS; slot++)
+			seen[slot] = 0;
+
+		for (slot = 0; slot < mpCcModelCount; slot++)
+		{
+			if (mpCcSlots[slot] >= 0 && mpCcSlots[slot] < MPCC_SLOTS)
+				seen[mpCcSlots[slot]] = 1;
+		}
 
 		strcpy(hidden, "; hidden:");
 
@@ -1500,7 +1503,7 @@ static void MpCcRebuild(void)
 		{
 			size_t used;
 
-			if (CarAvailability[city][slot] != 0)
+			if (seen[slot])
 				continue;
 
 			used = strlen(hidden);
