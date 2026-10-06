@@ -30,7 +30,7 @@ pushd "%EXEDIR%" || exit /b 1
 popd
 
 pushd "%HERE%" || exit /b 1
-"%SEVENZ%" a -t7z -mx=5 "%OUT%" PLAY_HOST.bat PLAY_JOIN.bat mp_bot_client.bat FIREWALL_FIX.bat README_LAN.txt
+"%SEVENZ%" a -t7z -mx=5 "%OUT%" PLAY_HOST.bat PLAY_JOIN.bat mp_bot_client.bat FIREWALL_FIX.bat README_LAN.txt README_LAN_TEST.txt
 popd
 
 rem The remote-testing agent, staged at the package ROOT (next to the exe) so the
