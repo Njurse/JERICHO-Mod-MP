@@ -5310,7 +5310,22 @@ int MpChangeCar(int city, int model)
 			return 0;
 		}
 
-		ChangePedPlayerToCar(0, &car_data[seat]);
+		/* The pedestrian is a real object, not just the player's pointer to it: the
+		 * engine's own get-in path (PedGetInCar -> ChangePedPlayerToCar + DestroyPedestrian
+		 * + the Tanner counter) removes it, and calling only ChangePedPlayerToCar leaves
+		 * the Tanner standing exactly where we got out - "you put me back in the car but
+		 * did not remove my Tanner". */
+		{
+			LPPEDESTRIAN ped = player[0].pPed;
+
+			ChangePedPlayerToCar(0, &car_data[seat]);
+			RemovePlayerPedestrian(ped);
+
+			if (gMpCtx != NULL)
+				gMpCtx->jer_log(gMpCtx,
+					"[mp] change car: got back into slot %d and put our pedestrian away (%s)\n",
+					seat, (ped != NULL) ? "removed" : "none");
+		}
 
 		/* Adopt the move NOW, so the re-model below lands on the car we just got
 		 * into instead of waiting a frame for the poll in MpSendOwnCarState. */
