@@ -1623,7 +1623,18 @@ static int MpOnPauseMenu(void* userdata, void* args)
 
 	(void)userdata;
 
-	if (pm == NULL || pm->action != JER_PAUSE_OPEN)
+	if (pm == NULL)
+		return JER_RESULT_CONTINUE;
+
+	/* Dying inside a session is a RESPAWN, not a game over. This is the engine asking
+	 * whether to arm it, so the answer is the refusal itself: STOP leaves the pause
+	 * unarmed and makes the engine drop the death fade, and by the time we answer the
+	 * player is already back on the map. Refusing is the only half a module CAN do -
+	 * the fade and the engine's WantPause are statics - which is why the hook exists. */
+	if (pm->action == JER_PAUSE_GAMEOVER)
+		return MpRespawnAfterDeath() ? JER_RESULT_STOP : JER_RESULT_CONTINUE;
+
+	if (pm->action != JER_PAUSE_OPEN)
 		return JER_RESULT_CONTINUE;
 
 	/* While the chat prompt is up, START is the player typing RETURN -- claim it,

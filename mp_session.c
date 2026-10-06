@@ -2069,6 +2069,7 @@ static void MpTestCityChangeTick(void);
 static void MpTestCarCycleTick(void);
 static void MpTestLeaveTick(void);
 static void MpTestOnFootTick(void);
+static void MpTestFallOffTick(void);
 
 
 /* ------------------------------------------------------------------ */
@@ -2629,6 +2630,7 @@ static const char* gTestOnFootStr;
 static const char* gTestCarChangeStr;
 static const char* gTestCityChangeStr;
 static const char* gTestCarCycleStr;
+static const char* gTestFallOffStr;
 static const char* gTestChatKeyStr;
 static const char* gTestCarSelectStr;
 static const char* gTestFrontendJoinStr;
@@ -2648,6 +2650,7 @@ static void MpResolveTestLevers(void)
 	gTestCarChangeStr = getenv("MP_TEST_CARCHANGE");
 	gTestCityChangeStr = getenv("MP_TEST_CITYCHANGE");
 	gTestCarCycleStr = getenv("MP_TEST_CARCYCLE");
+	gTestFallOffStr = getenv("MP_TEST_FALLOFF");
 	gTestChatKeyStr = getenv("MP_TEST_CHATKEY");
 	gTestCarSelectStr = getenv("MP_TEST_CARSELECT");
 	gTestFrontendJoinStr = getenv("MP_TEST_FRONTEND_JOIN");
@@ -3258,6 +3261,10 @@ void MpLockstepFrame(void)
 	 * without a physical collision (inert unless MP_TEST_TRAFFIC_HIT). */
 	MpTestTrafficHitTick();
 
+	/* test lever: drop our car off the map, to exercise the game-over refusal
+	 * (inert unless MP_TEST_FALLOFF). */
+	MpTestFallOffTick();
+
 	/* test lever: a clean leave part-way through (inert unless MP_TEST_LEAVE), so
 	 * that "a deliberate quit" and "a connection died" can be told apart in a
 	 * log without a human sitting at the menu. */
@@ -3684,6 +3691,47 @@ static void MpTestRestartTick(void)
 
 		jer_fire(JER_EVENT_GAME_QUIT, &q);
 	}
+}
+
+/* MP_TEST_FALLOFF=<secs> -- drop our car off the map that many seconds in.
+ *
+ * The only way to reach the game-over refusal (JER_PAUSE_GAMEOVER) without driving off a
+ * cliff by hand: the engine arms the death fade when the car's y goes below -1000, so this
+ * just puts it there. What proves the refusal is the pair of log lines - the engine's fade
+ * arming and then our "[mp] death in a session: respawned ... game over refused" - with no
+ * pause menu and no black screen after it. */
+static void MpTestFallOffTick(void)
+{
+	static int done;
+	static unsigned long startMs;
+	const char* s;
+	MP_PLAYER* me;
+
+	if (done || !gMp.running)
+		return;
+
+	s = gTestFallOffStr;
+
+	if (s == NULL)
+		return;
+
+	if (startMs == 0)
+		startMs = MpNowMs();
+
+	if (MpNowMs() - startMs < (unsigned long)atoi(s) * 1000UL)
+		return;
+
+	me = MpLocalPlayer();
+
+	if (me == NULL || me->carId < 0 || me->carId >= MAX_CARS)
+		return;
+
+	done = 1;
+
+	if (gMpCtx != NULL)
+		gMpCtx->jer_log(gMpCtx, "[mp] test: MP_TEST_FALLOFF - dropping our car off the map\n");
+
+	car_data[me->carId].hd.where.t[1] = -2000;
 }
 
 static void MpTestCarChangeTick(void)
@@ -5526,6 +5574,126 @@ int MpSoftRestart(void)
 			cp->st.n.fposition[0], cp->st.n.fposition[1], cp->st.n.fposition[2]);
 
 	MpNotify("Restarted: back at the start, car repaired, wanted level cleared");
+
+	return 1;
+}
+
+/* IN A SESSION, DYING IS A RESPAWN, NOT A GAME OVER.
+ *
+ * The engine asks (JER_PAUSE_GAMEOVER) just before it arms the game-over pause - the death
+ * fade (gDieWithFade, set when the car drops below y = -1000) reaching its end, or a mission
+ * asking for it. Answering "handled" IS the refusal: the engine leaves the pause unarmed and
+ * drops the fade instead of blackening the screen, and the player is put back on the map
+ * HERE, so by the time the engine asks the car is no longer dying.
+ *
+ * The placement is the engine's own (InitCarPhysics: the rigid-body quaternion and the
+ * fixed-point fposition, NOT hd.where) for the reason the soft restart above learned the hard
+ * way - writing hd.where alone leaves the body where it was, at the roll it had, and the next
+ * physics step snaps the car back onto it. The camera is re-seated with it, because
+ * cameraAngle is an absolute world yaw.
+ *
+ * The car goes back WHERE IT IS when that is still on the map, and to the level's own start
+ * when it is not: "in place" cannot mean the void, and MapHeight answering with a sane height
+ * is what says which of the two this is.
+ *
+ * Returns 1 when the game over was refused, 0 to let the engine have it - no session, or a
+ * player with no car (on foot the engine's death test never fires, so a game over there is
+ * not this one).
+ */
+int MpRespawnAfterDeath(void)
+{
+	MP_PLAYER* me;
+	CAR_DATA* cp;
+	LONGVECTOR4 start;
+	VECTOR probe;
+	int ground;
+	int x, z, dir;
+
+	if (!gMp.running)
+		return 0;
+
+	me = MpLocalPlayer();
+
+	if (me == NULL || me->carId < 0 || me->carId >= MAX_CARS)
+		return 0;
+
+	cp = &car_data[me->carId];
+
+	/* Placed on EVERY ask, because "the engine wants a game over" IS the dying signal - the
+	 * car's own y is not: the engine can already have clamped where.t[1] back to the ground
+	 * while the fade and the mission's game-over delay are still counting. What keeps this
+	 * from running per frame is the ENGINE: it clears Mission.gameover_delay when we refuse
+	 * (see JerGameOverRefused), so it asks once per death, not once per frame. */
+	x = cp->hd.where.t[0];
+	z = cp->hd.where.t[2];
+	dir = cp->hd.direction;
+
+	probe.vx = x;
+	probe.vy = 0;
+	probe.vz = z;
+	probe.pad = 0;
+
+	/* A sane ground height means this x/z is on the map. Anything else is the void. */
+	ground = MapHeight(&probe);
+
+	if (ground <= -1000)
+	{
+		if (PlayerStartInfo[0] == NULL)
+			return 0;			/* nothing sane to fall back to - let the engine end it */
+
+		x = PlayerStartInfo[0]->position.vx;
+		z = PlayerStartInfo[0]->position.vz;
+		dir = PlayerStartInfo[0]->rotation;
+	}
+
+	start[0] = x;
+	start[1] = 0;				/* the engine resolves the ground under the car */
+	start[2] = z;
+	start[3] = 0;
+
+	InitCarPhysics(cp, &start, dir);
+
+	cp->hd.speed = 0;
+	cp->wheel_angle = 0;
+
+	/* REPAIRED, and handed back whole: totalDamage alone leaves the car looking caved in,
+	 * because the DRAWN vertices only come back from the clean model through
+	 * CreateDentableCar (the same reason the restart above needs it). */
+	cp->totalDamage = 0;
+	memset(cp->ap.damage, 0, sizeof(cp->ap.damage));
+	CreateDentableCar(cp);
+	cp->ap.needsDenting = 0;
+
+	/* NOT DYING ANY MORE, and NOT WANTED. Repairing the CAR is not enough: the mission's
+	 * death route counts the player down through tannerDeathTimer -> player[].dying, and
+	 * BOTH the "your vehicle's wrecked" banner and the playersdead game over hang off that
+	 * counter -- so with it left standing the game kept saying the car was wrecked and kept
+	 * re-arming the game over we had just refused (which is why a refusal without this
+	 * respawned a few times before it settled, instead of once). */
+	tannerDeathTimer = 0;
+	player[0].dying = 0;
+	player[0].upsideDown = 0;
+
+	/* NO FELONY either - a forced respawn is a fresh start, not a wanted level carried
+	 * over. GetPlayerFelony picks the car's rating or the pedestrian's, so both go, or
+	 * stepping out puts the cops straight back on us. */
+	cp->felonyRating = 0;
+	pedestrianFelony = 0;
+
+	player[0].cameraAngle = cp->hd.direction + 1536;
+	player[0].cameraCarId = cp->id;
+
+	{
+		JER_ARGS_RESET_CAR rc;
+
+		rc.carId = me->carId;
+		jer_fire(JER_EVENT_RESET_CAR, &rc);
+	}
+
+	if (gMpCtx != NULL)
+		gMpCtx->jer_log(gMpCtx,
+			"[mp] death in a session: respawned at %d,%d (ground=%d) in slot %d - game over refused\n",
+			cp->hd.where.t[0], cp->hd.where.t[2], ground, me->carId);
 
 	return 1;
 }

@@ -404,6 +404,12 @@ void MpReturnToFrontend(void);		/* end the match, back to the main frontend */
 void MpHostByeAll(void);		/* tell every client the match is ending */
 void MpClientBye(void);		/* tell the host WE are ending (a deliberate quit) */
 
+/* JER_PAUSE_GAMEOVER's answer: 1 = "handled, this is not a game over" (the caller then
+ * returns JER_RESULT_STOP and the engine leaves the game-over pause unarmed), 0 = let the
+ * engine have its game over. Puts the local player back on the map and hands their car back
+ * whole. */
+int  MpRespawnAfterDeath(void);
+
 #ifdef __cplusplus
 }
 #endif
