@@ -22,6 +22,31 @@ HOW TO PLAY
    Both machines need the same city/arena; the host's choice is what everyone
    loads, so just start a normal Take a Ride on the host.
 
+PLAYING AGAINST THE BOT (needs no second human)
+   You can drive one seat yourself and let a BOT drive the other, on this one
+   machine:
+
+       play your host as usual, then run (start the host FIRST, then give it a
+       few seconds to come up)
+
+       mp_bot_client.bat                 the bot chases you
+       mp_bot_client.bat "" pursuit      the two hunt EACH OTHER
+       mp_bot_client.bat "" catmouse     the pair, driven by the pathfinder
+
+   It starts a second copy of the game as a CLIENT with MP_BOT set, so the bot
+   drives that car. The mode splits by ROLE -- in `chase` the host flees and the
+   joiner chases -- so with the bot on the client it chases whoever is driving the
+   host. That is the way to test a chase without a second player.
+
+   Set the mode on the bot copy only. Putting MP_BOT on the host as well makes
+   the host FLEE, which is right for a bot-vs-bot run and wrong when you are the
+   one driving it.
+
+   Both copies in one folder share JERICHO.log, so that file interleaves and the
+   second copy truncates the first one's earlier lines. Read the timestamps, or
+   set MP_EXEDIR to a second copy of the game folder to get a clean log from each.
+   MP_BOT_DRAW=1 draws the bot's aim and pathfinding on its HUD.
+
 FIREWALL
    On the HOST, inbound TCP + UDP on the session port (1400 here) must be
    allowed. Run FIREWALL_FIX.bat AS ADMINISTRATOR on the host -- it prints the
@@ -76,7 +101,8 @@ IF IT GOES WRONG
    (join, launch, resync). A `JERICHO.dmp` next to it is a crash dump.
 
 NOTES
-   * The test bot is OFF. Nothing drives your car unless you set MP_BOT.
+   * The test bot is OFF. Nothing drives your car unless you set MP_BOT -- see
+     PLAYING AGAINST THE BOT above for the one-command way to be chased.
    * Take a Ride with the two of you is the supported path for now. Car-to-car
      collisions are replicated -- each machine owns its own car's response, so a
      shove lands after one round trip -- but damage is not.

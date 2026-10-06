@@ -30,7 +30,7 @@ pushd "%EXEDIR%" || exit /b 1
 popd
 
 pushd "%HERE%" || exit /b 1
-"%SEVENZ%" a -t7z -mx=5 "%OUT%" PLAY_HOST.bat PLAY_JOIN.bat FIREWALL_FIX.bat README_LAN.txt
+"%SEVENZ%" a -t7z -mx=5 "%OUT%" PLAY_HOST.bat PLAY_JOIN.bat mp_bot_client.bat FIREWALL_FIX.bat README_LAN.txt
 popd
 
 rem The remote-testing agent, staged at the package ROOT (next to the exe) so the
@@ -54,6 +54,12 @@ mkdir "%STAGE%\JERICHO\CONFIG" 2>nul
 > "%STAGE%\JERICHO\CONFIG\mp.ini" echo # LAN build (JERICHO mp) -- copied whole, so the digests match.
 >> "%STAGE%\JERICHO\CONFIG\mp.ini" echo # strict_version = 1 REFUSES a join when the other machine runs a different build.
 >> "%STAGE%\JERICHO\CONFIG\mp.ini" echo strict_version = 1
+rem The session port has to be written down here, not left to MP_DEFAULT_PORT: a
+rem config `port` WINS over a -host/-join port, so with no line here the host
+rem listened on 1318 while PLAY_HOST/PLAY_JOIN and the firewall rule in
+rem README_LAN all said 1400 -- a join by address could never connect. Keep these
+rem three in step: this line, PLAY_HOST's default, and README_LAN's firewall note.
+>> "%STAGE%\JERICHO\CONFIG\mp.ini" echo port = 1400
 pushd "%STAGE%" || exit /b 1
 "%SEVENZ%" a -t7z -mx=5 "%OUT%" JERICHO\CONFIG\mp.ini
 popd

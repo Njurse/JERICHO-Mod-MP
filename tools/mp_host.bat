@@ -4,7 +4,13 @@ rem mp_host.bat [port] [lobby] [dry]
 rem
 rem   Host a LAN game and go straight into hosting -- no frontend walking.
 rem
-rem       JERICHO_dev.exe -nointro -nofmv -host [port]      (default 1400)
+rem       JERICHO_dev.exe -nointro -nofmv -host [port]      (default 1318)
+rem
+rem   The port has to MATCH JERICHO\CONFIG\mp.ini: the game loads that file at
+rem   boot and binds the listener before the command line is read, so a port given
+rem   here cannot MOVE an already-bound host -- it only desyncs what the host
+rem   advertises from what it listens on. Two ends on different ports never meet.
+rem   To really change it, edit `port` in mp.ini; then pass the same number here.
 rem
 rem   MP_AUTOSTART=host is set for you, so the match starts as soon as a player is
 rem   in. Pass "lobby" instead of a port to sit and wait for somebody to press
@@ -32,7 +38,7 @@ echo echo mp: no JERICHO_dev.exe in "%EXEDIR%"
 )
 if /i "%~1"=="dry" goto :dry
 set "PORT=%~1"
-if "%PORT%"=="" set "PORT=1400"
+if "%PORT%"=="" set "PORT=1318"
 if not defined MP_AUTOSTART set "MP_AUTOSTART=host"
 if /i "%~2"=="lobby" set "MP_AUTOSTART="
 echo mp: hosting on port %PORT%, autostart "%MP_AUTOSTART%"
@@ -43,7 +49,7 @@ exit /b 0
 
 :dry
 set "PORT=%~2"
-if "%PORT%"=="" set "PORT=1400"
+if "%PORT%"=="" set "PORT=1318"
 if not defined MP_AUTOSTART set "MP_AUTOSTART=host"
 echo mp: would run, in "%EXEDIR%"
 echo   JERICHO_dev.exe -nointro -nofmv -host %PORT%
