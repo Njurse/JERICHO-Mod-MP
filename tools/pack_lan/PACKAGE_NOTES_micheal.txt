@@ -1,0 +1,67 @@
+PR #15 candidate -- notes for this copy (Micheal)
+==================================================
+
+This is the same build as the standard LAN package README_LAN.txt describes, with
+three deliberate differences made for this hand-off. Read this first, then
+README_LAN.txt. (README_LAN_TEST.txt is the checklist of what is worth trying.)
+
+1. THERE IS NO DRIVER2\ FOLDER IN THIS ZIP -- ON PURPOSE.
+   You already have the game data on this PC. Unpack this zip so that its contents
+   sit in the SAME FOLDER as your existing DRIVER2\ (i.e. next to the exe), so you
+   end up with:
+
+       <somewhere>\JERICHO_dev.exe
+       <somewhere>\JERICHO\
+       <somewhere>\DRIVER2\          <- your existing copy, untouched
+       <somewhere>\DRIVER\D1CARS\    <- from this zip
+
+   If DRIVER2\ is not beside JERICHO_dev.exe the game will start and find no data.
+   Nothing in this zip overwrites DRIVER2\, so your data copy is safe.
+
+2. THE PLAYER NAME IN THIS COPY IS "Micheal".
+   JERICHO\CONFIG\mp.ini ships with player_name = Micheal. The machine this was
+   built on keeps its own name (Jaret) -- that file was not touched.
+
+3. DRIVER\D1CARS\ IS INCLUDED (1.8 MB), AND WAS NOT BEFORE.
+   This is our baked Driver 1 car data, and it is what makes the five Driver 1
+   cities (MIAMI, FRISCO, LA, NEWYORK, NEWCASTLE) work in the car-select at all:
+   the runtime opens exactly DRIVER\D1CARS\<CITY>.LEV and .LCF. The rest of
+   DRIVER\ -- the Driver 1 game data, ~620 MB -- is not needed and is not here.
+
+   In this build the Driver 1 cars also render CORRECTLY for the first time: the
+   bake used to hand the first texture page the number 0, which the engine
+   reserves as "no page", so on Newcastle car 1 the bonnet was invisible and cars
+   1 and 2 were half-missing. Cycle the cars in a session and they should be
+   complete, in their own colours, and stay that way however many times you
+   switch. Worth trying: the pause menu's Change car, through every city, several
+   times over.
+
+WHAT ELSE IS NEW SINCE THE COPY YOU HAVE
+----------------------------------------
+* THE SESSION PORT IS WRITTEN DOWN AT LAST. mp.ini now says port = 1400, which is
+  the number PLAY_HOST/PLAY_JOIN and README_LAN's firewall note always claimed. It
+  did not before, and a config port WINS over a -host/-join port, so the host
+  actually listened on 1318 while advertising 1400 -- a join by address could
+  never connect, and only LAN discovery found the host. If a join fails now it is
+  a firewall or discovery problem, not this.
+* mp_bot_client.bat -- a BOT you can be chased by, on one machine. Start your host,
+  run mp_bot_client.bat in the same folder, and a second copy of the game drives
+  itself and comes after you (mp_bot_client.bat "" pursuit makes the two hunt each
+  other). The quickest way to exercise car-to-car collisions without a second
+  player. Setting MP_BOT on the host too makes the host flee instead, which is
+  right for a bot-vs-bot run and wrong when you are driving.
+
+BUILD IDENTITY
+   The banner the game logs on boot says which build it is:
+
+       == JERICHO v2 (build 0.9.0-125-gc8ecca02-dirty) ==
+
+   That alone does not have to match. What the join COMPARES is the multiplayer
+   stamp, which the same startup prints and the pause-menu scoreboard repeats:
+
+       [mp] multiplayer ready (... build f381, mods 0cca)
+
+   It is a digest of the RELEASE SERIES, not of the code, so it does not change
+   per commit -- two machines on the same release are admitted whatever their
+   build provenance. If THOSE two differ, the join is refused with a clear message
+   rather than the two of you silently failing to see each other.

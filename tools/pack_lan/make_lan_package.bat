@@ -7,6 +7,11 @@ rem Ships the exe, the DLLs, the game data and JERICHO -- but NOT the 1.5 GB of
 rem FMV videos, which are the bulk of the build and are not needed by the
 rem launchers (they pass -nofmv, which the game supports). Add DRIVER2\FMV to
 rem the second 7z command if someone wants the movies.
+rem
+rem DRIVER\D1CARS is our baked Driver 1 car data (1.8 MB) and IS shipped: the
+rem runtime opens exactly DRIVER\D1CARS\<CITY>.LEV and .LCF, so without it not one
+rem of the five Driver 1 cities can be selected. The rest of DRIVER\ -- the Driver
+rem 1 game data, ~620 MB -- is neither needed nor shipped.
 setlocal
 set "HERE=%~dp0"
 set "ROOT=%HERE%..\..\..\..\.."
@@ -26,7 +31,7 @@ echo packaging %EXEDIR% -^> %OUT%
 pushd "%EXEDIR%" || exit /b 1
 "%SEVENZ%" a -t7z -mx=5 "-xr!FMV" "%OUT%" ^
     JERICHO_dev.exe SDL2.dll OpenAL32.dll soft_oal.dll config.ini ^
-    VERSION.txt DRIVER2 JERICHO
+    VERSION.txt DRIVER2 JERICHO DRIVER\D1CARS
 popd
 
 pushd "%HERE%" || exit /b 1
