@@ -5459,26 +5459,36 @@ int MpSoftRestart(void)
 
 	cp = &car_data[me->carId];
 
-	/* The level's own start for this player (PlayerStartInfo[0] is us), placed the
-	 * engine's own way: only x and z, with t[1] = 0 so the engine resolves the
-	 * ground under the car -- exactly what a car created at level init relies on
-	 * (see MpSpawnLateJoiners). */
+	/* The level's own start for this player (PlayerStartInfo[0] is us), placed THE ENGINE'S
+	 * OWN WAY. A car's orientation is a rigid-body QUATERNION (st.n.orientation) and its
+	 * position a fixed-point fposition; hd.where and hd.where.m are DERIVED from those by
+	 * RebuildCarMatrix. Writing only hd.where - as this used to - leaves the body where it
+	 * was and at the roll it had, so the next physics step snaps the car back onto the old
+	 * state: the reported "they respawn upside down", and a car that can drop out of the
+	 * world. InitCarPhysics writes the whole state the way a level-built car gets it, and
+	 * the AI already uses it to place cars (civ_ai.c, leadai.c). */
 	if (PlayerStartInfo[0] != NULL)
 	{
-		MATRIX m;
+		LONGVECTOR4 start;
 
-		cp->hd.where.t[0] = PlayerStartInfo[0]->position.vx;
-		cp->hd.where.t[1] = 0;
-		cp->hd.where.t[2] = PlayerStartInfo[0]->position.vz;
-		cp->hd.direction = PlayerStartInfo[0]->rotation;
+		start[0] = PlayerStartInfo[0]->position.vx;
+		start[1] = 0;		/* the engine resolves the ground under the car */
+		start[2] = PlayerStartInfo[0]->position.vz;
+		start[3] = 0;
 
-		/* A teleport has to carry the handling matrix with it: leaving it behind
-		 * makes the car collide at the spot it used to be. */
-		_RotMatrixY(&m, (short)cp->hd.direction);
-		memcpy(cp->hd.where.m, m.m, sizeof(cp->hd.where.m));
+		InitCarPhysics(cp, &start, PlayerStartInfo[0]->rotation);
+
+		/* The camera angle is an ABSOLUTE world yaw, so it has to be re-seated against the
+		 * car's new heading - the engine's own rule when a player gets into a car
+		 * (players.c: cameraAngle = newCar->hd.direction + 1536). Left as it was, the view
+		 * keeps aiming from the heading the player was respawned away from, which reads as
+		 * the camera flipping and rolling. */
+		player[0].cameraAngle = cp->hd.direction + 1536;
+		player[0].cameraCarId = cp->id;
 	}
 
-	/* Stopped dead: a restart is not a momentum transfer. */
+	/* Stopped dead: a restart is not a momentum transfer. (InitCarPhysics has already
+	 * zeroed the body's linear/angular velocity; hd.speed is not one of its fields.) */
 	cp->hd.speed = 0;
 	cp->wheel_angle = 0;
 	memset(cp->st.n.linearVelocity, 0, sizeof(cp->st.n.linearVelocity));
@@ -5508,8 +5518,12 @@ int MpSoftRestart(void)
 
 	if (gMpCtx != NULL)
 		gMpCtx->jer_log(gMpCtx,
-			"[mp] soft restart: back at the level start %d,%d in slot %d, repaired, felony cleared\n",
-			cp->hd.where.t[0], cp->hd.where.t[2], me->carId);
+			"[mp] soft restart: back at the level start %d,%d in slot %d, repaired, felony cleared"
+			" (body q %d,%d,%d,%d, fpos %d,%d,%d)\n",
+			cp->hd.where.t[0], cp->hd.where.t[2], me->carId,
+			cp->st.n.orientation[0], cp->st.n.orientation[1],
+			cp->st.n.orientation[2], cp->st.n.orientation[3],
+			cp->st.n.fposition[0], cp->st.n.fposition[1], cp->st.n.fposition[2]);
 
 	MpNotify("Restarted: back at the start, car repaired, wanted level cleared");
 
