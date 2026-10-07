@@ -134,6 +134,32 @@ no wanted level, and the session carries on.
 | `mod_check` | `0` | host lobby mod policy: 0 off, 1 by id, 2 by id+version |
 | `strict_version` | `0` | host lobby setting: 1 also requires an identical build hash (off by default, because that hash tracks `git describe`) |
 
+**The file wins over the command line.** `port` is read before the arguments are
+applied, so `-host 1400` / `-join host:1400` do not move a session off the ini's port.
+If two machines disagree about the port, nothing connects and nothing in the UI says
+why: the dev build's default is `1318` while the shipped LAN package's is `1400`, so
+set the same port in both `mp.ini`, or change it in the ini rather than on the command
+line. (`-join` is still the way to pick the *address*; the port in it is a hint only.)
+
+### A dev build and a release build can play together
+
+They can, deliberately. The two speak the same wire protocol, and the host's mod policy
+is off by default (`mod_check = 0`), so a *different* mod set is not an admission gate:
+a joiner whose manifest does not match is still let in, and is told so on screen ("This
+host is on a different mod set - you can still play, but cars and content may not
+match"). That is the honest answer rather than a hidden one, because the two machines
+really do not have the same cars and content -- a dev build carries modules a release
+does not. Set `strict_version = 1` on the host when a picky session is wanted; the
+things that will genuinely stop a pair are the port above and a protocol mismatch
+between builds far apart in time.
+
+Measured (dev host, release client, same commit series): the host logged
+`player 1 'LocalB' joined (2/8)` and the client `accepted as player 1 (matched=1)`, so
+the two builds do not merely tolerate each other -- they report a match, even though
+their mod hashes differ (`mods 4806` against `mods b7fe`). The LAN browser still shows
+each host's `build`/`mods` stamps, which is where a genuine difference is visible
+before joining.
+
 ## Command line
 
 `-help` (also `-h`, `--help`, `-?`) prints the full argument list **to the

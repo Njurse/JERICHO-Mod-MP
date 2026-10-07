@@ -81,14 +81,23 @@ STAYING ON THE SAME BUILD
    there (no Visual Studio, no git).
 
    <build> is the same string the game logs at startup
-       [mp] multiplayer ready (... build be0d, mods 13bd)
-   and prints on the pause-menu scoreboard, right under "-- PLAYERS --". If those
-   two do not match, the two machines are not on the same build.
+       [mp] multiplayer ready (... build f381, mods 4806)
+   and prints on the pause-menu scoreboard, right under "-- PLAYERS --".
+
+   The BUILD stamp is the one that has to agree: it identifies the release series,
+   and two machines built from the same series agree on it even when one is a dev
+   build and the other is this package. The MODS stamp is a different thing -- it
+   follows which modules are enabled -- so a build carrying extra modules shows a
+   different one (this package shows `mods b7fe` where a dev build shows `mods
+   4806`) and that is NOT a mismatch to fix.
 
    This package ships JERICHO\CONFIG\mp.ini with `strict_version = 1`, so a
-   mismatched build is REFUSED at join with a clear message, instead of the two
-   players silently failing to see each other. To deliberately test mismatched
-   builds, set it back to 0 in that file.
+   genuinely different BUILD is REFUSED at join with a clear message, instead of
+   the two players silently failing to see each other. To deliberately test
+   mismatched builds, set it back to 0 in that file. A different MOD SET is not
+   refused: the joining player is told on screen that the host is on a different
+   mod set, and the session carries on -- which is the honest answer, because the
+   two machines really do not have the same cars and content.
 
    The usual symptom of a stale exe on one side is a session that HALF works --
    the two players never see each other's car, or one HUD lists a peer that never

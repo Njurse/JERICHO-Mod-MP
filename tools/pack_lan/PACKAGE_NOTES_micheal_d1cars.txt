@@ -60,8 +60,21 @@ BUILD IDENTITY
 
    It is a digest of the RELEASE SERIES, not of the code, so it does not change
    per commit -- two machines on the same release are admitted whatever their
-   build provenance. If THOSE two differ, the join is refused with a clear message
-   rather than the two of you silently failing to see each other.
+   build provenance. A different MOD SET is admitted as well (the joiner is told
+   on screen that the host is on a different mod set); only a different BUILD is
+   refused.
+
+5. IF SOMETHING CRASHES, ONE FILE IS WORTH MORE THAN A DESCRIPTION.
+   A crash puts up a Windows dialog headed "Unhandled exception!" (the body is the
+   system's access-violation wording -- "The thread attempted to read the
+   inaccessible data at ..."). It also writes JERICHO.dmp NEXT TO JERICHO.exe.
+   That file names the faulting function exactly, so please keep it and send it
+   along with a line about what you were doing -- it turns "it crashed" into a
+   symbol. The log beside it (JERICHO.log) is the second-most useful thing.
+
+   On the other side of the session we run a DEV build of the same release, so our
+   startup line will show a different `mods` stamp to yours. That is expected and
+   does not stop the join.
 
 SIX MODULES, NOT FOUR
    The public package pre-includes four. This one has six: carhacks, CRUMPLE,

@@ -265,6 +265,35 @@ Two rules follow, both learned the hard way:
   host" report, and the engine then has to pull the car down. Move a car in x/z
   and let placement find the ground under it.
 
+### A hop must be streamed before its ground is read
+
+The gather writes the host's x/z onto the client's car and then asks the engine for
+the ground there (`MapHeight`). That ask only means anything if the place is loaded,
+and **a place you HOP into is not loaded**: the streamer follows where you drive, not
+where you are put, so a region you are teleported into is never unpacked into the
+engine's 2x2 barrel. `MapHeight` reads that barrel (`sdGetCell`), returns 0 when the
+cell has no plane, and a car placed on that 0 is under the world -- the client's "no
+cells, it fell into the void", and then the crash handler's "Unhandled exception!"
+dialog with the OS access-violation text. Two things about the fix are worth keeping:
+
+- **`resident` answers "is this a hop", never "is there ground here".**
+  `jer_map_region_resident` means *unpacked*, not *in the barrel*: measured on this
+  very path, the gather's destination reported `region 135 resident=1 hasData=1` and
+  still gave `MapHeight 0`. So do not reason "resident, therefore the ground is fine";
+  equally, do not stream on every gather just because resident is not proof.
+- **`jer_map_spool_to` is the right call for a hop, and it is not free.** It is the
+  SDK's "stream there" call, and it is what the arena and antfarm use for their own
+  teleports. But when the region IS already resident it still runs
+  `CheckLoadAreaData` + `StartSpooling` + `UpdateSpool` -- a synchronous spool pass --
+  and calling it unconditionally on every gather stalled both harness rigs (measured).
+  So: point `MainPlayer.spoolXZ` at the destination (it must outlive the call),
+  stream only when the region is genuinely not in, and leave `spoolXZ` on the car
+  afterwards so the streamer keeps following the car instead of the spot it left.
+
+When the destination cannot be streamed at all (no data there -- off the map), the
+gather places nothing and leaves the car on the level's own start, which is real,
+streamed ground by construction, and retries on later carstates.
+
 ---
 
 ## 5. Input replication

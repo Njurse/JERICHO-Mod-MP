@@ -29,6 +29,7 @@ extern int gWantNight;		/* glaunch.c: 1 = the night take-a-ride level variant */
 #include "handling.h"	/* LongQuaternion2Matrix: rebuild a car's matrix from its body */
 #include "state.h"
 #include "dr2roads.h"	/* FindSurfaceD2: the real ground height at a point */
+#include "jer_map.h"	/* jer_map_*: the region maths behind "is the ground there?" */
 #include "pedest.h"	/* pUsedPeds: our player's own pedestrian, when on foot */
 #include "jer_npc.h"	/* jer_npc_*: the pedestrian we stand in for a REMOTE one */
 #include "jer_ped_palette.h"	/* jer_ped_palette_reset: scope the suit-colour cache to a session */
@@ -1872,6 +1873,15 @@ static void MpHandleWelcome(const unsigned char* p, int len)
 	if (gMpCtx)
 		gMpCtx->jer_log(gMpCtx, "[mp] accepted as player %d (matched=%d gamemode=%d city=%d)\n",
 			w.playerId, gMp.modsMatched, w.gamemode, w.city);
+
+	/* SAY SO ON SCREEN. modsMatched is the host's comparison of OUR mod manifest against
+	 * its own, so it catches exactly the pair we deliberately allow -- a dev build joining
+	 * a release build, or simply a different modlist. The protocol and the level are the
+	 * same either way and the match goes ahead (the mod-check policy is off by default),
+	 * but the two machines do NOT have the same cars and content, and a player who cannot
+	 * tell that apart will blame the connection for whatever the mismatch does next. */
+	if (!gMp.modsMatched)
+		MpNotify("This host is on a different mod set - you can still play, but cars and content may not match");
 
 	MpJoinStateSet(MP_JOIN_READY);	/* the "Connecting..." row goes away */
 
@@ -6119,6 +6129,11 @@ static void MpHandleCarState(int connIndex, const unsigned char* p, int len)
 				CAR_DATA* my = &car_data[me->carId];
 				MATRIX m;
 				int gy;
+				int oldX = my->hd.where.t[0];	/* so a REFUSED gather can put us back */
+				int oldY = my->hd.where.t[1];
+				int oldZ = my->hd.where.t[2];
+				int oldDir = my->hd.direction;
+				VECTOR* oldSpoolXZ = MainPlayer.spoolXZ;
 
 				/* OUR x/z (the peer's spot offset along X) -- but the HEIGHT is
 				 * resolved from the ground UNDER where we land, never carried from
@@ -6132,23 +6147,138 @@ static void MpHandleCarState(int connIndex, const unsigned char* p, int len)
 				my->hd.where.t[2] = e.z;
 				my->hd.direction = e.heading;
 
-				gy = MapHeight((VECTOR*)my->hd.where.t);
-				if (my->ap.carCos != NULL)
-					gy -= my->ap.carCos->wheelDisp[0].vy;
-				my->hd.where.t[1] = gy;
+				/* MAKE THE DESTINATION REAL BEFORE WE READ ITS GROUND.
+				 *
+				 * This gather is a HOP across the map, and the streamer does not follow a
+				 * hop: the region we are dropped into is very often not the one that is
+				 * resident, and MapHeight answers 0 for ground that is not there
+				 * (sdGetCell -> NULL -> 0, dr2roads.c:544). A car placed on that 0 is a
+				 * car below the world -- it falls, and the client has "no cells".
+				 *
+				 * jer_map_spool_to is the SDK's "stream there" call, and this is the same
+				 * sequence antfarm and the arena use for their own hops: point the
+				 * streamer at the destination first (it follows MainPlayer.spoolXZ), then
+				 * ask, and the engine unpacks that region through its own level-start
+				 * path -- the 2x2 barrel, its geometry and roadmap and its texture area
+				 * together, none of which a bare UnpackRegion would do. */
+				{
+					static VECTOR sGatherSpool;	/* spoolXZ must outlive this call */
+					int gx = my->hd.where.t[0];
+					int gz = my->hd.where.t[2];
+					int region = jer_map_ready() ? jer_map_region_of(gx, gz) : -1;
+					int hasData = (region >= 0) ? jer_map_region_has_data(region) : 0;
+					int before = MapHeight((VECTOR*)my->hd.where.t);
+					int after = before;
+					int resident = (region >= 0) ? jer_map_region_resident(region) : 0;
+					int placed = 0;
 
-				/* Rebuild the handling matrix too: setting only t[]/direction left the
-				 * collision box at the OLD spot until the engine next recomputed it --
-				 * and this is a teleport, so it matters. */
-				_RotMatrixY(&m, (short)e.heading);
-				memcpy(my->hd.where.m, m.m, sizeof(my->hd.where.m));
+					if (jer_map_ready() && region >= 0 && hasData)
+					{
+						if (resident)
+						{
+							/* Already unpacked and in the barrel: nothing to stream, so do
+							 * NOT call the helper. jer_map_spool_to is not free when the
+							 * region is resident -- it still runs CheckLoadAreaData +
+							 * StartSpooling + UpdateSpool, a synchronous spool pass -- and
+							 * calling it on every gather stalled both a pair run and a
+							 * 3-seat run (measured). Stream only when the region genuinely
+							 * is not in, which is the hop this gather is.
+							 *
+							 * And be plain about the limit of this test: residency is NOT
+							 * the same question as "is there ground under us". A region
+							 * can read resident=1 hasData=1 and still give MapHeight 0
+							 * (measured on this path), which is why placement is not made
+							 * conditional on the height -- on the level's own start that
+							 * 0 is correct and the car is fine, so refusing on it would
+							 * break the ordinary case. The streamer is what has to be
+							 * right, and for a destination that was never streamed this
+							 * branch is not taken at all. */
+							placed = 1;
+						}
+						else
+						{
+							/* THE HOP. A region you are dropped into is never put into a
+							 * barrel by the streamer, so the ground there never loads and
+							 * MapHeight answers 0: this is the client's "no cells, fell
+							 * into the void". jer_map_spool_to is the SDK's "stream there"
+							 * call -- the same one antfarm and the arena use for their own
+							 * teleports -- and it unpacks the region under
+							 * MainPlayer.spoolXZ through the engine's own level-start
+							 * path, so the caller must point spoolXZ at the destination
+							 * first. That pointer needs to outlive the call, hence the
+							 * static. */
+							sGatherSpool.vx = gx;
+							sGatherSpool.vy = 0;
+							sGatherSpool.vz = gz;
+							sGatherSpool.pad = 0;
+							MainPlayer.spoolXZ = &sGatherSpool;
 
-				gMp.localPlaced = 1;
+							/* 0 = there is nothing there to stream (off the map or no
+							 * regions), in which case we must not place at all. */
+							placed = jer_map_spool_to(gx, gz);
+							after = MapHeight((VECTOR*)my->hd.where.t);
 
-				if (gMpCtx)
-					gMpCtx->jer_log(gMpCtx,
-						"[mp] gathered next to peer at %d,%d,%d (ground under us, not the peer's y)\n",
-						my->hd.where.t[0], my->hd.where.t[1], my->hd.where.t[2]);
+							/* And hand the streamer back. Ours pointed at a static, whose
+							 * contents cannot follow a moving car, whereas the engine's own
+							 * convention is the player car's position vector itself
+							 * (cutscene.c:673 does exactly that) -- which is the car we are
+							 * moving, so it already follows us. */
+							MainPlayer.spoolXZ = oldSpoolXZ;
+						}
+					}
+
+					if (gMpCtx != NULL)
+						gMpCtx->jer_log(gMpCtx,
+							"[mp] gather ground: region %d (resident=%d, hasData=%d) at %d,%d - MapHeight before %d, after %d, %s\n",
+							region, resident, hasData, gx, gz, before, after,
+							placed ? (resident ? "already streamed, placing" : "streamed, placing")
+								: "nothing to stream, NOT placing");
+
+					if (!placed)
+					{
+						/* NO GROUND, NO PLACE -- and put the car back. The x/z above was
+						 * already written, so without this the refusal would leave the car
+						 * standing at the destination with no ground under it: the very void
+						 * this is here to prevent. It stays where the level put it -- real
+						 * ground by construction -- and tries again on the next carstate,
+						 * because localPlaced stays 0. */
+						my->hd.where.t[0] = oldX;
+						my->hd.where.t[1] = oldY;
+						my->hd.where.t[2] = oldZ;
+						my->hd.direction = oldDir;
+
+						if (gMpCtx != NULL)
+							gMpCtx->jer_log(gMpCtx,
+								"[mp] gather: there is no ground to stream at %d,%d (region %d, hasData=%d) - staying where the level put us, will retry\n",
+								gx, gz, region, hasData);
+					}
+					else
+					{
+						gy = after;	/* the height read immediately before placing */
+						if (my->ap.carCos != NULL)
+							gy -= my->ap.carCos->wheelDisp[0].vy;
+						my->hd.where.t[1] = gy;
+
+						/* Rebuild the handling matrix too: setting only t[]/direction left
+						 * the collision box at the OLD spot until the engine next
+						 * recomputed it -- and this is a teleport, so it matters. */
+						_RotMatrixY(&m, (short)e.heading);
+						memcpy(my->hd.where.m, m.m, sizeof(my->hd.where.m));
+
+						/* No need to re-point the streamer here: the engine's spoolXZ is
+						 * the player car's own position vector, and this IS that car, so
+						 * it follows us to the new spot on its own. (Re-pointing it at a
+						 * module static -- which is what this used to do -- leaves the
+						 * streamer reading a vector that never moves again.) */
+
+						gMp.localPlaced = 1;
+
+						if (gMpCtx)
+							gMpCtx->jer_log(gMpCtx,
+								"[mp] gathered next to peer at %d,%d,%d (ground under us, not the peer's y)\n",
+								my->hd.where.t[0], my->hd.where.t[1], my->hd.where.t[2]);
+					}
+				}
 			}
 		}
 
