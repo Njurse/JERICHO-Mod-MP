@@ -36,7 +36,7 @@
 #   * The token is random: generated on the first run and kept in
 #     mp_agent.config.json next to the game (never committed). The old published
 #     default 'jericho-mp' is refused. The token is never written to mp_agent.log.
-#   * Only the Release_dev Windows build (JERICHO_Release_dev_win64.zip, which
+#   * Only the Release Windows build (JERICHO_Release_win64.zip, which
 #     carries JERICHO_dev.exe) is ever installed. The plain Release assets that CI
 #     publishes beside it are not considered real releases yet and are refused, by
 #     name and again by what the archive contains.
@@ -56,7 +56,7 @@ param(
     [string] $Root  = '',              # defaults to the folder this script sits in
     [string] $Repo  = 'Njurse/JERICHO',                  # owner/name the releases come from
     [string] $Tag   = 'alpha',                           # the release `update` installs by default
-    [string] $Asset = 'JERICHO_Release_dev_win64.zip',   # the ONLY asset accepted: the Release_dev build
+    [string] $Asset = 'JERICHO_Release_win64.zip',   # the ONLY asset accepted: the Release build
     [switch] $InstallRelease,          # one-shot: install -Tag, then exit (no listener)
     [switch] $Rollback,                # one-shot: restore the previous build, then exit
     [switch] $Force,                   # reinstall even when that exact archive is already installed
@@ -106,7 +106,7 @@ $RepoPattern  = '^[A-Za-z0-9-]{1,39}/[A-Za-z0-9._-]{1,100}$'
 # archives for each platform; only the Release_dev Windows build (JERICHO_dev.exe)
 # counts for now -- the plain Release ones are not treated as real releases yet,
 # and their exe (JERICHO.exe) is not what this agent starts or stops anyway.
-$DevAsset   = 'JERICHO_Release_dev_win64.zip'
+$ReleaseAsset = 'JERICHO_Release_win64.zip'
 $DevExe     = 'JERICHO_dev.exe'
 $NonDevExe  = 'JERICHO.exe'     # the plain Release exe: an archive carrying it is refused
 
@@ -833,8 +833,8 @@ if (-not $PSBoundParameters.ContainsKey('Repo')) {
     }
 }
 if ($Tag -notmatch $TagPattern) { throw "-Tag is not a valid release tag: '$Tag'" }
-if ($Asset -ne $DevAsset) {
-    throw "only the Release_dev build is installed: -Asset must be $DevAsset (got '$Asset'). The plain Release assets are refused."
+if ($Asset -ne $ReleaseAsset) {
+    throw "only the Release build is installed: -Asset must be $ReleaseAsset (got '$Asset'). The other assets are refused."
 }
 
 if ($InstallRelease -or $Rollback) {

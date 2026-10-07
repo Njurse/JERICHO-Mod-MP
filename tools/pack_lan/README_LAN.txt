@@ -6,7 +6,7 @@ exe will not talk to it). Unzip it anywhere -- the game writes its log and
 config next to the exe, so it does not need to be installed.
 
 WHAT IS IN HERE
-   JERICHO_dev.exe, the DLLs        the game
+   JERICHO.exe, the DLLs        the game
    DRIVER2\                           the game data (the intro/mission FMV
                                       videos are left out; both launchers pass
                                       -nofmv, which the game supports)

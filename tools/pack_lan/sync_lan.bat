@@ -19,7 +19,7 @@ pushd "%HERE%..\..\..\..\.." || exit /b 1
 set "ROOT=%CD%"
 popd
 set "SRC=%ROOT%\src_rebuild"
-set "EXEDIR=%SRC%\bin\Release_dev"
+set "EXEDIR=%SRC%\bin\Release"
 
 rem ---------------------------------------------------------------- 1) stamp
 rem The SAME value premake bakes in as JERICHO_BUILD_VERSION, so the package name,
@@ -45,17 +45,44 @@ if errorlevel 1 (
 popd
 
 rem ------------------------------------------------------------------- 3) build
-rem build_dev.bat passes msbuild a RELATIVE path (build\JERICHO.vcxproj), so it
-rem must be invoked with src_rebuild as the current directory.
-echo [sync_lan] building Release_dev (this takes a few minutes)...
+rem The RELEASE build, not the dev one: a release pre-includes only carhacks +
+rem crumple + mp (premake5.lua JERICHO_RELEASE_MODS), and bin\Release is what this
+rem package ships.
+rem
+rem exports.def is generated from a LINKER MAP, and the committed copy is shaped
+rem for the DEV build -- it names every mod's entry symbol. A release links only
+rem the three, so that def fails the link with LNK2001s. So: link once against a
+rem throwaway empty def (that pass is what writes the map), regenerate the def
+rem from that map, then relink. The CI workflow does the same. The committed,
+rem dev-shaped def is restored afterwards, so the repo is left as it was found.
+rem
+rem build_jericho.bat passes msbuild a RELATIVE path (build\JERICHO.vcxproj), so
+rem it must be invoked with src_rebuild as the current directory.
+echo [sync_lan] building Release (this takes a few minutes)...
 pushd "%SRC%" || exit /b 1
-call "%SRC%\build_dev.bat"
-set "RC=%ERRORLEVEL%"
-popd
-if not "%RC%"=="0" (
-    echo [sync_lan] BUILD FAILED - nothing was packaged
-    exit /b 1
+copy /Y "%SRC%\exports.def" "%SRC%\exports.def.keep" >nul
+> "%SRC%\exports.def" echo EXPORTS
+call "%SRC%\build_jericho.bat"
+if errorlevel 1 (
+    copy /Y "%SRC%\exports.def.keep" "%SRC%\exports.def" >nul & del "%SRC%\exports.def.keep" >nul
+    echo [sync_lan] BUILD FAILED (pass 1) - nothing was packaged
+    popd & exit /b 1
 )
+"%SRC%\bin\Release\gen_exports.exe" "%SRC%\bin\Release\JERICHO.map" "%SRC%\exports.def"
+if errorlevel 1 (
+    copy /Y "%SRC%\exports.def.keep" "%SRC%\exports.def" >nul & del "%SRC%\exports.def.keep" >nul
+    echo [sync_lan] gen_exports FAILED - nothing was packaged
+    popd & exit /b 1
+)
+call "%SRC%\build_jericho.bat"
+if errorlevel 1 (
+    copy /Y "%SRC%\exports.def.keep" "%SRC%\exports.def" >nul & del "%SRC%\exports.def.keep" >nul
+    echo [sync_lan] BUILD FAILED (pass 2) - nothing was packaged
+    popd & exit /b 1
+)
+copy /Y "%SRC%\exports.def.keep" "%SRC%\exports.def" >nul
+del "%SRC%\exports.def.keep" >nul
+popd
 
 rem ------------------------------------------------------------------ 4) stamp in
 > "%EXEDIR%\VERSION.txt" echo %BUILD%

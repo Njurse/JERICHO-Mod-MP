@@ -10,11 +10,11 @@ README_LAN.txt. (README_LAN_TEST.txt is the checklist of what is worth trying.)
    sit in the SAME FOLDER as your existing DRIVER2\ (i.e. next to the exe), so you
    end up with:
 
-       <somewhere>\JERICHO_dev.exe
+       <somewhere>\JERICHO.exe
        <somewhere>\JERICHO\
        <somewhere>\DRIVER2\          <- your existing copy, untouched
 
-   If DRIVER2\ is not beside JERICHO_dev.exe the game will start and find no data.
+   If DRIVER2\ is not beside JERICHO.exe the game will start and find no data.
    Nothing in this zip overwrites DRIVER2\, so your data copy is safe.
 
 2. THE PLAYER NAME IN THIS COPY IS "Micheal".

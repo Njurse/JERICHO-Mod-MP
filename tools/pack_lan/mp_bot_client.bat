@@ -44,10 +44,10 @@ setlocal
 rem Works both in the package (this file next to the exe) and in the dev tree
 rem (JERICHO\MODS\mp\tools\pack_lan -- five levels up to the repo root).
 set "EXEDIR=%~dp0"
-if not exist "%EXEDIR%JERICHO_dev.exe" set "EXEDIR=%~dp0\..\..\..\..\..\src_rebuild\bin\Release_dev"
+if not exist "%EXEDIR%JERICHO.exe" set "EXEDIR=%~dp0\..\..\..\..\..\src_rebuild\bin\Release"
 if not "%MP_EXEDIR%"=="" set "EXEDIR=%MP_EXEDIR%"
-if not exist "%EXEDIR%\JERICHO_dev.exe" (
-    echo mp: no JERICHO_dev.exe in "%EXEDIR%"
+if not exist "%EXEDIR%\JERICHO.exe" (
+    echo mp: no JERICHO.exe in "%EXEDIR%"
     echo     build it, or set MP_EXEDIR to the directory that has it
     exit /b 1
 )
@@ -60,7 +60,7 @@ if not defined MP_BOT set "MP_BOT=%MODE%"
 set "MP_AUTOSTART="
 echo mp: bot client joining %ADDR% with MP_BOT=%MP_BOT%
 cd /d "%EXEDIR%"
-start "" "JERICHO_dev.exe" -nointro -nofmv -join %ADDR%
+start "" "JERICHO.exe" -nointro -nofmv -join %ADDR%
 endlocal
 exit /b 0
 
@@ -70,7 +70,7 @@ if "%ADDR%"=="" set "ADDR=127.0.0.1"
 set "MODE=%~3"
 if "%MODE%"=="" set "MODE=chase"
 echo mp: would run, in "%EXEDIR%"
-echo   JERICHO_dev.exe -nointro -nofmv -join %ADDR%
+echo   JERICHO.exe -nointro -nofmv -join %ADDR%
 echo   with MP_BOT=%MODE%, MP_AUTOSTART cleared
 endlocal
 exit /b 0

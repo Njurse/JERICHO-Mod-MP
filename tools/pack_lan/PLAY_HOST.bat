@@ -12,5 +12,5 @@ if "%PORT%"=="" set "PORT=1400"
 echo mp: hosting on port %PORT%. Choose Las Vegas + Take a Ride in the menus.
 echo mp: allow inbound TCP and UDP on port %PORT% in Windows Firewall.
 set "MP_AUTOSTART=host"
-start "" "JERICHO_dev.exe" -nointro -nofmv -host %PORT%
+start "" "JERICHO.exe" -nointro -nofmv -host %PORT%
 endlocal

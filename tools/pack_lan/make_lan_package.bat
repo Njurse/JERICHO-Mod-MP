@@ -3,6 +3,10 @@ rem Build the LAN test package (JERICHO_mp_lan.7z in the project root).
 rem
 rem   make_lan_package.bat [output.7z]
 rem
+rem Ships the RELEASE build (bin\Release\JERICHO.exe): the public build, which
+rem pre-includes only carhacks + crumple + mp. It is NOT the dev build -- a dev
+rem build carries every mod and stays local. See premake5.lua JERICHO_RELEASE_MODS.
+rem
 rem Ships the exe, the DLLs, the game data and JERICHO -- but NOT the 1.5 GB of
 rem FMV videos, which are the bulk of the build and are not needed by the
 rem launchers (they pass -nofmv, which the game supports). Add DRIVER2\FMV to
@@ -18,7 +22,7 @@ rem package alongside this one, never inside it.
 setlocal
 set "HERE=%~dp0"
 set "ROOT=%HERE%..\..\..\..\.."
-set "EXEDIR=%ROOT%\src_rebuild\bin\Release_dev"
+set "EXEDIR=%ROOT%\src_rebuild\bin\Release"
 set "OUT=%~1"
 if "%OUT%"=="" set "OUT=%ROOT%\JERICHO_mp_lan.7z"
 
@@ -33,7 +37,7 @@ if not exist "%SEVENZ%" (
 echo packaging %EXEDIR% -^> %OUT%
 pushd "%EXEDIR%" || exit /b 1
 "%SEVENZ%" a -t7z -mx=5 "-xr!FMV" "%OUT%" ^
-    JERICHO_dev.exe SDL2.dll OpenAL32.dll soft_oal.dll config.ini ^
+    JERICHO.exe SDL2.dll OpenAL32.dll soft_oal.dll config.ini ^
     VERSION.txt DRIVER2 JERICHO
 popd
 
@@ -68,16 +72,12 @@ rem listened on 1318 while PLAY_HOST/PLAY_JOIN and the firewall rule in
 rem README_LAN all said 1400 -- a join by address could never connect. Keep these
 rem three in step: this line, PLAY_HOST's default, and README_LAN's firewall note.
 >> "%STAGE%\JERICHO\CONFIG\mp.ini" echo port = 1400
-rem Ship the SHIPPED-PROFILE modlist.ini, NOT whatever the dev machine's build
-rem currently has. bin/ is a dev tree: it may have d1cars (or any other module)
-rem toggled on for testing, and the release must not -- a package that enabled
-rem d1cars would name a module it does not carry. The repo's
-rem JERICHO\CONFIG\modlist.ini is the shipped profile (carhacks + mp only), so
-rem that is what goes in the zip. Staged in TEMP like mp.ini, so the build's own
-rem modlist is never touched.
-copy /Y "%ROOT%\JERICHO\CONFIG\modlist.ini" "%STAGE%\JERICHO\CONFIG\modlist.ini" >nul
+rem The RELEASE modlist is written by the Release build itself (premake copies
+rem gen/modlist_release.ini over bin/Release/JERICHO/CONFIG/modlist.ini), so the
+rem package ships exactly the pre-included three and never a module it does not
+rem carry. Nothing is staged here for it.
 pushd "%STAGE%" || exit /b 1
-"%SEVENZ%" a -t7z -mx=5 "%OUT%" JERICHO\CONFIG\mp.ini JERICHO\CONFIG\modlist.ini
+"%SEVENZ%" a -t7z -mx=5 "%OUT%" JERICHO\CONFIG\mp.ini
 popd
 
 echo done: %OUT%

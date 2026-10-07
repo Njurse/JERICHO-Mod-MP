@@ -80,14 +80,15 @@ WHAT TO EXERCISE
 
 WHAT IS IN THE PACKAGE
 ----------------------
-  JERICHO_dev.exe + DLLs   the game (this build)
+  JERICHO.exe + DLLs   the game (this build)
   DRIVER2\                 the Driver 2 data, minus the 1.4 GB of FMV
                            (both launchers pass -nofmv)
   (no DRIVER\D1CARS\)      The Driver 1 car content is NOT in this package, so the
                            five Driver 1 cities cannot be selected here. It ships
                            SEPARATELY, as its own release -- never inside this one.
-  JERICHO\                 the loader, the mp mod and its config
-                           (modlist.ini already has mp = 1 and carhacks = 1)
+  JERICHO\                 the loader, the three pre-included mods and their
+                           config (modlist.ini is carhacks = 1, crumple = 1,
+                           mp = 1 -- the only mods a release ships)
   PLAY_HOST.bat / PLAY_JOIN.bat / mp_bot_client.bat / FIREWALL_FIX.bat
   mp_agent.ps1 + START_AGENT.bat   hands-free remote test agent (optional)
 

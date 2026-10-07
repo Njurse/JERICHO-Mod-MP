@@ -58,11 +58,10 @@ tell you so -- push to main (or tag) and let CI publish first.
 
 WHAT AN UPDATE DOES
 -------------------
-1. Asks the GitHub API (HTTPS) for the release and finds the Release_dev
-   Windows zip, JERICHO_Release_dev_win64.zip (the one with JERICHO_dev.exe).
-   That is the ONLY build it installs: the plain Release assets
-   (JERICHO_Release_win64.zip, JERICHO.exe) are not treated as real releases
-   yet and are refused -- by name, and again if an archive carries JERICHO.exe.
+1. Asks the GitHub API (HTTPS) for the release and finds the Release
+   Windows zip, JERICHO_Release_win64.zip (the one with JERICHO.exe).
+   That is the ONLY build it installs: every other asset is refused -- by name,
+   and again if an archive does not carry JERICHO.exe.
 2. Gets the expected SHA256 from GitHub's asset digest -- or, if a release has
    none, from a SHA256SUMS file published beside the zips. Never from
    anything inside the zip. With neither, it refuses to install.
