@@ -5477,6 +5477,13 @@ int MpChangeCar(int city, int model)
 				"[mp] change car (single player): we asked for %s model %d (slot %d)\n",
 				MpCarCityName(city), model, slot);
 
+		/* NOT A CAR THIS MACHINE HOLDS YET? Ask for it, exactly as the session path
+		 * does below. The picker offers a city's whole roster, so choosing one IS the
+		 * request that imports it -- without this a cross-city or Driver 1 pick could
+		 * be selected and then always refused, and the roster would be a lie. */
+		if (MpResidentSlotForCar(city, model) < 0)
+			MpCarQueryLoad(city, model);
+
 		changed = MpAdoptCar(slot, city, model, NULL);
 
 		if (changed)

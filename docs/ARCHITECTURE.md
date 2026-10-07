@@ -1042,12 +1042,16 @@ host's roster names the car it is really driving.
 The page is registered UNCONDITIONALLY, so it is there in SINGLE PLAYER as well.
 Out of a session `MpChangeCar` takes the car from the engine
 (`MainPlayer.playerCarId`, `MainPlayer.playerType`) and does the same local
-re-model with no roster row to update and nothing to publish. Two things follow
-from there being nobody to ask: the picker offers only cars this level can build
-RIGHT NOW, because there is no import/hotload request path to lean on and so a
-listed car must not be one Apply would refuse; and a pick that still cannot be
-built is refused with a reason (`MpChangeCarRefusal`), leaving the current car in
-place.
+re-model with no roster row to update and nothing to publish. The picker offers
+the WHOLE roster of every city, foreign ones included, exactly as it does in a
+session -- because choosing a car that is not resident here yet IS the request
+that brings it in: `MpChangeCar` asks carhacks to import it (`MpCarQueryLoad`)
+before it re-models, in single player as much as in a match. (It once offered only
+what the level could already build out of a session, on the theory that anything
+else could only be refused. It never prevented a refusal -- the import was right
+there -- it just made every city list nothing, which read as "no cars available".)
+A pick that still cannot be loaded is refused with a reason
+(`MpChangeCarRefusal`), leaving the current car in place.
 
 **Where the cities come from.** mp can only offer what this machine can actually
 hold, and a second city's car data is carhacks' business, so mp ASKS:
