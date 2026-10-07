@@ -2,7 +2,10 @@
 
 **New here? Start with [`docs/JERICHO-MP.md`](docs/JERICHO-MP.md)** — what a match
 is, who owns which car, how a player joins, and the things that cost days, in plain
-language. [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) is the deep version.
+language. [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) is the deep version, and
+[`docs/SYNC_CHECKLIST.md`](docs/SYNC_CHECKLIST.md) is the **release gate**: what
+"synchronised" means per domain, how to verify each one, what is knowingly imperfect
+in v1, and the sign-off table.
 
 LAN multiplayer for REDRIVER2, built as a JERICHO deep mod (compiled into the
 game like `levelhacks`, so it can read/write game globals). Host on TCP/UDP

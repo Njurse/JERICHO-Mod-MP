@@ -125,6 +125,10 @@ mod.
 
 ## 6. What is deliberately not synchronised
 
+> ⚠ Traffic sync has since **landed** (owner-authoritative, disjoint `car_data` bands —
+> `MP_TAG_TRAFFIC`). See [`SYNC_CHECKLIST.md`](SYNC_CHECKLIST.md); the paragraph below
+> predates it.
+
 - **Traffic and pedestrians.** Every machine runs its own; they will not match, and
   nothing tries to make them. This is why a car slot number means nothing on another
   machine (it may hold a different car there), and why matching a *model* by number

@@ -565,6 +565,11 @@ that run used to report was the clock-underflow disconnect (trap 15) and is gone
 Ordered by what is proven broken and what unblocks the most. Items marked DONE are
 implemented and, where noted, observed.
 
+> ⚠ The traffic work (§ the "Traffic and police sync" note below) has since **landed** —
+> `MP_TAG_TRAFFIC`, disjoint `car_data` bands and owner-following contacts are in the code
+> (`MP_PROTO_VERSION` 9). This section's prose lags it; the current acceptance view is
+> [`SYNC_CHECKLIST.md`](SYNC_CHECKLIST.md).
+
 ### A. Verify the pair end to end — DONE
 
 Verified: a two-instance run (`mp_localpair.py`, and `mp_pair.bat`) reaches a match
@@ -745,6 +750,11 @@ must keep that guard meaningful.
 ## 13. Unverified
 
 Kept honest and separate, because the difference matters when picking this up.
+
+> See [`SYNC_CHECKLIST.md`](SYNC_CHECKLIST.md) for the current, per-domain acceptance view
+> and the v1 sign-off gate. Two entries below are now stale against the code: the
+> **late joiner dropped for `timeout` while it loads** is fixed (the poll-gap credit in
+> `mp_net.c`), and **traffic sync is landed**, not "NOT started".
 
 **Observed working:** the transport (HELLO/WELCOME/REJECT/roster/START/INPUT/PING all seen on the wire), discovery and the beacon, a client being accepted and
 launching into a live match, remote cars being engine-simulated with the right
