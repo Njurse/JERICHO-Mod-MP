@@ -657,6 +657,19 @@ static void MpChatGrabKeyboard(int on)
  * else appends, up to the buffer, terminator included. */
 static void MpOnTextInput(const char* text)
 {
+	/* The manual address field first: it lives in the FRONTEND, where chat never
+	 * runs, and it is the only other claimant of this slot. */
+	if (MpUiManualEditing())
+	{
+		/* Enter can arrive here as text on some backends: treat it as done. */
+		if (text != NULL && (text[0] == '\r' || text[0] == '\n'))
+			MpUiManualCommit();
+		else
+			MpUiManualType(text);
+
+		return;
+	}
+
 	if (!gMp.chatOpen)
 	{
 		/* not ours: pass it on untouched */
@@ -701,6 +714,18 @@ static void MpOnDebugKey(int nKey, char down)
 
 	if (!down)
 		return;
+
+	/* The manual address field is in the FRONTEND, so this sits BEFORE the in-game
+	 * gate below: while it is editing it owns Enter and Escape. */
+	if (MpUiManualEditing())
+	{
+		if (nKey == MP_KEY_CHAT_SEND)
+			MpUiManualCommit();
+		else if (nKey == MP_KEY_CHAT_CANCEL)
+			MpUiManualCancel();
+
+		return;
+	}
 
 	/* In a live match only: while the frontend is up the engine's own text fields
 	 * (and every other module) want the keyboard. */
@@ -808,7 +833,7 @@ static int MpOnFrame(void* userdata, void* args)
 	 * then never acted on. */
 	/* Chat owns PsyX's single text-input slot exactly while the prompt is up.
 	 * Re-asserted every frame so a missed release self-heals. */
-	MpChatGrabKeyboard(gMp.chatOpen ? 1 : 0);
+	MpChatGrabKeyboard((gMp.chatOpen || MpUiManualEditing()) ? 1 : 0);
 
 	/* Test lever: MP_TEST_CITYCONFIRM=<secs> fires the take-a-ride CITY CONFIRM the
 	 * way the frontend does (CutSceneCitySelectScreen on CROSS), that many seconds

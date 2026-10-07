@@ -33,6 +33,7 @@
 #  include <netinet/in.h>
 #  include <netinet/tcp.h>
 #  include <arpa/inet.h>
+#  include <netdb.h>		/* getaddrinfo: a join target may be a DNS name */
 #  include <unistd.h>
 #  include <fcntl.h>
 #  include <sys/time.h>	/* gettimeofday for MpClockMs - NOT <time.h>, see there */
@@ -755,12 +756,100 @@ void MpClientDisconnect(void)
 	gJoinState = MP_JOIN_IDLE;
 }
 
-/* Is this a dotted-quad IPv4 address? There is no DNS anywhere in this module,
- * so anything else is a mistake worth reporting rather than something to
- * silently aim at the loopback. */
+/* Is this something we can dial? A dotted-quad IPv4 or a DNS name -- both are
+ * resolved by MpResolveHost. This is only a SANITY check (non-empty, no
+ * whitespace, not absurdly long), because whether a name actually EXISTS is the
+ * resolver's answer and can only be had at connect time. */
 int MpIsValidAddress(const char* host)
 {
-	return host != NULL && host[0] != '\0' && inet_addr(host) != INADDR_NONE;
+	size_t i;
+
+	if (host == NULL || host[0] == '\0' || strlen(host) >= 128)
+		return 0;
+
+	for (i = 0; host[i] != '\0'; i++)
+	{
+		/* a name may carry letters, digits, dots, hyphens and an inline :port;
+		 * whitespace or a slash is a paste or typing mistake every time */
+		if (host[i] == ' ' || host[i] == '\t' || host[i] == '/' || host[i] == '\\')
+			return 0;
+	}
+
+	return 1;
+}
+
+/* Resolve `host` (a dotted-quad IPv4 or a DNS name) plus `port` into `out`.
+ *
+ * A literal IPv4 is taken directly, which keeps LAN peers and the
+ * discovery-derived addresses off the resolver entirely. Anything else goes
+ * through getaddrinfo -- the only reason this module can be pointed at a NAME at
+ * all, and what makes "join myhost.ddns.net" work.
+ *
+ * getaddrinfo BLOCKS: a DNS server that is slow or unreachable stalls for seconds,
+ * and the game loop must not. So the answer is cached per host string -- a retry
+ * (MP_JOIN_ATTEMPTS) or a reconnect re-uses it rather than re-querying, and the
+ * lookup therefore happens once, where the join is started (a menu press or -join),
+ * never on the frame path.
+ *
+ * Returns 1 and fills `out` on success, 0 if the name does not resolve. */
+static int MpResolveHost(const char* host, int port, struct sockaddr_in* out)
+{
+	static char cachedHost[128];
+	static struct in_addr cachedAddr;
+
+	struct in_addr literal;
+
+	if (host == NULL || host[0] == '\0')
+		return 0;
+
+	memset(out, 0, sizeof(*out));
+	out->sin_family = AF_INET;
+	out->sin_port = htons((unsigned short)(port > 0 ? port : gMp.config.port));
+
+	/* NOTE: inet_addr also rejects the all-ones address, which nothing sensible
+	 * would dial; everything else non-numeric falls through to the resolver. */
+	literal.s_addr = inet_addr(host);
+	if (literal.s_addr != INADDR_NONE)
+	{
+		out->sin_addr = literal;
+		return 1;
+	}
+
+	if (cachedAddr.s_addr != 0 && strcmp(cachedHost, host) == 0)
+	{
+		out->sin_addr = cachedAddr;
+		return 1;
+	}
+
+	{
+		struct addrinfo hints;
+		struct addrinfo* res = NULL;
+		int rc;
+
+		memset(&hints, 0, sizeof(hints));
+		hints.ai_family = AF_INET;		/* the transport is IPv4-only */
+		hints.ai_socktype = SOCK_STREAM;
+		hints.ai_flags = AI_ADDRCONFIG;		/* no IPv6 here: skip AAAA lookups */
+
+		rc = getaddrinfo(host, NULL, &hints, &res);
+
+		if (rc != 0 || res == NULL)
+		{
+			/* name the true cause here: the caller can only see "no socket" */
+			if (gMpCtx != NULL)
+				gMpCtx->jer_log(gMpCtx, "[mp] '%s' does not resolve (getaddrinfo %d)\n", host, rc);
+
+			return 0;
+		}
+
+		out->sin_addr = ((struct sockaddr_in*)res->ai_addr)->sin_addr;
+
+		snprintf(cachedHost, sizeof(cachedHost), "%s", host);
+		cachedAddr = out->sin_addr;
+
+		freeaddrinfo(res);
+		return 1;
+	}
 }
 
 /* A socket set up for `host:port` (already non-blocking, ready for connect). */
@@ -770,23 +859,16 @@ static SOCKET MpClientSocket(const char* host, int port, struct sockaddr_in* out
 	SOCKET s;
 	int one = 1;
 
+	/* resolved BEFORE the socket exists: an unresolvable name is a reporting
+	 * error, not something to open a handle for */
+	if (!MpResolveHost(host, port, &addr))
+		return INVALID_SOCKET;
+
 	s = socket(AF_INET, SOCK_STREAM, 0);
 	if (s == INVALID_SOCKET)
 		return INVALID_SOCKET;
 
 	setsockopt(s, SOL_SOCKET, SO_REUSEADDR, (const char*)&one, sizeof(one));
-
-	memset(&addr, 0, sizeof(addr));
-	addr.sin_family = AF_INET;
-	addr.sin_port = htons((unsigned short)(port > 0 ? port : gMp.config.port));
-	addr.sin_addr.s_addr = inet_addr(host != NULL ? host : "");
-	if (addr.sin_addr.s_addr == INADDR_NONE)
-	{
-		/* not a dotted quad -- fail rather than quietly dial the loopback, so
-		 * a typo is reported instead of looking like a dead server */
-		closesocket(s);
-		return INVALID_SOCKET;
-	}
 
 	*out = addr;
 
@@ -928,12 +1010,25 @@ int MpClientConnectBegin(const char* host, int port)
 
 	MpClientDisconnect();	/* also cancels any earlier attempt */
 
-	s = MpClientSocket(host, port, &addr);
-	if (s == INVALID_SOCKET)
-		return 0;
-
+	/* Recorded BEFORE the socket, because the failure paths below report
+	 * "%s:%d" and would otherwise name nothing (and the pre-connect log should
+	 * name the same thing the connection will). */
 	snprintf(gConnectingHost, sizeof(gConnectingHost), "%s", host != NULL ? host : "");
 	gConnectingPort = port > 0 ? port : gMp.config.port;
+
+	s = MpClientSocket(host, port, &addr);
+	if (s == INVALID_SOCKET)
+	{
+		/* MpResolveHost logs WHICH it was (no socket, or a name that does not
+		 * resolve). Either way this is FINAL rather than parked in the retry path:
+		 * a name that does not resolve will not resolve 1.2 seconds from now, and
+		 * making the player wait through MP_JOIN_ATTEMPTS for it is worse than
+		 * telling them at once. */
+		gJoinAttempt = MP_JOIN_ATTEMPTS - 1;
+		MpJoinFail("could not resolve the address");
+		return 0;
+	}
+
 	gConnectingSinceMs = MpClockMs();
 	gJoinState = MP_JOIN_CONNECTING;
 

@@ -450,6 +450,30 @@ In game, chat opens on **T** and closes on **Escape**, and **Enter** sends. A
 received line is an ordinary notify, so every seat logs it as
 `[mp] notify row '<name>: <text>'`.
 
+## The manual address field, and joining by name
+
+The manual join field is TYPED, not adjusted: Cross on the row starts the keyboard,
+Cross again (or Enter) keeps what you typed, Escape undoes it. It takes an IPv4
+address **or a DNS name**, and an optional `:port` -- `play.example.net:1318` and
+`192.168.1.20:1318` are both fine. A port that is not a number (or is out of range) is
+refused with a logged reason rather than silently dialled on the configured port.
+`-join <host>[:port]` takes exactly the same thing.
+
+The harness has no keyboard, so the field is exercised through a lever instead:
+
+    MP_TEST_MANUALADDR=<host>[:port] python mp_localpair.py --seat-env client=MP_TEST_MANUALADDR=localhost:1400
+
+It fills the field and presses Connect through the SAME code path the row uses, so a
+run reports:
+
+    [mp] test: manual address <- 'localhost:1400' (MP_TEST_MANUALADDR)
+    [mp] joining manual localhost:1400
+
+and a bad port gives `manual address '...' does not parse (want host or host:port)`.
+
+`mp_localpair.py --join-host <name>` makes the client seats dial a NAME rather than
+127.0.0.1, which is the DNS path end to end.
+
 ## The Single Player / Multiplayer prompt (a headless run has no pad)
 
 The take-a-ride city confirm is the one place that asks Singleplayer vs

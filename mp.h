@@ -400,6 +400,15 @@ void MpSetSubGame(int n);		/* the multiplayer sub-level (gSubGameNumber) */
 void MpUiOpenModeMenu(void);		/* open the Single Player / Multiplayer menu */
 void MpUiArmModeMenu(void);		/* ask for it on the NEXT frame - call this from a hook */
 void MpUiOpenCarSelect(void);		/* open the stock car select (joining player picks a car) */
+
+/* The typed manual-address field. It lives in mp_ui.c but the keyboard belongs to
+ * mp.c (PsyX has ONE text-input slot and mp.c chains it), so these are how the two
+ * halves meet: mp.c asks whether the field wants the keys, and hands it what was
+ * typed. */
+int  MpUiManualEditing(void);
+void MpUiManualType(const char* text);	/* one character, or NULL for backspace */
+void MpUiManualCommit(void);
+void MpUiManualCancel(void);
 void MpClientLaunch(void);		/* launch a client into the host's level */
 void MpReturnToFrontend(void);		/* end the match, back to the main frontend */
 void MpHostByeAll(void);		/* tell every client the match is ending */

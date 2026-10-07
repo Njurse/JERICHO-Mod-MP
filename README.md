@@ -147,6 +147,7 @@ carries on.
     JERICHO_dev.exe -help
     JERICHO_dev.exe -host 1318
     JERICHO_dev.exe -join 192.168.1.20:1318
+    JERICHO_dev.exe -join play.example.net:1318    # a DOMAIN works as well as an IP
 
 ## If nobody can see your game
 
@@ -164,8 +165,31 @@ Two things have to be true, and the module only controls one of them.
    A *second copy of this game* sharing the port is fine (both can still see
    each other); a different program holding it is not.
 
-`-join <ip>[:port]` still works with discovery off, so a host can always be
-reached by address.
+`-join <host>[:port]` still works with discovery off -- and with discovery off it is
+the ONLY way -- so a host can always be reached by address. `<host>` may be an IP
+**or a domain name**: a name is resolved with DNS when you connect. The menu's manual
+field takes exactly the same thing, typed on the keyboard.
+
+That field is **typed**, which means entering an address now needs a keyboard. It used
+to be four pad-adjustable octets, so a pad-only player could assemble an IP; they can
+no longer type one. The LAN list still covers the pad-only case.
+
+## Playing over the internet
+
+Direct connect, no relay: forward **TCP 1318** on the host's router to its PC, then
+join with the host's public IP or its DDNS name -- typed into the manual field, or
+passed as `-join <host>[:port]`. UDP 1318 is only needed for the LAN server list, so
+forward it too if you want local machines to discover the game.
+
+Three things to know before relying on it:
+
+- **No authentication and no encryption.** Anything that can reach the port can
+  join, and the traffic is plain text. Forward the port deliberately.
+- **No internet server browser.** Discovery is UDP broadcast, which stops at the
+  router, so a remote game never appears in the list and has to be typed in. A DDNS
+  name makes that a one-time thing.
+- **LAN-tuned feel.** There is no client-side prediction, so at 100-200 ms ping the
+  other cars move in visible steps. Fine for a drive, not for a race.
 
 ## Testing
 

@@ -26,8 +26,11 @@ That is the whole design. Everything below is a consequence of it.
 1. **Host** — the frontend gets a multiplayer menu (`-host` does the same). The
    host opens a TCP listener on port 1318 and starts advertising a UDP beacon, so
    the game appears in everyone else's LAN list.
-2. **Join** — pick a game from the list (or `-join <ip>`). The client connects,
-   says hello, and gets a car and a player number.
+2. **Join** — pick a game from the LAN list, or type an address in the manual field
+   (`-join <host>[:port]` does the same). The host may be named by a **domain** as
+   readily as by an IP, so `-join play.example.net:1318` and typing that into the
+   menu both work. The client connects, says hello, and gets a car and a player
+   number.
 3. **Choose the match** — the host picks these on the ENGINE'S OWN screens: the city
    screen, then the combined **Time of Day / Condition** screen that the Single Player
    prompt hands over to (time of day and weather both live there). The multiplayer map
@@ -40,6 +43,22 @@ That is the whole design. Everything below is a consequence of it.
    everyone (Escape cancels). Every player sees the line at once.
 
 ---
+
+### Playing over the internet
+
+The same thing works across the open internet by **direct connect**. The host
+forwards **TCP 1318** on its router to its PC, and everyone else joins by typing the
+host's public IP or **domain** into the manual field (or `-join <host>[:port]`).
+There is no relay and no server of ours in the middle.
+
+- **UDP 1318 is LAN-only.** Discovery is a broadcast, which stops at the router, so a
+  remote game never appears in the list and its address has to be typed. Forward UDP
+  1318 as well if you want local machines to find it.
+- **No authentication and no encryption.** Anyone who can reach the port can join,
+  and the traffic is plain text. Forward it deliberately.
+- **It is LAN-tuned.** Remote cars are driven from the replicated pad with no
+  client-side prediction, so at 100-200 ms ping the world moves in visible steps.
+- **IPv4 only.** A name that resolves only to IPv6 will not connect.
 
 ## 3. Who owns what (the one rule that explains the rest)
 
@@ -183,7 +202,7 @@ mod.
 | --- | --- |
 | the mod | `JERICHO/MODS/mp/` — `mp.c` (hooks/registry), `mp_net.c` (transport), `mp_session.c` (session + sync), `mp_ui.c` (frontend), `mp_players.c`, `mp_bot.c` (test bot) |
 | config | `JERICHO/CONFIG/mp.ini` (port, name, version strictness, colour) |
-| command line | `-host [port]`, `-join <ip>[:port]`, `-mpcar [city:]<model\|slotN>` |
+| command line | `-host [port]`, `-join <host>[:port]`, `-mpcar [city:]<model\|slotN>` (a host may be a **domain**, not just an IP) |
 | how to run it | `README.md` in this folder, and `tools/README.md` for every harness |
 | how it works, deeply | `ARCHITECTURE.md` |
 | testing two or four machines | `tools/mp_localpair.py --players N` (one PC), `tools/remote/` (a second PC) |

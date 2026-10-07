@@ -478,6 +478,11 @@ def main():
     ap.add_argument("--game-dir", default=DEFAULT_GAME_DIR)
     ap.add_argument("--exe", default="JERICHO_dev.exe")
     ap.add_argument("--port", type=int, default=1400)
+    ap.add_argument("--join-host", default="127.0.0.1", metavar="HOST",
+                    help="what the client seats dial. Default 127.0.0.1. Use a NAME "
+                         "(e.g. --join-host localhost) to exercise the DNS path, or a "
+                         "name that cannot resolve to check the failure is reported "
+                         "rather than looking like a refused server.")
     ap.add_argument("--seconds", type=int, default=40,
                     help="how long to let them run (default 40; the shapes that need a level "
                          "rebuild -- a city change, a car change -- want more)")
@@ -741,7 +746,7 @@ def main():
         if i == 0 and args.client_car != "default":
             argv += ["-mpcar", args.client_car]
 
-        argv += ["-join", f"127.0.0.1:{args.port}"]
+        argv += ["-join", f"{args.join_host}:{args.port}"]
 
         # this seat's own picks: the generic client entries first, then its own
         this_env = dict(client_env)

@@ -100,13 +100,21 @@ static const char* const kModCheckNames[] = { "Off", "By ID", "By ID+Ver" };
 /* editor state */
 static char gNameEdit[11];
 static int  gNameInit;
-/* The manual address is edited one octet at a time in its own submenu: the
- * join row has a single adjust axis, which can never reach past the last
- * octet. gManualIp is only ever a rendering of gManualOct. */
-static int  gManualOct[4] = { 127, 0, 0, 1 };
+/* The manual join target, TYPED rather than dialled an octet at a time: a DNS name
+ * or an IPv4, optionally with ":port" -- which is what makes the field usable for a
+ * host on the internet, where the address is a NAME and the port is forwarded.
+ *
+ * gManualIp is the source of truth and holds exactly what was typed. The menu row
+ * renders it and an EDIT MODE feeds it keystrokes: no frontend menu item can take
+ * text (jer_frontend.h has no keyboard hook -- the same reason the name menu is a
+ * row of per-character adjusters), so the field borrows PsyX's text-input slot the
+ * way chat does. */
+#define MP_MANUAL_MAX	100		/* what the row can show without spilling */
+static char gManualIp[128] = "127.0.0.1";
+static char gManualUndo[128];		/* what Escape restores */
+static int  gManualPort;
+static int  gManualEdit;		/* the field owns the keyboard right now */
 static int  gManualSeed;		/* seeded from a discovered host yet? */
-static char gManualIp[32] = "127.0.0.1";
-static int gManualPort;
 
 /* LAN browser (Join Game) state -- declared up here because the Join action
  * below needs it, while the menu arrays live further down. */
@@ -125,9 +133,18 @@ static unsigned long gJoinScanStart;	/* when the browse began (0 = not browsing)
 static void LblEnforce(void* ud, char* o, int n) { (void)ud; snprintf(o, n, "Enforce Mods: < %s >", kModCheckNames[gMp.config.modCheck % 3]); }
 static void LblStrict(void* ud, char* o, int n)  { (void)ud; snprintf(o, n, "Strict Version: < %s >", gMp.config.strictVersion ? "On" : "Off"); }
 static void LblPort(void* ud, char* o, int n)    { (void)ud; snprintf(o, n, "Port: %d", gMp.config.port); }
-static void LblManualIp(void* ud, char* o, int n) { (void)ud; snprintf(o, n, "Manual IP: %s ...", gManualIp); }
-static void LblManualOct(void* ud, char* o, int n) { snprintf(o, n, "Part %d: < %d >", (int)(intptr_t)ud + 1, gManualOct[(int)(intptr_t)ud]); }
+static void LblManualIp(void* ud, char* o, int n) { (void)ud; snprintf(o, n, "Manual address: %s ...", gManualIp); }
 static void LblManualGo(void* ud, char* o, int n) { (void)ud; snprintf(o, n, "Connect to %s", gManualIp); }
+
+/* The field itself. It says it is taking keystrokes and shows a caret, so "why does
+ * nothing happen when I press keys" answers itself. */
+static void LblManualField(void* ud, char* o, int n)
+{
+	(void)ud;
+
+	snprintf(o, n, "%s %s%s", gManualEdit ? "Address (typing):" : "Address:",
+		gManualIp, gManualEdit ? "_" : "");
+}
 
 static int AdjEnforce(void* ud, int dir) { (void)ud; gMp.config.modCheck = (gMp.config.modCheck + dir + 3) % 3; MpConfigSave(); return 1; }
 
@@ -280,67 +297,164 @@ static int ActJoinServer(void* ud)
 	return 1;
 }
 
-static void MpManualSync(void)
+/* "host" or "host:port" -> the two parts. Returns 1 on success, 0 if the text after
+ * the colon is not a usable port -- so a typo is REFUSED rather than silently dialled
+ * on the configured port. No colon at all leaves `*port` alone. */
+static int MpManualParse(const char* text, char* host, size_t hostLen, int* port)
 {
-	snprintf(gManualIp, sizeof(gManualIp), "%d.%d.%d.%d",
-		gManualOct[0], gManualOct[1], gManualOct[2], gManualOct[3]);
+	const char* colon = strrchr(text, ':');
+	size_t n;
+	int p, d;
+
+	if (colon == NULL)
+	{
+		if (text[0] == '\0')
+			return 0;
+
+		snprintf(host, hostLen, "%s", text);
+		return 1;
+	}
+
+	n = (size_t)(colon - text);
+
+	if (n == 0 || n >= hostLen)
+		return 0;
+
+	for (d = 1; colon[d] != '\0'; d++)
+	{
+		if (colon[d] < '0' || colon[d] > '9')
+			return 0;
+	}
+
+	if (d == 1)
+		return 0;
+
+	p = atoi(colon + 1);
+
+	if (p < 1 || p > 65535)
+		return 0;
+
+	memcpy(host, text, n);
+	host[n] = '\0';
+	*port = p;
+
+	return 1;
 }
 
-/* Seed the address from the first LAN game we can see, so the usual case is
- * a couple of taps on the last octet rather than typing a whole subnet. */
+/* Seed the address from the first LAN game we can see, so the usual case is an
+ * address already sitting there. Only until the player types: gManualSeed marks
+ * that they have taken over. */
 static void MpManualSeed(void)
 {
 	MP_SERVER* s = (MpDiscoveryCount() > 0) ? MpDiscoveryGet(0) : NULL;
 
-	if (!gManualSeed && s != NULL &&
-		sscanf(s->ip, "%d.%d.%d.%d",
-			&gManualOct[0], &gManualOct[1], &gManualOct[2], &gManualOct[3]) == 4)
+	if (!gManualSeed && s != NULL && s->ip[0] != '\0')
 	{
+		snprintf(gManualIp, sizeof(gManualIp), "%s", s->ip);
 		gManualSeed = 1;
 	}
-
-	MpManualSync();
 }
 
-/* The submenu's Connect row. The button sticks to the one we press, so the
- * accent stays on the last octet it was landed on. */
+/* The submenu's Connect row. */
 static int ActManualConnect(void* ud)
 {
+	char host[128];
+	int port = gManualPort > 0 ? gManualPort : gMp.config.port;
+
 	(void)ud;
 
-	/* gManualPort, not our own configured port: the manual entry has to be able
-	 * to reach a host listening somewhere else. */
-	if (gManualPort <= 0)
-		gManualPort = gMp.config.port;
+	if (!MpManualParse(gManualIp, host, sizeof(host), &port))
+	{
+		if (gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx, "[mp] manual address '%s' does not parse (want host or host:port)\n", gManualIp);
+
+		jer_error("Use an address or host:port, not %s", gManualIp);
+		return 1;
+	}
+
+	gManualPort = port;
 
 	if (gMpCtx != NULL)
-		gMpCtx->jer_log(gMpCtx, "[mp] joining manual %s:%d\n", gManualIp, gManualPort);
+		gMpCtx->jer_log(gMpCtx, "[mp] joining manual %s:%d\n", host, port);
 
-	if (MpBeginJoinAsync(gManualIp, gManualPort))
+	if (MpBeginJoinAsync(host, port))
 		jer_frontend_open(gMenuIdx[M_LOBBY]);
 
 	return 1;
 }
 
-static int AdjManualOct(void* ud, int dir)
+/* ------------------------------------------------------------------ */
+/* The typed address field                                             */
+/* ------------------------------------------------------------------ */
+int MpUiManualEditing(void)
 {
-	int i = (int)(intptr_t)ud;
-	int v;
+	return gManualEdit;
+}
 
-	if (i < 0 || i > 3)
-		return 1;
+void MpUiManualBegin(void)
+{
+	snprintf(gManualUndo, sizeof(gManualUndo), "%s", gManualIp);
+	gManualEdit = 1;
 
-	/* holding the button ramps, so wrap around instead of sticking at the end */
-	v = gManualOct[i] + dir;
+	if (gMpCtx != NULL)
+		gMpCtx->jer_log(gMpCtx, "[mp] manual address: typing (Enter keeps it, Escape undoes)\n");
+}
 
-	if (v < 0)
-		v = 255;
-	if (v > 255)
-		v = 0;
+void MpUiManualCommit(void)
+{
+	gManualEdit = 0;
 
-	gManualOct[i] = v;
-	gManualSeed = 1;	/* the player has taken over */
-	MpManualSync();
+	if (gMpCtx != NULL)
+		gMpCtx->jer_log(gMpCtx, "[mp] manual address: '%s'\n", gManualIp);
+}
+
+void MpUiManualCancel(void)
+{
+	snprintf(gManualIp, sizeof(gManualIp), "%s", gManualUndo);
+	gManualEdit = 0;
+
+	if (gMpCtx != NULL)
+		gMpCtx->jer_log(gMpCtx, "[mp] manual address: reverted to '%s'\n", gManualIp);
+}
+
+/* One typed character (or NULL for backspace) from PsyX, while the field is editing.
+ * The accepted set is what an address can hold: letters and digits for a name, dots
+ * and hyphens for a host name, a colon for the port. Anything else is dropped rather
+ * than shown, so the field cannot fill with text no resolver would accept. */
+void MpUiManualType(const char* text)
+{
+	size_t len = strlen(gManualIp);
+
+	if (text == NULL)
+	{
+		if (len > 0)
+			gManualIp[len - 1] = '\0';
+
+		return;
+	}
+
+	if (text[0] == '\0' || len + 1 >= MP_MANUAL_MAX)
+		return;
+
+	if (!((text[0] >= 'a' && text[0] <= 'z') || (text[0] >= 'A' && text[0] <= 'Z') ||
+	      (text[0] >= '0' && text[0] <= '9') ||
+	      text[0] == '.' || text[0] == '-' || text[0] == ':' || text[0] == '_'))
+		return;
+
+	snprintf(gManualIp + len, sizeof(gManualIp) - len, "%s", text);
+}
+
+/* Cross on the field: start typing, or stop. Committing on the SECOND press as well
+ * as on Enter matters because the pad still navigates this screen -- a player with a
+ * pad and no keyboard must be able to leave the field. */
+static int ActManualEdit(void* ud)
+{
+	(void)ud;
+
+	if (gManualEdit)
+		MpUiManualCommit();
+	else
+		MpUiManualBegin();
 
 	return 1;
 }
@@ -527,8 +641,8 @@ static void JoinOnEnter(void* ud)
 		k++;
 	}
 
-	/* manual IP -- a submenu, because a real address needs all four octets and
-	 * this row has one adjust axis */
+	/* manual address -- its own submenu: there is somewhere to TYPE here, and a
+	 * DNS name would never fit on a single row with one adjust axis */
 	gJoinItems[k].label = NULL;
 	gJoinItems[k].get_label = LblManualIp;
 	gJoinItems[k].userdata = NULL;
@@ -702,28 +816,25 @@ static int AdjNameChar(void* ud, int dir)
 }
 
 /* wire the dynamic on_enter callbacks (the menus are non-const statics) */
-/* Four octet rows, Connect, Back. Built on entry so the label picks up the
- * seeded address, which is why the address defaults to the subnet the first
- * discovered game is on. */
+/* The address field, Connect, Back. Built on entry so the label picks up the seeded
+ * address. The field is TYPED: Cross starts the keyboard, Cross again (or Enter)
+ * keeps it, Escape undoes -- see MpUiManualType. */
 static void ManualOnEnter(void* ud)
 {
-	int i, k = 0;
+	int k = 0;
 
 	(void)ud;
 
 	MpManualSeed();
 
-	for (i = 0; i < 4; i++)
-	{
-		gManualItems[k].label = NULL;
-		gManualItems[k].get_label = LblManualOct;
-		gManualItems[k].userdata = (void*)(intptr_t)i;
-		gManualItems[k].on_activate = NULL;
-		gManualItems[k].on_adjust = AdjManualOct;
-		gManualItems[k].submenu = -1;
-		gManualItems[k].is_back = 0;
-		k++;
-	}
+	gManualItems[k].label = NULL;
+	gManualItems[k].get_label = LblManualField;
+	gManualItems[k].userdata = NULL;
+	gManualItems[k].on_activate = ActManualEdit;
+	gManualItems[k].on_adjust = NULL;
+	gManualItems[k].submenu = -1;
+	gManualItems[k].is_back = 0;
+	k++;
 
 	gManualItems[k].label = NULL;
 	gManualItems[k].get_label = LblManualGo;
@@ -812,6 +923,38 @@ void MpUiTick(void)
 	 * resolves -- accepted (READY) or refused/failed */
 	if (MpMenuIs(M_LOBBY) && MpJoinState() != gLobbyJoinState)
 		jer_frontend_refresh();
+
+	/* The address field holds the keyboard only while its own menu is up. Left any
+	 * other way -- Back/Triangle, or the engine popping the menu -- the flag would
+	 * stay set and the keys would keep feeding a field nobody can see. Committing
+	 * here is also the self-healing half of the grab. */
+	if (gManualEdit && !MpMenuIs(M_MANUAL))
+		MpUiManualCommit();
+
+	/* TEST LEVER (MP_TEST_MANUALADDR=<host>[:port]): the address field needs a
+	 * KEYBOARD, which the harness does not have, so this fills the field and
+	 * presses Connect the way the menu does -- which is what makes "does a typed
+	 * address parse, and does the resolver reach it?" a line in a headless run
+	 * instead of something only a human at the menu can check. It goes through the
+	 * SAME ActManualConnect the row uses, so it exercises the field's parsing
+	 * rather than bypassing it. Inert unless set. */
+	{
+		static int manualTested = 0;
+		const char* mt = getenv("MP_TEST_MANUALADDR");
+
+		if (mt != NULL && !manualTested && gInFrontend)
+		{
+			manualTested = 1;
+
+			snprintf(gManualIp, sizeof(gManualIp), "%s", mt);
+			gManualSeed = 1;
+
+			if (gMpCtx != NULL)
+				gMpCtx->jer_log(gMpCtx, "[mp] test: manual address <- '%s' (MP_TEST_MANUALADDR)\n", gManualIp);
+
+			ActManualConnect(NULL);
+		}
+	}
 
 	/* The Join screen is rebuilt only by its on_enter, which the engine runs
 	 * on setup/refresh alone -- without this the server list would be frozen
@@ -1051,7 +1194,10 @@ void MpUiInit(void)
 
 	jer_frontend_set_main_entry("mp.root");
 
-	MpManualSync();
+	/* gManualIp is the source of truth now, so there is nothing to render here --
+	 * but the SEED still belongs at registration, so a discovered LAN game can fill
+	 * the field in before the player ever opens it. */
+	MpManualSeed();
 
 	if (gMpCtx != NULL)
 		gMpCtx->jer_log(gMpCtx, "[mp] registered %d frontend menus (main entry mp.root)\n",
