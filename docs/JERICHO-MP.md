@@ -28,9 +28,12 @@ That is the whole design. Everything below is a consequence of it.
    the game appears in everyone else's LAN list.
 2. **Join** — pick a game from the list (or `-join <ip>`). The client connects,
    says hello, and gets a car and a player number.
-3. **Choose the match** — the host picks the city, the multiplayer map, gamemode,
-   weather and time of day. Those travel in the handshake, so everyone loads the
-   same place. Nobody else has to configure anything.
+3. **Choose the match** — the host picks these on the ENGINE'S OWN screens: the city
+   screen, then the combined **Time of Day / Condition** screen that the Single Player
+   prompt hands over to (time of day and weather both live there). The multiplayer map
+   and the gamemode come from the session. `MpStartMatch` seeds the session from those
+   picks, so they travel in the handshake and everyone loads the same place. Nobody
+   else has to configure anything.
 4. **Drive.** Each player sees the others' cars moving, and their own car responds
    to their own pad with no delay. Collisions push both cars.
 5. **Talk.** Press `T` to open a chat line, type, and press `Enter` to send it to
@@ -88,9 +91,12 @@ car through the engine's own `InitPlayer`. See §4 of `ARCHITECTURE.md` for why 
 must never be carried from one car to another.
 
 **Everybody must agree on the level before anyone loads it.** The city, the
-multiplayer map, the gamemode and the weather are decided once, by the host, and
-travel in the handshake — a machine that loads a different level cannot see the
-other players' cars, and the failure looks like a desync rather than a mismatch.
+multiplayer map, the gamemode and the time of day / weather are decided once, by the
+host, and travel in the handshake — a machine that loads a different level cannot see
+the other players' cars, and the failure looks like a desync rather than a mismatch.
+The host's time of day and weather are taken from what it picked on the frontend's
+Time of Day screen and its city from the city screen (`MpStartMatch`); there is no
+separate mp settings menu for them any more.
 
 ---
 

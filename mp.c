@@ -1987,8 +1987,14 @@ static int MpOnLevelLaunch(void* userdata, void* args)
 
 	if (MpIsActive())
 	{
-		l->timeOfDay = gMp.timeOfDay;
-		l->weather = gMp.weather;
+		/* Only override when the SESSION actually has a value. The engine seeds
+		 * these args from the frontend's own picks (-1 = "mission default"), so
+		 * writing -1 blindly would erase the host's choice on the Time of Day
+		 * screen and drop the launch to the mission default. */
+		if (gMp.timeOfDay >= 0)
+			l->timeOfDay = gMp.timeOfDay;
+		if (gMp.weather >= 0)
+			l->weather = gMp.weather;
 	}
 
 	return JER_RESULT_CONTINUE;

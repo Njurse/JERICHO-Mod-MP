@@ -21,11 +21,21 @@ engine through the JERICHO frontend-menu API (`jer_frontend.h`):
 
 ```
 Multiplayer
-  Host Game ......... gamemode -> city / time / weather / enforce-mods -> Start
-  Join Game ......... LAN server list / manual IP
-  Options ........... Change Name / Enforce Mods / Port
-  Local Split-Screen  (returns to the stock 2-pad flow)
+  LAN ............... Host Game / Join Game / Options
+  Split-Screen ...... returns to the stock 2-pad flow
+
+Host Game, then Take a Ride, hands over to the ENGINE'S OWN city screen, and then:
+  Single Player ..... continues the stock take-a-ride flow — next stop the stock
+                      Time of Day / Condition screen. That one screen sets BOTH the
+                      time of day and the weather, and the host's picks become the
+                      session's, so everyone loads the same place.
+  Multiplayer ....... the per-city multiplayer level list (35..38)
 ```
+
+There is deliberately **no mp screen for the city, time of day or weather**: those are
+the engine's own screens, and `MpStartMatch` seeds the session from what the host
+chose there. `mp.mode` used to be a full lobby (City / Time / Weather / Enforce Mods /
+Start Session) and those rows were removed.
 
 `Enforce Mods` is the host's lobby setting (Off / By ID / By ID+Version): the
 join handshake then admits or refuses clients by their enabled-mod manifest.

@@ -1324,13 +1324,58 @@ int MpStartMatch(void)
 	 * picked a city in the menus. */
 	if (gMp.autoSession)
 		gMp.city = GameLevel;
-	/* the lobby values may still be unset (-1): clamp to valid ones BEFORE
-	 * both the broadcast and the local launch so host and clients agree, and
-	 * the mission loader never sees an out-of-range index */
+
+	/* TEST LEVER (MP_TEST_TIMEWEATHER=<time>,<weather>): stands in for the host's
+	 * choices on the frontend's screens -- the one step a padless run cannot drive --
+	 * so "does the session TAKE the host's picks?" is a line in a headless run rather
+	 * than something only a human at the Time of Day screen can check. It writes the
+	 * SAME globals that screen writes (wantedTimeOfDay / wantedWeather), not gMp.*,
+	 * so it exercises the seeding below instead of bypassing it. Inert unless set. */
+	{
+		const char* s = getenv("MP_TEST_TIMEWEATHER");
+
+		if (s != NULL)
+		{
+			int t = -1, w = -1;
+
+			if (sscanf(s, "%d,%d", &t, &w) >= 1)
+			{
+				if (t >= 0)
+					wantedTimeOfDay = t;
+				if (w >= 0)
+					wantedWeather = w;
+
+				if (gMpCtx != NULL)
+					gMpCtx->jer_log(gMpCtx,
+						"[mp] test: frontend time/weather <- %d,%d (MP_TEST_TIMEWEATHER)\n",
+						wantedTimeOfDay, wantedWeather);
+			}
+		}
+	}
+
+	/* THE STOCK SCREENS ARE THE HOST'S SETTINGS UI. A host picks its city on the
+	 * frontend's city screen and its time of day / condition on the combined Time
+	 * of Day screen, so the session takes THOSE values instead of a fixed default:
+	 * seed the session from the engine's own picks, then clamp whatever is still
+	 * unset. Before this a session forced TIME_DAY / weather 0 ("a session with no
+	 * time is a DAY match") and the host's choice on the Time of Day screen was
+	 * silently thrown away, while the city came from gMp.city's default (0 = Miami)
+	 * because nothing in the current Single Player / Multiplayer flow ever set it --
+	 * the lobby that did was replaced by the SP/MP menu. */
+	if (gMp.autoSession || MpIsHost())
+		gMp.city = GameLevel;
+	if (gMp.timeOfDay < 0 && wantedTimeOfDay >= 0)
+		gMp.timeOfDay = wantedTimeOfDay;
+	if (gMp.weather < 0 && wantedWeather >= 0)
+		gMp.weather = wantedWeather;
+
+	/* Whatever is STILL unset gets a valid value BEFORE both the broadcast and the
+	 * local launch so host and clients agree, and the mission loader never sees an
+	 * out-of-range index */
 	if (gMp.city < 0)
 		gMp.city = 0;
 	if (gMp.timeOfDay < 0)
-		gMp.timeOfDay = TIME_DAY;	/* a session with no time is a DAY match (0 = DAWN) */
+		gMp.timeOfDay = TIME_DAY;
 	if (gMp.weather < 0)
 		gMp.weather = 0;
 

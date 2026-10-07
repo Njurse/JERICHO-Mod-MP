@@ -3,13 +3,22 @@
  * via jer_frontend.h (native buttons + navigation, no overlay).
  *
  * Menu tree:
- *   mp.root     Host Game | Join Game | Options | Local Split-Screen | Back
+ *   mp.root     LAN | Split-Screen | Back
+ *   mp.lan      Host Game | Join Game | Options | Back
  *   mp.host     Take a Ride | Back
- *   mp.hostset  City / Time / Weather / Enforce Mods / Start Session / Back
+ *   mp.mode     Single Player | Multiplayer | Back          (the take-a-ride question)
  *   mp.join     <LAN servers...> / Manual IP / Back
  *   mp.lobby    <players...> / Start Match (host) or Leave / Back
- *   mp.options  Change Name / Enforce Mods / Port / Back
+ *   mp.options  Change Name | Enforce Mods | Port / Back
  *   mp.name     10 character slots / Done / Back
+ *
+ * THE MATCH'S CITY, TIME OF DAY AND WEATHER ARE NOT SET HERE. They are the host's
+ * choices on the ENGINE'S OWN screens -- the city screen, then the combined Time of
+ * Day / Condition screen that "Single Player" hands over to -- and MpStartMatch
+ * seeds the session from them so the host and every client load the same thing.
+ * mp used to carry a lobby menu (City / Time / Weather / Start Session) for these;
+ * mp.mode replaced it and those rows were removed, which left the session fields
+ * with no writer. They are now the WIRE's override channel only.
  *
  * The engine renders and navigates these; the callbacks here drive the
  * module (MpBeginHost / MpBeginJoin / discovery / config).
@@ -86,13 +95,9 @@ static int MpMenuIs(int logical)
 		gMenuIdx[logical] >= 0 && jer_frontend_current_menu() == gMenuIdx[logical];
 }
 
-static const char* const kCityNames[] = { "Chicago", "Havana", "Las Vegas", "Rio" };
-static const char* const kTimeNames[] = { "Dawn", "Day", "Dusk", "Night" };
-static const char* const kWeatherNames[] = { "Sunny", "Rain", "Wet" };
 static const char* const kModCheckNames[] = { "Off", "By ID", "By ID+Ver" };
 
-/* host settings + editor state */
-static int gCity, gTimeOfDay, gWeather;
+/* editor state */
 static char gNameEdit[11];
 static int  gNameInit;
 /* The manual address is edited one octet at a time in its own submenu: the
@@ -117,9 +122,6 @@ static unsigned long gJoinScanStart;	/* when the browse began (0 = not browsing)
 /* ------------------------------------------------------------------ */
 /* Labels / adjusters                                                  */
 /* ------------------------------------------------------------------ */
-static void LblCity(void* ud, char* o, int n)    { (void)ud; snprintf(o, n, "City:  < %s >", kCityNames[gCity & 3]); }
-static void LblTime(void* ud, char* o, int n)    { (void)ud; snprintf(o, n, "Time:  < %s >", kTimeNames[gTimeOfDay & 3]); }
-static void LblWeather(void* ud, char* o, int n) { (void)ud; snprintf(o, n, "Weather: < %s >", kWeatherNames[gWeather % 3]); }
 static void LblEnforce(void* ud, char* o, int n) { (void)ud; snprintf(o, n, "Enforce Mods: < %s >", kModCheckNames[gMp.config.modCheck % 3]); }
 static void LblStrict(void* ud, char* o, int n)  { (void)ud; snprintf(o, n, "Strict Version: < %s >", gMp.config.strictVersion ? "On" : "Off"); }
 static void LblPort(void* ud, char* o, int n)    { (void)ud; snprintf(o, n, "Port: %d", gMp.config.port); }
@@ -127,9 +129,6 @@ static void LblManualIp(void* ud, char* o, int n) { (void)ud; snprintf(o, n, "Ma
 static void LblManualOct(void* ud, char* o, int n) { snprintf(o, n, "Part %d: < %d >", (int)(intptr_t)ud + 1, gManualOct[(int)(intptr_t)ud]); }
 static void LblManualGo(void* ud, char* o, int n) { (void)ud; snprintf(o, n, "Connect to %s", gManualIp); }
 
-static int AdjCity(void* ud, int dir)    { (void)ud; gCity = (gCity + dir + 4) & 3; return 1; }
-static int AdjTime(void* ud, int dir)    { (void)ud; gTimeOfDay = (gTimeOfDay + dir + 4) & 3; return 1; }
-static int AdjWeather(void* ud, int dir) { (void)ud; gWeather = (gWeather + dir + 3) % 3; return 1; }
 static int AdjEnforce(void* ud, int dir) { (void)ud; gMp.config.modCheck = (gMp.config.modCheck + dir + 3) % 3; MpConfigSave(); return 1; }
 
 /* Host-side policy: also require an identical build hash. Off by default --
@@ -162,23 +161,6 @@ static int ActJoinEnter(void* ud)
 
 	MpDiscoveryStart(0);	/* begin browsing; engine opens the submenu */
 	return 0;
-}
-
-static int ActHostStart(void* ud)
-{
-	(void)ud;
-
-	if (MpBeginHost())
-	{
-		/* set the lobby config AFTER MpBeginHost (which resets state) */
-		gMp.gamemode = MP_GAMEMODE_TAKEADRIDE;
-		gMp.city = gCity;
-		gMp.timeOfDay = gTimeOfDay;
-		gMp.weather = gWeather;
-		jer_frontend_open(gMenuIdx[M_LOBBY]);
-	}
-
-	return 1;
 }
 
 static int ActSplitScreen(void* ud)
@@ -1070,11 +1052,6 @@ void MpUiInit(void)
 	jer_frontend_set_main_entry("mp.root");
 
 	MpManualSync();
-
-	/* sensible host-settings defaults */
-	gCity = gMp.city;
-	gTimeOfDay = (gMp.timeOfDay < 0) ? 1 : gMp.timeOfDay;
-	gWeather = (gMp.weather < 0) ? 0 : gMp.weather;
 
 	if (gMpCtx != NULL)
 		gMpCtx->jer_log(gMpCtx, "[mp] registered %d frontend menus (main entry mp.root)\n",
