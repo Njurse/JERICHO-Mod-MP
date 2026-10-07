@@ -1029,7 +1029,8 @@ fixed when the page opens and a module menu cannot nest a second level
 (`jer_pause_menu.h`) -- so a 12-car roster is reached by cycling.
 
 Applying it calls `MpChangeCar(city, model)` (`mp_session.c`), which does the
-SAME in-place re-model a peer's car goes through (`MpAdoptRemoteCar`): only the
+SAME in-place re-model a peer's car goes through (`MpAdoptCar`, the session-free
+core that `MpAdoptRemoteCar` wraps in two lines): only the
 cosmetic model and the mesh change, on the slot we already drive, so nothing
 about this world's car slots -- and so nothing about anybody else's car -- is
 disturbed. On foot, the player is put into their parked car first, because
@@ -1037,6 +1038,16 @@ disturbed. On foot, the player is put into their parked car first, because
 ordinary way: our carstate carries the new `(city, model)` from that frame on, so
 every peer re-models its copy of us, and a client also tells the host so the
 host's roster names the car it is really driving.
+
+The page is registered UNCONDITIONALLY, so it is there in SINGLE PLAYER as well.
+Out of a session `MpChangeCar` takes the car from the engine
+(`MainPlayer.playerCarId`, `MainPlayer.playerType`) and does the same local
+re-model with no roster row to update and nothing to publish. Two things follow
+from there being nobody to ask: the picker offers only cars this level can build
+RIGHT NOW, because there is no import/hotload request path to lean on and so a
+listed car must not be one Apply would refuse; and a pick that still cannot be
+built is refused with a reason (`MpChangeCarRefusal`), leaving the current car in
+place.
 
 **Where the cities come from.** mp can only offer what this machine can actually
 hold, and a second city's car data is carhacks' business, so mp ASKS:

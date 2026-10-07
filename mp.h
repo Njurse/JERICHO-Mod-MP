@@ -334,6 +334,21 @@ int MpIsValidAddress(const char* host);	/* dotted-quad check (no DNS in this mod
 void MpUiInit(void);			/* register the frontend menus (jer_frontend) */
 void MpUiTick(void);			/* refresh the live lobby menu when needed */
 
+/* The local resident SLOT that holds (city, model) here, or -1 when none does.
+ * `city` is -1 for the session's own city. A model number alone is not enough --
+ * the same number is a different vehicle in every city -- so it is matched together
+ * with the city its data came from. Exported because the SINGLE-PLAYER picker needs
+ * the very question the apply path asks: the list it builds carries a city-list
+ * index and a model, and only this turns those into a slot the level can build. */
+int MpResidentSlotForCar(int city, int model);
+
+/* Test lever (MP_TEST_PAUSECAR): drive the pause menu's Change car path. Called from
+ * the lockstep tick inside a session, and from the frame hook in SINGLE PLAYER,
+ * where there is no lockstep tick at all (MpLockstepFrame returns immediately when
+ * not running). Inert unless the lever is set, and a no-op unless the player is
+ * actually driving. */
+void MpTestPauseCarTick(void);
+
 /* Lower-left info overlay (who joined/left) + the chat prompt. */
 void MpNotify(const char* text);	/* queue a line for the overlay */
 void MpNotifyf(const char* fmt, ...);	/* printf-style MpNotify */

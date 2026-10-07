@@ -442,7 +442,7 @@ static void MpLaunchLocal(void)
 		int me = (gMp.localPlayerId >= 0) ? gMp.localPlayerId : 0;
 		int assigned = MpAssignedCarModel(me);
 
-		if (assigned >= 0 && assigned < MAX_CAR_RESIDENT_MODELS && gCarCleanModelPtr[assigned] != NULL)
+		if (JerCarSlotUsable(assigned))
 		{
 			wantedCar[0] = assigned;
 
@@ -899,7 +899,7 @@ static int MpSetStartCar(int slot, MP_PLAYER* p)
 	 *
 	 * A CHOICE is left alone whatever the level holds: carhacks is responsible for
 	 * holding a picked car, that is the import/hotload path. */
-	if (!chosen && (cid < 0 || cid >= MAX_CAR_RESIDENT_MODELS || gCarCleanModelPtr[cid] == NULL))
+	if (!chosen && !JerCarSlotUsable(cid))
 	{
 		if (gMpCtx != NULL)
 			gMpCtx->jer_log(gMpCtx,
@@ -2083,8 +2083,10 @@ int MpOnNetSpawn(void* userdata, void* args)
 /* ------------------------------------------------------------------ */
 
 /* Declared here because MpLockstepFrame runs before its body below (the test
- * levers are all one tick, and this one has to sit with the others). */
-static void MpTestPauseCarTick(void);
+ * levers are all one tick, and this one has to sit with the others). NOT static:
+ * mp.c's frame hook calls it as well, for the single-player case where the lockstep
+ * tick never runs (see mp.h). */
+void MpTestPauseCarTick(void);
 static void MpTestRestartTick(void);
 
 int MpInputForPlayer(int id)
@@ -3565,7 +3567,7 @@ static void MpTestOnFootTick(void)
  * looked at by hand. <city> defaults to the session's own and <model> to the SECOND
  * car in that city's roster (the first is usually the one already being driven,
  * which would make the run say nothing). Inert unless set. */
-static void MpTestPauseCarTick(void)
+void MpTestPauseCarTick(void)
 {
 	static int next, noted;
 	static unsigned long startMs;
@@ -3576,7 +3578,14 @@ static void MpTestPauseCarTick(void)
 	int secs, city, model = -1, idx, total = 1;
 
 	if (!gMp.running)
-		return;
+	{
+		/* SINGLE PLAYER: the same pause-menu row is reachable in a solo game, so the
+		 * lever drives it there too -- that is the only padless way to exercise the
+		 * single-player swap. It does need the player to BE in a car; MpChangeCar
+		 * reports that itself if they are not. */
+		if (MainPlayer.playerType != PLAYER_TYPE_CAR)
+			return;
+	}
 
 	s = getenv("MP_TEST_PAUSECAR");
 
@@ -5048,7 +5057,7 @@ const char* MpCarCityName(int city)
  * same number is a DIFFERENT vehicle in each, so a number is matched together
  * with the city its data came from (GetCarModelSourceCity). This is what turns
  * a peer's (city, model) into a slot HERE, where the slot numbers may differ. */
-static int MpResidentSlotForCar(int city, int model)
+int MpResidentSlotForCar(int city, int model)
 {
 	int levelCity = -1;
 	int slot, i;
@@ -5118,15 +5127,23 @@ static unsigned char sMpCarKeepSet[MP_MAX_PLAYERS];
  * THIS machine resolves it to its own resident slot (MpResidentSlotForCar). A
  * slot number is never taken off the wire. Returns 1 if the car was changed, 0
  * when this machine cannot hold it (not resident, or its mesh is not loaded). */
-static int MpAdoptRemoteCar(MP_PLAYER* p, int city, int model)
+/* The reusable core of a car change: re-model the car in `carSlot` as (city, model).
+ *
+ * `who` is the roster row doing the changing, or NULL in SINGLE PLAYER, where there
+ * is no roster at all -- the pause menu's Change car row is registered
+ * unconditionally, so the same row has to work in a solo game. Session-free on
+ * purpose: everything session-shaped (the identity bookkeeping, the keep-gate, the
+ * per-player log wording) is gated on `who`; everything that decides whether the
+ * car CAN be changed is not. Returns 1 when the car was changed. */
+static int MpAdoptCar(int carSlot, int city, int model, MP_PLAYER* who)
 {
 	CAR_DATA* cp;
 	int slot;
 
-	if (p == NULL || p->carId < 0 || p->carId >= MAX_CARS)
+	if (carSlot < 0 || carSlot >= MAX_CARS)
 		return 0;
 
-	cp = &car_data[p->carId];
+	cp = &car_data[carSlot];
 
 	/* The resident slot on THIS machine that holds the vehicle the owner named.
 	 * This is the whole reason the wire carries a (city, model) and not a slot:
@@ -5136,7 +5153,7 @@ static int MpAdoptRemoteCar(MP_PLAYER* p, int city, int model)
 	/* Only to a slot the renderer actually HAS. Pointing ap.model at a mesh we
 	 * never loaded is a crash, not a cosmetic glitch, so an unavailable slot
 	 * keeps the old one and says so. */
-	if (slot >= 0 && gCarCleanModelPtr[slot] != NULL)
+	if (JerCarSlotUsable(slot))
 	{
 		int was = cp->ap.model;
 
@@ -5168,27 +5185,44 @@ static int MpAdoptRemoteCar(MP_PLAYER* p, int city, int model)
 		 * had its cosmetics replaced the moment they landed (JerHotLoadCarCosmetics),
 		 * and this is the call that makes the car on the road use them. */
 		if (gMpCtx != NULL)
+		{
+			if (who != NULL)
+				gMpCtx->jer_log(gMpCtx,
+					"[mp] rebuilt player %d's car on slot %d (model %d from %s): cosmetics, collision box and mesh are that car's own now"
+					" [local=%d localId=%d slot=%d]\n",
+					who->id, slot, model, MpCarCityName(city),
+					who->isLocal, gMp.localPlayerId, carSlot);
+			else
+				gMpCtx->jer_log(gMpCtx,
+					"[mp] rebuilt the local car on slot %d (model %d from %s): cosmetics, collision box and mesh are that car's own now (single player)\n",
+					slot, model, MpCarCityName(city));
+		}
+
+		/* The roster row's identity is a model NUMBER now, with its city -- not the
+		 * slot we happened to resolve it to. In single player there is no row to
+		 * record it on: the car on the road IS the record. */
+		if (who != NULL)
+		{
+			who->car = model;
+			who->carIsSlot = 0;
+			who->carCity = (city < 0) ? -1 : city;
+
+			if (who->id >= 0 && who->id < MP_MAX_PLAYERS)
+				sMpCarKeepSet[who->id] = 0;	/* it holds the car now; re-arm the gate */
+
+			if (gMpCtx != NULL)
+				gMpCtx->jer_log(gMpCtx,
+					"[mp] player %d changed car: slot %d -> %d (%s model %d), mesh rebuilt"
+					" [local=%d localId=%d row=%d]\n",
+					who->id, was, slot, MpCarCityName(city), model,
+					who->isLocal, gMp.localPlayerId, (int)(who - gMp.players));
+		}
+		else if (gMpCtx != NULL)
+		{
 			gMpCtx->jer_log(gMpCtx,
-				"[mp] rebuilt player %d's car on slot %d (model %d from %s): cosmetics, collision box and mesh are that car's own now"
-				" [local=%d localId=%d slot=%d]\n",
-				p->id, slot, model, MpCarCityName(city),
-				p->isLocal, gMp.localPlayerId, p->carId);
-
-		/* p->car is a model NUMBER now (the identity), with its city -- not the
-		 * slot we happened to resolve it to. */
-		p->car = model;
-		p->carIsSlot = 0;
-		p->carCity = (city < 0) ? -1 : city;
-
-		if (p->id >= 0 && p->id < MP_MAX_PLAYERS)
-			sMpCarKeepSet[p->id] = 0;	/* it holds the car now; re-arm the gate */
-
-		if (gMpCtx != NULL)
-			gMpCtx->jer_log(gMpCtx,
-				"[mp] player %d changed car: slot %d -> %d (%s model %d), mesh rebuilt"
-				" [local=%d localId=%d row=%d]\n",
-				p->id, was, slot, MpCarCityName(city), model,
-				p->isLocal, gMp.localPlayerId, (int)(p - gMp.players));
+				"[mp] changed car (single player): slot %d -> %d (%s model %d), mesh rebuilt\n",
+				was, slot, MpCarCityName(city), model);
+		}
 
 		return 1;
 	}
@@ -5196,25 +5230,49 @@ static int MpAdoptRemoteCar(MP_PLAYER* p, int city, int model)
 	/* Cannot hold it: KEEP the car we have and say so ONCE per change, not every
 	 * frame -- a carstate arrives every frame, so the repetition is the noise this
 	 * avoids. Loading it is the hotload's job (carhacks/MP_ADAPTER.md). */
-	if (gMpCtx != NULL && p->id >= 0 && p->id < MP_MAX_PLAYERS &&
-		(!sMpCarKeepSet[p->id] || sMpCarKeepCity[p->id] != city || sMpCarKeepModel[p->id] != model))
+	if (who != NULL && gMpCtx != NULL && who->id >= 0 && who->id < MP_MAX_PLAYERS &&
+		(!sMpCarKeepSet[who->id] || sMpCarKeepCity[who->id] != city || sMpCarKeepModel[who->id] != model))
 	{
-		sMpCarKeepCity[p->id] = city;
-		sMpCarKeepModel[p->id] = model;
-		sMpCarKeepSet[p->id] = 1;
+		sMpCarKeepCity[who->id] = city;
+		sMpCarKeepModel[who->id] = model;
+		sMpCarKeepSet[who->id] = 1;
 
 		if (slot >= 0)
 			gMpCtx->jer_log(gMpCtx,
 				"[mp] player %d drives %s model %d (slot %d here) but that mesh is not loaded; keeping slot %d\n",
-				p->id, MpCarCityName(city), model, slot, cp->ap.model);
+				who->id, MpCarCityName(city), model, slot, cp->ap.model);
 		else
 			gMpCtx->jer_log(gMpCtx,
 				"[mp] player %d drives %s model %d, which this machine does not hold (the hotload will load it); keeping slot %d (model %d)\n",
-				p->id, MpCarCityName(city), model, cp->ap.model,
+				who->id, MpCarCityName(city), model, cp->ap.model,
+				(cp->ap.model >= 0 && cp->ap.model < MAX_CAR_RESIDENT_MODELS) ? residentCarModels[cp->ap.model] : -1);
+	}
+	else if (who == NULL && gMpCtx != NULL)
+	{
+		/* Single player: a menu action, not a per-frame carstate, so there is no
+		 * repetition to suppress -- say it every time. */
+		if (slot >= 0)
+			gMpCtx->jer_log(gMpCtx,
+				"[mp] change car (single player): %s model %d resolves to slot %d here but that mesh is not loaded; keeping slot %d\n",
+				MpCarCityName(city), model, slot, cp->ap.model);
+		else
+			gMpCtx->jer_log(gMpCtx,
+				"[mp] change car (single player): %s model %d is not held by this machine; keeping slot %d (model %d)\n",
+				MpCarCityName(city), model, cp->ap.model,
 				(cp->ap.model >= 0 && cp->ap.model < MAX_CAR_RESIDENT_MODELS) ? residentCarModels[cp->ap.model] : -1);
 	}
 
 	return 0;
+}
+
+/* A roster row's car, arriving from its owner (or from the host's roster): the
+ * session-shaped entry point, which is just the core aimed at that row's car. */
+static int MpAdoptRemoteCar(MP_PLAYER* p, int city, int model)
+{
+	if (p == NULL)
+		return 0;
+
+	return MpAdoptCar(p->carId, city, model, p);
 }
 
 /* ------------------------------------------------------------------ */
@@ -5365,12 +5423,72 @@ void MpCarQueryChosen(int city, int model, int changed)
  * car the level does not carry is what the carhacks import is for. Returns 1 if
  * the car on the road changed (0 when we were already driving it, or there was
  * nothing to change). */
+/* Why a pick could not be applied, in the player's own words.
+ *
+ * One place, so the on-screen notice, the log and the picker's filtering all
+ * describe the SAME rule: this machine does not hold the car / it holds a slot with
+ * no mesh / the car is already the one being driven. (MpAdoptCar returns 0 for the
+ * last case too, which is not a refusal at all.) */
+static const char* MpChangeCarRefusal(int city, int model)
+{
+	int slot = MpResidentSlotForCar(city, model);
+
+	if (slot < 0)
+		return "this machine does not hold that car";
+
+	if (JerCarSlotUsable(slot))
+		return "you are already driving it";
+
+	return JerCarSlotRefusal(slot);
+}
+
 int MpChangeCar(int city, int model)
 {
 	MP_PLAYER* me = MpLocalPlayer();
 	int changed;
 
-	if (me == NULL || !gMp.running || model < 0)
+	if (model < 0)
+		return 0;
+
+	/* SINGLE PLAYER. The pause menu's Change car row is registered unconditionally,
+	 * so in a solo game its Apply row arrives HERE, with gMp.running false and no
+	 * roster in existence. A change is then a purely local re-model of the car the
+	 * local player is driving: the same picker and the same "does this machine hold
+	 * it" rule as a session, with nobody to publish to. A refused pick (a car this
+	 * level has no mesh for) leaves the car alone and says so, exactly as it does in
+	 * a session. */
+	if (!gMp.running)
+	{
+		int slot = MainPlayer.playerCarId;
+
+		if (slot < 0 || slot >= MAX_CARS || MainPlayer.playerType != PLAYER_TYPE_CAR)
+		{
+			if (gMpCtx != NULL)
+				gMpCtx->jer_log(gMpCtx,
+					"[mp] change car (single player): not driving (playerCarId %d, type %d) - nothing to change\n",
+					slot, (int)MainPlayer.playerType);
+
+			MpNotify("Change car: get in a car first");
+			return 0;
+		}
+
+		if (gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx,
+				"[mp] change car (single player): we asked for %s model %d (slot %d)\n",
+				MpCarCityName(city), model, slot);
+
+		changed = MpAdoptCar(slot, city, model, NULL);
+
+		if (changed)
+			MpNotifyf("Changed car: %s model %d", MpCarCityName(city), model);
+		else
+			MpNotifyf("Change car refused: %s model %d - %s", MpCarCityName(city), model,
+				MpChangeCarRefusal(city, model));
+
+		return changed;
+	}
+
+	if (me == NULL)
 		return 0;
 
 	if (me->carId < 0)
@@ -5464,7 +5582,8 @@ int MpChangeCar(int city, int model)
 	if (changed)
 		MpNotifyf("Changed car: %s model %d", MpCarCityName(city), model);
 	else
-		MpNotifyf("Change car: %s model %d is not loaded here", MpCarCityName(city), model);
+		MpNotifyf("Change car refused: %s model %d - %s", MpCarCityName(city), model,
+			MpChangeCarRefusal(city, model));
 
 	/* THE INVISIBLE-CAR INSTRUMENT.
 	 *
@@ -5483,7 +5602,7 @@ int MpChangeCar(int city, int model)
 
 		if (slot >= 0 && slot < MAX_CAR_RESIDENT_MODELS)
 		{
-			int built = (gCarCleanModelPtr[slot] != NULL);
+			int built = JerCarSlotUsable(slot);
 
 			gMpCtx->jer_log(gMpCtx,
 				"[mp] car status: driving model %d (resident %d, source %s); mesh %s\n",
@@ -5832,8 +5951,7 @@ static void MpHandleCarState(int connIndex, const unsigned char* p, int len)
 						"[mp] MODEL: player %d drives %s model %d on the wire; we render slot %d "
 						"(model %d, src %d, mesh %s); this machine holds it in slot %d\n",
 						pl->id, MpCarCityName(wantCity), (int)e.model, haveSlot, haveModel, haveCity,
-						(haveSlot >= 0 && haveSlot < MAX_CAR_RESIDENT_MODELS &&
-						 gCarCleanModelPtr[haveSlot] != NULL) ? "present" : "NULL",
+						JerCarSlotUsable(haveSlot) ? "present" : "NULL",
 						MpResidentSlotForCar(wantCity, (int)e.model));
 
 				if (MpAdoptRemoteCar(pl, wantCity, (int)e.model))
@@ -6090,7 +6208,7 @@ static int MpCreateTrafficMirror(int slot, int city, int model, int palette)
 
 	/* Never point ap.model at a mesh this machine does not have (DrawCar would read
 	 * it) -- a car we cannot build is simply left out. */
-	if (resident < 0 || gCarCleanModelPtr[resident] == NULL)
+	if (!JerCarSlotUsable(resident))
 		return 0;
 
 	cp = &car_data[slot];

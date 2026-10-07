@@ -115,7 +115,7 @@ page to it with three rows:
 
 | Row | What it does |
 | --- | --- |
-| `Change car` | pick a city and one of its cars, then "Respawn as this car": your vehicle is replaced in place, and every peer re-models its copy of you. The city row offers the whole session when carhacks is installed (a session can mix cities' car data), and the session's own city alone when it is not |
+| `Change car` | pick a city and one of its cars, then "Respawn as this car": your vehicle is replaced in place, and every peer re-models its copy of you. The city row offers the whole session when carhacks is installed (a session can mix cities' car data), and the session's own city alone when it is not. The page also works in SINGLE PLAYER, where the change is a purely local re-model of the car you are driving and the list offers only cars the level can build right now; a pick that cannot be built is refused, with a reason, and leaves your car alone |
 | `My colour` | your character's suit colour, on or off, plus RGB. Off (the default) keeps the game's own colours |
 | `Write diagnostics now` | writes `mp_diag.txt` next to the game |
 
@@ -249,7 +249,7 @@ them):
 | --- | --- |
 | `MP_TEST_ONFOOT=<secs>` | get out of the car that many seconds in, so the on-foot path runs at all |
 | `MP_BOT` | drives the cars AND the on-foot Tanner (see `mp_bot.c`), so a run has motion without a human. `mp_localpair.py` defaults it to `chase` (the host flees, every joiner chases); `pursuit` hunts mutually; `catmouse` is the same pair DRIVEN BY THE PATHFINDER - the mouse runs to a place it chooses (far from the cat, preferring the road, reachable) and the cat plans to where the mouse is; `off` leaves a real player's car alone |
-| `MP_TEST_PAUSECAR=<secs>[,<city>[,<model>]][;...]` | runs the pause menu's `Change car` apply path, so a mid-match vehicle change (including a cross-city one, with carhacks) is reproducible headlessly. A `;`-separated list (`30,3,1;45,1,2`) makes one change per entry, in order, each at its own time, counted in seconds from when the session starts running - enough to switch until the spare slots would run out |
+| `MP_TEST_PAUSECAR=<secs>[,<city>[,<model>]][;...]` | runs the pause menu's `Change car` apply path, so a mid-match vehicle change (including a cross-city one, with carhacks) is reproducible headlessly. A `;`-separated list (`30,3,1;45,1,2`) makes one change per entry, in order, each at its own time, counted in seconds from when the session starts running - enough to switch until the spare slots would run out. Also runs OUTSIDE a session (from the frame hook, since the lockstep tick it normally rides on needs a session), which is the only padless way to exercise the single-player swap: `MP_TEST_PAUSECAR=10,3` with `-level rio` switches to Rio's second car |
 | `MP_TEST_RESTART=<secs>` | fires the engine's own pause-menu answer, so a pass means the multiplayer soft restart is wired end to end |
 
 The driving bots work from what the engine's own scenery test can see and have **no route

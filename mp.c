@@ -795,6 +795,14 @@ static int MpOnFrame(void* userdata, void* args)
 	MpNetPoll(0);
 	MpUiTick();
 
+	/* The test levers ride on the lockstep tick, which exists only inside a session
+	 * (MpLockstepFrame returns at once when not running). Run the one lever that has
+	 * a single-player meaning out here as well, so the single-player Change car path
+	 * has a padless way to be exercised. Two no-ops unless MP_TEST_PAUSECAR is set
+	 * AND the player is actually driving. */
+	if (!gMp.running && !gInFrontend)
+		MpTestPauseCarTick();
+
 	/* MP_DEBUG: this hook runs whether or not the world is stepping, so its own
 	 * counter can tell "the sim stopped" from "the module stopped". gMp.frame is
 	 * incremented by the lockstep, which is exactly what is in question. */
@@ -1514,6 +1522,37 @@ static int MpCcCity(void)
 
 /* Fill the roster for the currently selected city. Safe to call any time; called
  * when the page opens and after the city row changes. */
+/* Keep only the picks whose resident slot this machine can build RIGHT NOW.
+ *
+ * This is the SINGLE-PLAYER rule: in a session a pick that is not resident is worth
+ * offering, because choosing it asks carhacks to import or hotload the car and tells
+ * the other machines to fold it in. Out of a session there is no such request path
+ * and nobody to fold anything in, so offering it would only produce a refusal on
+ * Apply -- the menu must not invite a pick it will then refuse. Compacted in place,
+ * order preserved. */
+static int MpCcFilterLoadable(int city, int count)
+{
+	int in, out;
+
+	for (in = 0, out = 0; in < count; in++)
+	{
+		/* The picker stores the CITY-LIST index and the MODEL, not a resident slot --
+		 * an index means different cars in different cities, which is exactly why the
+		 * wire carries (city, model). So ask the question MpChangeCar actually asks:
+		 * resolve the model to a resident slot here, then test THAT slot. Testing
+		 * mpCcSlots[in] directly would index gCarCleanModelPtr[] with the wrong
+		 * namespace and keep entries Apply then refuses (and drop ones it would take). */
+		if (JerCarSlotUsable(MpResidentSlotForCar(city, mpCcModels[in])))
+		{
+			mpCcSlots[out] = mpCcSlots[in];
+			mpCcModels[out] = mpCcModels[in];
+			out++;
+		}
+	}
+
+	return out;
+}
+
 static void MpCcRebuild(void)
 {
 	int city, slot;
@@ -1558,6 +1597,11 @@ static void MpCcRebuild(void)
 	 * falls back to that table when nobody answers. */
 	mpCcModelCount = MpCarListForCity(city, mpCcSlots, mpCcModels, MPCC_MAX_CARS);
 
+	/* Out of a session, drop whatever this level cannot build right now (see
+	 * MpCcFilterLoadable) -- so the menu cannot offer a car Apply would refuse. */
+	if (!gMp.running)
+		mpCcModelCount = MpCcFilterLoadable(city, mpCcModelCount);
+
 	/* What the picker had to leave out, logged when it changes - "I cannot pick that car" is
 	 * the report this whole path exists to answer, and a silent skip is what made it need
 	 * answering twice. It is computed from the roster that was actually built, so the line
@@ -1598,8 +1642,9 @@ static void MpCcRebuild(void)
 		}
 
 		if (gMpCtx != NULL)
-			gMpCtx->jer_log(gMpCtx, "[mp] car select: %s offers %d of %d slot(s)%s\n",
-				MpCarCityName(city), mpCcModelCount, MPCC_SLOTS, (h > 0) ? hidden : "");
+			gMpCtx->jer_log(gMpCtx, "[mp] car select: %s offers %d of %d slot(s)%s%s\n",
+				MpCarCityName(city), mpCcModelCount, MPCC_SLOTS, (h > 0) ? hidden : "",
+				gMp.running ? "" : " (single player: only cars this level can build now)");
 	}
 
 	if (mpCcModelIdx < 0 || mpCcModelIdx >= mpCcModelCount)
@@ -1720,7 +1765,15 @@ static int MpOnPauseMenu(void* userdata, void* args)
 		return JER_RESULT_STOP;
 
 	if (!gMp.running)
+	{
+		/* SINGLE PLAYER: there is no session and no world of ours to keep running,
+		 * but the Change car page is the SAME page (it is registered
+		 * unconditionally) and its roster needs the same refresh -- the city list is
+		 * carhacks' answer, which may have changed since the menu was last opened. */
+		MpCcRebuild();
+
 		return JER_RESULT_CONTINUE;
+	}
 
 	/* Let the ENGINE open its pause menu -- do not claim START. The world keeps
 	 * running because MpOnDrawOverlay steps it while paused, and our player list
@@ -1977,7 +2030,7 @@ static int MpOnGameStart(void* userdata, void* args)
 			p->id, p->carId, cp->controlType, cp->ap.model,
 			(cp->ap.model >= 0 && cp->ap.model < MAX_CAR_RESIDENT_MODELS) ? residentCarModels[cp->ap.model] : -1,
 			(PlayerStartInfo[p->carId] != NULL) ? PlayerStartInfo[p->carId]->model : -9,
-			(cp->ap.model >= 0 && cp->ap.model < MAX_CAR_RESIDENT_MODELS && gCarCleanModelPtr[cp->ap.model] != NULL) ? 1 : 0,
+			JerCarSlotUsable(cp->ap.model) ? 1 : 0,
 			cp->hd.where.t[0], cp->hd.where.t[1], cp->hd.where.t[2]);
 	}
 
