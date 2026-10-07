@@ -69,7 +69,18 @@ WHAT TO EXERCISE
    collide cleanly, does anything on either car corrupt after a car change made
    while it is chasing you.
 
-4. WHAT IS KNOWN-IMPERFECT (do not chase these, they are the next unit):
+4. THE SINGLE PLAYER / MULTIPLAYER PROMPT (levelhacks). Start a normal
+   single-player Take a Ride: after you pick a city and BEFORE the time-of-day
+   screen, you should get a Singleplayer / Multiplayer choice. Multiplayer opens
+   the four MP-city maps (MP Chicago / MP Havana / MP Las Vegas / MP Rio) and
+   starts the chosen one in single-player take-a-ride, so the small multiplayer
+   levels can be looked at without a second player.
+
+   In a LAN session the mp mod owns this question instead (its own Single Player /
+   Multiplayer menu, leading into the host flow), so while hosting you should see
+   that one and NOT this one -- never both on the same city confirm.
+
+5. WHAT IS KNOWN-IMPERFECT (do not chase these, they are the next unit):
    vehicles with EXTRA PANELS -- the Vegas ambulance, large SUVs, long cars --
    can still show minor colour corruption on their extra panels. The engine gives
    a car set eight palette rows, so a set with more pages borrows the first page's
@@ -86,9 +97,9 @@ WHAT IS IN THE PACKAGE
   (no DRIVER\D1CARS\)      The Driver 1 car content is NOT in this package, so the
                            five Driver 1 cities cannot be selected here. It ships
                            SEPARATELY, as its own release -- never inside this one.
-  JERICHO\                 the loader, the three pre-included mods and their
+  JERICHO\                 the loader, the four pre-included mods and their
                            config (modlist.ini is carhacks = 1, crumple = 1,
-                           mp = 1 -- the only mods a release ships)
+                           levelhacks = 1, mp = 1 -- the only mods a release ships)
   PLAY_HOST.bat / PLAY_JOIN.bat / mp_bot_client.bat / FIREWALL_FIX.bat
   mp_agent.ps1 + START_AGENT.bat   hands-free remote test agent (optional)
 

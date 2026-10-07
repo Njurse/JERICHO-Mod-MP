@@ -202,10 +202,24 @@ static int MpOnFrontendConfirm(void* userdata, void* args)
 	if (gMp.role != MP_ROLE_NONE && !gMp.running && fe->defer == 0)
 	{
 		fe->defer = 1;
-		MpUiOpenModeMenu();
+
+		/* NOT MpUiOpenModeMenu() from in here: an open issued from inside this hook
+		 * does not survive the engine finishing the screen switch, so the prompt
+		 * silently never appeared. Arm it; the next frame opens it (see
+		 * gModeMenuArmed in mp_ui.c). */
+		MpUiArmModeMenu();
 
 		if (gMpCtx != NULL)
 			gMpCtx->jer_log(gMpCtx, "[mp] city confirmed - asking Single Player / Multiplayer\n");
+	}
+	else if (gMpCtx != NULL)
+	{
+		/* Why the prompt did NOT open. Before this the only evidence was the
+		 * ABSENCE of the line above -- which is the same evidence as "this hook
+		 * never fired at all", and those are different bugs: a session that is
+		 * not in the hosting role, versus a hook that is not registered. */
+		gMpCtx->jer_log(gMpCtx, "[mp] city confirmed - NOT asking (role=%d running=%d defer=%d)\n",
+			(int)gMp.role, (int)gMp.running, (int)fe->defer);
 	}
 
 	return JER_RESULT_CONTINUE;
@@ -795,6 +809,44 @@ static int MpOnFrame(void* userdata, void* args)
 	/* Chat owns PsyX's single text-input slot exactly while the prompt is up.
 	 * Re-asserted every frame so a missed release self-heals. */
 	MpChatGrabKeyboard(gMp.chatOpen ? 1 : 0);
+
+	/* Test lever: MP_TEST_CITYCONFIRM=<secs> fires the take-a-ride CITY CONFIRM the
+	 * way the frontend does (CutSceneCitySelectScreen on CROSS), that many seconds
+	 * after the frontend comes up. A padless run cannot press X on that screen --
+	 * the frontend reads Pads[0].mapnew -- so without this the Single Player /
+	 * Multiplayer prompt path is unreachable headlessly. The prompt OPENING is
+	 * asserted separately: MpUiTick logs "the Single Player / Multiplayer menu did
+	 * not open" on failure, so a run that REQUIRES the line below and FORBIDS that
+	 * one is the regression guard for this whole flow. Inert unless set. */
+	{
+		static unsigned long confirmAtMs = 0;
+		static int confirmDone = 0;
+		const char* s = getenv("MP_TEST_CITYCONFIRM");
+
+		if (s != NULL && !confirmDone && gInFrontend && gMpCtx != NULL)
+		{
+			if (confirmAtMs == 0)
+				confirmAtMs = MpNowMs() + (unsigned long)(atoi(s) * 1000);
+
+			if (MpNowMs() >= confirmAtMs)
+			{
+				JER_ARGS_FRONTEND fe;
+
+				confirmDone = 1;
+
+				fe.gameLevel = MpGetGameLevel();
+				fe.gameType = GAME_TAKEADRIVE;
+				fe.numPlayers = 1;
+				fe.defer = 0;
+
+				jer_fire(JER_EVENT_FRONTEND, &fe);
+
+				gMpCtx->jer_log(gMpCtx,
+					"[mp] test: MP_TEST_CITYCONFIRM -> city confirm fired (defer=%d role=%d)\n",
+					fe.defer, (int)gMp.role);
+			}
+		}
+	}
 
 	/* Test lever: MP_TEST_CHATKEY=<secs> feeds the chat KEY into our own handler
 	 * once, that many seconds after the match goes live, so the open path can be

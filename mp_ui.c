@@ -60,6 +60,14 @@ static int gMenuIdx[M_COUNT];
 static int gMenusResolved;	/* set once MpResolveMenus has run: an index is only
 				 * meaningful after the registration pass */
 
+/* Armed by MpUiArmModeMenu (from mp.c's JER_EVENT_FRONTEND confirm hook) and acted
+ * on in MpUiTick, i.e. on a LATER frame. Opening the menu from inside the hook that
+ * triggered it does not take -- the engine finishes the screen switch after the hook
+ * returns -- which is exactly why the Single Player / Multiplayer step never
+ * appeared. carhacks defers its own menu the same way. Counts down so the open is
+ * retried while the screens settle. */
+static int gModeMenuArmed;
+
 /* Open the menu `logical`, if it registered. Inert until MpResolveMenus has run,
  * so a caller that fires before the registration pass cannot open index 0 by
  * accident (the array is zero-filled). */
@@ -226,7 +234,23 @@ static int ActModeMP(void* ud)
  * the city-confirm hook). */
 void MpUiOpenModeMenu(void)
 {
-	jer_frontend_open(gMenuIdx[M_HOSTSET]);
+	/* Log the resolved index BEFORE opening. MpMenuOpen no-ops on an unregistered
+	 * menu (idx -1), so jer_frontend_open(-1) used to be a silent nothing -- and
+	 * "the Single Player / Multiplayer menu never appeared" then had no evidence
+	 * at all, since the only trace was the line MpOnFrontendConfirm prints when
+	 * it BELIEVES it opened it. */
+	if (gMpCtx != NULL)
+		gMpCtx->jer_log(gMpCtx, "[mp] opening mp.mode (resolved idx %d)\n", gMenuIdx[M_HOSTSET]);
+
+	MpMenuOpen(M_HOSTSET);
+}
+
+/* Ask for the Single Player / Multiplayer menu on the NEXT frame instead of now.
+ * See gModeMenuArmed for why opening it from inside the confirm hook does not
+ * work. */
+void MpUiArmModeMenu(void)
+{
+	gModeMenuArmed = 8;
 }
 
 /* Open the stock CAR SELECT (screen 14) so a joining player picks their own
@@ -768,9 +792,34 @@ void MpUiTick(void)
 		{
 			probed = 1;
 			gMpCtx->jer_log(gMpCtx,
-				"[mp] frontend: %d menu(s) registered; mp.root=%d mp.lan=%d mp.join=%d mp.lobby=%d\n",
+				"[mp] frontend: %d menu(s) registered; mp.root=%d mp.lan=%d mp.host=%d mp.mode=%d mp.join=%d mp.lobby=%d\n",
 				jer_frontend_menu_count(), gMenuIdx[M_ROOT], gMenuIdx[M_LAN],
-				gMenuIdx[M_JOIN], gMenuIdx[M_LOBBY]);
+				gMenuIdx[M_HOST], gMenuIdx[M_HOSTSET], gMenuIdx[M_JOIN], gMenuIdx[M_LOBBY]);
+		}
+	}
+
+	/* The Single Player / Multiplayer menu owed by the take-a-ride confirm, opened
+	 * HERE and not from inside the hook (see gModeMenuArmed). Retried for a few
+	 * frames, and a failure is logged -- "the prompt never appeared" with no trace
+	 * at all is what made this hard to see in the first place. */
+	if (gModeMenuArmed > 0)
+	{
+		int want = gMenuIdx[M_HOSTSET];
+
+		gModeMenuArmed--;
+
+		if (want >= 0 && jer_frontend_current_menu() == want)
+		{
+			gModeMenuArmed = 0;	/* it took */
+		}
+		else if (gInFrontend)
+		{
+			MpUiOpenModeMenu();
+
+			if (gModeMenuArmed == 0 && gMpCtx != NULL && jer_frontend_current_menu() != want)
+				gMpCtx->jer_log(gMpCtx,
+					"[mp] the Single Player / Multiplayer menu did not open (idx %d, on screen %d)\n",
+					want, jer_frontend_current_menu());
 		}
 	}
 

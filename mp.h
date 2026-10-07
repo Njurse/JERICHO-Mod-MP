@@ -398,6 +398,7 @@ void MpCameraPose(int* x, int* y, int* z, int* yaw);	/* camera position + yaw */
 int  MpGetGameLevel(void);		/* the frontend's current city (GameLevel) */
 void MpSetSubGame(int n);		/* the multiplayer sub-level (gSubGameNumber) */
 void MpUiOpenModeMenu(void);		/* open the Single Player / Multiplayer menu */
+void MpUiArmModeMenu(void);		/* ask for it on the NEXT frame - call this from a hook */
 void MpUiOpenCarSelect(void);		/* open the stock car select (joining player picks a car) */
 void MpClientLaunch(void);		/* launch a client into the host's level */
 void MpReturnToFrontend(void);		/* end the match, back to the main frontend */

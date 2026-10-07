@@ -450,6 +450,29 @@ In game, chat opens on **T** and closes on **Escape**, and **Enter** sends. A
 received line is an ordinary notify, so every seat logs it as
 `[mp] notify row '<name>: <text>'`.
 
+## The Single Player / Multiplayer prompt (a headless run has no pad)
+
+The take-a-ride city confirm is the one place that asks Singleplayer vs
+Multiplayer — through mp's own `mp.mode` menu inside a session, or levelhacks'
+prompt outside one (levelhacks yields to mp whenever a session role is set). It
+fires on CROSS (`JER_EVENT_FRONTEND`), and the frontend reads `Pads[0].mapnew`, so
+a padless run cannot press it. `MP_TEST_CITYCONFIRM=<secs>` fires the confirm the
+way the engine does, that many seconds after the frontend is up:
+
+    MP_AUTOSTART=host MP_TEST_CITYCONFIRM=4 JERICHO_dev.exe -nointro -nofmv
+
+A healthy host run logs, in this order:
+
+    [mp] city confirmed - asking Single Player / Multiplayer
+    [mp] test: MP_TEST_CITYCONFIRM -> city confirm fired (defer=1 role=1)
+    [mp] opening mp.mode (resolved idx 4)
+
+and NOT `the Single Player / Multiplayer menu did not open (idx …, on screen …)`.
+So a wrapper run asserts it with:
+
+    --require "MP_TEST_CITYCONFIRM -> city confirm fired"
+    --forbid  "the Single Player / Multiplayer menu did not open"
+
 ## Reading a run
 
 The logs are chatty at `MP_DEBUG=1`; `JPPN`, `JPPO`, `pose:`, `JPIN` and `JPCS`
