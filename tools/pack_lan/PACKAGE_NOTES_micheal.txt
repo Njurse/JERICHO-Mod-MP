@@ -2,7 +2,7 @@ PR #15 candidate -- notes for this copy (Micheal)
 ==================================================
 
 This is the same build as the standard LAN package README_LAN.txt describes, with
-three deliberate differences made for this hand-off. Read this first, then
+two deliberate differences made for this hand-off. Read this first, then
 README_LAN.txt. (README_LAN_TEST.txt is the checklist of what is worth trying.)
 
 1. THERE IS NO DRIVER2\ FOLDER IN THIS ZIP -- ON PURPOSE.
@@ -13,7 +13,6 @@ README_LAN.txt. (README_LAN_TEST.txt is the checklist of what is worth trying.)
        <somewhere>\JERICHO_dev.exe
        <somewhere>\JERICHO\
        <somewhere>\DRIVER2\          <- your existing copy, untouched
-       <somewhere>\DRIVER\D1CARS\    <- from this zip
 
    If DRIVER2\ is not beside JERICHO_dev.exe the game will start and find no data.
    Nothing in this zip overwrites DRIVER2\, so your data copy is safe.
@@ -22,19 +21,13 @@ README_LAN.txt. (README_LAN_TEST.txt is the checklist of what is worth trying.)
    JERICHO\CONFIG\mp.ini ships with player_name = Micheal. The machine this was
    built on keeps its own name (Jaret) -- that file was not touched.
 
-3. DRIVER\D1CARS\ IS INCLUDED (1.8 MB), AND WAS NOT BEFORE.
-   This is our baked Driver 1 car data, and it is what makes the five Driver 1
-   cities (MIAMI, FRISCO, LA, NEWYORK, NEWCASTLE) work in the car-select at all:
-   the runtime opens exactly DRIVER\D1CARS\<CITY>.LEV and .LCF. The rest of
-   DRIVER\ -- the Driver 1 game data, ~620 MB -- is not needed and is not here.
-
-   In this build the Driver 1 cars also render CORRECTLY for the first time: the
-   bake used to hand the first texture page the number 0, which the engine
-   reserves as "no page", so on Newcastle car 1 the bonnet was invisible and cars
-   1 and 2 were half-missing. Cycle the cars in a session and they should be
-   complete, in their own colours, and stay that way however many times you
-   switch. Worth trying: the pause menu's Change car, through every city, several
-   times over.
+3. THE DRIVER 1 CITIES ARE NOT IN THIS COPY.
+   The earlier hand-off carried DRIVER\D1CARS\ (our baked Driver 1 car content,
+   1.8 MB), which is what makes the five Driver 1 cities (MIAMI, FRISCO, LA,
+   NEWYORK, NEWCASTLE) selectable. THIS copy does not -- that content is being kept
+   for a SEPARATE release of its own -- so in this build the pause menu's Change car
+   offers the four Driver 2 cities only (CHICAGO, HAVANA, VEGAS, RIO). That is
+   deliberate; do not read it as a missing download.
 
 WHAT ELSE IS NEW SINCE THE COPY YOU HAVE
 ----------------------------------------

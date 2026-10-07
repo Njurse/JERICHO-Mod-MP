@@ -8,10 +8,13 @@ rem FMV videos, which are the bulk of the build and are not needed by the
 rem launchers (they pass -nofmv, which the game supports). Add DRIVER2\FMV to
 rem the second 7z command if someone wants the movies.
 rem
-rem DRIVER\D1CARS is our baked Driver 1 car data (1.8 MB) and IS shipped: the
-rem runtime opens exactly DRIVER\D1CARS\<CITY>.LEV and .LCF, so without it not one
-rem of the five Driver 1 cities can be selected. The rest of DRIVER\ -- the Driver
-rem 1 game data, ~620 MB -- is neither needed nor shipped.
+rem DRIVER\D1CARS IS NOT SHIPPED, and neither is the d1cars module. It is the
+rem baked Driver 1 car content, and it is released SEPARATELY so it can be
+rem revealed on its own. A package made by this script therefore CANNOT select
+rem the five Driver 1 cities -- that is deliberate. A local DEV build keeps
+rem DRIVER\D1CARS and d1cars for testing (bin/ is the dev tree); the release
+rem does not carry either. To ship the Driver 1 cities, ship the separate d1cars
+rem package alongside this one, never inside it.
 setlocal
 set "HERE=%~dp0"
 set "ROOT=%HERE%..\..\..\..\.."
@@ -31,7 +34,7 @@ echo packaging %EXEDIR% -^> %OUT%
 pushd "%EXEDIR%" || exit /b 1
 "%SEVENZ%" a -t7z -mx=5 "-xr!FMV" "%OUT%" ^
     JERICHO_dev.exe SDL2.dll OpenAL32.dll soft_oal.dll config.ini ^
-    VERSION.txt DRIVER2 JERICHO DRIVER\D1CARS
+    VERSION.txt DRIVER2 JERICHO
 popd
 
 pushd "%HERE%" || exit /b 1
@@ -65,8 +68,16 @@ rem listened on 1318 while PLAY_HOST/PLAY_JOIN and the firewall rule in
 rem README_LAN all said 1400 -- a join by address could never connect. Keep these
 rem three in step: this line, PLAY_HOST's default, and README_LAN's firewall note.
 >> "%STAGE%\JERICHO\CONFIG\mp.ini" echo port = 1400
+rem Ship the SHIPPED-PROFILE modlist.ini, NOT whatever the dev machine's build
+rem currently has. bin/ is a dev tree: it may have d1cars (or any other module)
+rem toggled on for testing, and the release must not -- a package that enabled
+rem d1cars would name a module it does not carry. The repo's
+rem JERICHO\CONFIG\modlist.ini is the shipped profile (carhacks + mp only), so
+rem that is what goes in the zip. Staged in TEMP like mp.ini, so the build's own
+rem modlist is never touched.
+copy /Y "%ROOT%\JERICHO\CONFIG\modlist.ini" "%STAGE%\JERICHO\CONFIG\modlist.ini" >nul
 pushd "%STAGE%" || exit /b 1
-"%SEVENZ%" a -t7z -mx=5 "%OUT%" JERICHO\CONFIG\mp.ini
+"%SEVENZ%" a -t7z -mx=5 "%OUT%" JERICHO\CONFIG\mp.ini JERICHO\CONFIG\modlist.ini
 popd
 
 echo done: %OUT%

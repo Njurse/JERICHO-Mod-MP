@@ -459,10 +459,12 @@ means each machine drives its own traffic; a car you see need not be the same ca
 other screen. This is by design — it is *why* a slot is meaningless for a player car — and
 `ARCHITECTURE.md` §12's "out of scope" (matchmaking beyond LAN, host migration) still holds.
 
-**19. Extra-panel palette rows.** A city gets **eight** palette rows but a Driver 1 city
-carries eleven to thirteen pages, so pages past the eighth borrow the first page's palette:
-vehicles with **extra panels** — the Vegas ambulance, large SUVs, long cars — can show
-minor colour corruption. Cosmetic, known. (`README_LAN_TEST.txt` says the same.)
+**19. Extra-panel palette rows.** The engine gives a car set **eight** palette rows, so a
+set with more texture pages borrows the first page's palette for the extra ones: vehicles
+with **extra panels** — the Vegas ambulance, large SUVs, long cars — can show minor colour
+corruption. Cosmetic, known. (`README_LAN_TEST.txt` says the same.) The five Driver 1
+cities carry eleven to thirteen pages and so hit this hardest, but they ship as a
+**separate content release**, not in this one.
 
 **20. Doc drift.** `ARCHITECTURE.md` §12/§13 and `JERICHO-MP.md` §6 predate the traffic work
 and the load-timeout fix (§13's "late joiner dropped for `timeout`" is now fixed in code).

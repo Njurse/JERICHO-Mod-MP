@@ -34,14 +34,15 @@ NEW IN THIS PACKAGE
 WHAT TO EXERCISE
 ----------------
 1. CAR CYCLING (the point of this build). In a session, use the pause menu's
-   Change car and cycle through cars from EVERY city -- the four Driver 2 cities
-   and the five Driver 1 ones (MIAMI, FRISCO, LA, NEWYORK, NEWCASTLE). Then do it
-   again, and again: the bug this fixes only showed after several changes.
+   Change car and cycle through cars from EVERY city this build offers -- the four
+   Driver 2 cities (CHICAGO, HAVANA, VEGAS, RIO). Then do it again, and again: the
+   bug this fixes only showed after several changes.
+
+   (The five Driver 1 cities -- MIAMI, FRISCO, LA, NEWYORK, NEWCASTLE -- are NOT in
+   this package. They ship as a separate Driver 1 content release; see "WHAT IS IN
+   THE PACKAGE" below. Do not expect them in the Change car list here.)
 
    What was wrong before:
-     - the Hood was invisible on Newcastle car 1, and Newcastle cars 1 and 2 were
-       half-missing (the bake handed the first texture page the number 0, which
-       the engine reserves as "no page", so that page was never uploaded);
      - panels on cars from every city wore a stranger's colours (the engine
        fabricated a missing palette row by copying a NEIGHBOURING row, slot 0
        included);
@@ -70,11 +71,11 @@ WHAT TO EXERCISE
 
 4. WHAT IS KNOWN-IMPERFECT (do not chase these, they are the next unit):
    vehicles with EXTRA PANELS -- the Vegas ambulance, large SUVs, long cars --
-   can still show minor colour corruption on their extra panels. The engine
-   gives a city eight palette rows and a Driver 1 city carries eleven to
-   thirteen pages, so the pages past the eighth borrow the first page's palette.
-   Cosmetic, known, documented. Likewise CHICAGO is where scenery leaks most,
-   and RIO is where vehicle textures are most likely to look wrong.
+   can still show minor colour corruption on their extra panels. The engine gives
+   a car set eight palette rows, so a set with more pages borrows the first page's
+   palette for the extra ones. Cosmetic, known, documented. Likewise CHICAGO is
+   where scenery leaks most, and RIO is where vehicle textures are most likely to
+   look wrong.
 
 
 WHAT IS IN THE PACKAGE
@@ -82,11 +83,9 @@ WHAT IS IN THE PACKAGE
   JERICHO_dev.exe + DLLs   the game (this build)
   DRIVER2\                 the Driver 2 data, minus the 1.4 GB of FMV
                            (both launchers pass -nofmv)
-  DRIVER\D1CARS\           the baked Driver 1 car data, 1.8 MB. Required for the
-                           Driver 1 cities: the runtime opens exactly
-                           DRIVER\D1CARS\<CITY>.LEV and .LCF. The rest of DRIVER\
-                           (the Driver 1 game data, ~620 MB) is NOT needed and is
-                           not shipped.
+  (no DRIVER\D1CARS\)      The Driver 1 car content is NOT in this package, so the
+                           five Driver 1 cities cannot be selected here. It ships
+                           SEPARATELY, as its own release -- never inside this one.
   JERICHO\                 the loader, the mp mod and its config
                            (modlist.ini already has mp = 1 and carhacks = 1)
   PLAY_HOST.bat / PLAY_JOIN.bat / mp_bot_client.bat / FIREWALL_FIX.bat
