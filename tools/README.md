@@ -8,6 +8,10 @@ Path handling: the launchers find the game relative to themselves
 (`tools/` → repo root → `src_rebuild/bin/Release_dev`), so they work from a
 checkout anywhere. Set `MP_EXEDIR` to point them somewhere else.
 
+Packaging a build to hand to someone else is a different job in its own folder:
+`pack_lan/` holds both packagers (the public one and the Driver 1 hand-off), the
+launchers they ship, and its own README explaining which to use.
+
 ## Which one do I want?
 
 | I want to… | Use |

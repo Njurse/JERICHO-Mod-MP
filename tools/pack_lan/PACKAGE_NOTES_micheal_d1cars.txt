@@ -1,0 +1,69 @@
+Notes for this copy (Micheal) -- Driver 1 playtest build
+========================================================
+
+This is the standard LAN package (carhacks + CRUMPLE + Level Hacks + multiplayer)
+with TWO modules added: d1cars and sandbox. Everything else in it -- the
+launchers, the readmes, the port, the remote agent -- is the same. Read this
+first, then README_LAN.txt; README_LAN_TEST.txt is the checklist of what is worth
+trying.
+
+1. THERE IS NO DRIVER2\ FOLDER IN THIS ZIP -- ON PURPOSE.
+   You already have the game data on this PC. Unpack this zip so that its contents
+   sit in the SAME FOLDER as your existing DRIVER2\ (i.e. next to the exe), so you
+   end up with:
+
+       <somewhere>\JERICHO.exe
+       <somewhere>\JERICHO\
+       <somewhere>\DRIVER2\          <- your existing copy, untouched
+
+   If DRIVER2\ is not beside JERICHO.exe the game will start and find no data.
+   Nothing in this zip overwrites DRIVER2\, so your data copy is safe.
+
+2. THE PLAYER NAME IN THIS COPY IS "Micheal".
+   JERICHO\CONFIG\mp.ini ships with player_name = Micheal. The machine this was
+   built on keeps its own name -- that file was not touched.
+
+3. THE DRIVER 1 CITIES ARE IN THIS COPY.
+   DRIVER\D1CARS\ -- our baked Driver 1 car content, 1.8 MB -- is included, and so
+   is the driver-1 module folder (JERICHO\MODS\d1cars\). That is what can make the
+   five Driver 1 cities (MIAMI, FRISCO, LA, NEWYORK, NEWCASTLE) selectable, and
+   nothing is missing from your side this time.
+
+   BUT BE CLEAR ABOUT WHAT TO EXPECT. The d1cars MODULE is still a scaffold: it
+   registers no hooks yet, so switching it on does not by itself change anything
+   you can see or drive. Its entire behaviour on startup is one log line:
+
+       [d1cars] unit registered (scaffold - no hooks yet)
+
+   The Driver 1 shapes are baked and render offline; the engine wiring that would
+   offer them to the game as a fifth car-data source is not written yet (see
+   JERICHO\MODS\d1cars\docs\DRIVER1.md, section 9). So do not read "no Driver 1
+   cities in the menu" as a broken download -- it is where the work has got to.
+   What IS worth watching is that the [d1cars] line appears and nothing else about
+   it does: no warning, no refusal, no crash at boot.
+
+4. SANDBOX IS ON.
+   It is the dev scratchpad: a pile of vehicles, models and level objects you can
+   spawn and walk through, for poking at the car and object art outside a real
+   game. It is not part of the public build, so treat anything odd in it as "that
+   is what sandbox does", not as a multiplayer bug.
+
+BUILD IDENTITY
+   The banner the game logs on boot says which build it is:
+
+       == JERICHO v2 (build ...) ==
+
+   That alone does not have to match. What the join COMPARES is the multiplayer
+   stamp, which the same startup prints and the pause-menu scoreboard repeats:
+
+       [mp] multiplayer ready (... build ...., mods ....)
+
+   It is a digest of the RELEASE SERIES, not of the code, so it does not change
+   per commit -- two machines on the same release are admitted whatever their
+   build provenance. If THOSE two differ, the join is refused with a clear message
+   rather than the two of you silently failing to see each other.
+
+SIX MODULES, NOT FOUR
+   The public package pre-includes four. This one has six: carhacks, CRUMPLE,
+   Level Hacks, multiplayer, d1cars, sandbox -- JERICHO\CONFIG\modlist.ini lists
+   them. It is a private build; the public one stays as it is.
