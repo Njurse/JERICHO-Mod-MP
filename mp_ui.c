@@ -1073,11 +1073,18 @@ void MpConsoleChat(const char* name, int colorOn, int r, int g, int b, const cha
 	if (text == NULL || text[0] == '\0')
 		return;
 
+	/* A speaker's name is drawn in their own colour -- whatever they picked for
+	 * their car. With custom colour OFF there is no colour to show ("original"),
+	 * so it falls back to cream.
+	 *
+	 * These are the colours as they should LOOK: jer_console halves every colour
+	 * it passes, because the HQ font is drawn with the PSX texture filter on
+	 * (x2). See jerConsoleInk. */
 	if (!colorOn)
 	{
 		r = 255;
-		g = 235;
-		b = 140;	/* the amber the notifications used, when no colour is set */
+		g = 253;
+		b = 208;	/* cream */
 	}
 
 	snprintf(head, sizeof(head), "%s: ", (name != NULL && name[0] != '\0') ? name : "?");
@@ -1088,9 +1095,13 @@ void MpConsoleChat(const char* name, int colorOn, int r, int g, int b, const cha
 	segs[0].b = (unsigned char)b;
 	segs[0].ambient = 0;
 
+	/* The message itself is a flat near-white, so the name is what carries the
+	 * colour. Not `ambient`: chat does not dim with age the way status does. */
 	segs[1].text = text;
-	segs[1].r = segs[1].g = segs[1].b = 0;
-	segs[1].ambient = 1;
+	segs[1].r = 240;
+	segs[1].g = 240;
+	segs[1].b = 240;
+	segs[1].ambient = 0;
 
 	jer_console_chat(segs, 2);
 }
