@@ -126,7 +126,7 @@ void MpRemovePlayer(int id)
 
 	/* let the player know who left (never ourselves) */
 	if (!p->isLocal)
-		MpNotifyf("%s left", p->name);
+		MpConsoleLine("%s left", p->name);
 
 	/* take their car out of the world so it does not sit there parked with
 	 * nobody driving it; the slot is recycled by the engine.

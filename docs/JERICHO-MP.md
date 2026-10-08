@@ -40,7 +40,8 @@ That is the whole design. Everything below is a consequence of it.
 4. **Drive.** Each player sees the others' cars moving, and their own car responds
    to their own pad with no delay. Collisions push both cars.
 5. **Talk.** Press `T` to open a chat line, type, and press `Enter` to send it to
-   everyone (Escape cancels). Every player sees the line at once.
+   everyone (Escape cancels). Every player sees the line at once, in the status
+   console (`~` toggles it; chat stays visible either way).
 
 ---
 

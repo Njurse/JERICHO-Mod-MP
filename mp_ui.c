@@ -26,6 +26,7 @@
 #include "jericho.h"
 #include "jer_events.h"
 #include "jer_frontend.h"
+#include "jer_console.h"		/* the status stream (join/leave, chat) */
 #include "mp.h"
 
 /* The engine's text primitives (declared in Game/C/pres.h, which pulls in the
@@ -1046,6 +1047,54 @@ void MpNotifyf(const char* fmt, ...)
 	MpNotify(b);
 }
 
+/* ------------------------------------------------------------------ */
+/* The engine status console                                          */
+/* ------------------------------------------------------------------ */
+/* Join/leave and chat go into the scrolling stream rather than the transient
+ * amber toasts: the console keeps them readable (and greppable), and a chat
+ * line is drawn even while the console itself is toggled off. */
+void MpConsoleLine(const char* fmt, ...)
+{
+	char b[MP_NOTIFY_TEXT_MAX];
+	va_list ap;
+
+	va_start(ap, fmt);
+	vsnprintf(b, sizeof(b), fmt, ap);
+	va_end(ap);
+
+	jer_console_line(b);
+}
+
+void MpConsoleChat(const char* name, int colorOn, int r, int g, int b, const char* text)
+{
+	char head[MP_NAME_MAX + 4];
+	JER_CONSOLE_SEG segs[2];
+
+	if (text == NULL || text[0] == '\0')
+		return;
+
+	if (!colorOn)
+	{
+		r = 255;
+		g = 235;
+		b = 140;	/* the amber the notifications used, when no colour is set */
+	}
+
+	snprintf(head, sizeof(head), "%s: ", (name != NULL && name[0] != '\0') ? name : "?");
+
+	segs[0].text = head;
+	segs[0].r = (unsigned char)r;
+	segs[0].g = (unsigned char)g;
+	segs[0].b = (unsigned char)b;
+	segs[0].ambient = 0;
+
+	segs[1].text = text;
+	segs[1].r = segs[1].g = segs[1].b = 0;
+	segs[1].ambient = 1;
+
+	jer_console_chat(segs, 2);
+}
+
 
 /* The other players' numbers, drawn ABOVE their cars. Yaw-only projection
  * (the camera pitch is small enough not to matter for a label). */
@@ -1125,16 +1174,18 @@ int MpUiDrawOverlay(void* userdata, void* args)
 
 	MpDrawCarLabels();
 
-	/* The chat prompt: the line being typed, with a cursor, along the bottom.
-	 * Drawn from DRAW_OVERLAY, which the engine fires only while the world is
-	 * stepping -- so seeing this up IS the proof it shows while driving. */
+	/* The chat prompt: the line being typed, with a cursor. The ENGINE console
+	 * draws it now, on its own bottom row (jer_console_input), which also keeps
+	 * it visible while the console itself is toggled off -- what you are typing
+	 * is never invisible. MpUiDrawOverlay runs from DRAW_OVERLAY, which the
+	 * engine fires only while the world is stepping, so setting it here IS the
+	 * proof it shows while driving. */
 	if (gMp.chatOpen)
 	{
 		char line[MP_NOTIFY_TEXT_MAX + 2];
 
 		snprintf(line, sizeof(line), "%s_", gMp.chatBuf);
-		SetTextColour(150, 255, 150);
-		PrintString(line, 8, 232);
+		jer_console_input(line);
 
 		if (gMpCtx != NULL && MpDebugOn())
 		{
@@ -1146,6 +1197,10 @@ int MpUiDrawOverlay(void* userdata, void* args)
 				gMpCtx->jer_log(gMpCtx, "[mp] chat: prompt drawn (bottom-left, in game)\n");
 			}
 		}
+	}
+	else
+	{
+		jer_console_input(NULL);
 	}
 
 	return JER_RESULT_CONTINUE;

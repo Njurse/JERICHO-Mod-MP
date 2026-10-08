@@ -353,6 +353,14 @@ void MpTestPauseCarTick(void);
 void MpNotify(const char* text);	/* queue a line for the overlay */
 void MpNotifyf(const char* fmt, ...);	/* printf-style MpNotify */
 
+/* The engine's status console (jer_console.h). Join/leave and chat go there
+ * instead of the transient toast ring: the console is the scrolling stream, so
+ * a line survives long enough to be read and is greppable in the log. */
+void MpConsoleLine(const char* fmt, ...);	/* printf-style status line */
+/* A chat line, "<name>: <text>", the name in the speaker's own colour (or the
+ * neutral amber when they have not set one). */
+void MpConsoleChat(const char* name, int colorOn, int r, int g, int b, const char* text);
+
 /* Replace OUR OWN vehicle with another one, mid-match (the pause menu's Change
  * car). (city, model) is the pair the wire carries; the model must be one this
  * machine can hold. Returns 1 if the car on the road changed. */

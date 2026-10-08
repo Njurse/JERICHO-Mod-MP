@@ -1737,7 +1737,7 @@ static void MpHandleHello(int connIndex, const unsigned char* p, int len)
 
 	MpSendWelcome(connIndex, id, matched);
 
-	MpNotifyf("%s joined", h.playerName);
+	MpConsoleLine("%s joined", h.playerName);
 
 	if (gMpCtx)
 		gMpCtx->jer_log(gMpCtx, "[mp] player %d '%s' joined (%d/%d)%s\n",
@@ -1761,7 +1761,8 @@ void MpSendChat(const char* text)
 
 	if (MpIsHost())
 	{
-		MpNotifyf("%s: %s", gMp.config.playerName, c.text);
+		MpConsoleChat(gMp.config.playerName, gMp.config.colorOn,
+			gMp.config.colorR, gMp.config.colorG, gMp.config.colorB, c.text);
 		MpHostBroadcast(MP_TAG_CHAT, MP_FLAG_RELIABLE, &c, sizeof(c));
 	}
 	else
@@ -1782,7 +1783,11 @@ static void MpHandleChat(const unsigned char* p, int len)
 	c.text[sizeof(c.text) - 1] = '\0';
 
 	pl = MpGetPlayer(c.playerId);
-	MpNotifyf("%s: %s", (pl != NULL) ? pl->name : "?", c.text);
+
+	if (pl != NULL)
+		MpConsoleChat(pl->name, pl->colorOn, pl->colorR, pl->colorG, pl->colorB, c.text);
+	else
+		MpConsoleChat(NULL, 0, 0, 0, 0, c.text);
 
 	if (MpIsHost())
 		MpHostBroadcast(MP_TAG_CHAT, MP_FLAG_RELIABLE, &c, sizeof(c));

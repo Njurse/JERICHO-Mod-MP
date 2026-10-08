@@ -198,7 +198,7 @@ flushed as the socket accepts them (§10, trap 2).
 | `JPPN` / `JPPO` | both | PING / PONG (the PONG echoes the tick, so the host can compute RTT) |
 | `JPCH` | both | addon channel payload (the `jer_net.h` bridge) |
 | `JPLV` | both | LEAVE |
-| `JPCX` | both | chat line (T to open, Enter to send, Esc to cancel; received as a notify) |
+| `JPCX` | both | chat line (T to open, Enter to send, Esc to cancel; shown in the status console, in the speaker's colour) |
 | `JPCC` | client -> host | the car this player picked in the car select. Sent when the pick becomes known (at launch), because the `JPHL` hello goes out at CONNECT time, long before the player has chosen. The host records it, republishes `JPRS`, and - in a match already running - builds the vehicle then rather than at hello. No car is built for a player until this arrives, so a joiner's vehicle never appears before they have picked it. |
 
 ---
@@ -674,8 +674,9 @@ underlying state trustworthy.
 ### H. Out of scope for now
 
 Matchmaking beyond LAN, host migration, traffic/police replication. Chat is
-implemented (open on `T`, send on Enter, received as a notify). The lobby's
-"Enforce Mods" policy is implemented; nothing exercises it yet.
+implemented (open on `T`, send on Enter; join/leave and chat lines go to the
+engine status console, `jer_console.h`, which scrolls and is greppable). The
+lobby's "Enforce Mods" policy is implemented; nothing exercises it yet.
 
 #### The AI (`MODS/mp/ai/`)
 
