@@ -380,11 +380,37 @@ claims the press in a live match (the `JER_EVENT_PAUSE_MENU` hook, returning
 `JER_RESULT_STOP` -- the same mechanism the sandbox overlay uses), so the engine
 pause never opens and `pauseflag` is never set: the world keeps running.
 
-The press toggles mp's own non-freezing player list instead: the players down the
-left, the host first and in cyan, then each player's name, index, vehicle (`-1` = on
-foot: no car slot, or a car standing there with nobody driving it) and ping.
-`MP_PAUSE=1` holds the list open for testing; `MP_DEBUG` logs each row, which is how
-the content gets verified without eyes on the screen.
+The press toggles mp's own non-freezing player list instead: a small status panel
+down the left, one line per player.
+
+**It is drawn at HALF SIZE, and that is what makes one line per player possible.**
+At the default 0.275 only about 33 characters fit across the 320-px screen, which is
+why a player used to take two rows — a name row and an indented link row. At
+`0.138f` (plus a little tracking, via `PrintStringHiresScaledSpaced`) a whole row
+fits: `PLAYER`, `CAR`, `PING`, `RX`, `TX`, `LOSS` at fixed column positions
+(6/92/130/164/206/250), so the columns never shift as rows come and go. A player
+with no car reads `on foot` rather than `car -1`, and a figure that has not been
+measured yet reads `--`.
+
+**The panel has its OWN palette, deliberately not the chat's.** Chat is a
+conversation — a speaker's name in their colour, the message in a flat near-white.
+This is a readout, so it uses an accent for its title, a colour per ROLE (you /
+host / other), dim greys for the labels and chrome, and amber for a link that is
+dropping frames. Every colour goes through `MpInk`, which halves it: the HQ font is
+drawn with the PSX texture filter on (×2), the same trap `jer_console`'s
+`jerConsoleInk` handles. Without that halving nothing here can be dim — the panel's
+old 200/170/150/140 all clipped to a single flat white, and only the host's
+saturated cyan survived.
+
+The build identity sits under the title in plain words — `all players must match:
+build xxxx  addons xxxx` — because those are the same numbers the startup log
+prints and `strict_version` compares, and a mismatch is the most common cause of
+"we cannot see each other".
+
+`MP_PAUSE=1` logs the rows for testing (it deliberately does not force the engine's
+`pauseflag` — see the comment in the source); `MP_PANEL=1` shows the panel itself so
+its layout and colours can be captured headlessly with no pad, which is how they get
+verified without eyes on the screen.
 
 ---
 
@@ -891,7 +917,7 @@ attempt had cainescrossfire enabled by accident, which rewrites car handling):**
 `JERICHO_BUILD_VERSION` is baked in at PREMAKE time (`git describe --tags --always
 --dirty`), so the digest the game reports — `MpBuildHash()`, printed as
 `[mp] multiplayer ready (... build be0d, mods 13bd)` and on the pause-menu
-scoreboard under `-- PLAYERS --` — describes the tree the vcxproj was generated
+scoreboard under its `PLAYERS` panel — describes the tree the vcxproj was generated
 from, NOT the source as it stands now. That is why `sync_lan.bat` runs
 `premake5 vs2019` BEFORE the build: a stale `build/` directory would otherwise ship
 the previous release's stamp. `MpModHash()` folds the enabled module list in the
