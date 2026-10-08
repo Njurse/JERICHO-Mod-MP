@@ -1860,6 +1860,11 @@ static void MpHandleWelcome(const unsigned char* p, int len)
 
 	{
 		MP_PLAYER* me = MpAddPlayer(w.playerId, gMp.config.playerName, 1);
+
+		/* MpAddPlayer answers NULL when the player registry is full, so the car
+		 * fields must be written only once we know we have a row -- these used to
+		 * be written first, which is a dereference of NULL on a full roster. */
+		if (me != NULL)
 		{
 			extern u_char defaultPlayerPalette;
 
@@ -1867,11 +1872,13 @@ static void MpHandleWelcome(const unsigned char* p, int len)
 			me->carIsSlot = gMp.config.carIsSlot;
 			me->carCity = gMp.config.carCity;
 			me->palette = defaultPlayerPalette;
-		}
 
-		if (me != NULL)
-		{
 			me->carId = 0;		/* our own car is engine slot 0 */
+		}
+		else if (gMpCtx != NULL)
+		{
+			gMpCtx->jer_log(gMpCtx,
+				"[mp] WELCOME for player %d but the player registry is full\n", w.playerId);
 		}
 	}
 

@@ -133,6 +133,7 @@ static int gReturnToMenu;
  * keeps driving, so the two states disagree the moment play resumes. The START
  * press opens this instead -- a non-freezing overlay. */
 static int gMpShowPlayers;
+static int gMpPauseOpened;	/* the player opened the engine PAUSE (not another menu) */
 
 /* Leave the whole match: back to the main frontend with a notice. Used when
  * the host ends the game or the server connection is lost. */
@@ -155,6 +156,7 @@ void MpReturnToFrontend(void)
 	gMp.connected = 0;
 	gMp.running = 0;
 	gMpShowPlayers = 0;	/* the overlay only belongs to a live match */
+	gMpPauseOpened = 0;
 
 	/* the ENGINE's own way out of a gameplay session: it tears down the level,
 	 * stops the music/sfx and returns to the frontend (the same path the pause
@@ -1387,8 +1389,14 @@ static int MpOnDrawOverlay(void* userdata, void* args)
 	/* A LIVE MATCH DOES NOT FREEZE FOR THE PAUSE MENU. The engine freezes the world
 	 * while its pause menu is open (pauseflag) and does not run JER_EVENT_FRAME --
 	 * where our net tick lives -- while frozen, and it pauses the audio with it.
-	 * So while a session is up and paused we step the world, run our own tick, and
-	 * undo the audio pause once on the way in. The menu is still the engine's. */
+	 * So while a session is up and paused we step the world ourselves and undo the
+	 * audio pause once on the way in. The menu is still the engine's.
+	 *
+	 * Do NOT call MpLockstepFrame again here: StepSim() fires JER_EVENT_PRE_SIM at
+	 * its top, and our MpOnPreSim handler runs the lockstep. Calling it here as
+	 * well advanced gMp.frame (and ran every lockstep tick) TWICE on the paused
+	 * machine while every other machine advanced once -- the pausing player was
+	 * one frame ahead per frame of their own pause. */
 	{
 		static int wasPaused;
 
@@ -1401,7 +1409,6 @@ static int MpOnDrawOverlay(void* userdata, void* args)
 			}
 
 			StepSim();
-			MpLockstepFrame();
 		}
 		else
 		{
@@ -1409,8 +1416,25 @@ static int MpOnDrawOverlay(void* userdata, void* args)
 		}
 	}
 
-	/* the player list / MP options ride on the engine's pause menu */
-	gMpShowPlayers = (gMp.running && pauseflag != 0) ? 1 : 0;
+	/* The player list / MP options ride on the engine's PAUSE menu -- and only on
+	 * the pause menu.
+	 *
+	 * The two obvious signals are both wrong on their own. `gDrawPauseMenus` means
+	 * "a pause-MODE menu is up", which includes the game-over, mission-complete
+	 * and pad-error screens (pause.c sets it in PauseMenu(), for every mode).
+	 * `pauseflag` means "the world is frozen", which the director and cutscenes
+	 * raise too. Together they put this panel on screen while the player was
+	 * watching a cutscene.
+	 *
+	 * So: the engine fires JER_EVENT_PAUSE_MENU/JER_PAUSE_OPEN for the pause
+	 * itself (main.c), and when we do not claim the press the engine opens
+	 * PAUSEMODE_PAUSE. MpOnPauseMenu records that as gMpPauseOpened, and here we
+	 * clear it as soon as the menus stop being drawn. The panel is then shown
+	 * exactly while the pause the player opened is on screen. */
+	if (!gDrawPauseMenus)
+		gMpPauseOpened = 0;
+
+	gMpShowPlayers = (gMp.running && gMpPauseOpened && gDrawPauseMenus) ? 1 : 0;
 
 	/* MP_PAUSE logs the list for a test, and deliberately does NOT force the
 	 * engine's pause flag. It used to set gDrawPauseMenus = 1 every frame, which
@@ -1431,7 +1455,47 @@ static int MpOnDrawOverlay(void* userdata, void* args)
 	if (MpLeverFlag("MP_PANEL", &gTestPanelOn) && gMp.running)
 		gMpShowPlayers = 1;
 
-	if (gDrawPauseMenus || gMpShowPlayers)
+	/* MP_OPENPAUSE=<secs>: open the pause for real, so the gating above can be
+	 * checked with no pad (nothing else can open the engine pause headlessly).
+	 * This does both halves of what the pad handler does: it fires the same
+	 * JER_PAUSE_OPEN the engine fires -- which is what sets gMpPauseOpened -- and
+	 * then calls the engine's own EnablePause, which is the SUPPORTED way to open
+	 * the pause because it initialises the menu state. (The old MP_PAUSE lever set
+	 * gDrawPauseMenus directly and read a menu that was never set up: a wild
+	 * pointer. Calling the engine's entry point is not that.)
+	 *
+	 * It re-arms while the pause is closed, i.e. it HOLDS START. Without that a
+	 * -shot lands on whatever frame it lands on, and a frame the pause happened to
+	 * be closed on proves nothing either way. */
+	if (gMp.running)
+	{
+		static unsigned long openAtMs = 0;
+		const char* s = getenv("MP_OPENPAUSE");
+
+		if (s != NULL)
+		{
+			if (openAtMs == 0)
+				openAtMs = MpNowMs() + (unsigned long)(atoi(s) * 1000);
+
+			if (openAtMs != (unsigned long)-1 && MpNowMs() >= openAtMs &&
+				(!pauseflag || !gDrawPauseMenus))
+			{
+				JER_ARGS_PAUSE_MENU a;
+
+				a.action = JER_PAUSE_OPEN;
+				a.result = NULL;
+				a.value = 0;
+
+				if (gMpCtx != NULL)
+					gMpCtx->jer_log(gMpCtx, "[mp] test: MP_OPENPAUSE -> START\n");
+
+				if (jer_fire(JER_EVENT_PAUSE_MENU, &a) != JER_RESULT_STOP)
+					EnablePause(PAUSEMODE_PAUSE);
+			}
+		}
+	}
+
+	if (gMpShowPlayers)
 		MpDrawPlayerList();
 
 	/* Bottom-left HOST / CLIENT tag, on while a session exists: with two windows
@@ -1911,7 +1975,13 @@ static int MpOnPauseMenu(void* userdata, void* args)
 
 	/* Let the ENGINE open its pause menu -- do not claim START. The world keeps
 	 * running because MpOnDrawOverlay steps it while paused, and our player list
-	 * (and MP options) ride on top of the menu the player expects to see. */
+	 * (and MP options) ride on top of the menu the player expects to see.
+	 *
+	 * Record that it is OUR pause that is opening: the player list is gated on this
+	 * plus gDrawPauseMenus, so the other pause-MODE screens (game over, mission
+	 * complete, pad error) and cutscenes cannot put it on screen. */
+	gMpPauseOpened = 1;
+
 	if (gMpCtx != NULL)
 		gMpCtx->jer_log(gMpCtx,
 			"[mp] pause menu opened; the world keeps running\n");
