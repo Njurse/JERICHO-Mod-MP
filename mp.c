@@ -22,6 +22,7 @@
 #include "jer_colour.h"		/* a player's suit colour is a canonical JER_COLOUR */
 #include "jer_ped_palette.h"	/* a player's own Tanner in their own colour */
 #include "jer_npc.h"		/* JerNpc: the stand-in we drew for a remote player */
+#include "jer_console.h"	/* the unified status console (jer_console_enabled) */
 
 /* The chat key needs PsyX's debug-key hook, but NOT its header: PsyX_public.h and
  * SDL_scancode.h both pull in math/SDL defines that collide with the game's in
@@ -757,9 +758,14 @@ static int MpOnBoot(void* userdata, void* args)
 	(void)args;
 
 	/* Chat needs the keyboard while the pad drives: take PsyX's one debug-key slot,
-	 * CHAINING any existing handler so nothing else is starved. */
-	gMpPrevDebugKeys = g_dbg_gameDebugKeys;
-	g_dbg_gameDebugKeys = MpOnDebugKey;
+	 * CHAINING any existing handler so nothing else is starved. Guarded against a
+	 * second boot (a reload): re-installing would chain MpOnDebugKey onto itself
+	 * and recurse forever -- the console and the free camera share this slot now. */
+	if (g_dbg_gameDebugKeys != MpOnDebugKey)
+	{
+		gMpPrevDebugKeys = g_dbg_gameDebugKeys;
+		g_dbg_gameDebugKeys = MpOnDebugKey;
+	}
 
 	MpNetStart();
 
@@ -1276,10 +1282,13 @@ static int MpOnDrawOverlay(void* userdata, void* args)
 	if (gDrawPauseMenus || gMpShowPlayers)
 		MpDrawPlayerList();
 
-	/* Bottom-left HOST / CLIENT tag, always on while a session exists: with two
-	 * windows side by side on one machine (or two machines) there is otherwise no
-	 * way to tell which is which -- and the test is precisely about the two roles
-	 * behaving differently. */
+	/* Bottom-left HOST / CLIENT tag, on while a session exists: with two windows
+	 * side by side on one machine (or two machines) there is otherwise no way to
+	 * tell which is which -- and the test is precisely about the two roles
+	 * behaving differently. It is part of the console's bottom HUD BLOCK, so the
+	 * `~` key (jer_console_enabled) hides this tag and the two connection lines
+	 * together with the stream. */
+	if (jer_console_enabled())
 	{
 		const char* who = MpIsHost() ? "HOST" :
 			(gMp.role == MP_ROLE_CLIENT ? "CLIENT" : "MP");

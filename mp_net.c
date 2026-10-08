@@ -72,6 +72,7 @@
 
 #include "jericho.h"
 #include "mp.h"
+#include "jer_console.h"	/* the unified status console (jer_console_log) */
 
 #include <string.h>
 #include <stdio.h>
@@ -1501,6 +1502,16 @@ void MpConnEvent(const char* ev, int idx, const char* why)
 
 		gMpCtx->jer_log(gMpCtx, "[mp] on screen: %s | %s\n", l0, l1);
 	}
+
+	/* JERICHO-HOOK: the SAME event, into the unified status console (jer_console.h).
+	 * Every discrete connection/handshake step funnels through here, so this one
+	 * call is what puts "connected to <ip>", "WELCOME received" and stage changes
+	 * on the bottom-left stream -- in the frontend AND in-game. The live
+	 * HOST/CLIENT block stays separate; `~` hides both together. */
+	if (peer[0] != 0 && peer[0] != '(')
+		jer_console_log("[mp] %s  %s", ev != NULL ? ev : "?", peer);
+	else
+		jer_console_log("[mp] %s", ev != NULL ? ev : "?");
 }
 
 static void MpDropConn(int idx, const char* why)
