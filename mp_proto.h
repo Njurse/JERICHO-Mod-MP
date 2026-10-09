@@ -83,8 +83,9 @@ extern "C" {
 #define MP_TAG_HELLO	"JPHL"	/* client -> host: identity + mod manifest */
 #define MP_TAG_WELCOME	"JPWL"	/* host -> client: accepted (id + lobby) */
 #define MP_TAG_REJECT	"JPRJ"	/* host -> client: refused (reason text) */
-#define MP_TAG_SESSION	"JPSS"	/* RESERVED: nothing sends or handles it -- the launch
-				 * config rides in MP_START ('JPST'), see MP_SESSION */
+/* 'JPSS' was RETIRED here. It was reserved for a standalone session/lobby
+ * broadcast that nothing ever sent or handled (the launch config rides in
+ * MP_START, 'JPST'). The spelling is dead: do not reuse it. */
 #define MP_TAG_START	"JPST"	/* host -> client: begin the level launch */
 #define MP_TAG_INPUT	"JPIN"	/* client -> host, host -> client: input set */
 #define MP_TAG_CARSTATE	"JPCS"	/* host -> client: resync snapshot */
@@ -139,7 +140,8 @@ typedef struct MP_ROSTER_ENTRY
 				 * session's city, 0..3 = a cross-city import */
 	uint8_t  flags;		/* MP_ROSTER_FLAG_* */
 	uint16_t ping;		/* round trip in ms, as the host measured it */
-	uint16_t reserved;	/* the player's palette */
+	uint16_t palette;	/* the player's palette (was named `reserved`; it has only
+				 * ever held this, so the name now says so) */
 	char     name[MP_ROSTER_NAME_MAX];
 } MP_ROSTER_ENTRY;
 
@@ -293,9 +295,9 @@ typedef struct MP_REJECT
 	char     text[MP_REJECT_TEXT_MAX];
 } MP_REJECT;
 
-/* The launch config. It travels INSIDE MP_START ('JPST'), not as a standalone
- * 'JPSS' message -- there is no sender or handler for a bare JPSS, so that tag
- * is reserved. `state` is set to MP_SESSION_STARTING when the host launches. */
+/* The launch config. It travels INSIDE MP_START ('JPST'), never as a standalone
+ * message: the old standalone form ('JPSS') had no sender and no handler and has
+ * been retired. `state` is set to MP_SESSION_STARTING when the host launches. */
 typedef struct MP_SESSION
 {
 	uint8_t  gamemode;
@@ -304,14 +306,16 @@ typedef struct MP_SESSION
 	uint8_t  weather;
 	uint32_t seed;
 	uint8_t  numPlayers;
-	uint8_t  state;		/* MP_SESSION_STATE_* */
+	uint8_t  state;		/* MP_SESSION_* */
 	uint16_t spare;
 } MP_SESSION;
 
 enum
 {
-	MP_SESSION_LOBBY = 0,	/* reserved: no lobby-state JPSS is ever sent today */
-	MP_SESSION_STARTING	/* the only value the launch path sets */
+	/* 0 is RETIRED (it was MP_SESSION_LOBBY, a lobby state nothing ever sent).
+	 * The NUMBERING is kept deliberately: `state` rides the wire inside
+	 * MP_START, so renumbering STARTING to 0 would change what a peer reads. */
+	MP_SESSION_STARTING = 1	/* the only value the launch path sets */
 };
 
 /* 'JPST' -- host -> client: launch the level with the agreed config. */

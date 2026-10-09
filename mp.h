@@ -144,7 +144,9 @@ typedef struct MP_STATE
 	char notifyText[MP_NOTIFY_MAX][MP_NOTIFY_TEXT_MAX];
 	unsigned long notifyUntil[MP_NOTIFY_MAX];	/* ms deadline; 0 = empty */
 	int notifyNext;				/* ring write cursor */
-	char chatBuf[MP_NOTIFY_TEXT_MAX];	/* pending chat line being typed */
+	char chatBuf[MP_CHAT_TEXT_MAX];	/* pending chat line being typed (the WIRE limit,
+					 * MP_CHAT_TEXT_MAX -- not the notify one, which
+					 * happens to be the same 96 today) */
 	int chatOpen;				/* 1 = the chat prompt is up */
 
 	MP_PLAYER players[MP_MAX_PLAYERS];

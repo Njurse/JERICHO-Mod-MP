@@ -103,26 +103,6 @@ static int gTestMapOn = -1;
 static int gTestPauseOn = -1;
 static int gTestPanelOn = -1;
 
-/* ------------------------------------------------------------------ */
-/* Default player name                                                 */
-/* ------------------------------------------------------------------ */
-
-
-/* ------------------------------------------------------------------ */
-/* Config                                                              */
-/* ------------------------------------------------------------------ */
-
-
-
-/* ------------------------------------------------------------------ */
-/* Player registry                                                     */
-/* ------------------------------------------------------------------ */
-
-
-
-
-
-
 /* Set when a lost connection must land the player on the main menu; the
  * engine decides where its own exit goes, so we jump on the next frontend
  * frame instead of trusting it. */
@@ -1719,7 +1699,10 @@ static int MpColorAdjustB(void* ud, int dir) { (void)ud; return MpColorAdjust(&g
 					 * picker TRUNCATES to this - so at 6 the D1 cities past
 					 * the first two (LA, NEWYORK, NEWCASTLE) were silently
 					 * dropped and the menu showed only MIAMI and FRISCO. */
-#define MPCC_MAX_CARS	12
+#define MPCC_MAX_CARS	MP_CAR_LIST_MAX	/* NOT a literal: this is the `max` handed to
+					 * MpCarListForCity, whose contract IS
+					 * MP_CAR_LIST_MAX (mp.h). They must never
+					 * drift -- the note above is a drift bug. */
 #define MPCC_SLOTS	10		/* frontend slots per city (carNumLookup[city][0..9]) */
 
 static int mpCcCities[MPCC_MAX_CITIES];
@@ -2199,16 +2182,13 @@ static int MpOnFrontendIdle(void* userdata, void* args)
 
 /* JERICHO-HOOK: the multiplayer map.
  *
- * The stock drawer loops `for (i = 0; i < NumPlayers; i++)` and calls
- * DrawPlayerDot(pos, -dir, ...) -- a blip carrying BOTH position and facing.
- * We hold NumPlayers at 1 so the renderer stays single-view, so that loop only
- * ever draws our own blip and nobody else appears on the map at all.
+ * The blips live in mp_map.c (MpOnDrawMap) -- this file only registers it. The
+ * engine's own drawer holds NumPlayers at 1 in a session, so its loop plots our
+ * own car and nobody else's; the module adds the other players.
  *
- * Draw the same blip for every other player here, in the engine's own walk of
- * colours, so a full-screen player can see where everyone is and which way
- * they are pointing. */
-extern void WorldToMultiplayerMap(VECTOR* in, VECTOR* out);
-extern void DrawPlayerDot(VECTOR* pos, short rot, u_char r, u_char g, u_char b, int flags);
+ * Note the two engine externs that used to sit here are gone with the code that
+ * moved: in particular WorldToMultiplayerMap is NOT the transform to use for the
+ * single-player map (it returns a constant when region == 0 -- see mp_map.c). */
 
 
 static int MpOnGameStart(void* userdata, void* args)

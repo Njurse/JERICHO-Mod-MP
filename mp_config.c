@@ -134,8 +134,8 @@ void MpConfigSave(void)
  * beacons and the handshake so mismatched lobbies are visible up front. */
 unsigned short MpModHash(void)
 {
-	JER_MODULE_INFO info[32];
-	int n = jer_module_list(info, 32);
+	JER_MODULE_INFO info[MP_MAX_MODS];
+	int n = jer_module_list(info, MP_MAX_MODS);
 	int i;
 	unsigned int h = 2166136261u;	/* FNV-1a */
 
@@ -171,8 +171,8 @@ unsigned short MpModHash(void)
 /* The enabled-module manifest (id + version) exchanged in the handshake. */
 int MpBuildManifest(MP_MOD_INFO* out, int max)
 {
-	JER_MODULE_INFO info[32];
-	int n = jer_module_list(info, 32);
+	JER_MODULE_INFO info[MP_MAX_MODS];
+	int n = jer_module_list(info, MP_MAX_MODS);
 	int i, count = 0;
 
 	for (i = 0; i < n && count < max; i++)

@@ -95,6 +95,7 @@ connected and was then dropped. Ctrl-C stops it.
 | File | What it is |
 | --- | --- |
 | `mp_localpair.py` | the two-instance harness `mp_pair.bat` wraps; prints a PASS/FAIL verdict and reads `JERICHO.log` (also runs 3..8 seats -- see `--players`) |
+| `mp_smoke.py` | the smoke GATE around `mp_localpair.py`: turns the verdict into an exit code (PASS + `lost=0` + `dumps=0` + not STALLED). Exits 2 (skip) where the game assets are absent, so a CI job can tell "not runnable here" from "failed"; `--require-assets` makes a skip a failure |
 | `mp_crashrate.py` | repeat `mp_localpair.py` N times and report the CRASH RATE, plus the free car-slot count the `PingInCivCar` breadcrumbs print. Exits non-zero if any run crashed |
 | `mp_test.py` | mock host / client / beacon, plus the protocol checks |
 | `mp_dediserver.py` | the dedicated server `mp_dedi.bat` wraps |
@@ -107,7 +108,9 @@ nothing after the handshake drops itself at its idle timeout. The mock used to c
 0.5 s after `WELCOME` and the dedi never replied to `PING`, so both looked like
 instant drops. The wire format lives in `mp_test.py` -- when `mp_proto.h` changes,
 update it there (e.g. `WELCOME` is `<12BIB`, 12xu8 + u32 seed + u8 hostCar; a
-`<13BI` there crashes both simulated hosts).
+`<13BI` there crashes both simulated hosts). That includes *removals*: a retired tag
+is dropped from `TAG` too, so the mirror never advertises a tag the code does not have
+(it no longer carries `JPSS`).
 
 `mp_localpair.py` takes `--no-debug` to run WITHOUT `MP_DEBUG=1` -- the packaged
 launchers (PLAY_HOST/JOIN) never set it, so it is the only way to test what a player
@@ -183,7 +186,23 @@ python mp_localpair.py --until "getting OUT"       # stop the moment it appears
 python mp_localpair.py --forbid "Lost the server"  # stop AND fail on this marker
 python mp_localpair.py --stall 10                  # no tick for 10s -> STALLED
 python mp_localpair.py --tail 3                    # print both tails while waiting
+python mp_localpair.py --menu-host                 # host in the FRONTEND (no -level);
+                                                   # fails unless it starts exactly ONE match
+python mp_localpair.py --sp                        # a SINGLE-PLAYER level (omits -mp):
+                                                   # the only rig that reaches region 0
 ```
+
+`--sp` exists because **`-mp` always selects a multiplayer region** — the engine sets
+`gBootMpLevel = 1` for any `-mp` (main.c), so every other rig here, and every packaged
+launcher, only ever runs a multiplayer map. Anything keyed off `MissionHeader->region`
+(the overhead map's placement is one) is therefore untested without it. Measured: with
+`--sp` both seats come up on the same level at `subgame 0` with the remote car present.
+
+One thing to expect while reading an `--sp` run's map lines: the single-player mini-map
+is a **small window centred on the local car**, so a remote player's arrow only appears
+while that player is inside it. A missing arrow there is the engine's own clipping (the
+same the local marker gets), not a sync fault — watch the logged map coordinates instead
+of the picture.
 
 `--until` and `--forbid` are repeatable regexes matched against EITHER log, so a run
 ends when the thing under test has happened instead of sitting out `--seconds`.

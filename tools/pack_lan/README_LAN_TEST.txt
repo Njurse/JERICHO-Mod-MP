@@ -110,6 +110,27 @@ You do not both need to be at the keyboard at the same time. One seat can drive
 and the other can watch: the log next to the exe, or mp_agent.ps1 on the other PC.
 
 
+KNOWN BLOCKERS (measured 2026-10-07 -- read this before reporting a failure)
+---------------------------------------------------------------------------
+These are known, reproduced, and NOT yet fixed. A run that hits one is telling us
+what we already know, so please say so and move on:
+
+  * A match can FREEZE mid-play (the joiner's simulation stops; no crash dump, no
+    "lost"/"timeout" line). Seen in 2 of 3 sixty-second headless runs on a LAN setup.
+  * CHICAGO crashes the joining machine (access violation in crumpleDeformInternal).
+    Use Las Vegas or Rio unless you are deliberately testing that.
+  * Changing cars quickly can run the session out of car slots (a car then draws
+    from another car's slot, or a change is refused). A change every second or two
+    is far beyond what a player does and is the case that breaks it.
+
+Everything else -- a failure to join, a car that never appears, a desync -- is NEW
+and worth a log from BOTH machines.
+
+The full picture, with the numbers and the per-domain acceptance view, is in the
+project's JERICHO\MODS\mp\docs\MISSION_CRITICAL.md and ...\docs\SYNC_CHECKLIST.md
+(the "Measured baseline" and "Triage" sections).
+
+
 IF IT GOES WRONG
 ----------------
 JERICHO.log next to the exe is the game log. The lines worth grepping after a

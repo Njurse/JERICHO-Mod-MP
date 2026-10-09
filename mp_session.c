@@ -800,7 +800,7 @@ void MpHostSendRoster(void)
 		e->carId = 0xff;
 		e->model = 0xff;
 		e->modelCity = MP_CAR_CITY_SESSION;
-		e->reserved = (uint16_t)p->palette;
+		e->palette = (uint16_t)p->palette;
 
 		/* Whether THIS host has a car for that player yet -- the same gate the
 		 * spawn uses, and the only way a third machine can tell "their pick has
@@ -1186,7 +1186,7 @@ static void MpHandleRoster(const unsigned char* p, int len)
 			pl->carIsSlot = 0;
 			pl->carCity = (e->modelCity == MP_CAR_CITY_SESSION) ? -1 : (int)e->modelCity;
 		}
-		pl->palette = (int)e->reserved;
+		pl->palette = (int)e->palette;
 
 		/* The host has a car for them: build OUR copy of it. Without this a third
 		 * machine never gives a late joiner a car at all -- its carstate entries
@@ -6686,7 +6686,7 @@ void MpHandleMessage(int connIndex, const char* tag, const unsigned char* payloa
 		return;
 	}
 
-	/* No protocol surface sends a bare 'JPSS' (the launch config rides in
-	 * 'JPST'; MP_TAG_SESSION / MP_SESSION_LOBBY are reserved); unknown tags
-	 * are ignored. */
+	/* No protocol surface sends a bare 'JPSS' (the launch config rides in 'JPST',
+	 * and the tag itself has been retired -- see mp_proto.h); unknown tags are
+	 * ignored, which is also what makes a retired one harmless. */
 }

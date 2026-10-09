@@ -105,6 +105,50 @@ STAYING ON THE SAME BUILD
    else.
 
 
+WHAT TO EXPECT (the honest v1 limits)
+   * The HOST IS THE SESSION. If the host quits, crashes or is disconnected, the
+     match ends for everyone on it -- there is no host migration and no reconnect.
+     To keep playing, host again. The players who were in it are told the match
+     ended and are returned to the frontend.
+   * EIGHT players at most, and in practice fewer: each level has five of its own
+     cars, two spare slots and one special, so eight players get eight different
+     cars and a ninth cannot be seated.
+   * ONE gamemode: the stock Take a Ride free-roam. There is no race and no
+     mission, and nothing here is a scoreboard -- the pause list is who is in.
+   * ONE guest city at a time. You may pick a car from any city, but importing a
+     SECOND city's car data can colour the wrong cars and can touch the scenery.
+     Stay with one guest city per session.
+   * Damage is not shared on a PLAYER car: if your car is badly bent on your
+     screen it can look straight on the other player's, and vice versa. Damage to
+     TRAFFIC cars IS shared, so a wreck you caused looks the same to both of you.
+   * Car-to-car collisions are replicated, but each machine owns its own car's
+     response, so a shove lands after one round trip -- you will feel your car
+     move a moment after the bump.
+   * It is tuned for a LAN. Over the internet at 100-200 ms the other car moves
+     in visible steps (there is no prediction or smoothing yet).
+   * Traffic and pedestrians are your own: each machine has its own and they will
+     not match car for car. The mod replicates the traffic IT owns as state, so a
+     car you hit is hit for the other player too -- but it need not be the same
+     traffic car on both screens.
+
+PLAYING OVER THE INTERNET, AND WHAT THAT EXPOSES
+   The same package works across the open internet by DIRECT CONNECT. On the host,
+   forward the session port on your router (TCP, and UDP as well if you want local
+   machines to find the game in the browse list) -- 1400 in this package, set by
+   `port = ` in JERICHO\CONFIG\mp.ini, which FIREWALL_FIX.bat also opens. Everyone
+   else joins by typing the host's public IP or a domain name.
+
+       PLAY_JOIN.bat play.example.net          (or -join <host>[:port])
+
+   THERE IS NO AUTHENTICATION AND NO ENCRYPTION. Anyone who can reach that port
+   can join, the game applies no password and no ban list, and everything that
+   travels between the machines is plain text. A forwarded port is a public
+   invitation: open it while you are playing, for people you trust, and close it
+   afterwards. Nothing here leaves your network on a normal LAN.
+
+   IPv4 only -- a name that resolves only to IPv6 will not connect.
+
+
 IF IT GOES WRONG
    JERICHO.log next to the exe is the game log; it reports the session detail
    (join, launch, resync). A `JERICHO.dmp` next to it is a crash dump.
@@ -112,6 +156,7 @@ IF IT GOES WRONG
 NOTES
    * The test bot is OFF. Nothing drives your car unless you set MP_BOT -- see
      PLAYING AGAINST THE BOT above for the one-command way to be chased.
-   * Take a Ride with the two of you is the supported path for now. Car-to-car
-     collisions are replicated -- each machine owns its own car's response, so a
-     shove lands after one round trip -- but damage is not.
+   * Take a Ride with the two of you is the supported path for now. Read WHAT TO
+     EXPECT above before you play: the notable ones are that the host leaving ends
+     the match, that only one guest city is safe, and that player-car damage is not
+     shared.

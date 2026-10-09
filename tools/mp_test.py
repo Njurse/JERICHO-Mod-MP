@@ -34,11 +34,14 @@ NUL = bytes([0])
 
 TAG = {
     "hello": b"JPHL", "welcome": b"JPWL", "reject": b"JPRJ",
-    "session": b"JPSS", "start": b"JPST", "input": b"JPIN",
+    "start": b"JPST", "input": b"JPIN",
     "carstate": b"JPCS", "ping": b"JPPN", "pong": b"JPPO",
     "channel": b"JPCH", "leave": b"JPLV", "chat": b"JPCX",
     "roster": b"JPRS", "car": b"JPCC",
 }
+# NOTE: no "session" entry. 'JPSS' was retired from mp_proto.h -- it was reserved for
+# a standalone session/lobby broadcast that nothing ever sent or handled. Keep this
+# table to the tags the code actually has; a retired one is dropped here too.
 UDP_MAGIC = 0x31504D4A
 
 ENV = struct.Struct("<I4sBBH")

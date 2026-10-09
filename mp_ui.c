@@ -51,7 +51,8 @@ enum
 	M_ROOT = 0,
 	M_LAN,
 	M_HOST,
-	M_HOSTSET,
+	M_MODE,			/* the "mp.mode" menu (was M_HOSTSET: the registered id has
+				 * said `mode` for a while, so the enum now matches it) */
 	M_JOIN,
 	M_LOBBY,
 	M_OPTIONS,
@@ -240,9 +241,9 @@ void MpUiOpenModeMenu(void)
 	 * at all, since the only trace was the line MpOnFrontendConfirm prints when
 	 * it BELIEVES it opened it. */
 	if (gMpCtx != NULL)
-		gMpCtx->jer_log(gMpCtx, "[mp] opening mp.mode (resolved idx %d)\n", gMenuIdx[M_HOSTSET]);
+		gMpCtx->jer_log(gMpCtx, "[mp] opening mp.mode (resolved idx %d)\n", gMenuIdx[M_MODE]);
 
-	MpMenuOpen(M_HOSTSET);
+	MpMenuOpen(M_MODE);
 }
 
 /* Ask for the Single Player / Multiplayer menu on the NEXT frame instead of now.
@@ -583,8 +584,9 @@ static char gLobbyStatus[64];		/* "Connecting to <addr>..." / "(could not connec
 static JER_FE_ITEM gNameItems[JER_FE_MAX_ITEMS];
 static JER_FE_MENU gNameMenu = { "mp.name", gNameItems, 0, NULL, NULL };
 
-/* manual LAN address: one row per octet, then Connect */
-static JER_FE_ITEM gManualItems[6];
+/* manual LAN address: the field, Connect, Back -- exactly the three ManualOnEnter
+ * builds, so the count here is the count there */
+static JER_FE_ITEM gManualItems[3];
 static JER_FE_MENU gManualMenu = { "mp.manual", gManualItems, 0, NULL, NULL };
 static char gNameSlotLabel[10][24];
 static const char kAlpha[] = " ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.";
@@ -888,7 +890,7 @@ void MpUiTick(void)
 			gMpCtx->jer_log(gMpCtx,
 				"[mp] frontend: %d menu(s) registered; mp.root=%d mp.lan=%d mp.host=%d mp.mode=%d mp.join=%d mp.lobby=%d\n",
 				jer_frontend_menu_count(), gMenuIdx[M_ROOT], gMenuIdx[M_LAN],
-				gMenuIdx[M_HOST], gMenuIdx[M_HOSTSET], gMenuIdx[M_JOIN], gMenuIdx[M_LOBBY]);
+				gMenuIdx[M_HOST], gMenuIdx[M_MODE], gMenuIdx[M_JOIN], gMenuIdx[M_LOBBY]);
 		}
 	}
 
@@ -898,7 +900,7 @@ void MpUiTick(void)
 	 * at all is what made this hard to see in the first place. */
 	if (gModeMenuArmed > 0)
 	{
-		int want = gMenuIdx[M_HOSTSET];
+		int want = gMenuIdx[M_MODE];
 
 		gModeMenuArmed--;
 

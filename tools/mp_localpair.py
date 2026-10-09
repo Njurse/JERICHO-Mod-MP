@@ -380,7 +380,7 @@ def check_requires(names, dirs, requires):
     return missing
 
 
-def verdict(names, dirs, stopped=None, requires=()):
+def verdict(names, dirs, stopped=None, requires=(), menu_host=False):
     """Pass/fail for the run: EVERY seat must connect, none may drop, none may crash.
 
     This is what turns the harness from a log dump into a regression test.
@@ -432,10 +432,19 @@ def verdict(names, dirs, stopped=None, requires=()):
     known = known_disconnect(everything)
     missing_requires = check_requires(names, dirs, requires)
 
+    # --menu-host: the host came up in the FRONTEND, so the launch went through
+    # the menus. Exactly one "launching: city" is the whole point of the rig: a
+    # SECOND one is the frontend-driven second start (roadmap B) -- the host being
+    # dumped into the frontend's city instead of the session's -- and a ZERO means
+    # the menu path never launched at all, which is not a pass either.
+    launches = host.count("launching: city ") if menu_host else -1
+    menu_ok = (not menu_host) or launches == 1
+
     ok = (host_join and client_ok and zero_byte == 0
           and (client_lost == 0 or known)
           and not dumps and not forbidden
           and not missing_requires
+          and menu_ok
           and not (stalled and not known))
 
     why = ""
@@ -448,6 +457,9 @@ def verdict(names, dirs, stopped=None, requires=()):
                "everything above holds up to it")
     elif stalled:
         why = " -> STALLED (not a pass: a frozen game logs nothing)"
+    elif not menu_ok:
+        why = (f" -> FAIL (the menu host started the match {launches} time(s); exactly "
+               f"one is expected -- a second start is the frontend-driven one)")
     else:
         why = f" -> {'PASS' if ok else 'FAIL'}"
 
@@ -461,6 +473,10 @@ def verdict(names, dirs, stopped=None, requires=()):
 
     if missing:
         log(f"    never accepted: {', '.join(missing)}")
+
+    if menu_host:
+        log(f"    --menu-host: the host started the match {launches} time(s) "
+            f"(exactly 1 expected)")
 
     for where, pattern in missing_requires:
         log(f"    --require missing ({where}): {pattern}")
@@ -516,6 +532,21 @@ def main():
                          "reproduction of a human report should use it)")
     ap.add_argument("--level", default="rio",
                     help="city for the host to host (default rio)")
+    ap.add_argument("--menu-host", action="store_true",
+                    help="launch the HOST WITHOUT -level: it comes up in the FRONTEND and "
+                         "MP_AUTOSTART starts the match through the menus -- the menu rig "
+                         "SYNC_CHECKLIST domain 11 describes. -level boots straight into a "
+                         "city and bypasses the frontend, so this is the only way the "
+                         "frontend-driven launch path (and the MpBeginHost/second-start "
+                         "idempotency it protects) is exercised at all. The run FAILS unless "
+                         "the host starts exactly ONE match.")
+    ap.add_argument("--sp", action="store_true",
+                    help="run the pair on a SINGLE-PLAYER level (region 0) by omitting -mp. "
+                         "-mp ALWAYS selects a multiplayer region (main.c sets gBootMpLevel = 1 "
+                         "for any -mp), so every other rig here only ever exercises the "
+                         "multiplayer map path. This is the only way the overhead map's "
+                         "single-player path -- and anything else keyed off "
+                         "MissionHeader->region -- gets run.")
     ap.add_argument("--mp-arena", default="1",
                     help="multiplayer map/arena for both sides (default 1)")
     ap.add_argument("--players", type=int, default=2, metavar="N",
@@ -706,8 +737,19 @@ def main():
     # crash, not a slow start. The client follows the host's session for its level
     # and only needs -mp (which multiplayer map/arena) as a local boot flag, since
     # the arena is not in the session config yet.
-    host_args = ["-nointro", "-nofmv", "-level", args.level, "-mp", args.mp_arena]
-    client_args = ["-nointro", "-nofmv", "-mp", args.mp_arena]
+    #
+    # --sp omits -mp from BOTH seats, which is what puts the level in region 0 (a
+    # single-player map): -mp is a level selector, not a session switch, and it
+    # always sets gBootMpLevel = 1.
+    mp_flag = [] if args.sp else ["-mp", args.mp_arena]
+
+    if args.menu_host:
+        # No -level: let the engine come up in the frontend and MP_AUTOSTART take it
+        # through the menus, which is the path a real host walks.
+        host_args = ["-nointro", "-nofmv"] + mp_flag
+    else:
+        host_args = ["-nointro", "-nofmv", "-level", args.level] + mp_flag
+    client_args = ["-nointro", "-nofmv"] + mp_flag
 
     if args.vramview:
         host_args += ["-vramview", "-console"]
@@ -730,8 +772,11 @@ def main():
     procs = {}
     procs["a"] = launch(dirs["a"], args.exe, host_argv, host_env)
     log(f"host pid {procs['a'].pid} args: {' '.join(host_argv)}")
-    log(f"host  (port {args.port}, {args.level} arena {args.mp_arena}, "
-        f"host car {args.host_car}, first joiner car {args.client_car})")
+    log(f"host  (port {args.port}, "
+        f"{'FRONTEND (no -level)' if args.menu_host else args.level} "
+        f"{'SINGLE-PLAYER region 0 (no -mp)' if args.sp else 'arena ' + args.mp_arena}, "
+        f"host car {args.host_car}, "
+        f"first joiner car {args.client_car})")
 
     log(f"waiting {args.settle}s for the host to load...")
     time.sleep(args.settle)
@@ -878,7 +923,7 @@ def main():
         report(dirs[name], "HOST" if name == "a" else f"JOINER {name.upper()}", patterns)
 
     # Pass/fail BEFORE the run dirs (and their logs) are removed.
-    passes = verdict(names, dirs, stopped, requires=args.require)
+    passes = verdict(names, dirs, stopped, requires=args.require, menu_host=args.menu_host)
 
     for name in reversed(names):
         p = procs[name]
