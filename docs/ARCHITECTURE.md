@@ -191,7 +191,6 @@ flushed as the socket accepts them (§10, trap 2).
 | `JPWL` | H→C | WELCOME: player id + lobby + live state |
 | `JPRJ` | H→C | REJECT: why, in text |
 | `JPRS` | H→all | ROSTER: who is in the match, ascending id, host first |
-| `JPSS` | H→C | SESSION: config broadcast — **reserved; no sender or handler** (the launch config rides in `JPST`) |
 | `JPST` | H→all | START: begin the level launch |
 | `JPIN` | C→H, H→all | INPUT: this frame's pad set |
 | `JPCS` | each→H, H→all | CARSTATE: the sender's own car, adopted verbatim by everyone else |
@@ -200,6 +199,10 @@ flushed as the socket accepts them (§10, trap 2).
 | `JPLV` | both | LEAVE |
 | `JPCX` | both | chat line (T to open, Enter to send, Esc to cancel; drawn in the status console — the speaker's name in their own colour, or cream when custom colour is off, and the message in a flat 240,240,240) |
 | `JPCC` | client -> host | the car this player picked in the car select. Sent when the pick becomes known (at launch), because the `JPHL` hello goes out at CONNECT time, long before the player has chosen. The host records it, republishes `JPRS`, and - in a match already running - builds the vehicle then rather than at hello. No car is built for a player until this arrives, so a joiner's vehicle never appears before they have picked it. |
+
+`JPSS` was reserved here for a standalone session/lobby broadcast. It is now **retired**:
+nothing ever sent or handled it, the launch config rides inside `JPST`, and the tag is gone
+from the code. Do not reuse the spelling.
 
 ---
 
@@ -430,6 +433,20 @@ Engine hooks this work *added*, which other modules can use too:
   `NET_INPUT`, `NET_RECV` and `NET_SPAWN`. Treat them as reserved, not live.
 - **`JER_EVENT_LEVEL_LAUNCH`** — gained in/out `timeOfDay`/`weather` so a session's
   host can dictate the match conditions.
+- **`JER_EVENT_DRAW_MAP`** — fires on **three** surfaces, and `flags` is how a module
+  tells them apart: the multiplayer map (`0x20|0x2`), the overhead **mini-map on a
+  single-player level** (`0x1|0x2`) and the full-screen map (`0xE`, `fullscreen = 1`).
+  **A module must not transform its own world positions.** Give `DrawPlayerDot` the
+  *world* position and the hook's own `flags`, the way the stock loops do: `0x20`
+  makes it call `WorldToMultiplayerMap` and add the map offsets, `0x1` makes it call
+  `WorldToOverheadMapPositions` and clip to the overhead rect. In particular
+  **`WorldToMultiplayerMap` returns a constant `(32,32)` whenever
+  `MissionHeader->region == 0`** — it only has the maths for multiplayer regions — so
+  pre-transforming with it plots *every* player at the same wrong point. That was
+  mp's bug: remote players were invisible on the single-player mini-map until the
+  module stopped transforming and started passing `m->flags`. (Related: the hook's
+  `suppressStockBlip` is only read back on the multiplayer surface; the single-player
+  and full-screen sites pass it uninitialised and ignore it.)
 - **`JER_EVENT_CMDLINE`** — a module picks up its own shortcuts after the engine
   parses its args. Fixing this is what stopped unknown arguments popping a modal
   message box, which used to block the main thread *before* the frontend and made
@@ -620,10 +637,11 @@ that run used to report was the clock-underflow disconnect (trap 15) and is gone
 Ordered by what is proven broken and what unblocks the most. Items marked DONE are
 implemented and, where noted, observed.
 
-> ⚠ The traffic work (§ the "Traffic and police sync" note below) has since **landed** —
-> `MP_TAG_TRAFFIC`, disjoint `car_data` bands and owner-following contacts are in the code
-> (`MP_PROTO_VERSION` 9). This section's prose lags it; the current acceptance view is
-> [`SYNC_CHECKLIST.md`](SYNC_CHECKLIST.md).
+> ✅ The traffic work has **landed** — `MP_TAG_TRAFFIC`, disjoint `car_data` bands and
+> owner-following contacts are in the code (`MP_PROTO_VERSION` 9). The prose below has
+> been brought up to date with it; the current acceptance view, the measured baseline
+> (2026-10-07) and the v1 sign-off gate are in [`SYNC_CHECKLIST.md`](SYNC_CHECKLIST.md).
+> Items **B, E, G and H** were re-statussed against that baseline on 2026-10-07.
 
 ### A. Verify the pair end to end — DONE
 
@@ -632,12 +650,24 @@ with both cars present and no cop placeholder, each machine mirroring the other'
 car to within single-digit world units while both drive. The client's auto-launch
 and the roster ordering are confirmed, not reasoned.
 
-### B. Stop the frontend-driven second start
+### B. Stop the frontend-driven second start — NOT REPRODUCIBLE (2026-10-07)
 
 The host can be dumped into Chicago some time after hosting. The signature — a
 second start, using the frontend's city rather than the session's — fits the frontend
 menu flow re-entering `MpBeginHost`/`MpStartMatch`. An unattended session must be
 authoritative over the menus. Also give `MpBeginHost`'s idempotency a test.
+
+**Both the test and the answer now exist.** `mp_localpair.py --menu-host` is that test:
+it launches the host **without** `-level`, so it comes up in the frontend and
+`MP_AUTOSTART` drives it through the menus, and it FAILS unless the host starts
+**exactly one** match. Measured: **1 launch in 3 of 3 runs** — the second start does not
+reproduce, and the guards (`MpBeginHost` returning early when already host, and the
+frontend START press being `claimed`) hold.
+
+What those runs *do* hit is the genuine **joiner crash** — see §13. The old report named
+Chicago, the same city the crash was first measured on, so that crash is the likelier
+explanation than a second start; this item is closed as **not reproducible**, not as
+"fixed by an unrecorded change". (The crash turned out not to be Chicago-specific.)
 
 ### C. A snap writes a rigid body — DONE
 
@@ -680,29 +710,37 @@ Measured over the two-instance harness with the pursuit bot: `closing 26, giving
 15 units/frame` and the peer receives `push 48032,0,44656` (11.7 units/frame), on
 both seats, with the duplicate suppression visible as "our engine has it, kept".
 
-### E. Damage and health
+### E. Damage and health — OPEN (half done)
 
-A wreck should look the same on every machine. `totalDamage`, `ap.damage[]`,
-`needsDenting` are not synced at all, so a car that is badly bent on one screen is
-straight on another.
+A wreck should look the same on every machine. On a **traffic** car it now does: traffic
+damage rides `MP_TRAFFIC_ENTRY.damage[6]` and the peer re-dents its copy from it (domain
+12). On a **player** car it still does not — `totalDamage`, `ap.damage[]` and
+`needsDenting` do not ride `MP_CARSTATE_ENTRY`, so a badly bent player car is straight on
+another screen (limitation 17). The missing piece is a health field on the player
+carstate, not the mechanism.
 
 ### F. The arena in the session config — DONE
 
 `MP_WELCOME` carries `arena` and the client applies it with the city, so both sides
 load the same multiplayer map without being told separately.
 
-### G. Smoothing for latency
+### G. Smoothing for latency — OPEN (unchanged)
 
 Remote cars move on a fixed input delay and will rubber-band under loss. Standard
-remedies apply (interpolation buffer, extrapolation cap), but only once C makes the
-underlying state trustworthy.
+remedies apply (interpolation buffer, extrapolation cap), and C has made the underlying
+state trustworthy, so this is now the top *quality* gap rather than a prerequisite:
+`JERICHO-MP.md` advertises internet play by direct connect, and at 100–200 ms ping the
+world moves in visible steps. It is the reason the mod is described as **LAN-tuned**.
 
 ### H. Out of scope for now
 
-Matchmaking beyond LAN, host migration, traffic/police replication. Chat is
-implemented (open on `T`, send on Enter; join/leave and chat lines go to the
-engine status console, `jer_console.h`, which scrolls and is greppable). The
-lobby's "Enforce Mods" policy is implemented; nothing exercises it yet.
+Matchmaking beyond LAN, host migration, and **latency smoothing** (item G above).
+Traffic/police replication is **no longer out of scope** — it landed (§ the traffic
+work, `MP_TAG_TRAFFIC`, `MP_PROTO_VERSION` 9); the current acceptance view is
+[`SYNC_CHECKLIST.md`](SYNC_CHECKLIST.md) domain 12. Chat is implemented (open on `T`,
+send on Enter; join/leave and chat lines go to the engine status console,
+`jer_console.h`, which scrolls and is greppable). The lobby's "Enforce Mods" policy is
+implemented; nothing exercises it yet.
 
 #### The AI (`MODS/mp/ai/`)
 
@@ -755,10 +793,17 @@ are frequently -1 and the Chicago/Vegas loaders hand-patch missing links (dr2roa
 so it is a sparse, directional graph and not a navigable mesh. The grid is the substrate; the
 graph is there for a future route-follower that starts and ends on a road.
 
-#### Traffic and police sync — implementation ideas (NOT started)
-Neither is replicated today: each machine spawns and drives its own civs from the
-level data, so a car you hit on one screen may not be there on the other. Notes
-for whoever picks it up, because the obvious approach is the wrong one.
+#### Traffic and police sync — LANDED (these were the design notes)
+
+**Implemented** in `MP_PROTO_VERSION` 9 — acceptance view is
+[`SYNC_CHECKLIST.md`](SYNC_CHECKLIST.md) domain 12: a disjoint `car_data` **band per
+machine**, owner-authoritative `MP_TAG_TRAFFIC` state (model + city + palette +
+position + `damage[6]`), `MP_TRAFFIC_REMOVE` for a despawn, and owner-following
+contacts and damage (a mirrored re-dent moves no vertices). The notes below are the
+reasoning that got there, kept because the obvious approach is still the wrong one.
+
+Before it landed neither was replicated: each machine spawned and drove its own civs
+from the level data, so a car you hit on one screen might not be on the other.
 
 **The prerequisite is a slot agreement, not a wire format.** Every option below
 needs both machines to agree that "traffic car X" lives in the same `car_data`
@@ -807,10 +852,11 @@ must keep that guard meaningful.
 
 Kept honest and separate, because the difference matters when picking this up.
 
-> See [`SYNC_CHECKLIST.md`](SYNC_CHECKLIST.md) for the current, per-domain acceptance view
-> and the v1 sign-off gate. Two entries below are now stale against the code: the
-> **late joiner dropped for `timeout` while it loads** is fixed (the poll-gap credit in
-> `mp_net.c`), and **traffic sync is landed**, not "NOT started".
+> See [`SYNC_CHECKLIST.md`](SYNC_CHECKLIST.md) for the current, per-domain acceptance
+> view, the measured baseline (2026-10-07) and the v1 sign-off gate. This section has
+> been reconciled with the code: **traffic sync is landed**; the **late joiner dropped
+> for `timeout` while it loads** is fixed (the poll-gap credit in `mp_net.c`); and the
+> old "**~65 s drop**" is re-described below as a *freeze*, which is what it is.
 
 **Observed working:** the transport (HELLO/WELCOME/REJECT/roster/START/INPUT/PING all seen on the wire), discovery and the beacon, a client being accepted and
 launching into a live match, remote cars being engine-simulated with the right
@@ -827,13 +873,34 @@ Car-to-car collision is now OBSERVED in both directions: with the pursuit bot th
 same contact appears as "we bumped player N (engine contact: closing 26, giving up
 15 units/frame)" on one seat and "player N bumped us (push 48032,0,44656)" on the
 other, and the two sims stay within 1-3 units (the adopt lines), so the push lands.
-What is NOT observed is a two-seat run longer than ~65 s: every pair run so far
-drops the joiner mid-match ("send failed" here, "DROPPED ... timeout" on the host)
-at that point, and the same 90 s run on the unmodified build reproduces it, so it
-is a transport bug of its own and not this work.
 
-**Known broken:** the frontend-driven second start (Chicago); damage is not synced
-(a snap now writes a rigid body — see C).
+**The "~65 s drop" is really a freeze, and it is measured (2026-10-07).** Repeated at
+60 s the pair run **stalls 2 of 3 times**, always on the **joiner**, and the joiner's
+*simulation* stops — its lockstep heartbeat stops while its socket keeps polling —
+with **no `LEAVE`, no `timeout`, no drop** (`lost=0`) and **no crash dump**. So the
+old wording ("drops the joiner mid-match … a transport bug of its own") named the
+wrong layer: it is not the transport, and it is not necessarily the unmodified build's
+fault. Root cause unidentified; `tools/mp_smoke.py` is the gate that now fails on it.
+
+**Known broken / open:**
+
+- **A session can crash the joiner** in `crumpleDeformInternal+0x2A8` — the only crash
+  seen in this workstream, and first recorded as 4/4 with `--level chicago`. **Corrected
+  2026-10-08: it is not Chicago-specific.** It reproduced on **rio on a single-player**
+  level while the `--sp` rig was being added, and a second such run passed, so it is
+  **intermittent** and the city is not the trigger — the 4/4 reflects the conditions it
+  was first measured under. The fault lands immediately after mirrored traffic
+  (`recv JPTF` / `traffic mirror slot N re-dented`), so an `mp`↔`crumple` interaction is
+  still the lead. Re-measure before attributing it. **It is also very likely what the
+  old "frontend-driven second start (**Chicago**)" line was seeing** — the `--menu-host`
+  rig starts exactly **one** match in 3/3 runs, so a second start does not reproduce,
+  while this crash does.
+- **Damage on a PLAYER car is not synced** — `totalDamage`/`ap.damage[]`/
+  `needsDenting` do not ride `MP_CARSTATE_ENTRY` (limitation 17). Traffic damage **is**
+  synced (domain 12).
+- **Car-swap stress exhausts the resident slots** on a 6-module modlist
+  (`no spare resident slot` ×40 in 60 s of cycling) — see the baseline in
+  `SYNC_CHECKLIST.md`; re-measure with a clean `mp`-only modlist before fixing.
 
 **Open, from the 2026-09 four-seat runs (re-taken with a clean modlist — the first
 attempt had cainescrossfire enabled by accident, which rewrites car handling):**

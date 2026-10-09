@@ -151,17 +151,26 @@ mod.
 
 ## 6. What is deliberately not synchronised
 
-> ⚠ Traffic sync has since **landed** (owner-authoritative, disjoint `car_data` bands —
-> `MP_TAG_TRAFFIC`). See [`SYNC_CHECKLIST.md`](SYNC_CHECKLIST.md); the paragraph below
-> predates it.
+This section used to say traffic was out of scope. It is not any more — the warning
+banner that stood here is gone, and what follows is the current state. Where this and
+the code disagree, **the code and [`SYNC_CHECKLIST.md`](SYNC_CHECKLIST.md) win.**
 
-- **Traffic and pedestrians.** Every machine runs its own; they will not match, and
-  nothing tries to make them. This is why a car slot number means nothing on another
-  machine (it may hold a different car there), and why matching a *model* by number
-  is the only safe way to talk about "the car they are driving".
-- **Dents and damage.** Nothing about a car's condition is synced: `totalDamage`,
-  `ap.damage[]` and `needsDenting` never travel, so a wreck can look different on
-  two screens. (There is no health field on the wire — see `MP_CARSTATE_ENTRY`.)
+- **Traffic *motion*.** The cars travel as *state*, not as a shared simulation: each
+  machine owns a disjoint band of `car_data` slots and replicates only the traffic and
+  police cars **it owns** (`MP_TAG_TRAFFIC`, domain 12). A car you see need not be the
+  same car on the other screen, and the traffic nobody owns is not matched. This is
+  exactly *why* a car slot number means nothing on another machine and why matching a
+  **model** by number is the only safe way to talk about "the car they are driving".
+  (Police add one wrinkle: a cop's *target* is a per-machine choice, so it has to travel
+  as a **player id**, not a slot.)
+- **Ambient pedestrians.** Each machine grows its own population and nothing matches
+  them. The *players'* own pedestrians (on foot) **are** replicated — that is a player's
+  own body, not ambient traffic.
+- **Dents and damage — on a PLAYER car.** `totalDamage`, `ap.damage[]` and
+  `needsDenting` do not ride `MP_CARSTATE_ENTRY`, so a bent player car can look straight
+  on another screen. Deliberate for v1 (limitation 17). **Traffic car damage IS synced**
+  (domain 12): a wrecked traffic car is re-dented on the peer from `damage[]` alone,
+  moving no vertices.
 
 ---
 

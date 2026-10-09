@@ -199,6 +199,33 @@ present in `active_car_list` (`list=N/M`). The pair never reads 10,000+ units ap
 **Status** — Verified headless. The adopt line's `|d|` is *the* number to watch — it is
 what "the cars are not where they are on the other machine" looks like as a number.
 
+**The map marker is the same fact drawn.** A remote player's arrow is placed by
+`JER_EVENT_DRAW_MAP` (`mp_map.c`), so it fails and passes with this domain — and it has
+its own trap, because the hook fires on **three** surfaces and each needs a different
+transform:
+
+- **Verify** — `python JERICHO/MODS/mp/tools/mp_localpair.py --sp --level rio --seconds 30`
+  for the **single-player** mini-map, and the plain (no `--sp`) run for the multiplayer
+  map. Both print, under `MP_DEBUG=1`:
+  `[mp] map: drew N remote blip(s)` and
+  `[mp] map: flags 0x%x; first remote blip is player %d at world %d,%d`
+- **Pass** — the flags name the surface (`0x22` = the multiplayer map, `0x3` = the
+  single-player overhead map), and the world position **matches that player's `pose:`
+  line and moves with it**. A single fixed value for every player means the module is
+  transforming the position itself, which is wrong: `WorldToMultiplayerMap` returns a
+  constant `(32,32)` when `MissionHeader->region == 0`, so on a single-player level
+  every remote arrow lands on one wrong point and none of them show. Hand the *world*
+  position and `m->flags` to `DrawPlayerDot` and let the engine place it.
+- **Not a bug** — the single-player mini-map is a small window centred on the local
+  car, so a remote player's arrow only appears while that player is inside it. That is
+  the engine's own clipping, the same as for the local marker.
+
+**Status** — Verified headless on both surfaces (2026-10-08): flags `0x3` with the blip
+tracking the remote car's live world position on a single-player level, flags `0x22` on
+the multiplayer map, both seats agreeing on the level. The reason this survived every
+earlier harness run: `-mp` always selects a multiplayer region (`main.c` sets
+`gBootMpLevel = 1`), so no rig reached the single-player map until the `--sp` one.
+
 ---
 
 ### 5. Input replication is the fallback only
@@ -399,9 +426,9 @@ alone, moving no vertices); `dumps=0` (no `PingInCivCar` / `CivSteerAngle` fault
 standing rule holds: a mod-created car may reach the traffic AI **only** as a stopped,
 empty car.
 
-**Status** — Landed on this branch (`MP_PROTO_VERSION` 9). ⚠ `ARCHITECTURE.md` §12 still
-describes traffic sync as "NOT started" and `JERICHO-MP.md` §6 as "not synchronised" —
-both **lag the code**; treat this document as current.
+**Status** — Landed on this branch (`MP_PROTO_VERSION` 9). The doc drift this note used to
+warn about is **fixed** (2026-10-07): `ARCHITECTURE.md` §12/§13 and `JERICHO-MP.md` §6 now
+describe traffic sync as landed, not "NOT started" / "not synchronised".
 
 ---
 
@@ -416,11 +443,20 @@ keeps stepping on every machine — and a chat line reaches every player.
   `UnPauseSound()` once on the way in. Pad input is swallowed while the mp pause menu is
   open.
 - Chat: `MP_TEST_CHATKEY=<secs>[,<text>]`; in game **T** opens, **Enter** sends,
-  **Escape** cancels. A received line is an ordinary notify:
-  `[mp] notify row '%s'` / `[mp] chat: prompt open (type; Enter to send, Esc to cancel)`
+  **Escape** cancels. The lever feeds the REAL handlers (`MpOnDebugKey(MP_KEY_CHAT_OPEN)`
+  then `MP_KEY_CHAT_SEND`), so what it exercises is the key path, not a shortcut. It also
+  types `<text>` through the character handler and then one **BACKSPACE**, so the line it
+  sends is one character shorter than the argument (`…,helloo` sends `hello`).
+  Evidence: `[mp] chat: prompt open (type; Enter to send, Esc to cancel)`,
+  `[mp] test: chat buffer now 'hello'`, `[mp] test: chat SEND`, and then the row on the
+  console of **every** seat — `[console] <name>: <text>`. (Chat goes to the status console
+  since 2026-10; the old `[mp] notify row '%s'` line no longer exists — grep the `[console]`
+  row instead. Measured 2026-10-08: the host logs its own echoed line and the joiner logs
+  the received one, both as `[console] LocalA: hello`, with the wire frame as
+  `[mp] recv JPCX len=100` on the joiner.)
 
 **Pass** — With one player paused, the others keep moving (nobody freezes); a chat line
-sent on one seat appears as a notify on every other seat.
+sent on one seat appears on the console of every other seat (`[console] <name>: <text>`).
 
 **Status** — Verified headless (`MP_PAUSE`, `MP_TEST_CHATKEY`); the on-screen drawing by
 eye at the LAN pass.
@@ -466,9 +502,11 @@ corruption. Cosmetic, known. (`README_LAN_TEST.txt` says the same.) The five Dri
 cities carry eleven to thirteen pages and so hit this hardest, but they ship as a
 **separate content release**, not in this one.
 
-**20. Doc drift.** `ARCHITECTURE.md` §12/§13 and `JERICHO-MP.md` §6 predate the traffic work
-and the load-timeout fix (§13's "late joiner dropped for `timeout`" is now fixed in code).
-Where they disagree with the code, **the code is current** — this document tracks the code.
+**20. Doc drift — CORRECTED 2026-10-07.** `ARCHITECTURE.md` §12/§13 and `JERICHO-MP.md` §6
+used to predate the traffic work and the load-timeout fix; both have now been brought up to
+date (traffic sync landed, the `timeout` drop fixed, the "~65 s drop" re-described as a
+freeze). Where any doc still disagrees with the code, **the code is current** — this
+document tracks the code.
 
 ---
 
@@ -500,6 +538,116 @@ One command builds the shippable package (regenerate → build → `JERICHO_mp_l
 JERICHO\MODS\mp\tools\pack_lan\sync_lan.bat
 ```
 
+### Measured baseline (2026-10-07, one machine, headless)
+
+The first recorded run of the rigs against a current build, taken to turn the
+"verified headless" prose above into numbers. **Every run here had SIX modules
+enabled** (`carhacks`, `crumple`, `d1cars`, `levelhacks`, `mp`, `sandbox` — boot
+inventory: `6 module(s) active`), *not* the clean `mp`-only modlist this project's
+own docs prescribe (`JERICHO-MP.md` §8), so these numbers are a **lower bound and
+not a sign-off**. They are recorded as measured, with the confound named.
+
+| rig | command | result |
+| --- | --- | --- |
+| pair, 60 s | `mp_localpair.py --seconds 60 --settle 5 --keep` | **STALLED** — host sim reached heartbeat frame 301; the joiner's sim froze at **frame 1** and its log ends mid-match on `recv JPTF len=176`; `lost=0 dumps=0` |
+| pair, 60 s ×3 | same, repeated to get a rate | **2 of 3 STALLED** — one PASS (both seats heartbeat frame 1501); one joiner frozen at frame 1; one joiner frozen at frame 900 |
+| crash rate | `mp_crashrate.py --runs 5` (34 s each) | **0/5 crashed, dumps=0**; the rig's own note fires — `5 run(s) produced NO PingInCivCar breadcrumbs at all` |
+| car-swap stress | `mp_carstress.py --seconds 60` | **FAIL** — 3 seats, 249 changes: host 30/48, client 32/48, client1 35/48 cars driven (list not covered); `no spare resident slot` ×40 on the host plus `keeping slot`, `not loaded here`, refusals. The pair verdict itself was PASS (`lost=0 dumps=0 stopped=no`) |
+| cross-city tries | `mp_tries.py --keep` | **3/3 PASS** on the pair verdict; tries 1–2 carry real cross-city identity + release/reclaim evidence on both seats; **try 3 is vacuous** (its pick was refused) |
+| menu host (`--menu-host`, new) | `mp_localpair.py --menu-host --seconds 50` | **second-start check PASSES: exactly 1 launch, 3/3 runs** — but every run then **crashes the joiner** in `crumpleDeformInternal+0x2A8` (the one crash of this whole session) |
+| the same crash, isolated | `mp_localpair.py --level chicago` vs `--level rio` (both `-mp 1`) | **Chicago 1/1 CRASH, rio 1/1 PASS** — within the multiplayer-region rigs, the city mattered |
+| the same crash, again | `mp_localpair.py --sp --level rio` (region 0) | **CRASHED the joiner too** — so the trigger is not the city; see the correction below |
+
+The menu-host result is worth separating from the crash. The check this rig exists
+for — *does the host start a second, frontend-driven match?* — comes out **exactly
+one launch in 3 of 3 runs**, so roadmap B's failure mode did not reproduce; the
+`MpBeginHost` idempotency guard and the claimed frontend START hold. What the rig
+surfaced instead is a **new, reproducible joiner crash**: `EXCEPTION_ACCESS_VIOLATION`
+at `?crumpleDeformInternal@@YAXPEAU_CAR_DATA@@PEBF@Z+0x2A8`, always the **joiner**,
+faulting immediately after mirrored traffic (`recv JPTF` / `traffic mirror slot N
+re-dented`) — a `crumple`/`mp` interaction (it is `crumple`'s function, and `crumple`
+is one of the six modules on). Not previously recorded anywhere.
+
+**Correction (2026-10-08): it is not "the Chicago crash".** Re-measured while adding
+the `--sp` rig, the same fault reproduced on **rio**, on a **single-player** level
+(`--level rio`, no `-mp`, `subgame 0`) — and a second such run passed. So the city is
+not the trigger and the crash is **intermittent**; what the earlier 4/4 really showed
+is that it reproduces reliably under the menu-host/Chicago conditions *it was measured
+under*. Treat it as "some levels/conditions crash the joiner in crumple", and
+re-measure before attributing it. The `--menu-host` line in the doc's old "known
+broken: the frontend-driven second start (**Chicago**)" note named the same city this
+crash did, and the crash remains the likelier explanation for that report than a
+second start — but "Chicago" should not be read as its cause.
+
+Three caveats the numbers carry:
+
+- **The joiner freeze is real and frequent, and it is not the documented timeout.**
+  Repeated at 60 s it stalled **2 of 3** runs, at *different* points (joiner frozen at
+  frame 1 in one, frame 900 in the other), and it is always the **joiner**, never the
+  host. In both cases the joiner's *simulation* stops — its lockstep heartbeat stops
+  advancing while the module is still polling (its log goes on receiving `JPCS`/`JPTF`)
+  — and there is **no `LEAVE`, no `timeout`, no drop** (`lost=0`), so this is not the
+  "late joiner dropped for `timeout`" that §11 declares fixed. No `JERICHO.dmp` is
+  produced either, so it is a hang, not a crash, and `dmp_fault.py` cannot attribute it.
+  A control run of **two staggered instances with no session** survived 70 s, so it is
+  not simply two windows on one GPU. Root cause **not identified**.
+- **`mp_crashrate.py` cannot answer its own question.** Its regexes
+  (`PINGIN: enter dist=… freeSlots=(…)`) no longer match the engine, which now
+  emits `JERICHO-DIAG PINGIN: slot=… cookie=…` and only under
+  `JERICHO_DIAG_PINGIN=1` (`civ_ai.c:32-40,1871`), so the free-slot correlation is
+  dead tool drift. It also scores `clean` from crash dumps alone, so a STALLED run
+  is counted as clean — which is why its 5×34 s "0/5 crashed" says nothing about
+  the freeze.
+- **`mp_tries.py` PASSes on the pair verdict alone.** Try 3's whole cross-city
+  request was refused (`no car 12 in HAVANA's roster (9 available)`) and the run
+  still printed PASS with an empty evidence block; only `--require` makes a try
+  mean something.
+
+Consequently the sign-off cells below stay **blank**: no run here was under the
+prescribed clean modlist, and no two-machine LAN pass has been recorded.
+
+### Triage: what is a blocker, and what is an accepted limit (2026-10-07)
+
+Classified from the baseline above. **Blocker** = the gate cannot pass until it is
+resolved. **Tooling** = the instrument is wrong, not the mod — but two of these hide
+real failures, so they are blockers too. Nothing here changes the accepted
+limitations 14–20, which are unaffected.
+
+**Fix-now blockers**
+
+| # | finding | why it blocks | domain |
+| --- | --- | --- | --- |
+| B1 | The joiner's match **freezes** mid-play (rio), **2 of 3** at 60 s | "take a ride together" that stops after a minute is the feature failing; a freeze is invisible to a log-only PASS | 4, 12, 13 |
+| B2 | A session **crashes the joiner** in `crumpleDeformInternal+0x2A8` (4/4 under the menu-host/Chicago conditions it was first measured under; intermittent, and it reproduced on single-player rio too) | it is the only crash seen, it kills the joining machine, and it is `crumple`/`mp` interaction territory | 1, 4 |
+| B3 | Car-swap stress **exhausts the resident slots** (`no spare resident slot` ×40, `keeping slot`, refusals; 30/48–35/48 covered) | car swap is one of v1's two headline features | 6 |
+| B4 | **No CI job runs any mp rig** | every fix is verified by hand and can silently regress — which it has (the crash "came back" once already) | all |
+| B5 | The **two-machine LAN pass has never been run** | it is the only artifact that proves the scope; headless is not LAN | all |
+
+B3 is measured on a 6-module modlist, so it must be re-measured clean before it is
+fixed — the *measurement* is a blocker, the fix may not be.
+
+**Tooling defects (each is why something above went unseen)**
+
+| # | finding | why it matters |
+| --- | --- | --- |
+| T1 | `mp_crashrate.py`'s breadcrumb regexes no longer match the engine | it cannot report the free-slot correlation it exists for, and its own note says so |
+| T2 | `mp_crashrate.py` scores `clean` from crash dumps alone | a **STALLED** run is counted as clean — this is how B1 stays hidden in a "0/5 crashed" line |
+| T3 | `mp_tries.py` reports PASS on the pair verdict alone | its default try 3 was refused outright (`no car 12 in HAVANA's roster`) and still printed PASS with an empty evidence block |
+| T4 | `mp_tries.py`'s default try 3 names a non-existent car | the documented "havana car 12" example is stale against the roster |
+
+**Not a blocker** (measured, and it is good news)
+
+- **The `PingInCivCar` crash class did not reproduce** — 0/5 crash-rate runs, no dumps,
+  and the whole session produced exactly one crash (B2). T1 means this is *absence of
+  evidence*, not proof the fix holds.
+- **The frontend-driven second start (roadmap B) did not reproduce** — `--menu-host`
+  gives exactly 1 launch in 3/3 runs. What the docs called "the frontend-driven second
+  start (**Chicago**)" is better explained by B2: the crash, first measured on that same
+  city, and no second start. §12-B and §13 have been re-worded accordingly.
+
+**Unchanged** — accepted limitations 14–20 stand as written; nothing measured here
+contradicts them.
+
 ### Sign-off table
 
 One row per domain, one column per environment. Fill the date (and who ran it) when the
@@ -508,17 +656,17 @@ table is full and 14–20 are accepted.**
 
 | # | Domain | Headless | LAN | Notes |
 | --- | --- | --- | --- | --- |
-| 1 | Session admission | | | |
-| 2 | Roster and identity | | | |
-| 3 | Car assignment | | | |
-| 4 | Car pose replication | | | |
+| 1 | Session admission | | | Pair PASS ×7 (2026-10-07, 6-module modlist) |
+| 2 | Roster and identity | | | `mp_tries` 3/3 pair PASS; identity agreed on both seats (2026-10-07) |
+| 3 | Car assignment | | | `late joiner: player 1 -> slot 1 model 2` (2026-10-07) |
+| 4 | Car pose replication | | | `adopt |d|` 39→13→2 converging; frames to 751 (2026-10-07). One 60 s run STALLED |
 | 5 | Input fallback only | | | |
-| 6 | Mid-match car swap | | | |
-| 7 | Colour / palette | | | |
+| 6 | Mid-match car swap | | | **✗ FAIL 2026-10-07**: `mp_carstress` covered 30/48, 32/48, 35/48; `no spare resident slot` ×40; needs a clean-modlist re-run |
+| 7 | Colour / palette | | | `palette: player 0 reports 5, drawn as 5` (2026-10-07) |
 | 8 | Spawn placement | | | |
 | 9 | Collision handoff | | | |
 | 10 | Death / respawn | | | |
-| 11 | Live join (catch-up) | | | |
-| 12 | Replicated traffic | | | |
+| 11 | Live join (catch-up) | | | `mp_tries` 1–2 cross-city join healthy on both seats; try 3 vacuous (refused pick) |
+| 12 | Replicated traffic | | | `JPTF` mirrored + `traffic mirror slot 8/9 re-dented` (2026-10-07) |
 | 13 | Pause / chat | | | |
 | 14–20 | Accepted limitations — reviewed | n/a | n/a | |
