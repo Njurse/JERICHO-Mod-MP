@@ -27,7 +27,7 @@ import sys
 import threading
 import time
 
-PROTO = 8                     # must match mp_proto.h MP_PROTO_VERSION -- the game drops any frame whose envelope version differs
+PROTO = 10                    # must match mp_proto.h MP_PROTO_VERSION -- the game drops any frame whose envelope version differs
 SDK = 2                       # JERICHO_SDK_VERSION
 MP_VER = "0.1.0"              # JERICHO/MODS/mp/mod.toml version -- always advertised
 NUL = bytes([0])
@@ -36,7 +36,7 @@ TAG = {
     "hello": b"JPHL", "welcome": b"JPWL", "reject": b"JPRJ",
     "start": b"JPST", "input": b"JPIN",
     "carstate": b"JPCS", "ping": b"JPPN", "pong": b"JPPO",
-    "channel": b"JPCH", "leave": b"JPLV", "chat": b"JPCX",
+    "channel": b"JPCH", "leave": b"JPLV", "kick": b"JPKK", "chat": b"JPCX",
     "roster": b"JPRS", "car": b"JPCC",
 }
 # NOTE: no "session" entry. 'JPSS' was retired from mp_proto.h -- it was reserved for

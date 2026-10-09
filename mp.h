@@ -288,6 +288,7 @@ void MpSendHello(void);			/* client -> host identity + manifest */
 int  MpBeginHost(void);			/* become host: listen + advertise + self row */
 int  MpBeginJoinAsync(const char* host, int port);	/* the join (non-blocking) */
 void MpLeaveSession(void);		/* tear the session down, keep the module */
+void MpKickPlayer(int playerId);	/* HOST: remove a player (sends MP_TAG_KICK) */
 
 /* Addon network bridge (mp_bridge.c / jer_net.h). */
 void MpBridgeDeliver(const char* channel, int peer, const void* data, int len);

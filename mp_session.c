@@ -1819,6 +1819,59 @@ static void MpHandleLeave(int connIndex, const unsigned char* p, int len)
 	MpReturnToFrontend();
 }
 
+/* The host removing a player. The only kick path: send the message AND keep
+ * the teardown in one place by letting the kicked client drive it. Only the
+ * host may kick, and only a non-zero player id (the host is id 0). */
+void MpKickPlayer(int playerId)
+{
+	MP_KICK k;
+	int conn;
+
+	if (!MpIsHost())
+		return;
+
+	if (playerId <= 0)
+		return;
+
+	conn = MpConnFindByPlayer(playerId);
+
+	if (conn < 0)
+		return;
+
+	memset(&k, 0, sizeof(k));
+	k.playerId = (uint8_t)playerId;
+
+	if (gMpCtx != NULL)
+		gMpCtx->jer_log(gMpCtx, "[mp] kicking player %d (conn %d)\n", playerId, conn);
+
+	MpSendConn(conn, MP_TAG_KICK, MP_FLAG_RELIABLE, &k, sizeof(k));
+}
+
+/* MP_TAG_KICK -- the host removed us. Take the SAME clean-leave path a
+ * deliberate quit uses (MpLeaveSession sends our LEAVE back, which the host
+ * turns into the connection drop), rather than tearing down on our own: that
+ * way every machine's roster row and our car leave the world exactly as they
+ * do for any other leaver. */
+static void MpHandleKick(int connIndex, const unsigned char* p, int len)
+{
+	MP_KICK k;
+
+	(void)connIndex;
+
+	if (len >= (int)sizeof(MP_KICK))
+		memcpy(&k, p, sizeof(k));
+	else
+		memset(&k, 0, sizeof(k));
+
+	if (gMpCtx != NULL)
+		gMpCtx->jer_log(gMpCtx, "[mp] kicked by the host (player %d)\n", (int)k.playerId);
+
+	jer_error("You were kicked by the host");
+
+	MpLeaveSession();
+	MpReturnToFrontend();
+}
+
 static void MpHandleWelcome(const unsigned char* p, int len)
 {
 	MP_WELCOME w;
@@ -2138,6 +2191,7 @@ static void MpTestCarChangeTick(void);
 static void MpTestCityChangeTick(void);
 static void MpTestCarCycleTick(void);
 static void MpTestLeaveTick(void);
+static void MpTestKickTick(void);
 static void MpTestOnFootTick(void);
 static void MpTestFallOffTick(void);
 
@@ -2696,6 +2750,7 @@ static void MpHandleHit(int connIndex, const unsigned char* p, int len)
  * their behaviour and their log lines are unchanged. An inert lever stays NULL. */
 static const char* gHeartbeatStr;
 static const char* gTestLeaveStr;
+static const char* gTestKickStr;
 static const char* gTestOnFootStr;
 static const char* gTestCarChangeStr;
 static const char* gTestCityChangeStr;
@@ -2716,6 +2771,7 @@ static void MpResolveTestLevers(void)
 
 	gHeartbeatStr = getenv("MP_HEARTBEAT");
 	gTestLeaveStr = getenv("MP_TEST_LEAVE");
+	gTestKickStr = getenv("MP_TEST_KICK");
 	gTestOnFootStr = getenv("MP_TEST_ONFOOT");
 	gTestCarChangeStr = getenv("MP_TEST_CARCHANGE");
 	gTestCityChangeStr = getenv("MP_TEST_CITYCHANGE");
@@ -3340,6 +3396,11 @@ void MpLockstepFrame(void)
 	 * log without a human sitting at the menu. */
 	MpTestLeaveTick();
 
+	/* test lever: the HOST kicks a client part-way through (inert unless
+	 * MP_TEST_KICK), so the kick wire path + the client's clean teardown is
+	 * reproducible without a human at the pause menu. */
+	MpTestKickTick();
+
 	/* test lever: get out of the car part-way through (inert unless MP_TEST_ONFOOT),
 	 * so the on-foot path has a way to be exercised at all. */
 	MpTestOnFootTick();
@@ -3499,6 +3560,43 @@ static void MpTestLeaveTick(void)
 
 	MpLeaveSession();
 	MpReturnToFrontend();
+}
+
+/* MP_TEST_KICK=<secs> -- the HOST kicks its first client that many seconds in,
+ * through the same MpKickPlayer the pause menu will call, so the wire path and
+ * the kicked client's teardown are checkable from the log. Host only: running
+ * it on both machines would make the two logs ambiguous. */
+static void MpTestKickTick(void)
+{
+	static int done;
+	static unsigned long startMs;
+	const char* s;
+	unsigned long now = MpNowMs();
+
+	if (done || !gMp.running)
+		return;
+
+	if (gMp.role != MP_ROLE_HOST)
+		return;
+
+	s = gTestKickStr;
+
+	if (s == NULL)
+		return;
+
+	if (startMs == 0)
+		startMs = now;
+
+	if ((now - startMs) < (unsigned long)(atoi(s) * 1000))
+		return;
+
+	done = 1;
+
+	if (gMpCtx != NULL)
+		gMpCtx->jer_log(gMpCtx,
+			"[mp] test: host kicking player 1 %ss in (MP_TEST_KICK)\n", s);
+
+	MpKickPlayer(1);
 }
 
 /* MP_TEST_ONFOOT=<secs> -- get the local player OUT of their car that many
@@ -6663,6 +6761,12 @@ void MpHandleMessage(int connIndex, const char* tag, const unsigned char* payloa
 	if (memcmp(tag, MP_TAG_LEAVE, 4) == 0)
 	{
 		MpHandleLeave(connIndex, payload, len);
+		return;
+	}
+
+	if (memcmp(tag, MP_TAG_KICK, 4) == 0)
+	{
+		MpHandleKick(connIndex, payload, len);
 		return;
 	}
 

@@ -38,7 +38,7 @@
 extern "C" {
 #endif
 
-#define MP_PROTO_VERSION	9	/* 9: MP_TAG_TRAFFIC -- replicated civilian/police cars */
+#define MP_PROTO_VERSION	10	/* 10: MP_TAG_KICK -- the host removes a player */
 
 /* Default UDP+TCP port. 1318 is IANA-unassigned (the neighbour 1319 is
  * amx-icsp), so it is a safe, non-reserved choice for a game. Configurable
@@ -93,6 +93,7 @@ extern "C" {
 #define MP_TAG_PONG	"JPPO"
 #define MP_TAG_CHANNEL	"JPCH"	/* addon net bridge payload */
 #define MP_TAG_LEAVE	"JPLV"	/* either side: leaving the session */
+#define MP_TAG_KICK	"JPKK"	/* host -> client: you are being removed */
 #define MP_TAG_ROSTER	"JPRS"	/* host -> all: who is in the match */
 #define MP_TAG_HIT	"JPHI"	/* either side: "my car bumped yours, you push yourself" */
 #define MP_TAG_PED	"JPPD"	/* owner -> peers: an ON-FOOT player's pose */
@@ -529,6 +530,16 @@ typedef struct MP_CHAT
 	uint8_t reserved[3];
 	char    text[MP_CHAT_TEXT_MAX];
 } MP_CHAT;
+
+/* The host removing a player. `playerId` names the row being removed (the
+ * connection it travels on is the same thing, but the id is self-documenting
+ * and lets the client assert the two agree). Reliable: a lost kick must not
+ * leave the client sitting in a match the host no longer has it in. */
+typedef struct MP_KICK
+{
+	uint8_t playerId;
+	uint8_t reserved[3];
+} MP_KICK;
 
 /* A contact report. Cars are owner-authoritative, so a machine can only move
  * the ONE car it owns: when MY car touches YOURS I push MINE, and I send you
