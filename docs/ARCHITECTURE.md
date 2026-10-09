@@ -447,6 +447,17 @@ Engine hooks this work *added*, which other modules can use too:
   module stopped transforming and started passing `m->flags`. (Related: the hook's
   `suppressStockBlip` is only read back on the multiplayer surface; the single-player
   and full-screen sites pass it uninitialised and ignore it.)
+- **World→screen for the nametag (`MpProjectWorldToScreen`, mp_ui.c)** — the overlay
+  projects with a **yaw-only** transform (the camera pitch is small enough not to
+  matter for a label): subtract `camera_position`, rotate by `-camera_angle.vy`,
+  `f = 520/rz`, centre at (160,120), and reject behind-camera / too-far / off-screen.
+  Two frame gotchas recorded so the next module author does not re-derive them: a
+  **car's `hd.where.t[1]` is UP-positive** while a **pedestrian's `position.vy` is
+  DOWN-positive** (`ground - 130`), converted with the same negation the engine uses
+  in `ChangeCarPlayerToPed` (`hd.where.t[1] = -ped.vy`). Tag colour goes through the
+  single seam **`MpNameTagColour`** (future team/gamemode → the player's own colour →
+  white) and the text is **distance-scaled** `clamp(700/depth, 0.138, 0.275)` and
+  centred via `StringWidth`.
 - **`JER_EVENT_CMDLINE`** — a module picks up its own shortcuts after the engine
   parses its args. Fixing this is what stopped unknown arguments popping a modal
   message box, which used to block the main thread *before* the frontend and made

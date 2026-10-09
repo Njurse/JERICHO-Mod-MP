@@ -139,6 +139,7 @@ names; every player is distinct and addressable.
   `[mp] list: (build %04x mods %04x) %s #%d car %d slot %d %s%s`,
   `[mp] local row is player %d (row %d, car %d) - from localPlayerId`
 - A leaver: `[mp] player %d is no longer in the roster - taking their car out of the world`
+- Nametags: `MP_DEBUG` then read `[mp] nametag: <name> at screen %d,%d depth %d scale %.3f colour %d,%d,%d` — the throttle prints every 2 s while a remote player is on screen (driving, or on foot with a stand-in ped). The tag shows the name centred and distance-scaled above the anchor; `MpNameTagColour` is the colour seam (own colour, else white).
 
 **Pass** — N seats produce N **distinct** rows; the rows' ids and names are identical
 on every seat; each seat's "local row" names itself. A player who leaves disappears

@@ -33,6 +33,8 @@
  * full PSX type set -- declare just what the overlay needs instead). */
 extern void SetTextColour(unsigned char Red, unsigned char Green, unsigned char Blue);
 extern int  PrintString(char* string, int x, int y);
+extern int  PrintStringHiresScaledSpaced(char* string, int x, int y, float scale, float extra);
+extern int  StringWidth(char* pString);	/* pres.h: full-size text width, PSX units */
 extern int  gInFrontend;		/* glaunch.h: the engine is showing the frontend */
 
 #include <stdio.h>
@@ -1109,51 +1111,154 @@ void MpConsoleChat(const char* name, int colorOn, int r, int g, int b, const cha
 }
 
 
-/* The other players' numbers, drawn ABOVE their cars. Yaw-only projection
- * (the camera pitch is small enough not to matter for a label). */
-static void MpDrawCarLabels(void)
+/* The other players' name, drawn ABOVE them: over the car's roof when they are
+ * driving, over their head when they are on foot. Yaw-only projection (the
+ * camera pitch is small enough not to matter for a label). */
+static int MpProjectWorldToScreen(int wx, int wy, int wz, int* sx, int* sy, int* depth)
 {
 	int camx, camy, camz, camyaw;
-	int k;
+	float yaw, s, c, dx, dy, dz, rx, rz, f;
+	int ox, oy;
 
 	MpCameraPose(&camx, &camy, &camz, &camyaw);
 
+	yaw = (float)(camyaw & 0xfff) * (6.2831853f / 4096.0f);
+	s = sinf(yaw);
+	c = cosf(yaw);
+
+	dx = (float)(wx - camx);
+	dy = (float)(wy - camy);
+	dz = (float)(wz - camz);
+
+	rx = dx * c - dz * s;
+	rz = dx * s + dz * c;
+
+	if (rz < 64.0f || rz > 8000.0f)
+		return 0;		/* behind the camera / too far */
+
+	f = 520.0f / rz;
+	ox = 160 + (int)(rx * f);
+	oy = 120 - (int)(dy * f);
+
+	if (ox < 6 || ox > 308 || oy < 6 || oy > 232)
+		return 0;
+
+	if (sx != NULL) *sx = ox;
+	if (sy != NULL) *sy = oy;
+	if (depth != NULL) *depth = (int)rz;
+
+	return 1;
+}
+
+/* The single colour seam for a nametag. A future team/gamemode can claim the
+ * colour here and every caller follows; until then a player's own colour wins,
+ * and the default is white (readable against the world, unlike the game's
+ * suit colours which are dark). */
+static void MpNameTagColour(const MP_PLAYER* p, unsigned char* r, unsigned char* g, unsigned char* b)
+{
+	if (p->colorOn)
 	{
-		float yaw = (float)(camyaw & 0xfff) * (6.2831853f / 4096.0f);
-		float s = sinf(yaw), c = cosf(yaw);
+		*r = (unsigned char)p->colorR;
+		*g = (unsigned char)p->colorG;
+		*b = (unsigned char)p->colorB;
+	}
+	else
+	{
+		*r = 250;
+		*g = 250;
+		*b = 250;
+	}
+}
 
-		for (k = 0; k < MP_MAX_PLAYERS; k++)
+/* Nametag constants: full-size near (the 0.275f default), half-size far. */
+#define MP_TAG_SCALE_MAX	0.275f
+#define MP_TAG_SCALE_MIN	0.138f
+
+static void MpDrawNameTags(void)
+{
+	int k;
+
+	for (k = 0; k < MP_MAX_PLAYERS; k++)
+	{
+		MP_PLAYER* p = &gMp.players[k];
+		int wx, wy, wz, wh, sx, sy, depth;
+		unsigned char r, g, b;
+		float scale;
+		char name[MP_NAME_MAX];
+
+		if (!p->active || p->isLocal)
+			continue;
+
+		/* The anchor. A car's hd.where.t[1] is UP-positive; a pedestrian's
+		 * position.vy is DOWN-positive (ground - 130). The engine converts with
+		 * the negation hd.where.t[1] = -ped.vy (pedest.c ChangeCarPlayerToPed),
+		 * so do the same here. */
+		if (p->carId >= 0)
 		{
-			MP_PLAYER* p = &gMp.players[k];
-			int wx, wy, wz, wh, sx, sy;
-			float dx, dy, dz, rx, rz, f;
-			char tag[8];
-
-			if (!p->active || p->isLocal || p->carId < 0)
-				continue;
-
 			MpCarPose(p->carId, &wx, &wy, &wz, &wh);
+			wy += 320;	/* float the label over the roof */
+		}
+		else if (p->pedLastMs != 0 && p->ped != NULL)
+		{
+			wx = p->pedX;
+			wy = -p->pedY + 260;	/* over the head */
+			wz = p->pedZ;
+		}
+		else
+		{
+			continue;	/* no car and no stand-in ped yet */
+		}
 
-			dx = (float)(wx - camx);
-			dy = (float)(wy + 320 - camy);	/* float the label over the roof */
-			dz = (float)(wz - camz);
+		/* anchor-level trace, so "hook not firing" and "remote behind the camera"
+		 * are distinguishable from the log */
+		if (MpDebugOn() && gMpCtx != NULL)
+		{
+			static unsigned long lastAnchorMs;
 
-			rx = dx * c - dz * s;
-			rz = dx * s + dz * c;
+			if ((MpNowMs() - lastAnchorMs) > 2000)
+			{
+				lastAnchorMs = MpNowMs();
+				gMpCtx->jer_log(gMpCtx,
+					"[mp] nametag: player %d anchor world %d,%d,%d\n",
+					p->id, wx, wy, wz);
+			}
+		}
 
-			if (rz < 64.0f || rz > 8000.0f)
-				continue;		/* behind the camera / too far */
+		if (!MpProjectWorldToScreen(wx, wy, wz, &sx, &sy, &depth))
+			continue;
 
-			f = 520.0f / rz;
-			sx = 160 + (int)(rx * f);
-			sy = 120 - (int)(dy * f);
+		MpNameTagColour(p, &r, &g, &b);
 
-			if (sx < 6 || sx > 308 || sy < 6 || sy > 232)
-				continue;
+		/* Distance-scale the tag: full near, half-size far. */
+		scale = 700.0f / (float)depth;
+		if (scale > MP_TAG_SCALE_MAX)
+			scale = MP_TAG_SCALE_MAX;
+		else if (scale < MP_TAG_SCALE_MIN)
+			scale = MP_TAG_SCALE_MIN;
 
-			snprintf(tag, sizeof(tag), "%d", p->id);
-			SetTextColour(255, 240, 120);
-			PrintString(tag, sx, sy);
+		snprintf(name, sizeof(name), "%s", (p->name[0] != '\0') ? p->name : "?");
+
+		/* Centre the name on the anchor: StringWidth is full-size (0.275f). */
+		{
+			int w = (int)((float)StringWidth(name) * (scale / 0.275f));
+
+			SetTextColour(r, g, b);
+			PrintStringHiresScaledSpaced(name, sx - w / 2, sy, scale, 0.0f);
+		}
+
+		/* one throttled line so "did the tag project and what did it look like"
+		 * is answerable from the log rather than a screenshot */
+		if (MpDebugOn() && gMpCtx != NULL)
+		{
+			static unsigned long lastTagMs;
+
+			if ((MpNowMs() - lastTagMs) > 2000)
+			{
+				lastTagMs = MpNowMs();
+				gMpCtx->jer_log(gMpCtx,
+					"[mp] nametag: %s at screen %d,%d depth %d scale %.3f colour %d,%d,%d\n",
+					name, sx, sy, depth, scale, r, g, b);
+			}
 		}
 	}
 }
@@ -1185,7 +1290,7 @@ int MpUiDrawOverlay(void* userdata, void* args)
 		row++;
 	}
 
-	MpDrawCarLabels();
+	MpDrawNameTags();
 
 	/* The chat prompt: the line being typed, with a cursor. The ENGINE console
 	 * draws it now, on its own bottom row (jer_console_input), which also keeps
