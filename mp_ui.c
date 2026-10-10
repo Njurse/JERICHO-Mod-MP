@@ -1127,14 +1127,41 @@ static int MpProjectWorldToScreen(int wx, int wy, int wz, int* sx, int* sy, int*
 	c = cosf(yaw);
 
 	dx = (float)(wx - camx);
-	dy = (float)(wy - camy);
+	/* The Y axis is NEGATED relative to X/Z: the engine stores the car's Y as
+	 * pos.vy = -where.t[1] (cars.c DrawCar) and camera_position.vy = -jcam.where.t[1]
+	 * (camera.c:616), so a world point's vertical offset from the camera is
+	 * -wy - camy = -(wy + camy) in the (down-positive) GTE frame, and screen y
+	 * follows that sign. Computing dy = wy + camy keeps the tag 320 units ABOVE the
+	 * roof on screen instead of ~600 units too high. */
+	dy = (float)(wy + camy);
 	dz = (float)(wz - camz);
 
-	rx = dx * c - dz * s;
-	rz = dx * s + dz * c;
+	/* Camera space is inv_camera_matrix = RotY(camyaw) (yaw only), matching the engine's
+	 * LIBGTE RotMatrixY (LIBGTE.C:696): a point directly ahead maps to +z, and
+	 *   cam_x = c*dx + s*dz   (right)
+	 *   cam_z = -s*dx + c*dz  (forward)
+	 * The first cut had these mirrored (c*dx - s*dz / s*dx + c*dz), which is RotY(-yaw):
+	 * "in front of the camera" then read as "behind", so a nametag only survived the
+	 * rz < 64 reject when its player was BEHIND you. */
+	rx = dx * c + dz * s;
+	rz = -dx * s + dz * c;
 
 	if (rz < 64.0f || rz > 8000.0f)
-		return 0;		/* behind the camera / too far */
+	{
+		if (MpDebugOn() && gMpCtx != NULL)
+		{
+			static unsigned long lastProjMs;
+
+			if ((MpNowMs() - lastProjMs) > 2000)
+			{
+				lastProjMs = MpNowMs();
+				gMpCtx->jer_log(gMpCtx,
+					"[mp] nametag: reject depth cam=%d,%d,%d yaw=%d -> world %d,%d,%d rx=%.0f rz=%.0f\n",
+					camx, camy, camz, camyaw, wx, wy, wz, rx, rz);
+			}
+		}
+		return 0;		/* behind the camera / too far to be worth drawing */
+	}
 
 	f = 520.0f / rz;
 	ox = 160 + (int)(rx * f);
