@@ -645,8 +645,35 @@ city-specific. **Root cause not yet found**; it needs a stack of the hung proces
 **One bisect did land.** Skipping `CheckCarToCarCollisions()` (handling.c:325) makes
 Chicago PASS outright (`simFrames=a:750 b:751`), so the hang is reached *through* the
 car-to-car collision pass. That pass's own loops are bounded (`do/while` over
-`MAX_CARS`), so the loop is in what the `mayBeColliding` bits it sets feed next -- or
-the trigger is indirect. That is the next thread to pull.
+`MAX_CARS`), so the loop is in what the `mayBeColliding` bits it sets feed next -- here
+that is `CarCarCollision3` -> `collided3d` (**bcoll3d.c:113**), which contains an
+**inherited infinite loop**:
+
+```c
+while (PointFaceCheck(cp0, cp1, i, least, 1) >= 0)   /* outer: this axis overlaps */
+{
+    if (PointFaceCheck(cp1, cp0, i, least, -1) >= 0) /* inner: the other way too */
+    { i += 2; if (i <= 2) continue; return 1; }
+    /* inner failed -> falls through with `i` UNCHANGED, so the outer is re-tested
+       with the same i. PointFaceCheck stores the smaller depth in least, so once
+       that is settled the outer result is stable and it never ends. */
+}
+```
+
+That is the hang's mechanism: it needs the pose where `cp0` faces `cp1` but `cp1` does
+not face `cp0` back -- rare in a normal race, but two player cars do it. **The file is
+byte-identical to upstream** `OpenDriver2/REDRIVER2`, so this is inherited, not a
+JERICHO regression.
+
+**Behind the hang is a second defect.** Making the loop advance `i` on every iteration
+(keeping both axes tested, so only the hanging case's answer changes) removes the hang
+-- and the joiners then CRASH `3/3` instead (`dumps=1`, sim frame 1). So the hang and
+the crash are one bad car-to-car collision with two faces, and the hang was masking the
+crash (which is the 2026-10-07 `crumpleDeformInternal` one). Fixing this properly means
+finding why the collision between the two player cars is degenerate on Chicago -- the
+engine's collision data for that first contact -- and that is still open. Neither patch
+ships: a `break` there changes normal collision results too, and the advance variant
+trades a silent hang for a crash.
 
 **The gate could not see any of this.** `mp_localpair`'s verdict checked only
 connection markers, so a joiner hung at sim frame 1 with the link up was reported PASS,
