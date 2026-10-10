@@ -2262,11 +2262,121 @@ static int MpOnLevelLaunch(void* userdata, void* args)
 	return JER_RESULT_CONTINUE;
 }
 
+/* ------------------------------------------------------------------ */
+/* Kick player: a target cycler + a confirm row, the same shape as the Change
+ * car page. HOST ONLY -- on a client both rows say so and do nothing, because
+ * only the host owns the connection table (and MpKickPlayer is a no-op there
+ * anyway; the menu says it rather than looking broken). The confirm row IS the
+ * confirmation screen: a kick takes a deliberate second press on a row that
+ * names who is about to go. */
+static int mpKickTarget = -1;	/* registry row of the selected target, or -1 */
+
+/* The next kickable row from `from` in `dir`: a connected player that is not us
+ * and not the host. Walks the registry, so a player who leaves drops out of the
+ * cycle by himself. */
+static int MpKickNext(int from, int dir)
+{
+	int i;
+
+	for (i = 1; i <= MP_MAX_PLAYERS; i++)
+	{
+		int idx = (from + dir * i + MP_MAX_PLAYERS * 2) % MP_MAX_PLAYERS;
+
+		if (gMp.players[idx].active && gMp.players[idx].connected &&
+			!gMp.players[idx].isHost && !gMp.players[idx].isLocal)
+			return idx;
+	}
+
+	return -1;
+}
+
+/* The effective target, repairing a stale/never-set one. */
+static int MpKickCurrent(void)
+{
+	if (!MpIsHost())
+		return -1;
+
+	if (mpKickTarget < 0 || mpKickTarget >= MP_MAX_PLAYERS ||
+		!gMp.players[mpKickTarget].active || !gMp.players[mpKickTarget].connected)
+		mpKickTarget = MpKickNext(MP_MAX_PLAYERS - 1, 1);
+
+	return mpKickTarget;
+}
+
+static const char* MpKickName(int idx)
+{
+	return (idx >= 0 && gMp.players[idx].name[0] != '\0') ? gMp.players[idx].name : "?";
+}
+
+static void MpKickLabelTarget(void* ud, char* out, int max)
+{
+	int t = MpKickCurrent();
+
+	(void)ud;
+
+	if (!MpIsHost())
+		snprintf(out, max, "Kick: (host only)");
+	else if (t < 0)
+		snprintf(out, max, "Kick: (no other players)");
+	else
+		snprintf(out, max, "Kick: %s", MpKickName(t));
+}
+
+static int MpKickAdjust(void* ud, int dir)
+{
+	int t = MpKickCurrent();
+
+	(void)ud;
+
+	if (t >= 0)
+		mpKickTarget = MpKickNext(t, dir);
+
+	return JER_PAUSE_QUIT_NONE;
+}
+
+static void MpKickLabelConfirm(void* ud, char* out, int max)
+{
+	int t = MpKickCurrent();
+
+	(void)ud;
+
+	if (!MpIsHost())
+		snprintf(out, max, "Confirm kick (host only)");
+	else if (t < 0)
+		snprintf(out, max, "Confirm kick (nobody selected)");
+	else
+		snprintf(out, max, "Confirm kick %s", MpKickName(t));
+}
+
+static int MpKickConfirm(void* ud, int dir)
+{
+	int t = MpKickCurrent();
+
+	(void)ud;
+	(void)dir;
+
+	if (t >= 0)
+		MpKickPlayer(gMp.players[t].id);
+
+	return JER_PAUSE_QUIT_NONE;
+}
+
+static const JER_PAUSE_MENU_ITEM mpKickItems[] =
+{
+	/* label, get_label, on_activate, userdata, submenu, adjust */
+	{ NULL, MpKickLabelTarget, MpKickAdjust, NULL, NULL, 1 },
+	{ NULL, MpKickLabelConfirm, MpKickConfirm, NULL, NULL, 0 },
+};
+
+static const JER_PAUSE_MENU mpKickMenu =
+{ "Kick player", mpKickItems, MP_MENU_ITEMS(mpKickItems) };
+
 static const JER_PAUSE_MENU_ITEM mpPauseItems[] =
 {
 	/* label, get_label, on_activate, userdata, submenu, adjust */
 	{ "Change car", NULL, NULL, NULL, &mpChangeCarMenu, 0 },
 	{ "My colour", NULL, NULL, NULL, &mpColorMenu, 0 },
+	{ "Kick player", NULL, NULL, NULL, &mpKickMenu, 0 },
 	{ "Write diagnostics now", NULL, MpMenuWriteDiag, NULL, NULL, 0 },
 };
 
