@@ -64,6 +64,11 @@ def main():
                          "with --seconds 60 when chasing that)")
     ap.add_argument("--settle", type=int, default=5)
     ap.add_argument("--level", default="rio")
+    ap.add_argument("--runs", type=int, default=1,
+                    help="how many pairs to play back to back (default 1). A single pass is weak "
+                         "evidence for a defect that shows up 2 times in 3 -- the freeze this gate "
+                         "exists for was measured at 2/3. Use --runs 6+ to make a green result mean "
+                         "something, and --seconds 60 (the freeze was seen at 60 s).")
     ap.add_argument("--require-assets", action="store_true",
                     help="exit 3 instead of skipping when the game assets are absent")
     a = ap.parse_args()
@@ -79,41 +84,56 @@ def main():
 
     cmd = [sys.executable, PAIR, "--game-dir", a.game_dir, "--level", a.level,
            "--seconds", str(a.seconds), "--settle", str(a.settle)]
-    print(f"[smoke] running: {' '.join(cmd)}")
-    r = subprocess.run(cmd, capture_output=True, text=True)
-
-    out = (r.stdout or "") + (r.stderr or "")
-    m = VERDICT.search(out)
-    line = m.group(1).strip() if m else ""
-    print(f"[smoke] pair verdict: {line or '<none -- the harness did not reach a verdict>'}")
 
     failures = []
+    passed = 0
 
-    if m is None:
-        failures.append("the harness produced no verdict line")
-    else:
-        if "-> PASS" not in line:
-            failures.append("the pair verdict was not PASS")
-        n = LOST.search(line)
-        if n and int(n.group(1)) != 0:
-            failures.append(f"lost={n.group(1)} (a client dropped)")
-        d = DUMPS.search(line)
-        if d and int(d.group(1)) != 0:
-            failures.append(f"dumps={d.group(1)} (an access violation)")
-        if STALLED.search(line):
-            failures.append("STALLED (a frozen game logs nothing, and is not a pass)")
+    for run in range(1, a.runs + 1):
+        if a.runs > 1:
+            print(f"[smoke] run {run}/{a.runs}")
+        print(f"[smoke] running: {' '.join(cmd)}")
+        r = subprocess.run(cmd, capture_output=True, text=True)
+
+        out = (r.stdout or "") + (r.stderr or "")
+        m = VERDICT.search(out)
+        line = m.group(1).strip() if m else ""
+        print(f"[smoke] pair verdict: {line or '<none -- the harness did not reach a verdict>'}")
+
+        before = len(failures)
+
+        if m is None:
+            failures.append(f"run {run}: the harness produced no verdict line")
+        else:
+            if "-> PASS" not in line:
+                failures.append(f"run {run}: the pair verdict was not PASS -- {line}")
+            n = LOST.search(line)
+            if n and int(n.group(1)) != 0:
+                failures.append(f"run {run}: lost={n.group(1)} (a client dropped)")
+            d = DUMPS.search(line)
+            if d and int(d.group(1)) != 0:
+                failures.append(f"run {run}: dumps={d.group(1)} (an access violation)")
+            if STALLED.search(line):
+                failures.append(f"run {run}: STALLED (a frozen game logs nothing, and is not a pass)")
+
+        if len(failures) == before:
+            passed += 1
+        else:
+            # one failing run's tail is what a reader needs; keep the output bounded
+            print(f"[smoke]   run {run} failed:")
+            for f in failures[before:]:
+                print(f"    - {f}")
+            if out.strip():
+                print("[smoke]   last 15 lines of that run ---")
+                for ln in out.rstrip().splitlines()[-15:]:
+                    print("    " + ln)
 
     if failures:
-        print("[smoke] FAIL:")
+        print(f"[smoke] FAIL: {passed}/{a.runs} run(s) clean")
         for f in failures:
             print(f"    - {f}")
-        if out.strip():
-            print("[smoke] --- last 15 lines of the harness output ---")
-            for ln in out.rstrip().splitlines()[-15:]:
-                print("    " + ln)
         return 1
 
-    print("[smoke] PASS: pair PASS, lost=0, dumps=0, not stalled")
+    print(f"[smoke] PASS: {passed}/{a.runs} pair(s) PASS, lost=0, dumps=0, not stalled")
     return 0
 
 

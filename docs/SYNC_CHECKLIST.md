@@ -608,6 +608,43 @@ Three caveats the numbers carry:
 Consequently the sign-off cells below stay **blank**: no run here was under the
 prescribed clean modlist, and no two-machine LAN pass has been recorded.
 
+### Re-measured (2026-10-09, one machine, headless): the freeze, and a gate that can see it
+
+The 2026-10-07 blocker "a pair STALLS when the joiner freezes mid-match (2 of 3)" was
+re-measured against the release modlist (`carhacks, crumple, levelhacks, mp`) and its
+exact baseline set (`+ d1cars, sandbox`).
+
+**It does not reproduce on `rio`** -- **14/14 runs PASS**, 60 s each, across both
+modlists, with the joiner's sim running the full ~1500 frames. The 2/3 figure is not a
+property of this build on that level.
+
+**It reproduces every time on `chicago`** (and on the `--menu-host` rig, whose stock
+menu picks Chicago):
+
+| rig | result |
+|---|---|
+| `--level rio` | PASS x14 (sim ~1500 frames, both seats) |
+| `--level havana`, `--level lasvegas` | PASS (sim 751-781, both seats) |
+| `--level chicago` | **STALLED** -- the joiner's sim never leaves frame 1 |
+| `--menu-host` (=> Chicago) | **STALLED** -- same shape |
+| `--level miami` | a *different* failure: the joiner never joins (0/1) |
+
+**What it is, exactly.** Polling the joiner's log while the run is still live: the
+joiner stops dead -- its log freezes at one line count for 30 s while the host's grows
+-- so the whole game LOOP stops, not merely the sim, and with no dump. The new
+`MP_WATCH` lever pins the last frame: `stage frame-done` (the frame hook finished, then
+no further frame). It hangs right after `match started`, while the host plays on.
+Removing `crumple` and then `carhacks` does not change it, so it is mp + levelhacks +
+engine, and city-specific. **Root cause not yet found** -- the next step is the engine
+side of the loop between the frame hook and the sim step.
+
+**The gate could not see any of this.** `mp_localpair`'s verdict checked only
+connection markers, so a joiner hung at sim frame 1 with the link up was reported PASS,
+and `--stall 90` "passed" the frozen run outright. The verdict now requires every seat
+that reached the match to have RUN its sim (`SIM_FLOOR`), prints the last frame per seat
+(`simFrames=a:1051 b:1`), and fails otherwise -- which is what turns the STALLED rows
+above from "sometimes caught" into a hard gate.
+
 ### Triage: what is a blocker, and what is an accepted limit (2026-10-07)
 
 Classified from the baseline above. **Blocker** = the gate cannot pass until it is

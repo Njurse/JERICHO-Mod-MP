@@ -289,6 +289,7 @@ int  MpBeginHost(void);			/* become host: listen + advertise + self row */
 int  MpBeginJoinAsync(const char* host, int port);	/* the join (non-blocking) */
 void MpLeaveSession(void);		/* tear the session down, keep the module */
 void MpKickPlayer(int playerId);	/* HOST: remove a player (sends MP_TAG_KICK) */
+extern const char* gMpStage;		/* the last stage the frame reached (MP_WATCH) */
 void MpSelfRepairCar(void);		/* pause menu: repair the local player's car */
 void MpSelfClearFelony(void);		/* pause menu: clear the local player's wanted level */
 

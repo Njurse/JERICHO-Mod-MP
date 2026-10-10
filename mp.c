@@ -783,10 +783,69 @@ static int MpOptToggleImmune(void* ud, int dir);
 static int MpOptRepair(void* ud, int dir);
 static int MpOptClearFelony(void* ud, int dir);
 
+/* MP_WATCH=<secs> -- the FORENSICS lever for "the game froze but the link is up".
+ *
+ * A stalled match and a hung frame hook look identical from outside (nothing
+ * moves), and they are different bugs. This logs, once every <secs>, the frame
+ * hook's own tick count next to the SIM frame (gMp.frame) and the flags that
+ * explain a stall. Read the two counters together:
+ *   - hookTick keeps rising, simFrame stuck  -> the sim is not stepping (a pause:
+ *     check pauseflag / drawPause, or running/role if the session fell over)
+ *   - the watch line STOPS altogether        -> the frame hook itself is wedged
+ * Unlike MP_HEARTBEAT (which lives in the sim tick and therefore stops WITH it),
+ * this runs from the frame hook, which survives a frozen sim -- so it is the one
+ * that can still speak at the moment of interest. Logging only; inert unless
+ * MP_WATCH is set. */
+extern int pauseflag;			/* declared with the other engine externs below; */
+extern int gDrawPauseMenus;		/* needed here, earlier in the file */
+
+static unsigned long gMpFrameHookTicks;
+
+/* WHERE the frame last got to. Set at the entry and exit of the two big entry
+ * points (the frame hook in mp.c, the sim tick in mp_session.c) and printed by
+ * MP_WATCH. Read it as "the stage the PREVIOUS frame reached":
+ *   sim        the sim tick was entered and never finished -> hung inside it
+ *   sim-done   the sim tick finished
+ *   frame      the frame hook was entered and never finished -> hung inside it
+ *   frame-done the frame hook finished, so the hang is BETWEEN frames (engine side)
+ * Non-static so mp_session.c's tick can set it; declared in mp.h. */
+const char* gMpStage = "boot";
+
+static void MpWatchTick(void)
+{
+	static unsigned long lastMs;
+	const char* s = getenv("MP_WATCH");
+	unsigned long now;
+	int secs;
+
+	if (s == NULL || gMpCtx == NULL)
+		return;
+
+	secs = atoi(s);
+
+	if (secs <= 0)
+		secs = 1;
+
+	now = MpNowMs();
+
+	if (lastMs != 0 && (now - lastMs) < (unsigned long)(secs * 1000))
+		return;
+
+	lastMs = now;
+
+	gMpCtx->jer_log(gMpCtx,
+		"[mp] watch: hookTick %lu simFrame %lu stage %s running %d role %d pauseflag %d drawPause %d\n",
+		gMpFrameHookTicks, gMp.frame, gMpStage, gMp.running, (int)gMp.role, pauseflag, gDrawPauseMenus);
+}
+
 static int MpOnFrame(void* userdata, void* args)
 {
 	(void)userdata;
 	(void)args;
+
+	gMpFrameHookTicks++;	/* one add a frame; the MP_WATCH log reads it */
+	MpWatchTick();		/* prints the stage the LAST frame reached */
+	gMpStage = "frame";
 
 	MpNetPoll(0);
 	MpUiTick();
@@ -1073,6 +1132,7 @@ static int MpOnFrame(void* userdata, void* args)
 		}
 	}
 
+	gMpStage = "frame-done";
 	return JER_RESULT_CONTINUE;
 }
 

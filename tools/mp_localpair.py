@@ -231,6 +231,11 @@ def read_log(run_dir):
 
 HEARTBEAT = re.compile(r"\[mp\] heartbeat: frame (\d+) ")
 
+# A seat that reached the match must have made its SIM run. At ~25 frames/s this is
+# a fraction of a second, so it only catches "the simulation never started" -- not
+# a late join. See the sim_bad check in verdict().
+SIM_FLOOR = 10
+
 
 def read_logs(dirs):
     """Both sides' live log text, plus the total length.
@@ -440,11 +445,22 @@ def verdict(names, dirs, stopped=None, requires=(), menu_host=False):
     launches = host.count("launching: city ") if menu_host else -1
     menu_ok = (not menu_host) or launches == 1
 
+    # The SIM must actually run. Every connection marker can hold while a seat's game
+    # is frozen -- that is exactly how "the joiner hung with its sim on frame 1" got
+    # reported as PASS. So the last heartbeat frame per seat is part of the verdict.
+    seats = [("a", host)] + sorted(others.items())
+    sim_last = {n: (heartbeat_frames(t)[-1] if heartbeat_frames(t) else -1)
+                for n, t in seats}
+    sim_text = " ".join(f"{n}:{sim_last[n]}" for n, _ in seats)
+    sim_bad = [f"{n} (last sim frame {sim_last[n]})" for n, t in seats
+               if "match started" in t and sim_last[n] < SIM_FLOOR]
+
     ok = (host_join and client_ok and zero_byte == 0
           and (client_lost == 0 or known)
           and not dumps and not forbidden
           and not missing_requires
           and menu_ok
+          and not sim_bad
           and not (stalled and not known))
 
     why = ""
@@ -460,6 +476,9 @@ def verdict(names, dirs, stopped=None, requires=(), menu_host=False):
     elif not menu_ok:
         why = (f" -> FAIL (the menu host started the match {launches} time(s); exactly "
                f"one is expected -- a second start is the frontend-driven one)")
+    elif sim_bad:
+        why = (" -> FAIL (a seat was in the match but its simulation never ran: "
+               + "; ".join(sim_bad) + ")")
     else:
         why = f" -> {'PASS' if ok else 'FAIL'}"
 
@@ -469,7 +488,7 @@ def verdict(names, dirs, stopped=None, requires=(), menu_host=False):
     log(f"verdict: host_joins={joins}/{want_joins} "
         f"joiners_accepted={len(others) - len(missing)}/{len(others)} "
         f"lost={client_lost} zero_byte_peers={zero_byte} "
-        f"dumps={len(dumps)} stopped={stopped or 'no'}{why}")
+        f"dumps={len(dumps)} stopped={stopped or 'no'} simFrames={sim_text}{why}")
 
     if missing:
         log(f"    never accepted: {', '.join(missing)}")

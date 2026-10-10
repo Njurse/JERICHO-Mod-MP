@@ -3425,6 +3425,8 @@ void MpLockstepFrame(void)
 	if (!gMp.running)
 		return;
 
+	gMpStage = "sim";
+
 	++gMp.frame;
 
 	/* Re-assert the traffic slot bands FIRST, before anything spawns this frame. A
@@ -3567,6 +3569,8 @@ void MpLockstepFrame(void)
 	MpHitFrame();
 
 	MpNetPoll(0);
+
+	gMpStage = "sim-done";
 }
 
 /* ------------------------------------------------------------------ */

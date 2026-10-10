@@ -204,6 +204,21 @@ while that player is inside it. A missing arrow there is the engine's own clippi
 same the local marker gets), not a sync fault — watch the logged map coordinates instead
 of the picture.
 
+**`MP_WATCH=<secs>` is the lever for "the game froze but the link is up".** It logs,
+from the FRAME hook, the hook's own tick next to the sim frame and a `stage` marker
+(`sim` / `sim-done` / `frame` / `frame-done`), so a frozen run says which half stopped:
+a rising `hookTick` with a stuck `simFrame` is a stalled SIMULATION, a line that stops
+altogether is a wedged frame hook. It lives in the frame hook on purpose — that is the
+one that can still speak when the sim is frozen, where `MP_HEARTBEAT` cannot. Pair it
+with `--stall` well above the run length, or the harness kills the game mid-diagnosis.
+
+**The verdict checks the sim, not only the link.** Every seat that reached the match
+must have RUN its sim, and the line prints `simFrames=a:N b:N`. This matters: a joiner
+can hang with its sim on frame 1 and the link perfectly up, which the connection markers
+on their own report as PASS. `mp_smoke.py --runs N` plays N pairs back to back and fails
+if any one is not clean — a single green run is weak evidence for a defect that shows up
+2 times in 3.
+
 `--until` and `--forbid` are repeatable regexes matched against EITHER log, so a run
 ends when the thing under test has happened instead of sitting out `--seconds`.
 `--stall` watches the heartbeat: **a heartbeat that stops advancing means the
