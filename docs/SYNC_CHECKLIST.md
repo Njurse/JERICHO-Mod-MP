@@ -391,6 +391,19 @@ one page per model its own city cannot classify — the same page for every mode
 polys, which is how ~30 distinct pages produce ~12,000 misses: it is one frequent page per
 car, not thirty rare events.
 
+**Map coverage (added 2026-10-10 after the user's correction).** Every measurement above
+was first taken on the ARENA map — `-mp` is a level selector, so the mp rigs only ever run
+the multiplayer map — and the same conditions were then re-run on FULL-SIZED single-player
+cities with `mp_localpair.py --sp --level rio` / `--level chicago`. Same defect, same
+unresolved pages (VEGAS 67/68 on both cities), same repaired page rows
+(`carTpages[VEGAS] = [41,59,54,62,17,32,18,19]`, `[RIO] = [55,59,57,68,58,60,66,67]`,
+matching the static table), no dumps. So the findings are not an arena artefact — the arena
+is in fact the harder case, since it loaded more guest cities (MIAMI and FRISCO as well).
+Two honest caveats: the ~12,000 figure is an ARENA measurement (the diagnostic caps at 24
+prints per seat, so the full-sized runs are only known to exceed 24), and **the colours
+themselves have never been looked at** on either map type — every colour claim here is
+argued from row numbers, not seen.
+
 **Tried and reverted (2026-10-10): routing the miss branch through the held-city search
 first.** The miss branch reads `idx = (base >= 0) ? base : GetCarPalIndex(tpage);`, so when
 the model's city has a block the all-cities search is never consulted — and the unresolved
