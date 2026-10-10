@@ -310,13 +310,24 @@ arithmetic itself is wrong no amount of waiting conjures the slot.
 What is left is the second source — `[carhacks/net] player N wants X, but no spare
 resident slot is free` (net.c:515) — where the canonical slot the mapping now picks is
 **occupied by a car still in the world**. That is the `keeping slot` release deferral
-doing its job: handing out a slot a live car is still drawn from is the invisible car,
-so it is contention rather than a defect, and it is what the last handful of cars in a
-pass meet. The rig's strictest bar ("every offered car driven") is therefore stricter
-than the design promises at **4.2 changes a second**, which is ~30x a human's rate; the
-honest bars are the ones this section already sets — no meshless change, no silent
-substitution (a change that cannot be slotted now waits and retries, bounded, and says
-so), and a refusal spoken out loud rather than a different car quietly handed over.
+doing its job: handing out a slot a live car is still drawn from is the invisible car.
+
+**But the transient itself was fixable, and is fixed** (`ce3034aa`). A local change held
+TWO slots: the new car was allocated while the old slot stayed `used`, released only in
+`chkNetLocalSwitched` after the adopt. Three seats changing at once then exhausted the
+four-slot pool. The fix retires the old slot FIRST — when the local player's own change
+vacates their slot, it is released before the spare is asked for, so a change holds one
+slot. It is safe because it is synchronous and the guard insists the sole car on the slot
+IS the local player's own `car_data` entry (a shared car or a peer's remote copy fails the
+guard and the ordinary path runs); mp's `MpAdoptCar` also rebuilds when the slot NUMBER is
+unchanged but its MODEL changed (a slot reused in place — `gMpAdoptModel[]`), so the new
+car never draws its polygons over the old car's vertices. And CHICAGO model 11 — the
+"empty truck slot", a list entry with no geometry to import — is no longer offered.
+
+Measured, 3 seats / 45 s: `no room` **x67 → x3**, dumps=0, the pair PASSing throughout.
+Coverage sits at **41 of 48**; the remaining misses are one-shot refusals of three other
+kinds (`not loaded` / `keeping slot` / a residual same-frame collision), not the transient,
+and each is a car the session refuses out loud rather than substitutes.
 
 ### 6b. Busted palettes on a cycling run — the deferral bakes a placeholder row
 
