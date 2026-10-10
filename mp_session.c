@@ -1159,7 +1159,10 @@ static void MpHandleRoster(const unsigned char* p, int len)
 	for (i = 0; i < n; i++)
 	{
 		MP_ROSTER_ENTRY* e = &r.entries[i];
-		MP_PLAYER* pl = MpGetPlayer(e->id);
+		MP_PLAYER* pl;
+
+		e->name[sizeof(e->name) - 1] = '\0';	/* wire string: never trust it terminated */
+		pl = MpGetPlayer(e->id);
 
 		if (pl == NULL)
 			pl = MpAddPlayer(e->id, e->name, e->id == gMp.localPlayerId);
@@ -1482,9 +1485,15 @@ static int MpModsMatchHost(const MP_MOD_INFO* cm, int cn, int strict)
 
 		for (j = 0; j < hn; j++)
 		{
-			if (strcmp(cm[i].id, hm[j].id) == 0)
+			/* strncmp, not strcmp: cm[] is the PEER's mod list (the wire `mods`);
+			 * hm[] above is our own MpBuildManifest. cm's id/version are fixed char
+			 * fields in a struct copied off the wire, so a peer that does not terminate
+			 * one would make strcmp walk past its struct. The field sizes bound the read
+			 * instead -- and bounding both operands is what keeps the comparison exact
+			 * for a well-formed peer. */
+			if (strncmp(cm[i].id, hm[j].id, MP_MOD_ID_MAX) == 0)
 			{
-				if (strict == MP_MODCHECK_EXACT && strcmp(cm[i].version, hm[j].version) != 0)
+				if (strict == MP_MODCHECK_EXACT && strncmp(cm[i].version, hm[j].version, MP_MOD_VER_MAX) != 0)
 					return 0;
 				found = 1;
 				break;
@@ -1502,7 +1511,13 @@ static int MpModsMatchHost(const MP_MOD_INFO* cm, int cn, int strict)
 
 		for (i = 0; i < cn; i++)
 		{
-			if (strcmp(cm[i].id, hm[j].id) == 0)
+			/* strncmp, not strcmp: cm[] is the PEER's mod list (the wire `mods`);
+			 * hm[] above is our own MpBuildManifest. cm's id/version are fixed char
+			 * fields in a struct copied off the wire, so a peer that does not terminate
+			 * one would make strcmp walk past its struct. The field sizes bound the read
+			 * instead -- and bounding both operands is what keeps the comparison exact
+			 * for a well-formed peer. */
+			if (strncmp(cm[i].id, hm[j].id, MP_MOD_ID_MAX) == 0)
 			{
 				found = 1;
 				break;
@@ -1640,6 +1655,7 @@ static void MpHandleHello(int connIndex, const unsigned char* p, int len)
 	}
 
 	memcpy(&h, p, sizeof(h));
+	h.playerName[sizeof(h.playerName) - 1] = '\0';	/* wire string: never trust it terminated */
 	n = h.modCount;
 	if (n > MP_MAX_MODS)
 		n = MP_MAX_MODS;
@@ -2074,6 +2090,7 @@ static void MpHandleReject(const unsigned char* p, int len)
 		return;
 
 	memcpy(&r, p, sizeof(r));
+	r.text[sizeof(r.text) - 1] = '\0';	/* wire string: never trust it terminated */
 
 	if (gMpCtx)
 		gMpCtx->jer_log(gMpCtx, "[mp] join refused: %s (reason %d)\n", r.text, r.reason);
@@ -2094,6 +2111,7 @@ static void MpHandleChannel(int connIndex, const unsigned char* p, int len)
 		return;
 
 	memcpy(&h, p, sizeof(h));
+	h.name[sizeof(h.name) - 1] = '\0';	/* wire string: never trust it terminated */
 
 	if (len < (int)(sizeof(MP_CHANNEL) + (size_t)h.len))
 		return;

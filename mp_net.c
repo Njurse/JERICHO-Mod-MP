@@ -2318,9 +2318,10 @@ static void MpServerTouch(const char* ip, const MP_BEACON* b)
 	if (MpIsHost() && (int)b->port == gMp.config.port)
 		return;
 
-	/* the wire name is a fixed 32-byte field with no guaranteed NUL, so it is
-	 * normalised once here (and compared against the stored copy below) */
-	snprintf(name, sizeof(name), "%s", b->hostName);
+	/* The wire name is a fixed 32-byte field with no guaranteed NUL. The precision
+	 * bounds the READ as well as the write -- a bare %s would walk off the end of the
+	 * beacon before snprintf's own size limit ever applied. */
+	snprintf(name, sizeof(name), "%.*s", (int)sizeof(b->hostName), b->hostName);
 
 	for (i = 0; i < MP_SERVER_SLOTS; i++)
 	{
@@ -2405,6 +2406,10 @@ static void MpBeaconRecv(void)
 
 		if (b.magic != MP_UDP_MAGIC || b.protoVersion != (uint16_t)MP_PROTO_VERSION)
 			continue;
+
+		/* b is our own copy of the datagram, so the peer's name can be terminated
+		 * here once and then read freely below (the debug log below uses %s). */
+		b.hostName[sizeof(b.hostName) - 1] = '\0';
 
 		/* Log every beacon we actually received, with its sender: when a
 		 * server is visible from one machine and not the other, this line is
