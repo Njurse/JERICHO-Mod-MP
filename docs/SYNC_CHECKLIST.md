@@ -558,6 +558,47 @@ that changed *nothing at all* was read as "every seat cycled its whole list". No
 vacuous run fails, a stall fails, a frozen joiner fails, and a refused pick fails -- the
 four ways this delivery has already lied to itself.
 
+### Why `carstress` fails: the spare-slot pool saturates EXACTLY (measured 2026-10-10)
+
+The rig counts `no spare resident slot`, and the engine's own message carries the whole
+arithmetic:
+
+```
+[carhacks/mp] change car: no spare resident slot for VEGAS model 10 (3 car(s) wanted)
+```
+
+The pool is `CHK_IMPORT_SPARE_FIRST` (5) .. `CHK_IMPORT_MAX_SLOTS` (11) -- **six spare
+resident slots**, 5..10. The stress runs **three seats, each changing car** every 700 ms,
+and a change holds its OLD slot until the release judges it free (`deferred - car N still
+on it`, retried every frame). So a seat wants a new slot *while still holding its old
+one*: 3 seats x 2 = **6**, exactly the pool. The stress sits on the boundary, jitters
+over it, and a pick that loses the race is dropped:
+
+```
+[error] [carhacks/net] player 2 wants HAVANA model 3, but no spare resident slot is
+        free - not importing it
+```
+
+Slots are **not leaking**. The log is full of `release: slot N ... released`, and the
+pool report right after them reads `pages 5 used / 25 free`, `CLUT watermark 206 rows
+used / 306 free`. This is a transient exhaustion at the change rate, not a lifetime bug
+-- which is why the "car cycling churns slots" theory died earlier.
+
+What it costs a player, and the part worth fixing: a refused pick does **not** keep the
+car they have. It **resolves to the level's own car of that number** ("riding the level's
+own car of that number"), so picking X can hand back Y -- worse than the change failing.
+
+Candidate fixes, best fit first:
+
+1. **Retry a refused change.** A change is only *advertised* when it actually happens
+   (`MP_CARQ_CHOSEN`, after a successful build), so retrying locally until a slot frees
+   is invisible to the other machines and needs no wire or determinism change. It needs a
+   bound, and it must not sit behind a slot that is never released.
+2. **Never silently substitute.** If a pick cannot be slotted, keep the player's CURRENT
+   car and say so.
+3. **A bigger pool is the wrong lever**: slots 5 and 6 are the LEVEL's own resident cars,
+   so the count comes from the engine's resident pool, not from a constant to raise.
+
 ### Measured baseline (2026-10-07, one machine, headless)
 
 The first recorded run of the rigs against a current build, taken to turn the
