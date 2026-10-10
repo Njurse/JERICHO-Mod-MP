@@ -540,6 +540,24 @@ One command builds the shippable package (regenerate → build → `JERICHO_mp_l
 JERICHO\MODS\mp\tools\pack_lan\sync_lan.bat
 ```
 
+### The gate's verdict, as of 2026-10-10 (one machine, headless)
+
+`python JERICHO/MODS/mp/tools/run_gate.py` is the whole headless gate in one command --
+smoke, carstress and tries, each with its own bar, one exit code. Run against this build
+it says:
+
+| rig | verdict | why |
+| --- | --- | --- |
+| `smoke` | **PASS** | a pair plays 60 s on rio, both seats' sims at ~1500 frames, `lost=0`, `dumps=0` |
+| `carstress` | **FAIL** | 3 seats cycled 249 cars, but only 32-35 of the 48 on offer got covered, with `no room` x25/x28/x24 -- the spare resident slots running out |
+| `tries` | **PASS** | three guest-car joins (rio, vegas, havana), each leaving a trace on a seat |
+
+**So the gate fails, and the failure is the car-swap defect (B3), not the rig.** That is
+the point of wiring it up: `carstress` used to be read as a table, and a 40-second run
+that changed *nothing at all* was read as "every seat cycled its whole list". Now a
+vacuous run fails, a stall fails, a frozen joiner fails, and a refused pick fails -- the
+four ways this delivery has already lied to itself.
+
 ### Measured baseline (2026-10-07, one machine, headless)
 
 The first recorded run of the rigs against a current build, taken to turn the
@@ -699,6 +717,16 @@ limitations 14–20, which are unaffected.
 
 B3 is measured on a 6-module modlist, so it must be re-measured clean before it is
 fixed — the *measurement* is a blocker, the fix may not be.
+
+**Reported 2026-10-10 (needs a reproduction before it is a blocker):** the user saw
+**busted palettes** in a run on this build. No seat log or screenshot was captured with
+it, so it is not yet an item with evidence -- but the cross-city import is exactly where
+it would come from (an imported car's colours ride the `civ_clut` pool bands, and there
+are two written reasons already on file for corruption there: the extra-panel row limit,
+limitation 19, and the shared pool when two guest cities are imported at once, limitation
+15). The gate's `tries` rig already prints the per-set `clut rows` and the palette-walk
+lines it would need; the next step is to make it *fail* on a corrupt palette rather than
+merely print it, which needs the symptom pinned to a line first.
 
 **Tooling defects (each is why something above went unseen) — ALL FOUR FIXED 2026-10-10**
 
