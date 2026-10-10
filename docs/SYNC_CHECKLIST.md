@@ -318,6 +318,37 @@ honest bars are the ones this section already sets — no meshless change, no si
 substitution (a change that cannot be slotted now waits and retries, bounded, and says
 so), and a refusal spoken out loud rather than a different car quietly handed over.
 
+### 6b. Busted palettes on a cycling run — the deferral bakes a placeholder row
+
+Seen by eye on a 3-seat `carstress` run ("I did see busted palettes on that last run"),
+and the logs say exactly why:
+
+```
+cross-city: VEGAS palettes: deferred (200 CLUT(s) in the lump) - which rows to keep is
+            not known until the model is built
+cross-city: VEGAS car palettes deferred MID-LEVEL for the hot load
+cross-city: set 65 has no palette row in VEGAS - baking that city's own row 0
+            (civ_clut 8) rather than a negative index
+```
+
+A mid-level hot load **defers** the imported city's palette rows, because which rows to
+keep is only known once a model that names them is built (that is the reclaim that took
+the table from 57 rows to the 2 the built model needs). A set that needs a row inside
+that window has nothing to read, so it **bakes the city's own row 0** rather than a
+negative index — a deliberate graceful degradation (a wrong colour instead of a crash) —
+and the wrong colour is what the eye sees until the pin resolves the set.
+
+Counts from that run: `palettes deferred MID-LEVEL` x130/x125/x116, `which rows to keep
+is not known` x39/x38/x37, and `palette leak avoided` x116/x110/x103 (the pin declining
+to re-point a row that resolves *below* the import bank — the leak fix, working as
+intended).
+
+So this is not a lost upload or a corrupt CLUT: it is a placeholder chosen on purpose.
+What to do about it is open, and recorded rather than fixed blind, because the
+palette/VRAM layout is delicate (see domain 7) and the deferral is what bought the VRAM
+back. The honest options: make the pin **re-bake** the set's row once the model names it;
+hold the **draw** rather than bake a wrong row; or accept the window and shorten it.
+
 ---
 
 ### 7. Car colour / palette ownership
