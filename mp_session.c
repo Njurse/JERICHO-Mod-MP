@@ -5375,6 +5375,13 @@ static unsigned char sMpCarKeepSet[MP_MAX_PLAYERS];
  * purpose: everything session-shaped (the identity bookkeeping, the keep-gate, the
  * per-player log wording) is gated on `who`; everything that decides whether the
  * car CAN be changed is not. Returns 1 when the car was changed. */
+/* The model each car's dentable verts were last built from. A slot reused IN PLACE
+ * (carhacks' retiring-slot handover) keeps the same slot NUMBER while its MODEL changes,
+ * so `was == slot` alone must not skip the rebuild: that would draw the new model's
+ * polygons over the old model's vertices (the garbled-car bug). -1 = never rebuilt. */
+static int gMpAdoptModel[MAX_CARS];
+static int gMpAdoptModelInit;
+
 static int MpAdoptCar(int carSlot, int city, int model, MP_PLAYER* who)
 {
 	CAR_DATA* cp;
@@ -5382,6 +5389,16 @@ static int MpAdoptCar(int carSlot, int city, int model, MP_PLAYER* who)
 
 	if (carSlot < 0 || carSlot >= MAX_CARS)
 		return 0;
+
+	if (!gMpAdoptModelInit)
+	{
+		int i;
+
+		for (i = 0; i < MAX_CARS; i++)
+			gMpAdoptModel[i] = -1;
+
+		gMpAdoptModelInit = 1;
+	}
 
 	cp = &car_data[carSlot];
 
@@ -5397,8 +5414,8 @@ static int MpAdoptCar(int carSlot, int city, int model, MP_PLAYER* who)
 	{
 		int was = cp->ap.model;
 
-		if (was == slot)
-			return 0;		/* already that car */
+		if (was == slot && gMpAdoptModel[carSlot] == model)
+			return 0;		/* already that car, and its verts match */
 
 		cp->ap.model = slot;
 
@@ -5420,6 +5437,7 @@ static int MpAdoptCar(int carSlot, int city, int model, MP_PLAYER* who)
 		cp->lowDetail = -1;
 
 		CreateDentableCar(cp);
+		gMpAdoptModel[carSlot] = model;
 
 		/* Say it: the car was REBUILT, not merely re-pointed. A hot-loaded car also
 		 * had its cosmetics replaced the moment they landed (JerHotLoadCarCosmetics),
