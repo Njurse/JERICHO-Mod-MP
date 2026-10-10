@@ -642,6 +642,12 @@ and then `carhacks` does not change it (and `crumpleDeformInternal` is
 city-specific. **Root cause not yet found**; it needs a stack of the hung process
 (no debugger here) or a bisect of the physics path.
 
+**One bisect did land.** Skipping `CheckCarToCarCollisions()` (handling.c:325) makes
+Chicago PASS outright (`simFrames=a:750 b:751`), so the hang is reached *through* the
+car-to-car collision pass. That pass's own loops are bounded (`do/while` over
+`MAX_CARS`), so the loop is in what the `mayBeColliding` bits it sets feed next -- or
+the trigger is indirect. That is the next thread to pull.
+
 **The gate could not see any of this.** `mp_localpair`'s verdict checked only
 connection markers, so a joiner hung at sim frame 1 with the link up was reported PASS,
 and `--stall 90` "passed" the frozen run outright. The verdict now requires every seat
