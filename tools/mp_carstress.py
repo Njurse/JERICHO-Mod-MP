@@ -183,6 +183,17 @@ def main():
     print("%d car change(s) in %ds = %.1f/s somewhere in the session"
           % (totals["changes"], a.seconds, totals["changes"] / max(1, a.seconds)))
 
+    # A run that cycled NOTHING is not a pass. This rig's whole job is to cycle cars,
+    # and with zero changes the per-seat lines are vacuous -- measured: a 40 s run
+    # reported "every seat cycled its whole list" having changed no car at all, because
+    # the lever never fired. That is how a run which exercised nothing reads as clean,
+    # which is the same failure this rig exists to catch in the game.
+    if totals["changes"] == 0:
+        print("\nRESULT: NOTHING CYCLED - 0 car changes in %ds. The rig exercised nothing, "
+              "so its clean lines mean nothing either. Give it more seconds (the level load "
+              "comes first) rather than reading this as a pass." % a.seconds)
+        return 1
+
     if coverage:
         for s, got, want in coverage:
             if got < want:

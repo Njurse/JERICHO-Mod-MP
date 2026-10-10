@@ -700,20 +700,24 @@ limitations 14–20, which are unaffected.
 B3 is measured on a 6-module modlist, so it must be re-measured clean before it is
 fixed — the *measurement* is a blocker, the fix may not be.
 
-**Tooling defects (each is why something above went unseen)**
+**Tooling defects (each is why something above went unseen) — ALL FOUR FIXED 2026-10-10**
 
-| # | finding | why it matters |
-| --- | --- | --- |
-| T1 | `mp_crashrate.py`'s breadcrumb regexes no longer match the engine | it cannot report the free-slot correlation it exists for, and its own note says so |
-| T2 | `mp_crashrate.py` scores `clean` from crash dumps alone | a **STALLED** run is counted as clean — this is how B1 stays hidden in a "0/5 crashed" line |
-| T3 | `mp_tries.py` reports PASS on the pair verdict alone | its default try 3 was refused outright (`no car 12 in HAVANA's roster`) and still printed PASS with an empty evidence block |
-| T4 | `mp_tries.py`'s default try 3 names a non-existent car | the documented "havana car 12" example is stale against the roster |
+| # | finding | why it matters | now |
+| --- | --- | --- | --- |
+| T1 | `mp_crashrate.py` read **zero** breadcrumbs, and its own note blamed the regexes | it cannot report the free-slot correlation it exists for | **the regexes were fine** — `civ_ai.c` gates PINGIN on `JERICHO_DIAG_PINGIN`, which the tool never set. Measured after: `pings=6229` per run (was 0), `freeSlots min=6 max=19` |
+| T2 | `mp_crashrate.py` scored `clean` from crash dumps alone | a **STALLED** run counted as clean — how B1 stays hidden inside a "0/5 crashed" line | a stall is a failure now, said in the summary and the exit code |
+| T3 | `mp_tries.py` reported PASS on the pair verdict alone | a refused pick connects, passes every connection check, and printed as a PASS with an **empty evidence block** | a bare pick must leave a trace on a seat, or the try fails |
+| T4 | `mp_tries.py`'s default try 3 was `havana:12` | the number is a ROSTER **SLOT** (it goes straight to `CHK_FORCE_CAR`) and 12 cannot exist in a ten-entry table — the try was refused outright | `havana:5` (its model 9); the help and parse text say SLOT, since calling it a model number is half of how this survived |
+
+And the gate: **`run_gate.py`** runs smoke + carstress + tries behind one exit code and
+is wired into CI's `checks` job, so the same command is the local gate and the CI gate.
 
 **Not a blocker** (measured, and it is good news)
 
 - **The `PingInCivCar` crash class did not reproduce** — 0/5 crash-rate runs, no dumps,
-  and the whole session produced exactly one crash (B2). T1 means this is *absence of
-  evidence*, not proof the fix holds.
+  and the whole session produced exactly one crash (B2). Those runs predate the T1 fix,
+  so they are *absence of evidence*, not proof the fix holds: the rig could not read its
+  own breadcrumbs. Re-run it now that it can.
 - **The frontend-driven second start (roadmap B) did not reproduce** — `--menu-host`
   gives exactly 1 launch in 3/3 runs. What the docs called "the frontend-driven second
   start (**Chicago**)" is better explained by B2: the crash, first measured on that same
