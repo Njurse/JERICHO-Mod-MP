@@ -329,10 +329,10 @@ Coverage sits at **41 of 48**; the remaining misses are one-shot refusals of thr
 kinds (`not loaded` / `keeping slot` / a residual same-frame collision), not the transient,
 and each is a car the session refuses out loud rather than substitutes.
 
-### 6b. Busted palettes on a cycling run — the deferral bakes a placeholder row
+### 6b. Busted palettes on a cycling run — the guest page table is replaced with the wrong pages
 
-Seen by eye on a 3-seat `carstress` run ("I did see busted palettes on that last run"),
-and the logs say exactly why:
+Seen by eye on a 3-seat `carstress` run ("I did see busted palettes on that last run").
+The log pointed at the deferral:
 
 ```
 cross-city: VEGAS palettes: deferred (200 CLUT(s) in the lump) - which rows to keep is
@@ -342,23 +342,53 @@ cross-city: set 65 has no palette row in VEGAS - baking that city's own row 0
             (civ_clut 8) rather than a negative index
 ```
 
-A mid-level hot load **defers** the imported city's palette rows, because which rows to
-keep is only known once a model that names them is built (that is the reclaim that took
-the table from 57 rows to the 2 the built model needs). A set that needs a row inside
-that window has nothing to read, so it **bakes the city's own row 0** rather than a
-negative index — a deliberate graceful degradation (a wrong colour instead of a crash) —
-and the wrong colour is what the eye sees until the pin resolves the set.
+**That is not the cause, and this section used to say it was.** Measured 2026-10-10 with
+`JERICHO_DIAG_PALBAKE=1` (a temporary lever in `CarPalIndexForBuild`'s miss branch, which
+prints the *runtime* page table, the lump's page set, and whether the page is in it):
 
-Counts from that run: `palettes deferred MID-LEVEL` x130/x125/x116, `which rows to keep
-is not known` x39/x38/x37, and `palette leak avoided` x116/x110/x103 (the pin declining
-to re-point a row that resolves *below* the import bank — the leak fix, working as
-intended).
+| city | `carTpages[city]` at runtime | pages its palette lump actually holds | static table in `texture.c:72` |
+| ---- | ---------------------------- | ------------------------------------- | ------------------------------ |
+| HAVANA | `0,1,2,3,4,10,38,39` | `10,35,20,37,51` | `10,36,35,20,37,51,38,39` |
+| CHICAGO | `0,1,2,48,50,51,54,55` | `1,65,62,50,63` | `1,58,65,62,50,63,54,55` |
+| VEGAS | `1,2,3,4,10,17,11,12` | `41,54,62,17,32` | `41,59,54,62,17,32,18,19` |
 
-So this is not a lost upload or a corrupt CLUT: it is a placeholder chosen on purpose.
-What to do about it is open, and recorded rather than fixed blind, because the
-palette/VRAM layout is delicate (see domain 7) and the deferral is what bought the VRAM
-back. The honest options: make the pin **re-bake** the set's row once the model names it;
-hold the **draw** rather than bake a wrong row; or accept the window and shorten it.
+Every page the lump holds is a page from the **static** table, and none of them is in the
+runtime table. The lump is keyed by the city's own car pages — so the static table is
+right and the runtime table is wrong. `CarImportFillCarTpages` (`texture.c:1183`) zeroes a
+guest city's row and refills it from that city's parsed permlist, and that list is not the
+city's page numbers.
+
+Two consequences, and together they are the whole bug:
+
+1. A page the built model names cannot be classified, so its poly bakes the fallback row.
+2. **Worse**, the lump's records cannot be classified either, so `ProcessPalletLumpForRows`
+   puts *all* of them on the same fallback row — which is the block base, i.e. the city's
+   own **first car row** — and they overwrite each other there. Several imported cars
+   sharing one wrong palette is exactly what the eye sees.
+
+So the deferral is innocent, and "the row is unknowable" was wrong: the row is knowable,
+we are asking the wrong table for it.
+
+Frequency on a 35 s 3-seat run: the bakes hit the probe's own 24-per-seat cap on all three
+seats, so their true rate is above 24; the four page/city pairs seen were CHICAGO 58,
+HAVANA 51, VEGAS 67 and VEGAS 68. Note that the long-standing
+`set %d has no palette row` line is capped at **4** by `sPalBakeMiss++ < 4`, so it can
+never report the rate — the same "an assertion that can be suppressed by volume is not an
+assertion" trap the VRAM notes warn about.
+
+**The one thing not yet settled**, and the fix depends on it: what the permlist field
+actually is. HAVANA's list parses to `0,1,2,3,4,10` where its real car pages are
+`10,35,20,37,51`, which looks like an **index** being read as a page. Until that is
+confirmed, do not "fix" it by restoring the static table alone — the static row is only
+correct for the four Driver 2 cities, and the whole reason `CarImportFillCarTpages` exists
+is a guest city whose static row is zeros.
+
+The exception, a different case: VEGAS 67/68 are not VEGAS's pages at all — RIO's static
+row carries 67 and 68 — and VEGAS's lump does not hold them. A page shared by two cities is
+a page-number collision question (domain 7), not a page-table one.
+
+Still recorded rather than fixed, because the palette/VRAM layout is delicate and a wrong
+table is still an upload that succeeds: the plan is to fix the parse, then re-measure.
 
 ---
 
