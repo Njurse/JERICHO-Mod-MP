@@ -1845,6 +1845,13 @@ void MpKickPlayer(int playerId)
 		gMpCtx->jer_log(gMpCtx, "[mp] kicking player %d (conn %d)\n", playerId, conn);
 
 	MpSendConn(conn, MP_TAG_KICK, MP_FLAG_RELIABLE, &k, sizeof(k));
+
+	/* The removal on THIS side is the kicked client's own LEAVE (MpLeaveSession
+	 * replies with one), exactly as for any other leaver, which is what keeps the
+	 * roster/car cleanup in one place. A wedged client that never replies is reaped
+	 * by the ordinary 30 s liveness check. (Half-closing here instead was tried and
+	 * reverted: the FIN raced the KICK, so the client saw a bare connection loss
+	 * and never printed "kicked by the host".) */
 }
 
 /* MP_TAG_KICK -- the host removed us. Take the SAME clean-leave path a
@@ -1857,6 +1864,11 @@ static void MpHandleKick(int connIndex, const unsigned char* p, int len)
 	MP_KICK k;
 
 	(void)connIndex;
+
+	/* Only the HOST kicks, so a KICK is only meaningful on a CLIENT. Acting on one
+	 * received as the host (or with no session up) would let a peer remove us. */
+	if (gMp.role != MP_ROLE_CLIENT)
+		return;
 
 	if (len >= (int)sizeof(MP_KICK))
 		memcpy(&k, p, sizeof(k));
