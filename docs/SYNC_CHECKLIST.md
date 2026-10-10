@@ -642,38 +642,36 @@ and then `carhacks` does not change it (and `crumpleDeformInternal` is
 city-specific. **Root cause not yet found**; it needs a stack of the hung process
 (no debugger here) or a bisect of the physics path.
 
-**One bisect did land.** Skipping `CheckCarToCarCollisions()` (handling.c:325) makes
-Chicago PASS outright (`simFrames=a:750 b:751`), so the hang is reached *through* the
-car-to-car collision pass. That pass's own loops are bounded (`do/while` over
-`MAX_CARS`), so the loop is in what the `mayBeColliding` bits it sets feed next -- here
-that is `CarCarCollision3` -> `collided3d` (**bcoll3d.c:113**), which contains an
-**inherited infinite loop**:
+**One bisect landed, and one theory died.** Skipping `CheckCarToCarCollisions()`
+(handling.c:325) makes Chicago PASS outright (`simFrames=a:750 b:751`), so the hang is
+reached *through* the car-to-car collision pass.
 
-```c
-while (PointFaceCheck(cp0, cp1, i, least, 1) >= 0)   /* outer: this axis overlaps */
-{
-    if (PointFaceCheck(cp1, cp0, i, least, -1) >= 0) /* inner: the other way too */
-    { i += 2; if (i <= 2) continue; return 1; }
-    /* inner failed -> falls through with `i` UNCHANGED, so the outer is re-tested
-       with the same i. PointFaceCheck stores the smaller depth in least, so once
-       that is settled the outer result is stable and it never ends. */
-}
-```
+The obvious suspect was `collided3d` (**bcoll3d.c:113**), whose `while` looks like it
+re-tests the same `i` forever when the two face checks disagree. **Measured, it is not
+the hang.** A one-shot diagnostic in that branch fired exactly **once** in a whole
+Chicago run, with `least->depth = -3` -- a loop about to exit, because `PointFaceCheck`
+stores the *smaller* depth in `least`, so the next outer check returns negative -- and
+the run **still stalled**. A `break` there fixed nothing (results alternated
+stall/crash: noise). `CarCarCollision3` is a three-line wrapper and `PointFaceCheck`'s
+only loop is a bounded `for (k = 0; k < 3; k++)`, so the hang is not in this file
+either. The earlier claim in this document -- and the commit `0deeb632` whose message
+repeats it -- that named this loop as the mechanism was **wrong, and is retracted here**.
 
-That is the hang's mechanism: it needs the pose where `cp0` faces `cp1` but `cp1` does
-not face `cp0` back -- rare in a normal race, but two player cars do it. **The file is
-byte-identical to upstream** `OpenDriver2/REDRIVER2`, so this is inherited, not a
-JERICHO regression.
+**What IS measured about the freeze:**
 
-**Behind the hang is a second defect.** Making the loop advance `i` on every iteration
-(keeping both axes tested, so only the hanging case's answer changes) removes the hang
--- and the joiners then CRASH `3/3` instead (`dumps=1`, sim frame 1). So the hang and
-the crash are one bad car-to-car collision with two faces, and the hang was masking the
-crash (which is the 2026-10-07 `crumpleDeformInternal` one). Fixing this properly means
-finding why the collision between the two player cars is degenerate on Chicago -- the
-engine's collision data for that first contact -- and that is still open. Neither patch
-ships: a `break` there changes normal collision results too, and the advance variant
-trades a silent hang for a crash.
+- It is **not a pause**. A probe in mp's draw overlay -- the one place that still runs
+  when the sim does not -- printed `pauseflag 0 paused 0` on the frozen seat, and that
+  seat's overlay logged once and then stopped altogether: the whole game loop stops.
+- It strikes **either seat**, not only the joiner (measured: the host froze at sim frame
+  1 in one run, the joiner in another).
+- It lands **early in a Chicago match** (frozen seat at sim frame 1, ~63 frame-hook
+  ticks), and only when a car-to-car pair is marked colliding.
+
+**Next step:** bisect the collision *resolution*, not the detection -- the block between
+`CarCarCollision3` returning non-zero and `DamageCar3D` (handling.c:474-528) -- one stage
+at a time. Note the instrument trap: the harness **kills** a stalled run, so the log tail
+can be lost and a "last stage" can mislead; a probe that survives the kill is worth
+having before trusting any of it.
 
 **The gate could not see any of this.** `mp_localpair`'s verdict checked only
 connection markers, so a joiner hung at sim frame 1 with the link up was reported PASS,
