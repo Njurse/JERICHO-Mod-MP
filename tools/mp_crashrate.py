@@ -48,6 +48,13 @@ def one_run(i, args):
     if args.onfoot:
         env["MP_TEST_ONFOOT"] = str(args.onfoot)
 
+    # The engine's PINGIN breadcrumbs are real but SWITCHED OFF by default:
+    # civ_ai.c gates them on JERICHO_DIAG_PINGIN ("it is off unless
+    # JERICHO_DIAG_PINGIN=1 is set"). Without it this tool reads zero breadcrumbs
+    # and cannot report the correlation it exists for -- which is exactly what it
+    # used to do, and then blamed the regexes. The regexes were fine.
+    env["JERICHO_DIAG_PINGIN"] = "1"
+
     cmd = [sys.executable, os.path.join(HERE, "mp_localpair.py"),
            "--seconds", str(args.seconds), "--settle", str(args.settle), "--keep"]
     r = subprocess.run(cmd, capture_output=True, text=True, env=env, timeout=args.seconds + 120)
@@ -79,12 +86,19 @@ def one_run(i, args):
         if os.path.isfile(os.path.join(lp.DEFAULT_GAME_DIR, ".mp-pair", side, "JERICHO.dmp")):
             dumps += 1
 
+    # A run is BAD if it crashed OR stalled. Scoring from dumps alone is how a
+    # frozen pair read as "clean": a stalled run produces no dump at all, so the
+    # one failure mode this test is most likely to see was the one it could not
+    # name. (The harness kills a stalled run, so it is also the reason a crash
+    # rate can look healthy while the match is unplayable.)
+    stalled = "STALLED" in verdict
     crashed = dumps > 0 or "dumps=1" in verdict or "dumps=2" in verdict
+    bad = crashed or stalled
 
-    print(f"  run {i}: {'CRASHED' if crashed else 'clean  '}  dumps={dumps} "
-          f"pings={pings}  freeSlots min={min(frees) if frees else '-'} "
+    print(f"  run {i}: {('STALLED' if stalled else 'CRASHED') if bad else 'clean  '}  "
+          f"dumps={dumps} pings={pings}  freeSlots min={min(frees) if frees else '-'} "
           f"max={max(frees) if frees else '-'}  slots={sorted(set(slots))}")
-    return crashed, min(frees) if frees else None, pings
+    return bad, min(frees) if frees else None, pings
 
 
 def main():
@@ -105,23 +119,24 @@ def main():
     for i in range(1, a.runs + 1):
         rows.append(one_run(i, a))
 
-    crashed = sum(1 for c, _, _ in rows if c)
-    free_at_crash = [f for c, f, _ in rows if c and f is not None]
-    free_clean = [f for c, f, _ in rows if not c and f is not None]
+    bad = sum(1 for b, _, _ in rows if b)
+    free_at_crash = [f for b, f, _ in rows if b and f is not None]
+    free_clean = [f for b, f, _ in rows if not b and f is not None]
     nopings = sum(1 for _, _, p in rows if p == 0)
 
     print()
-    print(f"=== {crashed}/{len(rows)} crashed ===")
+    print(f"=== {bad}/{len(rows)} failed (crashed or stalled) ===")
     if free_at_crash and free_clean:
-        print(f"    freeSlots on crashed runs: {sorted(free_at_crash)}")
-        print(f"    freeSlots on clean   runs: {sorted(free_clean)}")
+        print(f"    freeSlots on failed runs: {sorted(free_at_crash)}")
+        print(f"    freeSlots on clean  runs: {sorted(free_clean)}")
     if nopings:
-        print(f"    NOTE {nopings} run(s) produced NO PingInCivCar breadcrumbs at all -- "
-              f"those are not evidence about this crash, whatever their verdict")
-    # Exit non-zero on any crash, so "the crash fix holds" can be a command that
+        print(f"    NOTE {nopings} run(s) produced NO PingInCivCar breadcrumbs. "
+              f"JERICHO_DIAG_PINGIN is set by this tool, so that now means the engine "
+              f"did not reach the breadcrumb -- not that the switch was missing.")
+    # Exit non-zero on ANY failure, so "the crash fix holds" can be a command that
     # fails rather than a table somebody has to read. A crash-free run of N is the
-    # claim; this is what makes it checkable in a chain.
-    return 1 if crashed else 0
+    # claim; calling a stall a failure is what makes it true.
+    return 1 if bad else 0
 
 
 if __name__ == "__main__":

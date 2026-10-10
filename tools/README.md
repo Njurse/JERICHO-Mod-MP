@@ -21,6 +21,35 @@ launchers they ship, and its own README explaining which to use.
 | join, by hand, two machines | `mp_join.bat` |
 | drive the real game as a client with no second machine | `mp_mock_host.bat` |
 | leave a session running with no game window | `mp_dedi.bat` |
+| answer "is this build shippable?" in one command | **`run_gate.py`** |
+
+## The delivery gate — `run_gate.py`
+
+```
+python JERICHO/MODS/mp/tools/run_gate.py
+python .../run_gate.py --runs 6 --seconds 60      # the freeze bar, for a release
+python .../run_gate.py --only smoke               # one rig
+python .../run_gate.py --require-assets           # for a release job
+```
+
+One command, one exit code, over the three headless rigs — because a gate that has to
+be read is a gate that gets skipped. Each rig carries the bar it has to clear:
+
+| rig | bar |
+| --- | --- |
+| `smoke` | verdict PASS, `lost=0`, `dumps=0`, not stalled, and **both seats' sims actually ran** (`simFrames`) |
+| `carstress` | 3 seats cycle the whole car list: no dumps, no freeze, and **every seat covered its list** |
+| `tries` | a client joins and picks a guest car, three times: each try passes its checks **and leaves a trace** |
+
+Exit codes mirror `mp_smoke.py`: **0** every rig passed, **1** a rig failed, **2**
+skipped (no game assets), **3** `--require-assets` and no assets. The rigs need ~1.6 GB
+of assets and a display, so they **skip** where they cannot run — a release job passes
+`--require-assets` so "no assets" is a failure (3) rather than a quiet pass.
+
+Every bar there is a bug that was once believed. The `simFrames` bar exists because a
+joiner frozen at sim frame 1 with the link perfectly up used to be reported as PASS; the
+coverage bar is the spare-slot exhaustion; the trace bar is a refused pick reading as a
+pass. If a rig is ever loosened, name the measurement that says it can be.
 
 ## `mp_pair.bat` — two real instances, one PC
 

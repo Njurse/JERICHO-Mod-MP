@@ -7,7 +7,7 @@ This is the automation of the shape the user kept testing by hand:
     host used chicago car slot 1
     try 1: client used rio car 1
     try 2: client used vegas car 1
-    try 3: client used havana car 12
+    try 3: client used havana car 5
 
 Each try is a full pair-run of its own (mp_localpair.py), so the client starts from
 nothing, exactly as a fresh join does -- which is what makes a try a try. The
@@ -22,7 +22,7 @@ are read separately:
 
 Usage:
     python JERICHO/MODS/mp/tools/mp_tries.py                 # the three tries above
-    python .../mp_tries.py --try rio:1 --try havana:12 --keep --seconds 70
+    python .../mp_tries.py --try rio:1 --try havana:5 --keep --seconds 70
     python .../mp_tries.py --require "draws exactly that"    # a check per try
     python .../mp_tries.py --scenario T2 --keep              # a car-switch release scenario
     python .../mp_tries.py --scenario all --keep             # T2, T3, T5 and T6
@@ -67,7 +67,13 @@ DEFAULT_GAME_DIR = os.path.join(REPO_ROOT, "src_rebuild", "bin", "Release_dev")
 CITY_INDEX = {"chicago": 0, "havana": 1, "vegas": 2, "rio": 3}
 CITY_DIR = {"chicago": "chicago", "havana": "havana", "vegas": "lasvegas", "rio": "rio"}
 
-DEFAULT_TRIES = ["rio:1", "vegas:1", "havana:12"]
+# The number after the colon is a ROSTER SLOT, not a model number: it goes straight to
+# the module's CHK_FORCE_CAR, and the frontend slot->model table maps slot 1 -> model 2
+# (see CAR_SLOT_TO_MODEL below). The old default was havana:12 -- a slot that cannot
+# exist in a ten-entry table -- so try 3 asked for a car the roster does not hold, was
+# refused outright, and STILL reported PASS, because the pair verdict only says the two
+# games talked. Havana slot 5 is a real one (its model 9, the level's own car).
+DEFAULT_TRIES = ["rio:1", "vegas:1", "havana:5"]
 
 # What each seat says about the cars. Read from both seats, printed per try: these are
 # the lines that told us "correct on the host, still the old car on the client".
@@ -261,7 +267,7 @@ def identity_check(host_text, client_text, guest_pick=True):
 def parse_try(spec):
     """`city:model` -> (city, model, city_index)."""
     if ":" not in spec:
-        raise SystemExit(f"[tries] --try wants CITY:MODEL (e.g. havana:12), got '{spec}'")
+        raise SystemExit(f"[tries] --try wants CITY:SLOT (e.g. havana:5), got '{spec}'")
 
     city, model = spec.split(":", 1)
     city = city.strip().lower()
@@ -422,6 +428,15 @@ def run_try(index, spec, args, scenario=None, name=None):
             if not re.search(pattern, seat_text.get(seat, "")):
                 notes.append(f"{seat}: {why}")
 
+    # A bare pick must LEAVE A TRACE. The pair verdict only says the two games talked:
+    # a refused pick -- the old default was exactly this, a slot the roster cannot hold
+    # -- still connects, still passes every connection check, and was reported as a
+    # passing try with an EMPTY evidence block. If neither seat's log names the car,
+    # the pick did not happen, whatever the verdict says.
+    if scenario is None and not identity:
+        problems.append("the pick left no trace on either seat: neither log names the "
+                        "client's car, so a refused pick reads as a pass")
+
     # An identity problem fails the try even when the harness said PASS: "correct on the
     # host but the client was still the old car" is exactly the failure a verdict cannot see.
     if problems:
@@ -444,9 +459,10 @@ def run_try(index, spec, args, scenario=None, name=None):
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--try", action="append", default=[], dest="tries", metavar="CITY:MODEL",
-                    help=f"what the joining client picks (repeatable; default "
-                         f"{', '.join(DEFAULT_TRIES)})")
+    ap.add_argument("--try", action="append", default=[], dest="tries", metavar="CITY:SLOT",
+                    help=f"what the joining client picks, as a ROSTER SLOT (repeatable; default "
+                         f"{', '.join(DEFAULT_TRIES)}). A slot, not a model number: it is "
+                         f"passed to the module's CHK_FORCE_CAR, which takes a slot")
     ap.add_argument("--host-city", default="chicago",
                     help="the city the host hosts in (default chicago - the level's own "
                          "city, so every client pick is a guest)")
