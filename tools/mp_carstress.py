@@ -115,8 +115,10 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--players", type=int, default=3, help="one host plus this many - 1 (default 3)")
     ap.add_argument("--seconds", type=int, default=60)
-    ap.add_argument("--interval-ms", type=int, default=700,
-                    help="how often each seat changes car (default 700, as asked for)")
+    ap.add_argument("--interval-ms", type=int, default=1000,
+                    help="how often each seat changes car (default 1000ms, ~3/s across three "
+                         "seats -- hot-loading faster than this makes the game crawl and no "
+                         "player changes that fast anyway)")
     ap.add_argument("--game-dir", default=os.path.join(
         os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(HERE)))),
         "src_rebuild", "bin", "Release_dev"))
@@ -145,7 +147,7 @@ def main():
           % (a.players, a.interval_ms, max(1, a.interval_ms // a.players)))
     print("        " + " ".join(cmd))
     print()
-
+    cmd.append("--vramview")
     out = subprocess.run(cmd, capture_output=True, text=True).stdout
     verdict = VERDICT.search(out)
 
