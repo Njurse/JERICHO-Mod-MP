@@ -583,7 +583,7 @@ it says:
 | rig | verdict | why |
 | --- | --- | --- |
 | `smoke` | **PASS** | a pair plays 60 s on rio, both seats' sims at ~1500 frames, `lost=0`, `dumps=0` |
-| `carstress` | **FAIL** | 3 seats cycled 249 cars, but only 32-35 of the 48 on offer got covered, with `no room` x25/x28/x24 -- the spare resident slots running out |
+| `carstress` | **FAIL** | 3 seats cycled 249 cars; coverage 34/33/35 -> **40/40/38 of 48** after the `chkImportCanonicalSlot` fix (0541ef83), and `no room` x162/x156/x132 -> x67 on one seat. The residue is neither the pool nor the arithmetic: it is `net.c:515`, the canonical slot occupied by a car still in the world (see section 6a) |
 | `tries` | **PASS** | three guest-car joins (rio, vegas, havana), each leaving a trace on a seat |
 
 **So the gate fails, and the failure is the car-swap defect (B3), not the rig.** That is
