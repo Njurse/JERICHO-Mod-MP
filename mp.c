@@ -847,6 +847,11 @@ static int MpOnFrame(void* userdata, void* args)
 	MpWatchTick();		/* prints the stage the LAST frame reached */
 	gMpStage = "frame";
 
+	/* A Change car that asked for a car this machine does not hold yet and was told to
+	 * wait (a spare slot busy for a frame or two): retry it here, once a frame, in the
+	 * sim, which is where a level's resident slots mean anything. */
+	MpCarChangeWaitTick();
+
 	MpNetPoll(0);
 	MpUiTick();
 

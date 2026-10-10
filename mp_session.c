@@ -269,6 +269,10 @@ void MpLeaveSession(void)
 	MpDiscoveryStop();
 	MpResetPlayers();
 
+	/* ...and a Change car still waiting for a spare slot: the world it was waiting on
+	 * is going away, so the wait is not ours to keep. */
+	MpCarChangeWaitForget();
+
 	gMp.role = MP_ROLE_NONE;
 	gMp.connected = 0;
 	gMp.running = 0;
@@ -5662,7 +5666,93 @@ static const char* MpChangeCarRefusal(int city, int model)
 	return JerCarSlotRefusal(slot);
 }
 
+/* ------------------------------------------------------------------ */
+/* A CHANGE CAR THAT HAD TO WAIT                                        */
+/*                                                                      */
+/* MP_CARQ_LOAD can legitimately answer "not yet". The pool is six      */
+/* spare resident slots (CHK_IMPORT_SPARE_FIRST .. CHK_IMPORT_MAX_SLOTS) */
+/* and a change HOLDS its old slot until the release judges it free, so  */
+/* with several players changing at once the canonical slot can be busy  */
+/* for a frame or two. Measured: three seats changing every 700 ms       */
+/* saturate the pool exactly -- 3 x (held old + wanted new) = 6 -- and   */
+/* picks were refused.                                                   */
+/*                                                                      */
+/* Waiting is the right answer, and it is safe because a change is only  */
+/* ADVERTISED once it has happened (MpCarQueryChosen on success), so a   */
+/* frame or two of waiting here is invisible to the other machines: no   */
+/* wire change and no determinism change. What is NOT safe is carrying   */
+/* on and adopting the car regardless -- then the car points at a        */
+/* resident model whose mesh this machine does not hold, which IS the    */
+/* invisible car the instrument below describes, and a crash if the      */
+/* model is not resident at all.                                         */
+/*                                                                      */
+/* Bounded, because a slot can also be held for a reason that outlives   */
+/* the change; after MP_CHANGE_WAIT_FRAMES the wait is dropped and the   */
+/* refusal is reported like any other.                                   */
+/* ------------------------------------------------------------------ */
+#define MP_CHANGE_WAIT_FRAMES	90	/* ~3.5 s at 25 fps */
+#define MP_CHANGE_RETRY_EVERY	5	/* retry every N frames, not every frame */
+
+static struct
+{
+	int active;
+	int city;
+	int model;
+	int framesLeft;
+	int told;
+} gMpCarChangeWait;
+
+static int MpChangeCarRun(int city, int model, int isRetry);
+
 int MpChangeCar(int city, int model)
+{
+	return MpChangeCarRun(city, model, 0);
+}
+
+/* Forget a wait that is no longer relevant (level reset, leaving the session). */
+void MpCarChangeWaitForget(void)
+{
+	gMpCarChangeWait.active = 0;
+}
+
+/* One retry a frame, from the frame hook (the world is up there, which is what makes a
+ * level's resident slots mean anything). The wait owns framesLeft, so MpChangeCarRun
+ * only ever CLEARS the wait -- it never re-arms one on a retry. */
+void MpCarChangeWaitTick(void)
+{
+	if (!gMpCarChangeWait.active)
+		return;
+
+	if (!gMpCarChangeWait.told)
+	{
+		gMpCarChangeWait.told = 1;
+
+		MpNotifyf("Change car: %s model %d - waiting for a spare slot",
+			MpCarCityName(gMpCarChangeWait.city), gMpCarChangeWait.model);
+	}
+
+	if (--gMpCarChangeWait.framesLeft <= 0)
+	{
+		int city = gMpCarChangeWait.city;
+		int model = gMpCarChangeWait.model;
+
+		gMpCarChangeWait.active = 0;
+
+		MpNotifyf("Change car refused: %s model %d - %s", MpCarCityName(city), model,
+			MpChangeCarRefusal(city, model));
+		return;
+	}
+
+	/* One retry a FRAME is too eager: the pool frees in frames, not microseconds, and
+	 * each attempt costs a log line and a walk of the set. Measured: an unthrottled
+	 * retry turned a run's handful of "no room" lines into 500+ of them. */
+	if ((gMpCarChangeWait.framesLeft % MP_CHANGE_RETRY_EVERY) != 0)
+		return;
+
+	MpChangeCarRun(gMpCarChangeWait.city, gMpCarChangeWait.model, 1);
+}
+
+static int MpChangeCarRun(int city, int model, int isRetry)
 {
 	MP_PLAYER* me = MpLocalPlayer();
 	int changed;
@@ -5700,9 +5790,25 @@ int MpChangeCar(int city, int model)
 		/* NOT A CAR THIS MACHINE HOLDS YET? Ask for it, exactly as the session path
 		 * does below. The picker offers a city's whole roster, so choosing one IS the
 		 * request that imports it -- without this a cross-city or Driver 1 pick could
-		 * be selected and then always refused, and the roster would be a lie. */
-		if (MpResidentSlotForCar(city, model) < 0)
-			MpCarQueryLoad(city, model);
+		 * be selected and then always refused, and the roster would be a lie.
+		 *
+		 * The ANSWER is used now: "not yet" means wait (see the block above the
+		 * function), never adopt. */
+		if (MpResidentSlotForCar(city, model) < 0 && !MpCarQueryLoad(city, model))
+		{
+			if (!isRetry)
+			{
+				gMpCarChangeWait.active = 1;
+				gMpCarChangeWait.city = city;
+				gMpCarChangeWait.model = model;
+				gMpCarChangeWait.framesLeft = MP_CHANGE_WAIT_FRAMES;
+				gMpCarChangeWait.told = 0;
+			}
+
+			return 0;
+		}
+
+		gMpCarChangeWait.active = 0;	/* the load landed (or was never needed) */
 
 		changed = MpAdoptCar(slot, city, model, NULL);
 
@@ -5774,16 +5880,35 @@ int MpChangeCar(int city, int model)
 	if (me->carId < 0 || me->carId >= MAX_CARS)
 		return 0;
 
-	if (gMpCtx != NULL)
+	/* NOT logged on a retry: a retry is not a new ask, and the carstress rig counts
+	 * changes from this exact line (measured: an unthrottled retry inflated its
+	 * "changes" figure 7x and made the coverage number meaningless). */
+	if (gMpCtx != NULL && !isRetry)
 		gMpCtx->jer_log(gMpCtx, "[mp] change car: we asked for %s model %d (slot %d)\n",
 			MpCarCityName(city), model, me->carId);
 
 	/* Not a car this machine holds? Ask whoever can to make it available (carhacks'
 	 * import + hotload), which is also what tells the other machines to fold it in.
 	 * Only THEN try the swap: pointing the car at a mesh that is not loaded is a
-	 * crash, not a cosmetic glitch (see MpAdoptRemoteCar). */
-	if (MpResidentSlotForCar(city, model) < 0)
-		MpCarQueryLoad(city, model);
+	 * crash, not a cosmetic glitch (see MpAdoptRemoteCar).
+	 *
+	 * So the answer is used: "not yet" (a spare slot busy for a frame or two) is a
+	 * wait, not a refusal, and it must NOT fall through to the swap. */
+	if (MpResidentSlotForCar(city, model) < 0 && !MpCarQueryLoad(city, model))
+	{
+		if (!isRetry)
+		{
+			gMpCarChangeWait.active = 1;
+			gMpCarChangeWait.city = city;
+			gMpCarChangeWait.model = model;
+			gMpCarChangeWait.framesLeft = MP_CHANGE_WAIT_FRAMES;
+			gMpCarChangeWait.told = 0;
+		}
+
+		return 0;
+	}
+
+	gMpCarChangeWait.active = 0;	/* the load landed (or was never needed) */
 
 	changed = MpAdoptRemoteCar(me, city, model);
 
