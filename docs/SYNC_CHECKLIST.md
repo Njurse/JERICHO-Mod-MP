@@ -376,19 +376,37 @@ HAVANA 51, VEGAS 67 and VEGAS 68. Note that the long-standing
 never report the rate — the same "an assertion that can be suppressed by volume is not an
 assertion" trap the VRAM notes warn about.
 
-**The one thing not yet settled**, and the fix depends on it: what the permlist field
-actually is. HAVANA's list parses to `0,1,2,3,4,10` where its real car pages are
-`10,35,20,37,51`, which looks like an **index** being read as a page. Until that is
-confirmed, do not "fix" it by restoring the static table alone — the static row is only
-correct for the four Driver 2 cities, and the whole reason `CarImportFillCarTpages` exists
-is a guest city whose static row is zeros.
+**Settled**: the permlist field is a page, not an index (`texture.c:1527` compares
+`permlist[i].x` against a tpage), it is simply the **permanent** page list rather than the
+car-page list — which is why refilling `carTpages` from it was wrong. The static row is
+only correct for the four Driver 2 cities, and the whole reason `CarImportFillCarTpages`
+exists is a guest whose static row is zeros, which is why the fix keeps the refill for
+exactly that case.
+
+**The remaining traffic, named** (from `JERICHO_DIAG_PALBAKE`'s set dump, which prints
+what a BUILT car names): a car's sets split in two. The ones that are its city's own pages
+now resolve (`HAVANA 51→29, 38→30, 39→31`; `CHICAGO 62→19`; `VEGAS 32→13`), and exactly
+one page per model its own city cannot classify — the same page for every model of a city
+(VEGAS 4, HAVANA 21, RIO 1, CHICAGO 66/67). That one page carries most of the model's
+polys, which is how ~30 distinct pages produce ~12,000 misses: it is one frequent page per
+car, not thirty rare events.
+
+**Tried and reverted (2026-10-10): routing the miss branch through the held-city search
+first.** The miss branch reads `idx = (base >= 0) ? base : GetCarPalIndex(tpage);`, so when
+the model's city has a block the all-cities search is never consulted — and the unresolved
+pages are often ones another held city carries (CHICAGO 66/67 are RIO's own spec pages;
+VEGAS's 4 sits at index 6 of MIAMI's row). The trial preferred a real search hit over the
+block base. Measured with the set dump's `o`/`f` columns (own-city row / row the bake
+actually uses): it converted only a MINORITY of the unresolved pages to another city's row
+(~126 of ~450 set-instances: `f6` for VEGAS 4 via MIAMI, `f2`, `f7`) and left the majority
+exactly as it was (`f24`/`f0`/`f8`/`f16` — the block base or 0, because nothing holds those
+pages at all). So it swapped one wrong row for another in a minority of cases rather than
+fixing colours, and the code is back as it was. The set dump keeps the `o`/`f` columns, so
+a better candidate can be measured the same way.
 
 The exception, a different case: VEGAS 67/68 are not VEGAS's pages at all — RIO's static
 row carries 67 and 68 — and VEGAS's lump does not hold them. A page shared by two cities is
 a page-number collision question (domain 7), not a page-table one.
-
-Still recorded rather than fixed, because the palette/VRAM layout is delicate and a wrong
-table is still an upload that succeeds: the plan is to fix the parse, then re-measure.
 
 ---
 
