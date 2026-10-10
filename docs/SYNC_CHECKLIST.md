@@ -765,9 +765,16 @@ it, so it is not yet an item with evidence -- but the cross-city import is exact
 it would come from (an imported car's colours ride the `civ_clut` pool bands, and there
 are two written reasons already on file for corruption there: the extra-panel row limit,
 limitation 19, and the shared pool when two guest cities are imported at once, limitation
-15). The gate's `tries` rig already prints the per-set `clut rows` and the palette-walk
-lines it would need; the next step is to make it *fail* on a corrupt palette rather than
-merely print it, which needs the symptom pinned to a line first.
+15).
+
+**The one existing palette check cannot see this.** `[mp] palette: player N reports M,
+drawn as M` compares the CLUT **index** the draw resolves (mp_session.c), and every run
+on file reads either a match or the expected `drawn as 0 (corrected: not their car here)`
+-- because the index is not what breaks. A busted palette is the ROWS' *contents*, so
+catching it needs a row-content check: read the rows back (`JerichoClutRead`, the
+machinery `tools/paletteedit.py` and `cc_palette_map.txt` already use) and compare them
+against the source row the import baked. That is the instrument to build before this can
+become a check rather than an anecdote.
 
 **Tooling defects (each is why something above went unseen) — ALL FOUR FIXED 2026-10-10**
 
