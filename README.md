@@ -30,9 +30,19 @@ Host Game, then Take a Ride, hands over to the ENGINE'S OWN city screen, and the
   Single Player ..... continues the stock take-a-ride flow — next stop the stock
                       Time of Day / Condition screen. That one screen sets BOTH the
                       time of day and the weather, and the host's picks become the
-                      session's, so everyone loads the same place.
-  Multiplayer ....... the per-city multiplayer level list (35..38)
+                      session's, so everyone loads the same place. The session's map
+                      is the city's large one.
+  Multiplayer ....... the per-city multiplayer level list (35..38). The session
+                      loads that city's SMALL multiplayer map, the arena being the
+                      level picked on that list.
 ```
+
+The answer decides the MAP, not just the menu: `Single Player` and `Multiplayer`
+publish a different level shape, and the shape travels to every client in
+`MP_START`, so both machines load the same one (a client that booted with a
+different `-mp`, or none, is corrected by the host). Both screens the player can
+confirm a city on fire `JER_EVENT_FRONTEND`, so this prompt appears on the
+Take-a-Ride screen itself.
 
 There is deliberately **no mp screen for the city, time of day or weather**: those are
 the engine's own screens, and `MpStartMatch` seeds the session from what the host
