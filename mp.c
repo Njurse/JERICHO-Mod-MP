@@ -1111,7 +1111,7 @@ static int MpOnFrame(void* userdata, void* args)
 		{
 			MP_PLAYER* p = &gMp.players[i];
 
-			if (!p->active || p->carId < 0)
+			if (!p->active || p->carId < 0 || p->carId >= MAX_CARS)
 				continue;
 
 			{
@@ -2304,14 +2304,14 @@ static int MpOnGameStart(void* userdata, void* args)
 		MP_PLAYER* p = &gMp.players[i];
 		CAR_DATA* cp;
 
-		if (!p->active || p->carId < 0)
+		if (!p->active || p->carId < 0 || p->carId >= MAX_CARS)
 			continue;
 
 		cp = &car_data[p->carId];
 		gMpCtx->jer_log(gMpCtx, "[mp] car: player %d slot %d controlType=%d apmodel=%d carmodel=%d want=%d loaded=%d pos=%d,%d,%d\n",
 			p->id, p->carId, cp->controlType, cp->ap.model,
 			(cp->ap.model >= 0 && cp->ap.model < MAX_CAR_RESIDENT_MODELS) ? residentCarModels[cp->ap.model] : -1,
-			(PlayerStartInfo[p->carId] != NULL) ? PlayerStartInfo[p->carId]->model : -9,
+			(p->carId < MP_MAX_PLAYERS && PlayerStartInfo[p->carId] != NULL) ? PlayerStartInfo[p->carId]->model : -9,
 			JerCarSlotUsable(cp->ap.model) ? 1 : 0,
 			cp->hd.where.t[0], cp->hd.where.t[1], cp->hd.where.t[2]);
 	}
