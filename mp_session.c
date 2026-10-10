@@ -4717,8 +4717,7 @@ static void MpDriveRemotePed(MP_PLAYER* p)
 	if (p->pedSpeed != 0)
 	{
 		/* move_to takes a POINT, so aim a little way along the owner's heading:
-		 * that is the same thing as "walk forward at this speed", and it keeps the
-		 * engine turning and animating as it goes. */
+		 * that is the same thing as "walk forward at this speed". */
 		int tx = p->pedX + (int)(((long)rsin(p->pedHeading) * 300) >> 12);
 		int tz = p->pedZ + (int)(((long)rcos(p->pedHeading) * 300) >> 12);
 
@@ -4728,6 +4727,33 @@ static void MpDriveRemotePed(MP_PLAYER* p)
 	{
 		jer_npc_stop(n);
 		jer_npc_face(n, p->pedHeading);
+	}
+
+	/* NOW animate + integrate it. Setting the intent is not enough: this ped is
+	 * not CIVILIAN, so neither the ambient pedestrian updater (ControlPedestrians)
+	 * nor the player-ped loop runs its state function -- and those are the only
+	 * callers of AnimatePed. Nothing advanced its animation or moved it, so it
+	 * stood still until the err > 120 catch-up above snapped it onto the owner:
+	 * that is what "Tanner teleports, no walk animation" was. jer_npc_tick runs
+	 * the pass a pedestrian's own state function would, so the stand-in walks with
+	 * its legs moving. */
+	jer_npc_tick(n);
+
+	/* Evidence line: the stand-in's OWN position (what AnimatePed just integrated)
+	 * next to the owner's. A walking stand-in TRACKS the owner; a stuck one stays
+	 * put and the "corrected" line above fires repeatedly. */
+	if (gMpCtx != NULL && MpDebugOn())
+	{
+		static unsigned long lastPedMs;
+
+		if ((MpNowMs() - lastPedMs) > 2000)
+		{
+			lastPedMs = MpNowMs();
+			gMpCtx->jer_log(gMpCtx,
+				"[mp] ped: player %d stand-in at %d,%d,%d (owner %d,%d,%d) speed %d\n",
+				p->id, ped->position.vx, ped->position.vy, ped->position.vz,
+				p->pedX, p->pedY, p->pedZ, p->pedSpeed);
+		}
 	}
 }
 

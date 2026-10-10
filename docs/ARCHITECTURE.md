@@ -1312,3 +1312,23 @@ presses `TANNER_PAD_ACTION` when he reaches a car, so the whole get-out -> walk 
 get-back-in loop runs without a human. It reaches the engine through
 `JER_EVENT_PED_INPUT`, which fires immediately before `ProcessTannerPad` -- the
 on-foot twin of the car's `JER_EVENT_NET_INPUT`.
+
+### The on-foot stand-in walks itself
+
+A remote on-foot player is drawn by a **stand-in pedestrian** mp spawns and drives
+(`MpDriveRemotePed`, `mp_session.c`) -- a `TANNER_MODEL` ped held in the module's
+own row, not the engine's player set. It is **not** CIVILIAN, so the ambient
+pedestrian updater (`ControlPedestrians`, gated on `pedType == CIVILIAN`) never
+runs its state function, and the player-ped loop only runs the LOCAL player's own
+ped. Those are the only two callers of `AnimatePed` -- the pass that advances a
+ped's walk animation **and** integrates its position from `speed` + `dir`.
+
+So a stand-in that only had its intent set (`jer_npc_move_to`) never animated or
+moved: it stood still until the `err > 120` catch-up snapped it onto the owner, and
+that snap is what "Tanner teleports, no walk animation" was. The fix is one call:
+**`jer_npc_tick(n)`** (`jer_npc.c` -> `AnimatePed`), after the intent is set, so the
+stand-in walks with its legs moving and the catch-up becomes a rare drift
+correction instead of the only motion. A PARKED ped is skipped (its state is the
+frozen no-op). The ped's `padId` must stay negative for this: `AnimatePed` writes
+`player[ABS(padId)].pos` for a non-civilian ped, and `ABS(-1) = 1` lands on the
+unused slot, where `0` would overwrite the local player's own position every frame.
