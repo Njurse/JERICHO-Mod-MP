@@ -630,13 +630,17 @@ menu picks Chicago):
 | `--level miami` | a *different* failure: the joiner never joins (0/1) |
 
 **What it is, exactly.** Polling the joiner's log while the run is still live: the
-joiner stops dead -- its log freezes at one line count for 30 s while the host's grows
--- so the whole game LOOP stops, not merely the sim, and with no dump. The new
-`MP_WATCH` lever pins the last frame: `stage frame-done` (the frame hook finished, then
-no further frame). It hangs right after `match started`, while the host plays on.
-Removing `crumple` and then `carhacks` does not change it, so it is mp + levelhacks +
-engine, and city-specific. **Root cause not yet found** -- the next step is the engine
-side of the loop between the frame hook and the sim step.
+joiner stops dead -- its log frozen at one line count while the host's grows -- and it
+is a TRUE hang, not a slow load: sampled for 145 s it never wrote another line and its
+sim never left frame 1. There is no dump. The `MP_WATCH` lever pins the last frame at
+`stage frame-done`, and `JER_EVENT_FRAME` fires at the TOP of `GlobalTimeStep`
+(handling.c:320), so "frame hook finished, sim never entered" places the hang in the
+**car physics that `GlobalTimeStep` runs next** (`StepCars` / `CheckCarToCarCollisions`
+/ the force and collision resolution) -- i.e. engine code, not mp's. Removing `crumple`
+and then `carhacks` does not change it (and `crumpleDeformInternal` is
+`crumple`'s, so that is a separate defect), leaving mp + levelhacks + engine, and
+city-specific. **Root cause not yet found**; it needs a stack of the hung process
+(no debugger here) or a bisect of the physics path.
 
 **The gate could not see any of this.** `mp_localpair`'s verdict checked only
 connection markers, so a joiner hung at sim frame 1 with the link up was reported PASS,
