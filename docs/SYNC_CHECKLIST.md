@@ -592,6 +592,17 @@ that changed *nothing at all* was read as "every seat cycled its whole list". No
 vacuous run fails, a stall fails, a frozen joiner fails, and a refused pick fails -- the
 four ways this delivery has already lied to itself.
 
+**Two things to know before reading a red run as a verdict.** First, *what* it fails on
+has moved: it is no longer the pool (that was arithmetic, fixed in `0541ef83` -- see
+[§6a](#6a-why-changes-were-refused--one-real-bug-and-what-is-left)) but the release
+deferral, i.e. the canonical slot a change wants still being held by the car it is
+replacing. Second, the rig intermittently starts *nothing* -- four runs in a row reported
+`0 car changes` / `NOTHING CYCLED` with no stray process left behind, ~15 s apart, then
+the next run cycled 163 changes and covered 40 of 48 on every seat. The rig fails that
+case correctly rather than calling it clean, which is why it is safe to keep; but a
+SINGLE gate run is not yet a stable verdict, and a red `carstress` line should be read
+together with its `car change(s)` count -- `0` means the rig never started.
+
 ### Why `carstress` fails: the spare-slot pool saturates EXACTLY (measured 2026-10-10)
 
 The rig counts `no spare resident slot`, and the engine's own message carries the whole
