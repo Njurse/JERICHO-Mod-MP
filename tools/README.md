@@ -544,22 +544,43 @@ and a bad port gives `manual address '...' does not parse (want host or host:por
 ## The Single Player / Multiplayer prompt (a headless run has no pad)
 
 The take-a-ride city confirm is the one place that asks Singleplayer vs
-Multiplayer — through mp's own `mp.mode` menu inside a session, or levelhacks'
-prompt outside one (levelhacks yields to mp whenever a session role is set). It
-fires on CROSS (`JER_EVENT_FRONTEND`), and the frontend reads `Pads[0].mapnew`, so
-a padless run cannot press it. `MP_TEST_CITYCONFIRM=<secs>` fires the confirm the
-way the engine does, that many seconds after the frontend is up:
+Multiplayer, and mp owns it: `mp.mode` is opened from the city-confirm hook
+(`JER_EVENT_FRONTEND`, fired by `JerichoFrontendCityConfirm` from the
+Take-a-Ride city screen — SCRS.BIN screen 1 — and from the cutscene city
+screen). The answer sets the map the session loads, so `Single Player` is the
+full city and `Multiplayer` is the city's small multiplayer map, with the arena
+taken from the stock per-city multiplayer level list.
+
+**The real path, with the frontend press lever.** The frontend reads
+`Pads[0].mapnew` straight out of `ReadControllers()` and a module cannot inject
+a pad, so a screen that is only left by a real press is unreachable in a padless
+run. `JERICHO_TEST_FEPRESS` drives those presses — a comma-separated list of
+`<screen>[:<row>]` steps (row = the cursor walked down from the top):
+
+    JERICHO_TEST_FEPRESS="0:3,43:0,44:0,45:0,1:0,46:1,35:0,3:0,42:2" \
+      JERICHO_dev.exe -nointro -nofmv -frames 1500
+
+That is: main menu's Multiplayer row (3) -> mp.root -> mp.lan -> mp.host -> the
+Take-a-Ride city screen (1) -> the confirm -> `mp.mode` (46) row 1 =
+Multiplayer -> the city's MP level list (35) -> time of day -> carhacks' car
+menu (42) "Ride". A healthy run logs
+
+    [mp] city confirmed - asking Single Player / Multiplayer
+    [mp] opening mp.mode (resolved idx 4)
+    [mp] launching: city 0 mode 1 (1=TAKEADRIVE, 0=MISSION!) subgame 0 map MULTIPLAYER arena 0 ...
+
+`map MULTIPLAYER` vs `map full-city` is the line to read: `subgame 0` alone does
+not tell the two answers apart, because the map flag is what selects the mission
+block (Take-a-Ride 50 vs the multiplayer 58). Row 0 on `mp.mode` instead of
+row 1 gives you the Single Player answer and `map full-city`.
+
+**The synthetic path.** `MP_TEST_CITYCONFIRM=<secs>` fires the confirm event
+directly, that many seconds after the frontend is up — useful when the module
+under test is the hook itself rather than the menus:
 
     MP_AUTOSTART=host MP_TEST_CITYCONFIRM=4 JERICHO_dev.exe -nointro -nofmv
 
-A healthy host run logs, in this order:
-
-    [mp] city confirmed - asking Single Player / Multiplayer
-    [mp] test: MP_TEST_CITYCONFIRM -> city confirm fired (defer=1 role=1)
-    [mp] opening mp.mode (resolved idx 4)
-
-and NOT `the Single Player / Multiplayer menu did not open (idx …, on screen …)`.
-So a wrapper run asserts it with:
+in which case a wrapper asserts it with:
 
     --require "MP_TEST_CITYCONFIRM -> city confirm fired"
     --forbid  "the Single Player / Multiplayer menu did not open"
