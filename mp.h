@@ -289,6 +289,8 @@ int  MpBeginHost(void);			/* become host: listen + advertise + self row */
 int  MpBeginJoinAsync(const char* host, int port);	/* the join (non-blocking) */
 void MpLeaveSession(void);		/* tear the session down, keep the module */
 void MpKickPlayer(int playerId);	/* HOST: remove a player (sends MP_TAG_KICK) */
+void MpSelfRepairCar(void);		/* pause menu: repair the local player's car */
+void MpSelfClearFelony(void);		/* pause menu: clear the local player's wanted level */
 
 /* Addon network bridge (mp_bridge.c / jer_net.h). */
 void MpBridgeDeliver(const char* channel, int peer, const void* data, int len);

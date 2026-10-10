@@ -1240,6 +1240,37 @@ To WATCH one of those changes rather than read it afterwards, run the pair with
 viewer, the console) and an `index.txt` row naming the line that caused them and the VRAM
 state at that moment (`tools/mpshots.py`, which also works against a hand-played session).
 
+### Player options
+
+`Multiplayer` -> `Player options` (`mp.c`): **Invincible car** and **Player
+immunity** flip the engine's own per-machine switches (`gInvincibleCar` /
+`gPlayerImmune`, `mission.h`) — the same ones the cheat codes set, so they are the
+engine's behaviour, not new behaviour. **Repair car** and **Clear felony** are
+one-shot: repair uses the field set the soft restart and sandbox's repair use
+(`totalDamage = 0`, `ap.damage[]` cleared, `CreateDentableCar` to rebuild the
+DRAWN mesh, `JER_EVENT_RESET_CAR`), and clearing the felony zeroes BOTH
+`car_data[...].felonyRating` and `pedestrianFelony`, because `GetPlayerFelony`
+picks whichever applies.
+
+**Deliberately NOT synced.** Invincibility and immunity belong to whoever is at
+this machine (one local player per machine), and the car/health the one-shots
+touch is this machine's own. Nothing goes on the wire; a peer's car is still its
+owner's truth. (`MP_TEST_OPTIONS=<secs>` fires all four through the same handlers
+for a headless check.)
+
+### Kick player
+
+`Multiplayer` -> `Kick player` (`mp.c`): HOST ONLY. A target cycler walks the
+connected players (the host and yourself excluded) and a "Confirm kick \<name\>"
+row sends `MP_TAG_KICK` (`JPKK`) to that peer via `MpKickPlayer`. The confirm row
+IS the confirmation step — a kick is a deliberate second press on a row that names
+who is going. On a client both rows read `(host only)` and do nothing, because
+only the host owns the connection table.
+
+The teardown lives in ONE place: the kicked client prints "kicked by the host" and
+takes the same `MpLeaveSession` a deliberate quit uses, so the roster row and the
+car leave every machine identically. (`MP_TEST_KICK=<secs>` runs it headlessly.)
+
 ### Restart is a soft reset
 
 The stock Restart calls `EndGame(GAMEMODE_RESTART)` and rebuilds the level

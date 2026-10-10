@@ -1872,6 +1872,62 @@ static void MpHandleKick(int connIndex, const unsigned char* p, int len)
 	MpReturnToFrontend();
 }
 
+/* The PAUSE MENU's "Player options" act on the LOCAL player's own car and wanted
+ * level, and only on this machine: they are the same per-machine switches the
+ * engine's own cheats drive (gInvincibleCar / gPlayerImmune), applied to whoever
+ * is sitting here. Nothing about them goes on the wire. */
+
+/* Repair OUR car. The same field set the soft restart and sandbox's repair use,
+ * plus CreateDentableCar -- totalDamage alone leaves the DRAWN mesh caved in. */
+void MpSelfRepairCar(void)
+{
+	MP_PLAYER* me = MpLocalPlayer();
+	CAR_DATA* cp;
+
+	if (me == NULL || me->carId < 0 || me->carId >= MAX_CARS)
+	{
+		MpNotify("Repair: you are on foot with no car");
+		return;
+	}
+
+	cp = &car_data[me->carId];
+
+	cp->totalDamage = 0;
+	memset(cp->ap.damage, 0, sizeof(cp->ap.damage));
+	CreateDentableCar(cp);
+	cp->ap.needsDenting = 0;
+
+	{
+		JER_ARGS_RESET_CAR rc;
+
+		rc.carId = me->carId;
+		jer_fire(JER_EVENT_RESET_CAR, &rc);
+	}
+
+	if (gMpCtx != NULL)
+		gMpCtx->jer_log(gMpCtx, "[mp] player option: car repaired (slot %d)\n", me->carId);
+
+	MpNotify("Car repaired");
+}
+
+/* Clear OUR wanted level. GetPlayerFelony picks the car's rating OR the
+ * pedestrian's, so clear both -- leaving the other set puts the cops straight
+ * back on us the moment we step out. */
+void MpSelfClearFelony(void)
+{
+	MP_PLAYER* me = MpLocalPlayer();
+
+	if (me != NULL && me->carId >= 0 && me->carId < MAX_CARS)
+		car_data[me->carId].felonyRating = 0;
+
+	pedestrianFelony = 0;
+
+	if (gMpCtx != NULL)
+		gMpCtx->jer_log(gMpCtx, "[mp] player option: wanted level cleared\n");
+
+	MpNotify("Wanted level cleared");
+}
+
 static void MpHandleWelcome(const unsigned char* p, int len)
 {
 	MP_WELCOME w;

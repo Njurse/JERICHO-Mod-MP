@@ -776,6 +776,13 @@ static int MpOnShutdown(void* userdata, void* args)
  * and again at the top of the world step for the lockstep hand-off. */
 static void MpLogPlayerList(void);
 
+/* The Player options' handlers (defined with their menu page below); the
+ * MP_TEST_OPTIONS lever in the frame hook calls these same functions. */
+static int MpOptToggleInvincible(void* ud, int dir);
+static int MpOptToggleImmune(void* ud, int dir);
+static int MpOptRepair(void* ud, int dir);
+static int MpOptClearFelony(void* ud, int dir);
+
 static int MpOnFrame(void* userdata, void* args)
 {
 	(void)userdata;
@@ -912,6 +919,32 @@ static int MpOnFrame(void* userdata, void* args)
 					gMpCtx->jer_log(gMpCtx, "[mp] test: chat SEND\n");
 					MpOnDebugKey(MP_KEY_CHAT_SEND, 1);
 				}
+			}
+		}
+	}
+
+	/* Test lever: MP_TEST_OPTIONS=<secs> fires the pause menu's four Player options
+	 * once, that many seconds after the match goes live, by calling the SAME
+	 * handlers the menu rows call -- so the toggles and the two one-shot repairs
+	 * are checkable with no pad and no menu. Inert unless set. */
+	{
+		static unsigned long optAtMs = 0;
+		const char* s = getenv("MP_TEST_OPTIONS");
+
+		if (s != NULL && gMpCtx != NULL)
+		{
+			if (optAtMs == 0 && gMp.running)
+				optAtMs = MpNowMs() + (unsigned long)(atoi(s) * 1000);
+
+			if (optAtMs != 0 && optAtMs != (unsigned long)-1 && MpNowMs() >= optAtMs)
+			{
+				optAtMs = (unsigned long)-1;	/* once */
+				gMpCtx->jer_log(gMpCtx,
+					"[mp] test: MP_TEST_OPTIONS -> firing the four Player options\n");
+				MpOptToggleInvincible(NULL, 0);
+				MpOptToggleImmune(NULL, 0);
+				MpOptRepair(NULL, 0);
+				MpOptClearFelony(NULL, 0);
 			}
 		}
 	}
@@ -2371,11 +2404,90 @@ static const JER_PAUSE_MENU_ITEM mpKickItems[] =
 static const JER_PAUSE_MENU mpKickMenu =
 { "Kick player", mpKickItems, MP_MENU_ITEMS(mpKickItems) };
 
+/* ------------------------------------------------------------------ */
+/* Player options: per-machine switches for the LOCAL player, the same things the
+ * engine's own cheats drive (gInvincibleCar / gPlayerImmune) plus two one-shot
+ * engine repairs. Deliberately NOT synced: invincibility belongs to whoever is
+ * sitting at this machine, and the car/health the one-shots touch is this
+ * machine's own. */
+static void MpOptLabelInvincible(void* ud, char* out, int max)
+{
+	(void)ud;
+	snprintf(out, max, "Invincible car: %s", gInvincibleCar ? "ON" : "off");
+}
+
+static int MpOptToggleInvincible(void* ud, int dir)
+{
+	(void)ud;
+	(void)dir;
+
+	gInvincibleCar ^= 1;
+
+	if (gMpCtx != NULL)
+		gMpCtx->jer_log(gMpCtx, "[mp] player option: invincible car %s\n",
+			gInvincibleCar ? "ON" : "off");
+
+	return JER_PAUSE_QUIT_NONE;
+}
+
+static void MpOptLabelImmune(void* ud, char* out, int max)
+{
+	(void)ud;
+	snprintf(out, max, "Player immunity: %s", gPlayerImmune ? "ON" : "off");
+}
+
+static int MpOptToggleImmune(void* ud, int dir)
+{
+	(void)ud;
+	(void)dir;
+
+	gPlayerImmune ^= 1;
+
+	if (gMpCtx != NULL)
+		gMpCtx->jer_log(gMpCtx, "[mp] player option: player immunity %s\n",
+			gPlayerImmune ? "ON" : "off");
+
+	return JER_PAUSE_QUIT_NONE;
+}
+
+static int MpOptRepair(void* ud, int dir)
+{
+	(void)ud;
+	(void)dir;
+
+	MpSelfRepairCar();
+
+	return JER_PAUSE_QUIT_NONE;
+}
+
+static int MpOptClearFelony(void* ud, int dir)
+{
+	(void)ud;
+	(void)dir;
+
+	MpSelfClearFelony();
+
+	return JER_PAUSE_QUIT_NONE;
+}
+
+static const JER_PAUSE_MENU_ITEM mpOptionsItems[] =
+{
+	/* label, get_label, on_activate, userdata, submenu, adjust */
+	{ NULL, MpOptLabelInvincible, MpOptToggleInvincible, NULL, NULL, 0 },
+	{ NULL, MpOptLabelImmune, MpOptToggleImmune, NULL, NULL, 0 },
+	{ "Repair car", NULL, MpOptRepair, NULL, NULL, 0 },
+	{ "Clear felony", NULL, MpOptClearFelony, NULL, NULL, 0 },
+};
+
+static const JER_PAUSE_MENU mpOptionsMenu =
+{ "Player options", mpOptionsItems, MP_MENU_ITEMS(mpOptionsItems) };
+
 static const JER_PAUSE_MENU_ITEM mpPauseItems[] =
 {
 	/* label, get_label, on_activate, userdata, submenu, adjust */
 	{ "Change car", NULL, NULL, NULL, &mpChangeCarMenu, 0 },
 	{ "My colour", NULL, NULL, NULL, &mpColorMenu, 0 },
+	{ "Player options", NULL, NULL, NULL, &mpOptionsMenu, 0 },
 	{ "Kick player", NULL, NULL, NULL, &mpKickMenu, 0 },
 	{ "Write diagnostics now", NULL, MpMenuWriteDiag, NULL, NULL, 0 },
 };
