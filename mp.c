@@ -67,6 +67,12 @@ extern MpTextInputFn g_cfg_gameOnTextInput;
 MP_STATE gMp;
 JERICHO_CONTEXT* gMpCtx;
 
+/* The engine's map-shape boot flags (main.c, set by -mp). The host's own
+ * Single Player / Multiplayer answer writes them through MpSetMapShape, and the
+ * session publishes them to clients, so they are read/written here too. */
+extern int gBootMpLevel;	/* 1 = a multiplayer map, 0 = the full city */
+extern int gBootMpArena;	/* which multiplayer map (0/1) */
+
 /* Is MP_DEBUG set? Resolved ONCE and cached. The module asks this from the
  * per-frame, per-poll and per-message paths (and a getenv there is a libc call
  * per ask), while the environment cannot change once the game is running. This
@@ -242,6 +248,15 @@ static int MpOnMpFrontend(void* userdata, void* args)
 				gMp.timeOfDay = wantedTimeOfDay;
 			if (wantedWeather >= 0)
 				gMp.weather = wantedWeather;
+
+			/* The stock per-city multiplayer level list picks the ARENA into
+			 * gSubGameNumber (its buttons are SetVariable code 8, and only
+			 * "Multiplayer" reaches that list). Take the arena from there so the
+			 * session loads the map the player actually chose; the Single Player
+			 * answer already set the shape to the full city (MpSetMapShape(0,0)),
+			 * for which this is a no-op. */
+			if (gBootMpLevel)
+				gBootMpArena = gSubGameNumber & 1;
 
 			MpStartMatch();
 		}

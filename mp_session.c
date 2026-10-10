@@ -379,8 +379,9 @@ static void MpLaunchLocal(void)
 		wantedWeather = gMp.weather;
 
 	if (gMpCtx)
-		gMpCtx->jer_log(gMpCtx, "[mp] launching: city %d mode %d (1=TAKEADRIVE, 0=MISSION!) subgame %d time %d weather %d players %d\n",
-			GameLevel, GameType, gSubGameNumber, wantedTimeOfDay, wantedWeather, NumPlayers);
+		gMpCtx->jer_log(gMpCtx, "[mp] launching: city %d mode %d (1=TAKEADRIVE, 0=MISSION!) subgame %d map %s arena %d time %d weather %d players %d\n",
+			GameLevel, GameType, gSubGameNumber, gBootMpLevel ? "MULTIPLAYER" : "full-city", gBootMpArena,
+			wantedTimeOfDay, wantedWeather, NumPlayers);
 
 	MpConnMatchStarted();	/* the stage stops lying here: we are IN the match now */
 
@@ -1318,6 +1319,24 @@ static void MpHandleRoster(const unsigned char* p, int len)
 	}
 }
 
+/* The map SHAPE of the session being set up: 0 = the city's large main map
+ * (Single Player), 1 = its small multiplayer map. These are the engine's own
+ * boot flags -- the launcher reads them (main.c -mp sets them; glaunch offsets
+ * the mission number by gSubGameNumber, which MpLaunchLocal derives from them)
+ * -- and the session publishes them to clients (MP_WELCOME.mpLevel/arena and
+ * MP_SESSION.spare), so the HOST's menu choice reaches every machine's level
+ * load. Kept behind a setter because the UI file must not poke boot flags.
+ *
+ * Without this the flags were only ever set by -mp on the command line, which is
+ * why the Single Player / Multiplayer menu changed NOTHING: MpLaunchLocal
+ * rewrote gSubGameNumber from gBootMpLevel either way, so both answers loaded
+ * the same level. */
+void MpSetMapShape(int mpLevel, int arena)
+{
+	gBootMpLevel = mpLevel ? 1 : 0;
+	gBootMpArena = arena & 1;
+}
+
 int MpStartMatch(void)
 {
 	MP_START st;
@@ -1403,6 +1422,12 @@ int MpStartMatch(void)
 	st.session.seed = gMp.seed;
 	st.session.numPlayers = (uint8_t)gMp.playerCount;
 	st.session.state = MP_SESSION_STARTING;
+	/* The map SHAPE rides in spare (there are no two free bytes): 1 = a
+	 * multiplayer map, and which arena. It must travel HERE and not only in
+	 * MpSendWelcome, because a client that connected while the host was still
+	 * choosing - i.e. before this START - was welcomed with whatever shape the
+	 * host had at that moment. */
+	st.session.spare = (uint16_t)((gBootMpLevel ? 1 : 0) | ((gBootMpArena & 1) << 8));
 
 	/* The roster goes first, so a client knows how many player cars to spawn
 	 * BEFORE its level loads. Without it the client added no car for the host
@@ -2150,6 +2175,12 @@ static void MpHandleStart(const unsigned char* p, int len)
 	gMp.weather = st.session.weather;
 	gMp.seed = st.session.seed;
 	gMp.running = 1;
+
+	/* Adopt the host's map SHAPE before the launch below, or this machine loads
+	 * whatever its own -mp said - the exact drift the host-as-authority rule
+	 * exists to prevent. MpLaunchLocal derives gSubGameNumber from these. */
+	gBootMpLevel = st.session.spare & 1;
+	gBootMpArena = (st.session.spare >> 8) & 1;
 
 	if (gMpCtx)
 		gMpCtx->jer_log(gMpCtx, "[mp] host started: mode %d city %d time %d weather %d\n",

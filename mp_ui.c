@@ -217,6 +217,10 @@ static int ActModeSP(void* ud)
 {
 	(void)ud;
 
+	/* The large main map: shape 0, no sub-level. MpSetMapShape is what makes the
+	 * answer real -- without it MpLaunchLocal derived gSubGameNumber from the
+	 * boot -mp flag, so this and Multiplayer loaded the same level. */
+	MpSetMapShape(0, 0);
 	MpSetSubGame(0);		/* the whole city, no sub-level */
 	jer_frontend_goto(3);		/* continue the stock flow: time of day */
 	return 1;
@@ -226,9 +230,13 @@ static int ActModeMP(void* ud)
 {
 	(void)ud;
 
+	/* The city's small multiplayer map. Which ARENA (0/1) is chosen on the stock
+	 * per-city level list reached below, whose buttons write gSubGameNumber
+	 * (SetVariable code 8); the host's START turns that into the session arena. */
+	MpSetMapShape(1, 0);
+
 	/* 35..38 are the per-city multiplayer level lists (35 = Chicago,
-	 * 36 = Havana, 37 = Las Vegas, 38 = Rio); their buttons set
-	 * gSubGameNumber (SetVariable code 8). */
+	 * 36 = Havana, 37 = Las Vegas, 38 = Rio). */
 	jer_frontend_goto(35 + (MpGetGameLevel() & 3));
 	return 1;
 }
