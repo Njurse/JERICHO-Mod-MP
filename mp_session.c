@@ -4689,9 +4689,11 @@ static void MpDriveRemotePed(MP_PLAYER* p)
 
 		/* A stand-in is NOT a local player's ped: mark it so a padId-keyed scan (or
 		 * anything else that treats padId >= 0 as "someone's character") can never
-		 * mistake it for ours. The spawn path leaves padId untouched, so a pooled
-		 * slot keeps whatever the previous occupant held -- which is how a remote
-		 * Tanner could inherit the local player's colour. */
+		 * mistake it for ours -- and so AnimatePed (jer_npc_tick) writes the unused
+		 * player slot, never the local player's. jer_npc_spawn now stamps -1 on every
+		 * module-spawned ped, so this is belt-and-braces rather than the only guard:
+		 * it was the only one when a pooled slot could inherit the local player's
+		 * padId (which is how a remote Tanner once took the player's colour). */
 		((LPPEDESTRIAN)n)->padId = -1;
 
 		if (gMpCtx != NULL)
