@@ -284,6 +284,40 @@ appears. `mp_carstress.py`'s per-seat report shows every offered car driven, 0 r
 The invalidation rules the two seats must obey (match the vehicle in place; a mod car
 reaches the traffic AI only as a stopped, empty car) are in [`ARCHITECTURE.md` §15](ARCHITECTURE.md).
 
+### 6a. Why changes were refused — one real bug, and what is left
+
+The stress rig's refusals ("no spare resident slot") had **two** sources, and only one
+was a bug. The bug is fixed in `0541ef83`:
+
+`chkImportCanonicalSlot` (carhacks/carimport.c:430) builds `spare[]` — the slots free of
+*our* cars — and then indexed it by the position in `order[]`, which counts **every**
+wanted car, placed or not. The two lists are not the same length, so with 3 wanted, 2
+already placed and 2 slots free, the third wanted car asked for `spare[2]` of a
+two-entry list and was **refused a slot the session actually had**. A car that already
+holds a slot is skipped now, so only the cars still without one consume an entry.
+
+Measured on the same 3-seat 60 s stress — and note the tell:
+
+| | before | after |
+| --- | --- | --- |
+| coverage | 34 / 33 / 35 of 48 | **40 / 40 / 38 of 48** |
+| `no room` | x162 / x156 / x132 | **x67, on one seat only** |
+
+The tell is that *retrying the refused change changed the coverage not at all*
+(34→35→38 across three attempts): you are chasing a contended pool, but when the
+arithmetic itself is wrong no amount of waiting conjures the slot.
+
+What is left is the second source — `[carhacks/net] player N wants X, but no spare
+resident slot is free` (net.c:515) — where the canonical slot the mapping now picks is
+**occupied by a car still in the world**. That is the `keeping slot` release deferral
+doing its job: handing out a slot a live car is still drawn from is the invisible car,
+so it is contention rather than a defect, and it is what the last handful of cars in a
+pass meet. The rig's strictest bar ("every offered car driven") is therefore stricter
+than the design promises at **4.2 changes a second**, which is ~30x a human's rate; the
+honest bars are the ones this section already sets — no meshless change, no silent
+substitution (a change that cannot be slotted now waits and retries, bounded, and says
+so), and a refusal spoken out loud rather than a different car quietly handed over.
+
 ---
 
 ### 7. Car colour / palette ownership

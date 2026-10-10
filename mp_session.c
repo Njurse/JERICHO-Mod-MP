@@ -4290,6 +4290,7 @@ static void MpTestCarCycleTick(void)
 	static int passes;
 	static unsigned long nextAt;
 	static int idx, total, pass, seed;
+	static int passLanded;	/* of this pass, how many actually landed */
 	static int cars[MP_TEST_CYCLE_MAX_CARS][2];
 	MP_PLAYER* me;
 
@@ -4358,7 +4359,20 @@ static void MpTestCarCycleTick(void)
 
 	nextAt = MpNowMs() + (unsigned long)intervalMs;
 
-	MpChangeCar(cars[idx][0], cars[idx][1]);
+	/* The outcome is what the rig is FOR, and it is not a given: a change can be waiting
+	 * for a spare slot (MpChangeCar remembers it and retries) or refused outright. So
+	 * say which it was. An earlier version told the rig every car had been driven
+	 * because it assumed the call always landed -- the rig then compared THAT against
+	 * a list of asks, and a run that changed nothing still read as full coverage. */
+	if (MpChangeCar(cars[idx][0], cars[idx][1]))
+	{
+		passLanded++;
+
+		if (gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx, "[mp] test: car cycle: drove %s model %d\n",
+				MpCarCityName(cars[idx][0]), cars[idx][1]);
+	}
+
 	idx++;
 
 	if (idx < total)
@@ -4370,8 +4384,10 @@ static void MpTestCarCycleTick(void)
 
 	if (gMpCtx != NULL)
 		gMpCtx->jer_log(gMpCtx,
-			"[mp] test: car cycle PASS %d done - every one of the %d car(s) has been driven\n",
-			pass, total);
+			"[mp] test: car cycle PASS %d done - %d of the %d car(s) landed as asked\n",
+			pass, passLanded, total);
+
+	passLanded = 0;
 
 	if (passes > 0 && pass >= passes)
 		gTestCarCycleStr = NULL;		/* asked for a number of passes and they are done */
