@@ -898,8 +898,17 @@ static void MpSessionRulesTick(void)
 
 	CopsAllowed = gMp.ruleCops;
 	gCopDifficultyLevel = gMp.ruleDiff;
-	gPlayerImmune = gMp.ruleImmune ? 1 : 0;
-	gInvincibleCar = gMp.ruleInvuln ? 1 : 0;
+
+	/* The two invincibility flags are a FLOOR, not an override. A rule that turns
+	 * one ON grants it to everyone and cannot be switched off locally; a rule that
+	 * leaves it OFF leaves each player's own pause-menu switch in charge. Forcing
+	 * them back OFF would quietly delete a feature that is sitting right there in
+	 * that menu -- and the host who wants it off has simply not granted it. */
+	if (gMp.ruleImmune)
+		gPlayerImmune = 1;
+
+	if (gMp.ruleInvuln)
+		gInvincibleCar = 1;
 
 	if (gMp.ruleCops != reportedCops || gMp.ruleDiff != reportedDiff ||
 	    gMp.ruleInvuln != reportedInv || gMp.ruleImmune != reportedImmune)
@@ -911,7 +920,8 @@ static void MpSessionRulesTick(void)
 
 		if (gMpCtx != NULL)
 			gMpCtx->jer_log(gMpCtx,
-				"[mp] session rules IN FORCE: CopsAllowed=%d gCopDifficultyLevel=%d gPlayerImmune=%d gInvincibleCar=%d\n",
+				"[mp] session rules IN FORCE: rules cops=%d diff=%d immune=%d invuln=%d -> CopsAllowed=%d gCopDifficultyLevel=%d gPlayerImmune=%d gInvincibleCar=%d\n",
+				gMp.ruleCops, gMp.ruleDiff, gMp.ruleImmune, gMp.ruleInvuln,
 				CopsAllowed, gCopDifficultyLevel, gPlayerImmune, gInvincibleCar);
 	}
 }
@@ -2098,12 +2108,19 @@ static int MpCcApply(void* ud, int dir)
 	return JER_PAUSE_QUIT_NONE;
 }
 
+/* Defined with the player actions further down; the Change car submenu wants it
+ * up here, where the CAR options live. */
+static int MpOptRepair(void* ud, int dir);
+
 static const JER_PAUSE_MENU_ITEM mpChangeCarItems[] =
 {
 	/* label, get_label, on_activate, userdata, submenu, adjust */
 	{ NULL, MpCcLabelCity, MpCcAdjustCity, NULL, NULL, 1 },
 	{ NULL, MpCcLabelCar, MpCcAdjustCar, NULL, NULL, 1 },
 	{ "Respawn as this car", NULL, MpCcApply, NULL, NULL, 0 },
+	/* Repair belongs with the car, not under Player options: it is a car action and
+	 * "Respawn as this car" next to it is the one that also MOVES you. */
+	{ "Repair car", NULL, MpOptRepair, NULL, NULL, 0 },
 };
 
 /* A JER_PAUSE_MENU's item_count, taken FROM the array.
@@ -2581,11 +2598,129 @@ static const JER_PAUSE_MENU mpKickMenu =
 { "Kick player", mpKickItems, MP_MENU_ITEMS(mpKickItems) };
 
 /* ------------------------------------------------------------------ */
-/* Player options: per-machine switches for the LOCAL player, the same things the
- * engine's own cheats drive (gInvincibleCar / gPlayerImmune) plus two one-shot
- * engine repairs. Deliberately NOT synced: invincibility belongs to whoever is
- * sitting at this machine, and the car/health the one-shots touch is this
- * machine's own. */
+/* Warp to Player: put this machine's car down near another player's, out of the
+ * path they are committed to. The PLACEMENT is mp_session.c's -- it needs
+ * InitCarPhysics, MapHeight and the spool call, which all live with the respawn
+ * -- so all this file owns is the picker. */
+static int gWarpTarget;		/* which OTHER player the row is pointing at */
+
+static int MpWarpCount(void)
+{
+	int i, n = 0;
+
+	for (i = 0; i < MP_MAX_PLAYERS; i++)
+	{
+		MP_PLAYER* p = &gMp.players[i];
+
+		if (p->active && p->id != gMp.localPlayerId)
+			n++;
+	}
+
+	return n;
+}
+
+static MP_PLAYER* MpWarpPlayerAt(int index)
+{
+	int i, n = 0;
+
+	for (i = 0; i < MP_MAX_PLAYERS; i++)
+	{
+		MP_PLAYER* p = &gMp.players[i];
+
+		if (!p->active || p->id == gMp.localPlayerId)
+			continue;
+
+		if (n == index)
+			return p;
+
+		n++;
+	}
+
+	return NULL;
+}
+
+/* The list is rebuilt every time it is READ rather than kept as state: a player who
+ * leaves while the menu is open changes it, and an index into a stale list is how
+ * a menu sends you to somebody who is no longer in the match. */
+static void MpWarpLabelTarget(void* ud, char* out, int max)
+{
+	int n = MpWarpCount();
+	MP_PLAYER* p;
+
+	(void)ud;
+
+	if (n == 0)
+	{
+		snprintf(out, max, "Target: (nobody else is here)");
+		return;
+	}
+
+	if (gWarpTarget < 0 || gWarpTarget >= n)
+		gWarpTarget = 0;
+
+	p = MpWarpPlayerAt(gWarpTarget);
+
+	snprintf(out, max, "Target: %s", (p != NULL) ? p->name : "?");
+}
+
+static int MpWarpAdjustTarget(void* ud, int dir)
+{
+	int n = MpWarpCount();
+
+	(void)ud;
+
+	if (n > 0)
+		gWarpTarget = ((gWarpTarget + dir) % n + n) % n;
+
+	return JER_PAUSE_QUIT_NONE;
+}
+
+static int MpWarpGo(void* ud, int dir)
+{
+	int n = MpWarpCount();
+	MP_PLAYER* p;
+
+	(void)ud;
+	(void)dir;
+
+	if (n == 0)
+	{
+		MpNotify("Warp: nobody else is in the match");
+		return JER_PAUSE_QUIT_NONE;
+	}
+
+	if (gWarpTarget < 0 || gWarpTarget >= n)
+		gWarpTarget = 0;
+
+	p = MpWarpPlayerAt(gWarpTarget);
+
+	if (p != NULL)
+		MpWarpToPlayer(p->id);
+
+	return JER_PAUSE_QUIT_NONE;
+}
+
+static const JER_PAUSE_MENU_ITEM mpWarpItems[] =
+{
+	/* label, get_label, on_activate, userdata, submenu, adjust */
+	{ NULL, MpWarpLabelTarget, MpWarpAdjustTarget, NULL, NULL, 1 },
+	{ "Warp to this player", NULL, MpWarpGo, NULL, NULL, 0 },
+};
+
+static const JER_PAUSE_MENU mpWarpMenu =
+{ "Warp to Player", mpWarpItems, MP_MENU_ITEMS(mpWarpItems) };
+
+/* ------------------------------------------------------------------ */
+/* The local player's own switches: the same engine flags the host's SESSION RULES
+ * drive (gInvincibleCar / gPlayerImmune), for whoever is sitting at THIS machine,
+ * plus two one-shot engine repairs. Deliberately NOT synced -- invincibility
+ * belongs to the person at this keyboard, and the car/health the one-shots touch
+ * is this machine's own.
+ *
+ * Note the two overlap on purpose: a host that turns a rule ON for the session
+ * has it in force for everyone (MpSessionRulesTick forces it), while a host that
+ * leaves it OFF is leaving it to each player's own switch here. That is why they
+ * are on the top-level page and not one click deeper. */
 static void MpOptLabelInvincible(void* ud, char* out, int max)
 {
 	(void)ud;
@@ -2646,24 +2781,22 @@ static int MpOptClearFelony(void* ud, int dir)
 	return JER_PAUSE_QUIT_NONE;
 }
 
-static const JER_PAUSE_MENU_ITEM mpOptionsItems[] =
-{
-	/* label, get_label, on_activate, userdata, submenu, adjust */
-	{ NULL, MpOptLabelInvincible, MpOptToggleInvincible, NULL, NULL, 0 },
-	{ NULL, MpOptLabelImmune, MpOptToggleImmune, NULL, NULL, 0 },
-	{ "Repair car", NULL, MpOptRepair, NULL, NULL, 0 },
-	{ "Clear felony", NULL, MpOptClearFelony, NULL, NULL, 0 },
-};
-
-static const JER_PAUSE_MENU mpOptionsMenu =
-{ "Player options", mpOptionsItems, MP_MENU_ITEMS(mpOptionsItems) };
-
 static const JER_PAUSE_MENU_ITEM mpPauseItems[] =
 {
 	/* label, get_label, on_activate, userdata, submenu, adjust */
+
+	/* THE THINGS YOU REACH FOR MID-MATCH are at the top, not one page deeper:
+	 * the two invincibility switches, the way out of being stranded in the
+	 * scenery, and clearing a wanted level. */
+	{ NULL, MpOptLabelInvincible, MpOptToggleInvincible, NULL, NULL, 0 },
+	{ NULL, MpOptLabelImmune, MpOptToggleImmune, NULL, NULL, 0 },
+	{ "Warp to Player", NULL, NULL, NULL, &mpWarpMenu, 0 },
+	{ "Clear felony", NULL, MpOptClearFelony, NULL, NULL, 0 },
+
+	/* Change car owns the CAR actions: picking one, respawning as it, repairing
+	 * the current one. "My colour" and "Kick player" stay their own pages. */
 	{ "Change car", NULL, NULL, NULL, &mpChangeCarMenu, 0 },
 	{ "My colour", NULL, NULL, NULL, &mpColorMenu, 0 },
-	{ "Player options", NULL, NULL, NULL, &mpOptionsMenu, 0 },
 	{ "Kick player", NULL, NULL, NULL, &mpKickMenu, 0 },
 	{ "Write diagnostics now", NULL, MpMenuWriteDiag, NULL, NULL, 0 },
 };

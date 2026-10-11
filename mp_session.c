@@ -28,6 +28,8 @@ extern int gWantNight;		/* glaunch.c: 1 = the night take-a-ride level variant */
 #include "players.h"	/* InitPlayer: a late joiner needs a car the same way the engine makes one */
 #include "handling.h"	/* LongQuaternion2Matrix: rebuild a car's matrix from its body */
 #include "state.h"
+#include "objcoll.h"	/* CellEmpty: the engine's own scenery test (the warp's landing check) */
+#include "dr2roads.h"	/* JerRoadAt: the engine's own road network (prefer a road to land on) */
 #include "dr2roads.h"	/* FindSurfaceD2: the real ground height at a point */
 #include "jer_map.h"	/* jer_map_*: the region maths behind "is the ground there?" */
 #include "pedest.h"	/* pUsedPeds: our player's own pedestrian, when on foot */
@@ -6365,6 +6367,184 @@ int MpRespawnAfterDeath(void)
 		gMpCtx->jer_log(gMpCtx,
 			"[mp] death in a session: respawned at %d,%d (ground=%d) in slot %d - game over refused\n",
 			cp->hd.where.t[0], cp->hd.where.t[2], ground, me->carId);
+
+	return 1;
+}
+
+/* ------------------------------------------------------------------ */
+/* WARP TO PLAYER                                                      */
+/*                                                                     */
+/* Put this machine's car down near another player's: close enough to  */
+/* be useful, out of the path they are already committed to, and on    */
+/* ground a car can actually sit on.                                   */
+/*                                                                     */
+/* The spot is CHOSEN, not guessed. A fixed ring of candidate offsets  */
+/* around the target is walked in order and the first that is clear, on */
+/* real ground and OFF their trajectory wins, with a road preferred to  */
+/* a shoulder. Two of those are the whole feature:                     */
+/*                                                                     */
+/*   - NEVER AHEAD. Every offset is behind or beside, so the arriving  */
+/*     car cannot materialise inside the target's braking distance.    */
+/*     That is the "instantly clipping" case, and it is handled by      */
+/*     which candidates exist rather than by a fudge factor.           */
+/*                                                                     */
+/*   - SPOOL BEFORE ASKING THE GROUND. MapHeight answers 0 for ground  */
+/*     that is not resident, and 0 reads as a perfectly good height,   */
+/*     so testing candidates before jer_map_spool_to has streamed the  */
+/*     destination is exactly how a warp lands in the void.            */
+/*                                                                     */
+/* Placed the way the engine places a car (InitCarPhysics: the rigid-body
+/* quaternion and the fixed-point fposition, NOT hd.where) and for the same
+/* reason the respawn above had to learn. The camera is re-seated with it,
+/* because cameraAngle is an absolute world yaw. */
+
+/* How far from the target the near/far candidates sit, and the clearance a car
+ * needs to be put down. The near ones are "alongside you", the far ones a
+ * junction away. */
+#define MP_WARP_NEAR	300
+#define MP_WARP_FAR	2000
+#define MP_WARP_CLEAR	300
+
+/* Is (x,z) somewhere a car can be put? The engine's own scenery test (CellEmpty,
+ * the one the civ AI uses) plus a ground height that actually exists - MapHeight
+ * answering for 0 is what separates "a road shoulder" from "beyond the level". */
+static int MpWarpSpotOk(int x, int z)
+{
+	VECTOR p;
+
+	p.vx = x;
+	p.vy = 0;
+	p.vz = z;
+	p.pad = 0;
+
+	if (!CellEmpty(&p, MP_WARP_CLEAR))
+		return 0;
+
+	return MapHeight(&p) > -1000;
+}
+
+int MpWarpToPlayer(int playerId)
+{
+	MP_PLAYER* me;
+	MP_PLAYER* tp;
+	CAR_DATA* myc;
+	CAR_DATA* tgt;
+	int tx, ty, tz, dir, fx, fz, rx, rz, i;
+	int bestX = 0, bestZ = 0, bestRoad = 0, found = 0;
+
+	/* The candidate ring, in the target's own axes: `along` is measured along
+	 * their FORWARD axis and every value is <= 0, which is the definition of
+	 * "not in their trajectory". Beside first (least in the way), then behind,
+	 * then further out. */
+	static const int kAlong[]  = { -MP_WARP_NEAR, -MP_WARP_NEAR, -900, -900, -1600, -MP_WARP_FAR, 0, 0 };
+	static const int kAcross[] = { 600, -600, 900, -900, 0, 0, 900, -900 };
+
+	if (!gMp.running)
+		return 0;
+
+	me = MpLocalPlayer();
+	tp = MpGetPlayer(playerId);
+
+	if (me == NULL || me->carId < 0 || me->carId >= MAX_CARS)
+	{
+		MpNotify("Warp: you are on foot with no car");
+		return 0;
+	}
+
+	if (tp == NULL || tp->id == gMp.localPlayerId ||
+	    tp->carId < 0 || tp->carId >= MAX_CARS)
+	{
+		MpNotify("Warp: that player has no car to go to");
+		return 0;
+	}
+
+	myc = &car_data[me->carId];
+	tgt = &car_data[tp->carId];
+
+	tx = tgt->hd.where.t[0];
+	ty = tgt->hd.where.t[1];
+	tz = tgt->hd.where.t[2];
+	dir = tgt->hd.direction;
+
+	/* Stream the destination BEFORE reading the ground under it. */
+	jer_map_spool_to(tx, tz);
+
+	/* The target's axes: forward (fx,fz) and a perpendicular (rx,rz). The offsets
+	 * are in those, so "behind" stays behind whichever way they are pointing
+	 * when the menu is used. */
+	fx = (int)rsin(dir);
+	fz = (int)rcos(dir);
+	rx = fz;
+	rz = -fx;
+
+	for (i = 0; i < (int)(sizeof(kAlong) / sizeof(kAlong[0])); i++)
+	{
+		int px = tx + ((fx * kAlong[i] + rx * kAcross[i]) >> 12);
+		int pz = tz + ((fz * kAlong[i] + rz * kAcross[i]) >> 12);
+		int onRoad;
+
+		if (!MpWarpSpotOk(px, pz))
+			continue;
+
+		onRoad = JerRoadAt(px, ty, pz) ? 1 : 0;
+
+		/* A clear road point beats anything already found. */
+		if (!found || (onRoad && !bestRoad))
+		{
+			bestX = px;
+			bestZ = pz;
+			bestRoad = onRoad;
+			found = 1;
+		}
+
+		if (bestRoad)
+			break;
+	}
+
+	if (!found)
+	{
+		MpNotify("Warp: no clear ground near that player");
+
+		if (gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx,
+				"[mp] warp: no clear spot near player %d (%s) at %d,%d - staying put\n",
+				tp->id, tp->name, tx, tz);
+
+		return 0;
+	}
+
+	{
+		LONGVECTOR4 start;
+		JER_ARGS_RESET_CAR rc;
+
+		start[0] = bestX;
+		start[1] = 0;		/* the engine resolves the ground under the car */
+		start[2] = bestZ;
+		start[3] = 0;
+
+		InitCarPhysics(myc, &start, dir);
+
+		/* Arrive stopped, and pointing the way the target is - not pointing AT
+		 * the target: the heading that matters is the one the driver can see out
+		 * of, and a car dropped in at an arbitrary angle is one they have to sort
+		 * out before they can drive. */
+		myc->hd.speed = 0;
+		myc->wheel_angle = 0;
+
+		/* Re-seated because cameraAngle is an absolute world yaw, not an offset. */
+		player[0].cameraAngle = myc->hd.direction + 1536;
+		player[0].cameraCarId = myc->id;
+
+		rc.carId = me->carId;
+		jer_fire(JER_EVENT_RESET_CAR, &rc);
+
+		if (gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx,
+				"[mp] warp: to player %d (%s) at %d,%d - %d units along their axis (negative = behind), %s\n",
+				tp->id, tp->name, myc->hd.where.t[0], myc->hd.where.t[2],
+				(int)(((long)fx * (bestX - tx) + (long)fz * (bestZ - tz)) >> 12),
+				bestRoad ? "on a road" : "off-road");
+	}
 
 	return 1;
 }
