@@ -1094,18 +1094,6 @@ void MpNotify(const char* text)
 	}
 }
 
-void MpNotifyf(const char* fmt, ...)
-{
-	char b[MP_NOTIFY_TEXT_MAX];
-	va_list ap;
-
-	va_start(ap, fmt);
-	vsnprintf(b, sizeof(b), fmt, ap);
-	va_end(ap);
-
-	MpNotify(b);
-}
-
 /* ------------------------------------------------------------------ */
 /* The engine status console                                          */
 /* ------------------------------------------------------------------ */

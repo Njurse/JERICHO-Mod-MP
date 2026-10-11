@@ -5854,7 +5854,6 @@ static struct
 	int city;
 	int model;
 	int framesLeft;
-	int told;
 } gMpCarChangeWait;
 
 static int MpChangeCarRun(int city, int model, int isRetry);
@@ -5878,14 +5877,6 @@ void MpCarChangeWaitTick(void)
 	if (!gMpCarChangeWait.active)
 		return;
 
-	if (!gMpCarChangeWait.told)
-	{
-		gMpCarChangeWait.told = 1;
-
-		MpNotifyf("Change car: %s model %d - waiting for a spare slot",
-			MpCarCityName(gMpCarChangeWait.city), gMpCarChangeWait.model);
-	}
-
 	if (--gMpCarChangeWait.framesLeft <= 0)
 	{
 		int city = gMpCarChangeWait.city;
@@ -5893,8 +5884,13 @@ void MpCarChangeWaitTick(void)
 
 		gMpCarChangeWait.active = 0;
 
-		MpNotifyf("Change car refused: %s model %d - %s", MpCarCityName(city), model,
-			MpChangeCarRefusal(city, model));
+		/* The wait ran out. The refusal is a LOG line now: the on-screen notice that
+		 * used to say it here went with the rest of mp's bottom-left debug block, and
+		 * the REASON is the part worth keeping. */
+		if (gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx, "[mp] change car refused: %s model %d - %s\n",
+				MpCarCityName(city), model, MpChangeCarRefusal(city, model));
+
 		return;
 	}
 
@@ -5933,7 +5929,6 @@ static int MpChangeCarRun(int city, int model, int isRetry)
 					"[mp] change car (single player): not driving (playerCarId %d, type %d) - nothing to change\n",
 					slot, (int)MainPlayer.playerType);
 
-			MpNotify("Change car: get in a car first");
 			return 0;
 		}
 
@@ -5957,7 +5952,6 @@ static int MpChangeCarRun(int city, int model, int isRetry)
 				gMpCarChangeWait.city = city;
 				gMpCarChangeWait.model = model;
 				gMpCarChangeWait.framesLeft = MP_CHANGE_WAIT_FRAMES;
-				gMpCarChangeWait.told = 0;
 			}
 
 			return 0;
@@ -5967,11 +5961,12 @@ static int MpChangeCarRun(int city, int model, int isRetry)
 
 		changed = MpAdoptCar(slot, city, model, NULL);
 
-		if (changed)
-			MpNotifyf("Changed car: %s model %d", MpCarCityName(city), model);
-		else
-			MpNotifyf("Change car refused: %s model %d - %s", MpCarCityName(city), model,
-				MpChangeCarRefusal(city, model));
+		/* A successful change is already in the log (the "we asked for" line above,
+		 * and MpAdoptCar's own). A refusal's REASON was the useful part of the notice
+		 * that used to be on screen, so it goes to the log instead. */
+		if (!changed && gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx, "[mp] change car refused: %s model %d - %s\n",
+				MpCarCityName(city), model, MpChangeCarRefusal(city, model));
 
 		return changed;
 	}
@@ -6006,7 +6001,6 @@ static int MpChangeCarRun(int city, int model, int isRetry)
 				gMpCtx->jer_log(gMpCtx,
 					"[mp] change car: on foot and no car of ours to get back into\n");
 
-			MpNotify("Change car: you are on foot with no car to change");
 			return 0;
 		}
 
@@ -6057,7 +6051,6 @@ static int MpChangeCarRun(int city, int model, int isRetry)
 			gMpCarChangeWait.city = city;
 			gMpCarChangeWait.model = model;
 			gMpCarChangeWait.framesLeft = MP_CHANGE_WAIT_FRAMES;
-			gMpCarChangeWait.told = 0;
 		}
 
 		return 0;
@@ -6086,11 +6079,12 @@ static int MpChangeCarRun(int city, int model, int isRetry)
 	else
 		MpSendPickedCar(model, city);
 
-	if (changed)
-		MpNotifyf("Changed car: %s model %d", MpCarCityName(city), model);
-	else
-		MpNotifyf("Change car refused: %s model %d - %s", MpCarCityName(city), model,
-			MpChangeCarRefusal(city, model));
+	/* The change itself is in the log (MpAdoptRemoteCar's "rebuilt player N's car"
+	 * line and MpCarQueryChosen's "car chosen"). Only a REFUSAL carried text worth
+	 * keeping, so its reason goes to the log rather than the screen. */
+	if (!changed && gMpCtx != NULL)
+		gMpCtx->jer_log(gMpCtx, "[mp] change car refused: %s model %d - %s\n",
+			MpCarCityName(city), model, MpChangeCarRefusal(city, model));
 
 	/* THE INVISIBLE-CAR INSTRUMENT.
 	 *

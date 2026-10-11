@@ -270,7 +270,7 @@ void MpConnSetPing(int connIndex, unsigned long ms);
 int  MpPingForPlayer(int playerId);	/* RTT in ms, or -1 -- from the PING/PONG tick */
 void MpConnHandshakeDone(int connIndex);	/* this connection has seen a HELLO/WELCOME */
 void MpConnEvent(const char* ev, int idx, const char* why);	/* the connection log */
-void MpConnLineText(char* out, int cap, int part);	/* the on-screen one (part 0 / 1) */
+void MpConnLineText(char* out, int cap, int part);	/* the two-line rollup, part 0 / 1 */
 void MpDiagDump(const char* reason);	/* everything we know -> mp_diag.txt */
 void MpConnMatchStarted(void);			/* the level is up: every stage says so */
 void MpConnDrop(int idx, const char* why);	/* close a connection, with the real reason */
@@ -388,7 +388,6 @@ void MpTestPauseCarTick(void);
 
 /* Lower-left info overlay (who joined/left) + the chat prompt. */
 void MpNotify(const char* text);	/* queue a line for the overlay */
-void MpNotifyf(const char* fmt, ...);	/* printf-style MpNotify */
 
 /* The engine's status console (jer_console.h). Join/leave and chat go there
  * instead of the transient toast ring: the console is the scrolling stream, so

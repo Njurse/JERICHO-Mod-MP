@@ -22,7 +22,6 @@
 #include "jer_colour.h"		/* a player's suit colour is a canonical JER_COLOUR */
 #include "jer_ped_palette.h"	/* a player's own Tanner in their own colour */
 #include "jer_npc.h"		/* JerNpc: the stand-in we drew for a remote player */
-#include "jer_console.h"	/* the unified status console (jer_console_enabled) */
 
 /* The chat key needs PsyX's debug-key hook, but NOT its header: PsyX_public.h and
  * SDL_scancode.h both pull in math/SDL defines that collide with the game's in
@@ -1267,7 +1266,6 @@ static int MpOnFrame(void* userdata, void* args)
  * Servicing the socket here is what keeps a paused session alive: we keep
  * sending our keepalive and keep draining the peer's. */
 extern void SetTextColour(unsigned char Red, unsigned char Green, unsigned char Blue);
-extern int  PrintString(char* string, int x, int y);
 extern int  PrintStringHiresScaledSpaced(char* string, int x, int y, float scale, float extra);
 extern int  gDrawPauseMenus;
 
@@ -1697,43 +1695,12 @@ static int MpOnDrawOverlay(void* userdata, void* args)
 	if (gMpShowPlayers)
 		MpDrawPlayerList();
 
-	/* Bottom-left HOST / CLIENT tag, on while a session exists: with two windows
-	 * side by side on one machine (or two machines) there is otherwise no way to
-	 * tell which is which -- and the test is precisely about the two roles
-	 * behaving differently. It is part of the console's bottom HUD BLOCK, so the
-	 * `~` key (jer_console_enabled) hides this tag and the two connection lines
-	 * together with the stream. */
-	if (jer_console_enabled())
-	{
-		const char* who = MpIsHost() ? "HOST" :
-			(gMp.role == MP_ROLE_CLIENT ? "CLIENT" : "MP");
-		char conn0[120];
-		char conn1[120];
-
-		if (MpIsHost())
-			SetTextColour(0, 255, 255);
-		else
-			SetTextColour(255, 200, 0);
-
-		PrintString((char*)who, 8, 226);
-
-		/* What the connection is DOING, right here on screen -- the line to read
-		 * out when something looks wrong on one machine only: which peer, how
-		 * long it has been in its current stage, and what happened last. Two
-		 * short lines because one long one runs off a 320 px screen. MpConnEvent
-		 * logs this same text, so it can also simply be grepped for. */
-		MpConnLineText(conn0, sizeof(conn0), 0);
-		MpConnLineText(conn1, sizeof(conn1), 1);
-
-		if (conn0[0] != 0)
-		{
-			SetTextColour(190, 190, 190);
-			PrintString(conn0, 8, 208);
-
-			if (conn1[0] != 0)
-				PrintString(conn1, 8, 217);
-		}
-	}
+	/* The bottom-left HOST/CLIENT tag and its two live connection lines USED to be
+	 * drawn here. REMOVED: with the status console drawing the same corner, the
+	 * block was a second, larger debug readout stacked under it. The same facts
+	 * (the role, the peer, the handshake stage, the last event) are still in the
+	 * session log -- see MpConnEvent's `[mp] conn: ...` and `[mp] conn status: ...`
+	 * lines, which is what MpConnLineText exists for now. */
 
 	return JER_RESULT_CONTINUE;
 }

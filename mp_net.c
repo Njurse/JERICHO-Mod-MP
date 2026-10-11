@@ -1396,16 +1396,18 @@ void MpDiagDump(const char* reason)
 		gMpCtx->jer_log(gMpCtx, "[mp] diag: wrote mp_diag.txt (%s)\n", reason);
 }
 
-/* The on-screen connection readout. Two SHORT lines rather than one long one:
- * the screen is 320 px wide, so peer + stage + time + last event on a single
- * line runs off the edge and becomes unreadable exactly when it matters.
+/* The connection readout, in two SHORT lines: peer + the stage it is in and how
+ * long it has been there, then the last event and how long ago it was.
  *
  *      part 0:  "<peer>  <stage> <n>s"   e.g. "192.168.50.244:55497  in match 67s"
  *      part 1:  "last: <event> (<n>s ago)"
  *
- * The same text is written to the log by MpConnEvent, deliberately: whatever is
- * on screen can then be grepped for, so "read me out what you see" becomes a
- * one-line search instead of a description. */
+ * REMOVED from the screen: mp used to draw these two lines (and a HOST/CLIENT
+ * tag) at the bottom-left, and that block is gone -- the status console owns the
+ * corner now. What is left is the LOG rollup, written by MpConnEvent on every
+ * connection event and by the periodic link tick: "time in the current stage"
+ * and "what happened last" are what a log reader needs to reconstruct a
+ * handshake, so both callers stay. */
 void MpConnLineText(char* out, int cap, int part)
 {
 	int idx = -1;
@@ -1491,8 +1493,9 @@ void MpConnEvent(const char* ev, int idx, const char* why)
 		(why != NULL && why[0] != 0) ? " | why: " : "",
 		why != NULL ? why : "");
 
-	/* Mirror the on-screen line into the log, so whatever is on screen is
-	 * searchable from here without anyone having to read it out loud. */
+	/* The two-line rollup (MpConnLineText) next to the event line above: the event
+	 * says WHAT happened, this says how long the connection has been in its current
+	 * stage and when it last did anything. */
 	{
 		char l0[120];
 		char l1[120];
@@ -1500,7 +1503,7 @@ void MpConnEvent(const char* ev, int idx, const char* why)
 		MpConnLineText(l0, sizeof(l0), 0);
 		MpConnLineText(l1, sizeof(l1), 1);
 
-		gMpCtx->jer_log(gMpCtx, "[mp] on screen: %s | %s\n", l0, l1);
+		gMpCtx->jer_log(gMpCtx, "[mp] conn status: %s | %s\n", l0, l1);
 	}
 
 	/* JERICHO-HOOK: the SAME event, into the unified status console (jer_console.h).
@@ -2040,8 +2043,8 @@ static void MpLinkTick(unsigned long now)
 				c->sbufLen - c->sbufOff, c->txBytes);
 		}
 
-		/* The same text the overlay is drawing, so "time in state" can be watched
-		 * in a log as well as read off the screen. */
+		/* The same two-line rollup, on a timer: what the connection is doing
+		 * between events (stage age, last event) is what shows a stalled link. */
 		{
 			char l0[120];
 			char l1[120];
@@ -2049,7 +2052,7 @@ static void MpLinkTick(unsigned long now)
 			MpConnLineText(l0, sizeof(l0), 0);
 			MpConnLineText(l1, sizeof(l1), 1);
 
-			gMpCtx->jer_log(gMpCtx, "[mp] screen: %s | %s\n", l0, l1);
+			gMpCtx->jer_log(gMpCtx, "[mp] conn status: %s | %s\n", l0, l1);
 		}
 	}
 }
