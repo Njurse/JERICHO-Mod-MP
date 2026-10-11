@@ -2132,7 +2132,7 @@ static const JER_PAUSE_MENU_ITEM mpChangeCarItems[] =
 #define MP_MENU_ITEMS(a)	(int)(sizeof(a) / sizeof((a)[0]))
 
 static const JER_PAUSE_MENU mpChangeCarMenu =
-{ "Change car", mpChangeCarItems, MP_MENU_ITEMS(mpChangeCarItems), "mp.car" };
+{ "Vehicle Options", mpChangeCarItems, MP_MENU_ITEMS(mpChangeCarItems), "mp.car" };
 
 static const JER_PAUSE_MENU_ITEM mpColorItems[] =
 {
