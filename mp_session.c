@@ -2012,17 +2012,16 @@ void MpSelfRepairCar(void)
 
 	cp = &car_data[me->carId];
 
+	/* The engine's own clean-car recipe (mission.c's respawn path): zero the
+	 * damage rating, rebuild the dentable mesh from the clean model, then run one
+	 * dent pass over the now-zero damage so the geometry and the damage-texture
+	 * UVs settle back to pristine together. CreateDentableCar fires
+	 * JER_EVENT_RESET_CAR itself (zeroing the crumple state before the clean
+	 * copy), so there is no separate reset here. */
 	cp->totalDamage = 0;
 	memset(cp->ap.damage, 0, sizeof(cp->ap.damage));
 	CreateDentableCar(cp);
-	cp->ap.needsDenting = 0;
-
-	{
-		JER_ARGS_RESET_CAR rc;
-
-		rc.carId = me->carId;
-		jer_fire(JER_EVENT_RESET_CAR, &rc);
-	}
+	DentCar(cp);
 
 	if (gMpCtx != NULL)
 		gMpCtx->jer_log(gMpCtx, "[mp] player option: car repaired (slot %d)\n", me->carId);
