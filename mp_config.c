@@ -77,6 +77,18 @@ void MpConfigLoad(void)
 
 	gMp.config.strictVersion = jer_config_get_int("mp", "strict_version", 0);
 
+	/* SESSION RULES. Defaults are the game's own behaviour -- cops on, the
+	 * engine's default difficulty (1), nothing invulnerable -- so a host who
+	 * never opens the settings gets what the game would have done anyway. */
+	gMp.config.cops = jer_config_get_int("mp", "cops", 1) ? 1 : 0;
+
+	gMp.config.copDifficulty = jer_config_get_int("mp", "cop_difficulty", 1);
+	if (gMp.config.copDifficulty < 0 || gMp.config.copDifficulty > MP_COP_DIFF_MAX)
+		gMp.config.copDifficulty = 1;
+
+	gMp.config.invuln = jer_config_get_int("mp", "invuln", 0) ? 1 : 0;
+	gMp.config.immune = jer_config_get_int("mp", "immune", 0) ? 1 : 0;
+
 	/* COLOUR. Off by default, and that default is deliberate: see MP_CONFIG. */
 	gMp.config.colorOn = jer_config_get_int("mp", "custom_color", 0);
 	gMp.config.colorR = jer_config_get_int("mp", "color_r", 255);
@@ -121,6 +133,10 @@ void MpConfigSave(void)
 	jer_config_set_int("mp", "car_city", gMp.config.carCity);
 	jer_config_set_int("mp", "car_is_slot", gMp.config.carIsSlot);
 	jer_config_set_int("mp", "strict_version", gMp.config.strictVersion);
+	jer_config_set_int("mp", "cops", gMp.config.cops);
+	jer_config_set_int("mp", "cop_difficulty", gMp.config.copDifficulty);
+	jer_config_set_int("mp", "invuln", gMp.config.invuln);
+	jer_config_set_int("mp", "immune", gMp.config.immune);
 
 	jer_config_set_int("mp", "custom_color", gMp.config.colorOn);
 	jer_config_set_int("mp", "color_r", gMp.config.colorR);

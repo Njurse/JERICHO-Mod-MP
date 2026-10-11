@@ -28,6 +28,10 @@ extern "C" {
 /* ------------------------------------------------------------------ */
 /* Config                                                              */
 /* ------------------------------------------------------------------ */
+/* gCopDifficultyLevel's range. The engine's own tables are indexed 0..2 --
+ * cop_ai.c's speed1/speed2 and its batter thresholds -- so 2 is the ceiling. */
+#define MP_COP_DIFF_MAX	2
+
 typedef struct MP_CONFIG
 {
 	int  port;			/* UDP+TCP port (default 1318) */
@@ -38,6 +42,19 @@ typedef struct MP_CONFIG
 	int  idleDropMs;		/* silence that drops a peer; 0 = never drop */
 	int  modCheck;			/* host lobby setting: MP_MODCHECK_* */
 	int  strictVersion;		/* host lobby setting: also require the same build */
+
+	/* SESSION RULES -- the host's per-session gameplay settings, chosen in the
+	 * Host Game menu and applied on EVERY machine (they ride the wire: see
+	 * MP_RULES_* / MP_WELCOME.rules). This is where the host's defaults for the
+	 * NEXT session live; the rules the LIVE session is enforcing are in
+	 * MP_STATE.rule* -- the two are deliberately separate, because a host may
+	 * change its mind in the menu without reaching back into a running match. */
+	int  cops;			/* 1 = police cars spawn (CopsAllowed = 1), 0 = they do not */
+	int  copDifficulty;		/* gCopDifficultyLevel, 0..MP_COP_DIFF_MAX */
+	int  immune;			/* 1 = cops cannot come after you (gPlayerImmune). NOT the
+				 * same axis as `cops`: this leaves them on the map and
+				 * takes away their reason to bother you. */
+	int  invuln;			/* 1 = no car can be damaged (gInvincibleCar) */
 	int  car;			/* this machine's vehicle for the match, -1 = level default */
 	int  carIsSlot;			/* 1 = `car` is a 1..10 frontend slot, resolved per city */
 	int  carCity;			/* the city `car`'s MODEL NUMBER belongs to, -1 = the session's
@@ -130,6 +147,16 @@ typedef struct MP_STATE
 	unsigned int seed;
 
 	int modsMatched;		/* client: our manifest matched the host */
+
+	/* THE SESSION RULES IN FORCE. The host sets these at launch; a client adopts
+	 * them from MP_START (the launch path) or MP_WELCOME (join in progress).
+	 * ruleSet is 0 until they are known, so the applier stays silent instead of
+	 * forcing a default of its own onto whatever level is up. */
+	int ruleCops;
+	int ruleDiff;
+	int ruleImmune;
+	int ruleInvuln;
+	int ruleSet;
 	int localPlaced;
 	unsigned long busyUntilMs;		/* client: our own car was gathered next to the host */
 

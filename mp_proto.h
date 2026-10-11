@@ -38,7 +38,8 @@
 extern "C" {
 #endif
 
-#define MP_PROTO_VERSION	10	/* 10: MP_TAG_KICK -- the host removes a player */
+#define MP_PROTO_VERSION	11	/* 11: MP_WELCOME.rules -- the host's session rules
+					 * (10: MP_TAG_KICK) */
 
 /* Default UDP+TCP port. 1318 is IANA-unassigned (the neighbour 1319 is
  * amx-icsp), so it is a safe, non-reserved choice for a game. Configurable
@@ -286,6 +287,8 @@ typedef struct MP_WELCOME
 	uint8_t  weather;
 	uint32_t seed;
 	uint8_t  hostCar;	/* the host's own vehicle (car id), 0xFF = unset */
+	uint8_t  rules;		/* the host's SESSION RULES, MP_RULES_PACK'd (v11) -- what a
+				 * client joining a match IN PROGRESS must adopt */
 } MP_WELCOME;
 
 /* 'JPRJ' -- host -> client, refused. */
@@ -295,6 +298,31 @@ typedef struct MP_REJECT
 	uint8_t  reserved[3];
 	char     text[MP_REJECT_TEXT_MAX];
 } MP_REJECT;
+
+/* The host's SESSION RULES, packed into ONE byte. They travel two ways and the
+ * two must stay in step: MP_WELCOME.rules (join in progress) and the free bits
+ * of MP_SESSION.spare (the launch path, shifted up by one because spare's bit 0
+ * is the map shape). MP_RULES_PACK and its readers are the only writers. */
+#define MP_RULE_COPS		0x1	/* 1 = police cars spawn (CopsAllowed = 1), 0 = off */
+#define MP_RULE_INVULN		0x2	/* 1 = no car can be damaged (gInvincibleCar) */
+#define MP_RULE_DIFF_SHIFT	2	/* 2 bits: gCopDifficultyLevel, 0..3 */
+#define MP_RULE_DIFF_MASK	0x3
+#define MP_RULE_IMMUNE		0x10	/* 1 = cops can't come after you (gPlayerImmune) */
+
+/* COPS and IMMUNITY are deliberately SEPARATE axes, not two names for one thing:
+ * Cops = do police cars exist/spawn at all (CopsAllowed), while Immunity = they
+ * may well exist but you are un-touchable (gPlayerImmune zeroes the wanted level,
+ * so nobody is ever sent after you). "Cops off" removes them; "Immunity on"
+ * leaves them on the map and makes them impotent. */
+#define MP_RULES_PACK(cops, invuln, diff, immune)	\
+	(uint32_t)(((cops) ? MP_RULE_COPS : 0) |\
+	           ((invuln) ? MP_RULE_INVULN : 0) |\
+	           (((diff) & MP_RULE_DIFF_MASK) << MP_RULE_DIFF_SHIFT) |\
+	           ((immune) ? MP_RULE_IMMUNE : 0))
+#define MP_RULES_COPS(b)	(((b) & MP_RULE_COPS) ? 1 : 0)
+#define MP_RULES_INVULN(b)	(((b) & MP_RULE_INVULN) ? 1 : 0)
+#define MP_RULES_DIFF(b)	(((b) >> MP_RULE_DIFF_SHIFT) & MP_RULE_DIFF_MASK)
+#define MP_RULES_IMMUNE(b)	(((b) & MP_RULE_IMMUNE) ? 1 : 0)
 
 /* The launch config. It travels INSIDE MP_START ('JPST'), never as a standalone
  * message: the old standalone form ('JPSS') had no sender and no handler and has
@@ -568,7 +596,7 @@ static_assert(sizeof(MP_ENVELOPE) == 12, "MP_ENVELOPE layout");
 static_assert(sizeof(MP_BEACON) == 50, "MP_BEACON layout");
 static_assert(sizeof(MP_MOD_INFO) == 42, "MP_MOD_INFO layout");
 static_assert(sizeof(MP_HELLO) == 44, "MP_HELLO layout");
-static_assert(sizeof(MP_WELCOME) == 17, "MP_WELCOME layout");
+static_assert(sizeof(MP_WELCOME) == 18, "MP_WELCOME layout");	/* 18 since v11 (rules) */
 static_assert(sizeof(MP_REJECT) == 68, "MP_REJECT layout");
 static_assert(sizeof(MP_SESSION) == 12, "MP_SESSION layout");
 static_assert(sizeof(MP_PLAYER_INPUT) == 4, "MP_PLAYER_INPUT layout");

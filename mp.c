@@ -869,6 +869,53 @@ static void MpWatchTick(void)
 		gMpFrameHookTicks, gMp.frame, gMpStage, gMp.running, (int)gMp.role, pauseflag, gDrawPauseMenus);
 }
 
+/* SESSION RULES, re-asserted every frame.
+ *
+ * NOT once at launch, and that is the whole point of this function: the LEVEL
+ * sets these for itself when it comes up (level setup does
+ * `CopsAllowed = (maxCopCars != 0)`), so a single write during the launch is
+ * overwritten by the level's own opinion a frame later. Re-asserting each frame
+ * is what makes the host's choice stick, and it is the same shape the engine's
+ * own cheats already use -- main.c re-zeroes the player's damage every frame
+ * while gInvincibleCar is set.
+ *
+ * gCopDifficultyLevel is re-asserted for the same reason: the frontend's Cop
+ * Difficulty screen and mission scripts both write it.
+ *
+ * Silent until the rules are known (gMp.ruleSet) and only while a match is live,
+ * so no pre-session or single-player frame gets a rule forced onto it that
+ * nobody asked for. */
+static void MpSessionRulesTick(void)
+{
+	/* "The menu says no cops" and "the sim is running with no cops" are
+	 * different claims, and only the second one is the feature. Say it once per
+	 * change of rules, with the ENGINE's own variables read back after the
+	 * write, so the log proves which of the two we have. */
+	static int reportedCops = -1, reportedDiff = -1, reportedInv = -1, reportedImmune = -1;
+
+	if (!gMp.ruleSet || !gMp.running)
+		return;
+
+	CopsAllowed = gMp.ruleCops;
+	gCopDifficultyLevel = gMp.ruleDiff;
+	gPlayerImmune = gMp.ruleImmune ? 1 : 0;
+	gInvincibleCar = gMp.ruleInvuln ? 1 : 0;
+
+	if (gMp.ruleCops != reportedCops || gMp.ruleDiff != reportedDiff ||
+	    gMp.ruleInvuln != reportedInv || gMp.ruleImmune != reportedImmune)
+	{
+		reportedCops = gMp.ruleCops;
+		reportedDiff = gMp.ruleDiff;
+		reportedInv = gMp.ruleInvuln;
+		reportedImmune = gMp.ruleImmune;
+
+		if (gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx,
+				"[mp] session rules IN FORCE: CopsAllowed=%d gCopDifficultyLevel=%d gPlayerImmune=%d gInvincibleCar=%d\n",
+				CopsAllowed, gCopDifficultyLevel, gPlayerImmune, gInvincibleCar);
+	}
+}
+
 static int MpOnFrame(void* userdata, void* args)
 {
 	(void)userdata;
@@ -885,6 +932,10 @@ static int MpOnFrame(void* userdata, void* args)
 
 	MpNetPoll(0);
 	MpUiTick();
+
+	/* The host's session rules, every frame -- the level sets these for itself
+	 * when it loads, so a one-shot write at launch would not survive it. */
+	MpSessionRulesTick();
 
 	/* The test levers ride on the lockstep tick, which exists only inside a session
 	 * (MpLockstepFrame returns at once when not running). Run the one lever that has

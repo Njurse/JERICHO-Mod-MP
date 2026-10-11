@@ -1337,6 +1337,53 @@ void MpSetMapShape(int mpLevel, int arena)
 	gBootMpArena = arena & 1;
 }
 
+/* The host's SESSION RULES, packed for the wire. ONE packed byte (MP_RULES_*),
+ * carried two ways: MP_WELCOME.rules for a client that joins a running match,
+ * and the free bits of MP_SESSION.spare for the launch. These two functions and
+ * the spare/welcome sites are the only readers and writers, deliberately -- the
+ * map shape already showed how easy it is for the two carriers to drift. */
+static uint32_t MpRulesFromConfig(void)
+{
+	return MP_RULES_PACK(gMp.config.cops, gMp.config.invuln, gMp.config.copDifficulty,
+		gMp.config.immune);
+}
+
+/* What the HOST should publish right now: the rules the running session was
+ * launched with once there is one, otherwise the lobby defaults from the menu.
+ * The difference matters -- a host that edits the menu mid-match must not
+ * retro-fit new rules onto the players already in it. */
+static uint32_t MpRulesForPeer(void)
+{
+	if (gMp.ruleSet)
+		return MP_RULES_PACK(gMp.ruleCops, gMp.ruleInvuln, gMp.ruleDiff, gMp.ruleImmune);
+
+	return MpRulesFromConfig();
+}
+
+/* Adopt a packed rule byte and remember it as in force. `how` names the carrier,
+ * because "the rules are not what I set" is otherwise unattributable. */
+static void MpRulesAdopt(uint32_t packed, const char* how)
+{
+	int cops = MP_RULES_COPS(packed);
+	int invuln = MP_RULES_INVULN(packed);
+	int diff = MP_RULES_DIFF(packed);
+	int immune = MP_RULES_IMMUNE(packed);
+
+	if (diff > MP_COP_DIFF_MAX)
+		diff = MP_COP_DIFF_MAX;
+
+	gMp.ruleCops = cops;
+	gMp.ruleInvuln = invuln;
+	gMp.ruleImmune = immune;
+	gMp.ruleDiff = diff;
+	gMp.ruleSet = 1;
+
+	if (gMpCtx != NULL)
+		gMpCtx->jer_log(gMpCtx,
+			"[mp] session rules from %s: cops=%s cop difficulty=%d immune=%s invulnerable=%s\n",
+			how, cops ? "on" : "off", diff, immune ? "on" : "off", invuln ? "on" : "off");
+}
+
 int MpStartMatch(void)
 {
 	MP_START st;
@@ -1426,8 +1473,21 @@ int MpStartMatch(void)
 	 * multiplayer map, and which arena. It must travel HERE and not only in
 	 * MpSendWelcome, because a client that connected while the host was still
 	 * choosing - i.e. before this START - was welcomed with whatever shape the
-	 * host had at that moment. */
-	st.session.spare = (uint16_t)((gBootMpLevel ? 1 : 0) | ((gBootMpArena & 1) << 8));
+	 * host had at that moment.
+	 *
+	 * The SESSION RULES ride beside it in spare's free bits, and for the same
+	 * reason: this is the moment they are decided. Snapshot the menu's settings
+	 * into the session FIRST (MpRulesAdopt), so a host who edits the menu
+	 * mid-match cannot retro-fit new rules onto the players already in it. */
+	{
+		uint32_t rules = MpRulesFromConfig();
+
+		MpRulesAdopt(rules, "the host's launch");
+
+		st.session.spare = (uint16_t)((gBootMpLevel ? 1 : 0) |
+			((uint16_t)rules << 1) |
+			((gBootMpArena & 1) << 8));
+	}
 
 	/* The roster goes first, so a client knows how many player cars to spawn
 	 * BEFORE its level loads. Without it the client added no car for the host
@@ -1593,6 +1653,7 @@ static void MpSendWelcome(int connIndex, int playerId, int matched)
 	w.subGame = (uint8_t)(gSubGameNumber & 0xff);
 	w.mpLevel = (uint8_t)(gBootMpLevel ? 1 : 0);	/* the map SHAPE, not the arena */
 	w.arena = (uint8_t)(gBootMpArena & 0x01);	/* which shape: the arena belongs in the session, not a local -mp */
+	w.rules = (uint8_t)MpRulesForPeer();	/* the session rules a joiner must adopt */
 	w.gamemode = (uint8_t)gMp.gamemode;
 	w.city = (uint8_t)gMp.city;
 	w.timeOfDay = (uint8_t)(gMp.timeOfDay < 0 ? 0 : gMp.timeOfDay);
@@ -2010,6 +2071,11 @@ static void MpHandleWelcome(const unsigned char* p, int len)
 	 * arguments said. */
 	gBootMpLevel = w.mpLevel ? 1 : 0;
 	gBootMpArena = (int)w.arena;
+
+	/* The host's session rules (what this match is being played under). The
+	 * welcome is the only way a client that joins a match IN PROGRESS ever
+	 * learns them - MP_START went out at launch, before it was here. */
+	MpRulesAdopt(w.rules, "the host's welcome");
 	/* NOT MpSetSubGame(w.subGame): glaunch.c multiplies gSubGameNumber by 440 when it derives the mission number, so pushing the host's raw internal value through it lands on a mission number hundreds out of range -- a level that does not exist, and then a car with no data reaching ComputeCarLightingLevels. That is an access violation, and it was mine. */
 
 	MpAddPlayer(0, "Host", 0);
@@ -2181,6 +2247,11 @@ static void MpHandleStart(const unsigned char* p, int len)
 	 * exists to prevent. MpLaunchLocal derives gSubGameNumber from these. */
 	gBootMpLevel = st.session.spare & 1;
 	gBootMpArena = (st.session.spare >> 8) & 1;
+
+	/* The host's session rules, in spare's free bits beside the shape (bit 0 is
+	 * the shape, so they are shifted up by one). Adopted BEFORE the level loads
+	 * below, so the first frame of the match is already under them. */
+	MpRulesAdopt((uint32_t)((st.session.spare >> 1) & 0xff), "the host's launch");
 
 	if (gMpCtx)
 		gMpCtx->jer_log(gMpCtx, "[mp] host started: mode %d city %d time %d weather %d\n",

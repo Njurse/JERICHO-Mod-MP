@@ -167,6 +167,46 @@ static int AdjPort(void* ud, int dir)
 	return 1;
 }
 
+/* ---- SESSION RULES (the Host Game menu) --------------------------------
+ *
+ * What the host picks here is applied on EVERY machine for the WHOLE match:
+ * the values are packed (MP_RULES_PACK) and published to the launch
+ * (MP_SESSION.spare) and to every joiner (MP_WELCOME.rules), then re-asserted
+ * every frame by MpSessionRulesTick. They are the host's defaults for the NEXT
+ * match, so they live in mp.ini and survive a restart -- and they are NOT read
+ * mid-match, so editing them cannot change a game already in progress.
+ *
+ * Cops is a strict on/off in both directions: it writes CopsAllowed. The
+ * engine's own default for that flag is per level, so "On" is an assertion a
+ * map with no cop capacity (an mp arena) is free to ignore.
+ *
+ * IMMUNITY is a DIFFERENT axis and must not be folded into Cops: Cops = do
+ * police cars exist, Immunity = they may exist but cannot come after you
+ * (gPlayerImmune). "Police cars: Off" clears the map; "Immunity: On" leaves
+ * them there and disarms them. */
+static void LblCops(void* ud, char* o, int n)    { (void)ud; snprintf(o, n, "Police cars: < %s >", gMp.config.cops ? "On" : "Off"); }
+static void LblCopDiff(void* ud, char* o, int n) { (void)ud; snprintf(o, n, "Cop difficulty: < %d >", gMp.config.copDifficulty); }
+static void LblInvuln(void* ud, char* o, int n)  { (void)ud; snprintf(o, n, "Invulnerability: < %s >", gMp.config.invuln ? "On" : "Off"); }
+static void LblImmune(void* ud, char* o, int n)  { (void)ud; snprintf(o, n, "Immunity: < %s >", gMp.config.immune ? "On" : "Off"); }
+
+static int AdjCops(void* ud, int dir)   { (void)ud; gMp.config.cops = (gMp.config.cops + dir + 2) & 1; MpConfigSave(); return 1; }
+static int AdjInvuln(void* ud, int dir) { (void)ud; gMp.config.invuln = (gMp.config.invuln + dir + 2) & 1; MpConfigSave(); return 1; }
+static int AdjImmune(void* ud, int dir) { (void)ud; gMp.config.immune = (gMp.config.immune + dir + 2) & 1; MpConfigSave(); return 1; }
+
+/* Wraps rather than stopping at the ends, so the row is a cycle and cannot be
+ * walked off the end into a value the engine's tables do not have. */
+static int AdjCopDiff(void* ud, int dir)
+{
+	(void)ud;
+
+	gMp.config.copDifficulty += dir;
+	if (gMp.config.copDifficulty < 0) gMp.config.copDifficulty = MP_COP_DIFF_MAX;
+	if (gMp.config.copDifficulty > MP_COP_DIFF_MAX) gMp.config.copDifficulty = 0;
+
+	MpConfigSave();
+	return 1;
+}
+
 /* ------------------------------------------------------------------ */
 /* Actions                                                             */
 /* ------------------------------------------------------------------ */
@@ -528,10 +568,17 @@ static const JER_FE_MENU kLanMenu = { "mp.lan", kLanItems, 4, NULL, NULL };
 
 static const JER_FE_ITEM kHostItems[] =
 {
+	/* SESSION RULES first: these are the host's gameplay settings for the match
+	 * about to be set up, and they apply to everyone who joins it. */
+	{ NULL, LblCops,    NULL, NULL, AdjCops,    -1, 0 },
+	{ NULL, LblCopDiff, NULL, NULL, AdjCopDiff, -1, 0 },
+	{ NULL, LblImmune,  NULL, NULL, AdjImmune,  -1, 0 },
+	{ NULL, LblInvuln,  NULL, NULL, AdjInvuln,  -1, 0 },
+
 	{ "Take a Ride", NULL, NULL, ActTakeARide, NULL, -1, 0 },
 	{ "Back",        NULL, NULL, NULL,         NULL, -1, 1 },
 };
-static const JER_FE_MENU kHostMenu = { "mp.host", kHostItems, 2, NULL, NULL };
+static const JER_FE_MENU kHostMenu = { "mp.host", kHostItems, 6, NULL, NULL };
 
 static const JER_FE_ITEM kHostSetItems[] =
 {
