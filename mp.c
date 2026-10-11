@@ -182,17 +182,28 @@ void MpSetSubGame(int n)
 /* The stock city screen was confirmed. Ask Singleplayer or Multiplayer BEFORE the
  * stock flow continues to time-of-day/car select -- for the LAN setup AND for a
  * plain singleplayer take-a-ride alike, since the answer also picks the MAP
- * (full city vs the city's multiplayer arena). Gate on the take-a-ride game type
- * so the mission/cutscene city screen (which reaches the same hook with a
- * different GameType) is left alone. `defer` stops the stock continuation and we
- * open our mode menu instead. */
+ * (full city vs the city's multiplayer arena).
+ *
+ * TWO ways in, so this must be a DISJUNCTION. The GameType alone cannot carry it:
+ * measured on the real host flow (Multiplayer -> LAN -> Host Game -> the city
+ * screen), the confirm arrives with `gameType == GAME_MISSION` (0) -- the very
+ * value the mission/cutscene screen carries. Gating on `gameType ==
+ * GAME_TAKEADRIVE` alone therefore silently dropped the LAN path into single
+ * player, and the guard stayed green because `MP_TEST_CITYCONFIRM` hardcodes
+ * GAME_TAKEADRIVE. A session being set up is the reliable LAN signal
+ * (MpBeginHost leaves `gMp.role != MP_ROLE_NONE`); a plain take-a-ride still
+ * arrives as GAME_TAKEADRIVE. The mission path has neither -- no role, not
+ * take-a-ride -- so it stays left alone.
+ *
+ * `defer` stops the stock continuation and we open our mode menu instead. */
 static int MpOnFrontendConfirm(void* userdata, void* args)
 {
 	JER_ARGS_FRONTEND* fe = (JER_ARGS_FRONTEND*)args;
 
 	(void)userdata;
 
-	if (fe->gameType == GAME_TAKEADRIVE && !gMp.running && fe->defer == 0)
+	if ((gMp.role != MP_ROLE_NONE || fe->gameType == GAME_TAKEADRIVE) &&
+	    !gMp.running && fe->defer == 0)
 	{
 		fe->defer = 1;
 
@@ -210,10 +221,11 @@ static int MpOnFrontendConfirm(void* userdata, void* args)
 		/* Why the prompt did NOT open. Before this the only evidence was the
 		 * ABSENCE of the line above -- which is the same evidence as "this hook
 		 * never fired at all", and those are different bugs: a screen the hook
-		 * does not serve (gameType != take-a-ride), versus a hook that is not
-		 * registered. */
-		gMpCtx->jer_log(gMpCtx, "[mp] city confirmed - NOT asking (gameType=%d running=%d defer=%d)\n",
-			fe->gameType, (int)gMp.running, (int)fe->defer);
+		 * does not serve (no session and not take-a-ride), versus a hook that is
+		 * not registered. `role` is in here because it is half of the gate, and
+		 * `gameType` ALONE is what made the LAN path look like a mission. */
+		gMpCtx->jer_log(gMpCtx, "[mp] city confirmed - NOT asking (gameType=%d role=%d running=%d defer=%d)\n",
+			fe->gameType, (int)gMp.role, (int)gMp.running, (int)fe->defer);
 	}
 
 	return JER_RESULT_CONTINUE;
@@ -922,14 +934,23 @@ static int MpOnFrame(void* userdata, void* args)
 	 * Re-asserted every frame so a missed release self-heals. */
 	MpChatGrabKeyboard((gMp.chatOpen || MpUiManualEditing()) ? 1 : 0);
 
-	/* Test lever: MP_TEST_CITYCONFIRM=<secs> fires the take-a-ride CITY CONFIRM the
-	 * way the frontend does (CutSceneCitySelectScreen on CROSS), that many seconds
-	 * after the frontend comes up. A padless run cannot press X on that screen --
-	 * the frontend reads Pads[0].mapnew -- so without this the Single Player /
-	 * Multiplayer prompt path is unreachable headlessly. The prompt OPENING is
-	 * asserted separately: MpUiTick logs "the Single Player / Multiplayer menu did
-	 * not open" on failure, so a run that REQUIRES the line below and FORBIDS that
-	 * one is the regression guard for this whole flow. Inert unless set. */
+	/* Test lever: MP_TEST_CITYCONFIRM=<secs>[,<gameType>[,<role>]] fires the
+	 * take-a-ride CITY CONFIRM the way the frontend does (CutSceneCitySelectScreen
+	 * on CROSS), that many seconds after the frontend comes up. A padless run
+	 * cannot press X on that screen -- the frontend reads Pads[0].mapnew -- so
+	 * without this the Single Player / Multiplayer prompt path is unreachable
+	 * headlessly. The prompt OPENING is asserted separately: MpUiTick logs "the
+	 * Single Player / Multiplayer menu did not open" on failure, so a run that
+	 * REQUIRES the line below and FORBIDS that one is the regression guard for
+	 * this whole flow. Inert unless set.
+	 *
+	 * The two optional fields exist because the gameType ALONE is a lie: measured
+	 * on the real LAN host flow, this hook arrives with gameType == GAME_MISSION
+	 * (0) and a session role already set, and that combination is exactly what the
+	 * gate has to accept. Synthesising only GAME_TAKEADRIVE is what let the LAN
+	 * path regress unnoticed, so the guard needs to be able to present the real
+	 * shape. gameType 0..15 (dr2types.h), role 0=NONE 1=HOST 2=CLIENT
+	 * (mp_proto.h); defaults are the old behaviour. */
 	{
 		static unsigned long confirmAtMs = 0;
 		static int confirmDone = 0;
@@ -943,19 +964,39 @@ static int MpOnFrame(void* userdata, void* args)
 			if (MpNowMs() >= confirmAtMs)
 			{
 				JER_ARGS_FRONTEND fe;
+				int gameType = GAME_TAKEADRIVE;
+				int role = MP_ROLE_NONE;
+				int roleSaved = (int)gMp.role;
+				const char* comma = strchr(s, ',');
 
 				confirmDone = 1;
 
+				if (comma != NULL)
+				{
+					const char* comma2;
+
+					gameType = atoi(comma + 1);
+
+					comma2 = strchr(comma + 1, ',');
+					if (comma2 != NULL)
+						role = atoi(comma2 + 1);
+				}
+
 				fe.gameLevel = MpGetGameLevel();
-				fe.gameType = GAME_TAKEADRIVE;
+				fe.gameType = (GAMETYPE)gameType;
 				fe.numPlayers = 1;
 				fe.defer = 0;
 
+				/* Present the role the way the real flow does, then put it back: the
+				 * lever exists to show the gate a session, not to leave a half-open
+				 * one behind for the rest of the run. */
+				gMp.role = role;
 				jer_fire(JER_EVENT_FRONTEND, &fe);
+				gMp.role = roleSaved;
 
 				gMpCtx->jer_log(gMpCtx,
-					"[mp] test: MP_TEST_CITYCONFIRM -> city confirm fired (defer=%d role=%d)\n",
-					fe.defer, (int)gMp.role);
+					"[mp] test: MP_TEST_CITYCONFIRM -> city confirm fired (gameType=%d role=%d defer=%d)\n",
+					gameType, role, fe.defer);
 			}
 		}
 	}
