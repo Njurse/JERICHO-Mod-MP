@@ -49,8 +49,11 @@ TROUBLE = (
 # Not trouble: work the session did on purpose. A pick that could not fit is remembered and
 # retried (MP_DEFER_*), and at a stress cadence most of them are superseded before a slot
 # frees - that is the mechanism working, and the numbers say whether it keeps up.
+# "retried" is the carhacks fold's own retry (a peer's car whose slot is busy, or whose
+# hot-load did not fit yet): it heals on a later beat, so a first refusal is not trouble.
 HANDLED = (
     ("no room", re.compile(r"no spare resident slot")),
+    ("retried", re.compile(r"is busy right now - retrying|could not build it yet - retrying")),
     ("waited", re.compile(r"is waiting for a free slot")),
     ("landed", re.compile(r"a slot freed up after")),
     ("gave up", re.compile(r"gave up on a resident slot")),
