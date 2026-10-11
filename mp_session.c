@@ -6638,6 +6638,143 @@ int MpWarpToPlayer(int playerId)
 	return 1;
 }
 
+/* ------------------------------------------------------------------ */
+/* RESPAWN ON THE NEAREST ROAD                                         */
+/*                                                                     */
+/* The pause menu's Respawn, and the answer to both "I am wedged in    */
+/* the scenery" and "I warped and landed in the void": put the car back */
+/* on the nearest bit of ROAD, repaired and upright.                   */
+/*                                                                     */
+/* Road rather than "wherever is clear", deliberately: clear ground can */
+/* be the flat roof of a building or a hillside the car cannot leave,   */
+/* while a road is somewhere the level is BUILT to be driven on. The    */
+/* search rings outward and stops at the first ring with a road point   */
+/* on it, so what comes back is the nearest one rather than whichever   */
+/* happened to pass a test first.                                      */
+/*                                                                     */
+/* And it REFUSES when there is nothing to land on, leaving the car put */
+/* -- a respawn that drops the player into the void is worse than no    */
+/* respawn, which is exactly how the warp earned these helpers.         */
+#define MP_RESPAWN_RING_STEP	600	/* units between rings */
+#define MP_RESPAWN_RINGS	12	/* 12 rings = 7200 units out */
+#define MP_RESPAWN_PROBES	12	/* points probed around each ring */
+
+int MpRespawnOnRoad(void)
+{
+	MP_PLAYER* me;
+	CAR_DATA* cp;
+	int cx, cy, cz, ring, i;
+	int bestX = 0, bestZ = 0, found = 0, bestRing = 0;
+
+	me = MpLocalPlayer();
+
+	if (me == NULL || me->carId < 0 || me->carId >= MAX_CARS)
+	{
+		MpNotify("Respawn: you are on foot with no car");
+		return 0;
+	}
+
+	cp = &car_data[me->carId];
+
+	cx = cp->hd.where.t[0];
+	cy = cp->hd.where.t[1];
+	cz = cp->hd.where.t[2];
+
+	for (ring = 1; ring <= MP_RESPAWN_RINGS && !found; ring++)
+	{
+		int r = ring * MP_RESPAWN_RING_STEP;
+
+		for (i = 0; i < MP_RESPAWN_PROBES; i++)
+		{
+			/* a full turn is 4096, so the probes are evenly spaced by construction */
+			int ang = (i * 4096) / MP_RESPAWN_PROBES;
+			int px = cx + (int)(((long)rsin(ang) * r) >> 12);
+			int pz = cz + (int)(((long)rcos(ang) * r) >> 12);
+
+			if (!JerRoadAt(px, cy, pz))
+				continue;
+
+			if (!MpWarpSpotOk(px, pz))
+				continue;
+
+			bestX = px;
+			bestZ = pz;
+			found = 1;
+			bestRing = ring;
+			break;
+		}
+	}
+
+	if (!found)
+	{
+		MpNotify("Respawn: no road near enough to put you on");
+
+		if (gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx,
+				"[mp] respawn: no road within %d units of %d,%d (region %d data=%d) "
+				"- leaving the car where it is\n",
+				MP_RESPAWN_RINGS * MP_RESPAWN_RING_STEP, cx, cz,
+				jer_map_region_of(cx, cz), jer_map_region_has_data(jer_map_region_of(cx, cz)));
+
+		return 0;
+	}
+
+	/* Make the chosen road point real, and confirm it - the same gate, and the same
+	 * reason, as the warp: MapHeight answers 0 for ground that is not streamed, and
+	 * 0 is also a perfectly good height. */
+	if (!MpWarpStreamTo(bestX, bestZ))
+	{
+		MpNotify("Respawn: could not stream the road there");
+
+		if (gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx,
+				"[mp] respawn: road point %d,%d (region %d) still not resident after "
+				"spooling - REFUSING rather than respawning into the void\n",
+				bestX, bestZ, jer_map_region_of(bestX, bestZ));
+
+		return 0;
+	}
+
+	{
+		LONGVECTOR4 start;
+		JER_ARGS_RESET_CAR rc;
+
+		start[0] = bestX;
+		start[1] = 0;		/* the engine resolves the ground under the car */
+		start[2] = bestZ;
+		start[3] = 0;
+
+		/* InitCarPhysics builds an UPRIGHT orientation out of the heading, which is
+		 * half of what "respawn" means; the heading itself is kept, so the player
+		 * comes back facing the way they were. */
+		InitCarPhysics(cp, &start, cp->hd.direction);
+
+		cp->hd.speed = 0;
+		cp->wheel_angle = 0;
+
+		/* the other half: repaired. The same fields the Repair row clears. */
+		cp->totalDamage = 0;
+		memset(cp->ap.damage, 0, sizeof(cp->ap.damage));
+		CreateDentableCar(cp);
+		cp->ap.needsDenting = 0;
+
+		player[0].cameraAngle = cp->hd.direction + 1536;
+		player[0].cameraCarId = cp->id;
+
+		rc.carId = me->carId;
+		jer_fire(JER_EVENT_RESET_CAR, &rc);
+
+		if (gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx,
+				"[mp] respawn: on the nearest road at %d,%d - ring %d, about %d units from "
+				"where the car was (%d,%d) - repaired and upright\n",
+				cp->hd.where.t[0], cp->hd.where.t[2], bestRing,
+				bestRing * MP_RESPAWN_RING_STEP, cx, cz);
+	}
+
+	return 1;
+}
+
 static void MpHandleCarState(int connIndex, const unsigned char* p, int len)
 {
 	MP_CARSTATE h;

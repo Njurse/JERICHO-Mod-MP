@@ -2721,6 +2721,19 @@ static const JER_PAUSE_MENU mpWarpMenu =
  * has it in force for everyone (MpSessionRulesTick forces it), while a host that
  * leaves it OFF is leaving it to each player's own switch here. That is why they
  * are on the top-level page and not one click deeper. */
+/* The Respawn row: back onto the nearest road, repaired and upright. The work is
+ * mp_session.c's -- it needs InitCarPhysics, MapHeight and the spool call, which
+ * all live with the respawn and the warp -- so this file owns only the door. */
+static int MpRespawn(void* ud, int dir)
+{
+	(void)ud;
+	(void)dir;
+
+	MpRespawnOnRoad();
+
+	return JER_PAUSE_QUIT_NONE;
+}
+
 static void MpOptLabelInvincible(void* ud, char* out, int max)
 {
 	(void)ud;
@@ -2785,13 +2798,14 @@ static const JER_PAUSE_MENU_ITEM mpPauseItems[] =
 {
 	/* label, get_label, on_activate, userdata, submenu, adjust */
 
-	/* THE FOUR THAT MATTER MID-MATCH come first, in this order: what you are
-	 * driving, going to somebody, and the two switches that decide whether anything
-	 * can touch you. */
-	{ "Change Vehicle", NULL, NULL, NULL, &mpChangeCarMenu, 0 },
-	{ "Warp To Player", NULL, NULL, NULL, &mpWarpMenu, 0 },
+	/* The two SUBMENUS first - everything about the car behind one door, everything
+	 * about going to somebody behind the other - then the two switches and the
+	 * recovery action that sit alongside them. */
+	{ "Car options", NULL, NULL, NULL, &mpChangeCarMenu, 0 },
+	{ "Warp To", NULL, NULL, NULL, &mpWarpMenu, 0 },
 	{ NULL, MpOptLabelInvincible, MpOptToggleInvincible, NULL, NULL, 0 },
 	{ NULL, MpOptLabelImmune, MpOptToggleImmune, NULL, NULL, 0 },
+	{ "Respawn", NULL, MpRespawn, NULL, NULL, 0 },
 
 	/* ...then the rest, so the reordering costs nothing that was already here. */
 	{ "My colour", NULL, NULL, NULL, &mpColorMenu, 0 },
