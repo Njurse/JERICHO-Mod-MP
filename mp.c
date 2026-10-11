@@ -2132,7 +2132,7 @@ static const JER_PAUSE_MENU_ITEM mpChangeCarItems[] =
 #define MP_MENU_ITEMS(a)	(int)(sizeof(a) / sizeof((a)[0]))
 
 static const JER_PAUSE_MENU mpChangeCarMenu =
-{ "Change car", mpChangeCarItems, MP_MENU_ITEMS(mpChangeCarItems) };
+{ "Change car", mpChangeCarItems, MP_MENU_ITEMS(mpChangeCarItems), "mp.car" };
 
 static const JER_PAUSE_MENU_ITEM mpColorItems[] =
 {
@@ -2144,7 +2144,7 @@ static const JER_PAUSE_MENU_ITEM mpColorItems[] =
 };
 
 static const JER_PAUSE_MENU mpColorMenu =
-{ "My colour", mpColorItems, MP_MENU_ITEMS(mpColorItems) };
+{ "My colour", mpColorItems, MP_MENU_ITEMS(mpColorItems), "mp.colour" };
 
 static int MpOnPauseMenu(void* userdata, void* args)
 {
@@ -2595,7 +2595,7 @@ static const JER_PAUSE_MENU_ITEM mpKickItems[] =
 };
 
 static const JER_PAUSE_MENU mpKickMenu =
-{ "Kick player", mpKickItems, MP_MENU_ITEMS(mpKickItems) };
+{ "Kick player", mpKickItems, MP_MENU_ITEMS(mpKickItems), "mp.kick" };
 
 /* ------------------------------------------------------------------ */
 /* Warp to Player: put this machine's car down near another player's, out of the
@@ -2708,7 +2708,7 @@ static const JER_PAUSE_MENU_ITEM mpWarpItems[] =
 };
 
 static const JER_PAUSE_MENU mpWarpMenu =
-{ "Warp to Player", mpWarpItems, MP_MENU_ITEMS(mpWarpItems) };
+{ "Warp to Player", mpWarpItems, MP_MENU_ITEMS(mpWarpItems), "mp.warp" };
 
 /* ------------------------------------------------------------------ */
 /* The local player's own switches: the same engine flags the host's SESSION RULES
@@ -2801,8 +2801,8 @@ static const JER_PAUSE_MENU_ITEM mpPauseItems[] =
 	/* The two SUBMENUS first - everything about the car behind one door, everything
 	 * about going to somebody behind the other - then the two switches and the
 	 * recovery action that sit alongside them. */
-	{ "Car options", NULL, NULL, NULL, &mpChangeCarMenu, 0 },
-	{ "Warp To", NULL, NULL, NULL, &mpWarpMenu, 0 },
+	{ "Vehicle Options", NULL, NULL, NULL, &mpChangeCarMenu, 0 },
+	{ "Warp To Player", NULL, NULL, NULL, &mpWarpMenu, 0 },
 	{ NULL, MpOptLabelInvincible, MpOptToggleInvincible, NULL, NULL, 0 },
 	{ NULL, MpOptLabelImmune, MpOptToggleImmune, NULL, NULL, 0 },
 	{ "Respawn", NULL, MpRespawn, NULL, NULL, 0 },
@@ -2815,7 +2815,7 @@ static const JER_PAUSE_MENU_ITEM mpPauseItems[] =
 };
 
 static const JER_PAUSE_MENU mpPauseMenu =
-{ "Multiplayer", mpPauseItems, MP_MENU_ITEMS(mpPauseItems) };
+{ "Multiplayer", mpPauseItems, MP_MENU_ITEMS(mpPauseItems), "mp.page" };
 
 /* DEPTH PROOF, for the test harness: MP_DEEP_MENU=1 registers a page whose tree
  * nests one level PAST the bridge's cap, so the refusal path can be SEEN in a log
