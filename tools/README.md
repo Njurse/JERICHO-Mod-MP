@@ -550,9 +550,18 @@ Take-a-Ride city screen — SCRS.BIN screen 1 — and from the cutscene city
 screen). The answer sets the map the session loads, so `Single Player` is the
 full city and `Multiplayer` is the city's small multiplayer map, with the arena
 taken from the stock per-city multiplayer level list. It now opens on a plain
-singleplayer take-a-ride too, not just while a LAN session is being set up: the
-hook fires whenever `gameType == GAME_TAKEADRIVE`, so the cutscene/mission city
-screen (a different GameType) is left alone.
+singleplayer take-a-ride too, not just while a LAN session is being set up.
+
+**The gate is a disjunction, and the GameType alone is a trap.** The hook accepts
+either a session being set up (`gMp.role != MP_ROLE_NONE`, which `MpBeginHost`
+sets) **or** a plain take-a-ride (`gameType == GAME_TAKEADRIVE`). It must be both,
+because the real LAN host flow reaches this hook with `gameType == GAME_MISSION`
+(0) — measured, see below — which is the same value the mission/cutscene screen
+carries. Gating on the GameType alone therefore dropped the LAN path silently
+into single player while a guard that synthesised `GAME_TAKEADRIVE` stayed green.
+The mission path has neither signal, so it is still left alone. The `NOT asking`
+log line prints all four inputs (`gameType`, `role`, `running`, `defer`), because
+the absent log line on its own cannot tell "refused" from "never fired".
 
 **The real path, with the frontend press lever.** The frontend reads
 `Pads[0].mapnew` straight out of `ReadControllers()` and a module cannot inject
@@ -577,9 +586,9 @@ not tell the two answers apart, because the map flag is what selects the mission
 block (Take-a-Ride 50 vs the multiplayer 58). Row 0 on `mp.mode` instead of
 row 1 gives you the Single Player answer and `map full-city`.
 
-**The synthetic path.** `MP_TEST_CITYCONFIRM=<secs>` fires the confirm event
-directly, that many seconds after the frontend is up — useful when the module
-under test is the hook itself rather than the menus:
+**The synthetic path.** `MP_TEST_CITYCONFIRM=<secs>[,<gameType>[,<role>]]` fires
+the confirm event directly, that many seconds after the frontend is up — useful
+when the module under test is the hook itself rather than the menus:
 
     MP_AUTOSTART=host MP_TEST_CITYCONFIRM=4 JERICHO_dev.exe -nointro -nofmv
 
@@ -587,6 +596,13 @@ in which case a wrapper asserts it with:
 
     --require "MP_TEST_CITYCONFIRM -> city confirm fired"
     --forbid  "the Single Player / Multiplayer menu did not open"
+
+The two optional fields exist so the guard can present the shape the REAL LAN
+flow presents, which is `gameType == GAME_MISSION (0)` with a role already set:
+`MP_TEST_CITYCONFIRM=4,0,1` asks, `=4,0,0` (mission, no session) does not, and
+`=4` alone is the old `GAME_TAKEADRIVE` take-a-ride. A guard that only ever
+synthesised the easy shape is exactly how the LAN regression got through, so
+prefer the real walk above and keep this for the hook in isolation.
 
 ## Reading a run
 
