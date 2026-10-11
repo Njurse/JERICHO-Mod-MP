@@ -2724,7 +2724,7 @@ static const JER_PAUSE_MENU mpWarpMenu =
 static void MpOptLabelInvincible(void* ud, char* out, int max)
 {
 	(void)ud;
-	snprintf(out, max, "Invincible car: %s", gInvincibleCar ? "ON" : "off");
+	snprintf(out, max, "Invincibility: %s", gInvincibleCar ? "ON" : "off");
 }
 
 static int MpOptToggleInvincible(void* ud, int dir)
@@ -2744,7 +2744,7 @@ static int MpOptToggleInvincible(void* ud, int dir)
 static void MpOptLabelImmune(void* ud, char* out, int max)
 {
 	(void)ud;
-	snprintf(out, max, "Player immunity: %s", gPlayerImmune ? "ON" : "off");
+	snprintf(out, max, "Immunity: %s", gPlayerImmune ? "ON" : "off");
 }
 
 static int MpOptToggleImmune(void* ud, int dir)
@@ -2785,24 +2785,75 @@ static const JER_PAUSE_MENU_ITEM mpPauseItems[] =
 {
 	/* label, get_label, on_activate, userdata, submenu, adjust */
 
-	/* THE THINGS YOU REACH FOR MID-MATCH are at the top, not one page deeper:
-	 * the two invincibility switches, the way out of being stranded in the
-	 * scenery, and clearing a wanted level. */
+	/* THE FOUR THAT MATTER MID-MATCH come first, in this order: what you are
+	 * driving, going to somebody, and the two switches that decide whether anything
+	 * can touch you. */
+	{ "Change Vehicle", NULL, NULL, NULL, &mpChangeCarMenu, 0 },
+	{ "Warp To Player", NULL, NULL, NULL, &mpWarpMenu, 0 },
 	{ NULL, MpOptLabelInvincible, MpOptToggleInvincible, NULL, NULL, 0 },
 	{ NULL, MpOptLabelImmune, MpOptToggleImmune, NULL, NULL, 0 },
-	{ "Warp to Player", NULL, NULL, NULL, &mpWarpMenu, 0 },
-	{ "Clear felony", NULL, MpOptClearFelony, NULL, NULL, 0 },
 
-	/* Change car owns the CAR actions: picking one, respawning as it, repairing
-	 * the current one. "My colour" and "Kick player" stay their own pages. */
-	{ "Change car", NULL, NULL, NULL, &mpChangeCarMenu, 0 },
+	/* ...then the rest, so the reordering costs nothing that was already here. */
 	{ "My colour", NULL, NULL, NULL, &mpColorMenu, 0 },
 	{ "Kick player", NULL, NULL, NULL, &mpKickMenu, 0 },
+	{ "Clear felony", NULL, MpOptClearFelony, NULL, NULL, 0 },
 	{ "Write diagnostics now", NULL, MpMenuWriteDiag, NULL, NULL, 0 },
 };
 
 static const JER_PAUSE_MENU mpPauseMenu =
 { "Multiplayer", mpPauseItems, MP_MENU_ITEMS(mpPauseItems) };
+
+/* DEPTH PROOF, for the test harness: MP_DEEP_MENU=1 registers a page whose tree
+ * nests one level PAST the bridge's cap, so the refusal path can be SEEN in a log
+ * instead of reasoned about. Nothing is registered without the variable, so a
+ * normal run carries these tables unused.
+ *
+ * A seven-level chain against a cap of five: levels 0..5 build and level 6 is the
+ * one that is refused, which is exactly the boundary worth pinning -- an off-by-one
+ * there would let a menu the navigation stack cannot hold be built. */
+#define MP_DEEP_LEVELS 7
+
+static const JER_PAUSE_MENU_ITEM kDeepItems6[] =
+{
+	{ "the last level", NULL, NULL, NULL, NULL, 0 },
+};
+static const JER_PAUSE_MENU kDeepMenu6 = { "Deep 6", kDeepItems6, MP_MENU_ITEMS(kDeepItems6) };
+
+static const JER_PAUSE_MENU_ITEM kDeepItems5[] =
+{
+	{ "deeper", NULL, NULL, NULL, &kDeepMenu6, 0 },
+};
+static const JER_PAUSE_MENU kDeepMenu5 = { "Deep 5", kDeepItems5, MP_MENU_ITEMS(kDeepItems5) };
+
+static const JER_PAUSE_MENU_ITEM kDeepItems4[] =
+{
+	{ "deeper", NULL, NULL, NULL, &kDeepMenu5, 0 },
+};
+static const JER_PAUSE_MENU kDeepMenu4 = { "Deep 4", kDeepItems4, MP_MENU_ITEMS(kDeepItems4) };
+
+static const JER_PAUSE_MENU_ITEM kDeepItems3[] =
+{
+	{ "deeper", NULL, NULL, NULL, &kDeepMenu4, 0 },
+};
+static const JER_PAUSE_MENU kDeepMenu3 = { "Deep 3", kDeepItems3, MP_MENU_ITEMS(kDeepItems3) };
+
+static const JER_PAUSE_MENU_ITEM kDeepItems2[] =
+{
+	{ "deeper", NULL, NULL, NULL, &kDeepMenu3, 0 },
+};
+static const JER_PAUSE_MENU kDeepMenu2 = { "Deep 2", kDeepItems2, MP_MENU_ITEMS(kDeepItems2) };
+
+static const JER_PAUSE_MENU_ITEM kDeepItems1[] =
+{
+	{ "deeper", NULL, NULL, NULL, &kDeepMenu2, 0 },
+};
+static const JER_PAUSE_MENU kDeepMenu1 = { "Deep 1", kDeepItems1, MP_MENU_ITEMS(kDeepItems1) };
+
+static const JER_PAUSE_MENU_ITEM kDeepItems0[] =
+{
+	{ "MP_DEEP_MENU: nest past the cap", NULL, NULL, NULL, &kDeepMenu1, 0 },
+};
+static const JER_PAUSE_MENU kDeepMenu0 = { "Deep 0", kDeepItems0, MP_MENU_ITEMS(kDeepItems0) };
 
 JER_MODULE_ENTRY(jer_module_mp_entry)(JERICHO_CONTEXT* ctx)
 {
@@ -2876,4 +2927,8 @@ JER_MODULE_ENTRY(jer_module_mp_entry)(JERICHO_CONTEXT* ctx)
 	 * declared item_count must equal the array length -- the engine builds the
 	 * submenu eagerly, so a count that is too large reads past the end. */
 	jer_pause_menu_register(&mpPauseMenu);
+
+	/* The depth proof rides along only when asked for (see kDeepMenu0). */
+	if (getenv("MP_DEEP_MENU") != NULL)
+		jer_pause_menu_register(&kDeepMenu0);
 }
