@@ -195,8 +195,20 @@ def safe_remove(path):
 def launch(run_dir, exe, args, env_extra):
     env = dict(os.environ)
     env.update(env_extra)
+
+    # Start MINIMIZED: the game opens an SDL window and a rig runs it several times
+    # in a row, so a window stealing focus on every seat is unbearable. Popen's
+    # startupinfo is the only lever here (no shell to pass /min to), and the PID
+    # stays real, so PID-scoped kills are unaffected.
+    si = None
+    if os.name == "nt":
+        si = subprocess.STARTUPINFO()
+        si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        si.wShowWindow = 7          # SW_SHOWMINNOACTIVE
+
     p = subprocess.Popen([os.path.join(run_dir, exe)] + args, cwd=run_dir, env=env,
-                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         startupinfo=si)
     STARTED.append(p)
     return p
 
