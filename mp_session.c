@@ -6405,12 +6405,36 @@ int MpRespawnAfterDeath(void)
 #define MP_WARP_FAR	2000
 #define MP_WARP_CLEAR	300
 
-/* Is (x,z) somewhere a car can be put? The engine's own scenery test (CellEmpty,
- * the one the civ AI uses) plus a ground height that actually exists - MapHeight
- * answering for 0 is what separates "a road shoulder" from "beyond the level". */
+/* Can this world point be LANDED on, and if not, can it be made so?
+ *
+ * Three questions in this order, and the order is the whole point:
+ *
+ *   1. does the REGION hold data (jer_map_region_has_data)? 0 means a void
+ *      forever - there is nothing to stream in - so never land there.
+ *   2. is it RESIDENT? If not, `spool` asks jer_map_spool_to to make it so
+ *      (synchronous on PC) and this answers "not yet".
+ *   3. only now the ground and the scenery.
+ *
+ * Asking the GROUND first is how a car lands in the void: an unstreamed
+ * destination has MapHeight answer 0, and 0 is also a perfectly good height, so
+ * `MapHeight > -1000` says "fine" about ground that is not there. Worse, the
+ * spool has to be for THE POINT BEING TESTED - a candidate a couple of thousand
+ * units from the one that was streamed is very likely a different region. */
 static int MpWarpSpotOk(int x, int z)
 {
 	VECTOR p;
+	int region;
+
+	if (!jer_map_ready())
+		return 0;
+
+	region = jer_map_region_of(x, z);
+
+	if (!jer_map_region_has_data(region))
+		return 0;	/* a void forever: there is nothing to stream in */
+
+	if (!jer_map_region_resident(region))
+		return 0;
 
 	p.vx = x;
 	p.vy = 0;
@@ -6423,6 +6447,52 @@ static int MpWarpSpotOk(int x, int z)
 	return MapHeight(&p) > -1000;
 }
 
+/* Make (x,z) landable if it can be, and say whether it now is.
+ *
+ * The streamer follows MainPlayer.spoolXZ, so it is AIMED FIRST and the stream is
+ * then asked for -- the sequence the hop path and antfarm both use, and the
+ * reason a bare jer_map_spool_to can quietly leave the window somewhere else.
+ * The helper is skipped when the region is already resident, because in that case
+ * it is not free (it still runs the load-area checks). The VECTOR must outlive
+ * the call, hence the static.
+ *
+ * Refusing is a real answer: a spot whose region has no data can never be
+ * streamed, and landing there is the void. */
+static int MpWarpStreamTo(int x, int z)
+{
+	static VECTOR sWarpSpool;
+	int region;
+
+	if (MpWarpSpotOk(x, z))
+		return 1;
+
+	if (!jer_map_ready())
+		return 0;
+
+	region = jer_map_region_of(x, z);
+
+	if (!jer_map_region_has_data(region))
+		return 0;
+
+	sWarpSpool.vx = x;
+	sWarpSpool.vy = 0;
+	sWarpSpool.vz = z;
+	sWarpSpool.pad = 0;
+
+	MainPlayer.spoolXZ = &sWarpSpool;
+
+	jer_map_spool_to(x, z);
+
+	return MpWarpSpotOk(x, z);	/* synchronous on PC, so readable now */
+}
+
+/* Where to put the car, in the target's own axes: `along` is measured along
+ * their FORWARD axis and every value is <= 0, which is the definition of "not in
+ * their trajectory". Beside first (least in the way), then behind, then further
+ * out. */
+static const int kWarpAlong[]  = { -MP_WARP_NEAR, -MP_WARP_NEAR, -900, -900, -1600, -MP_WARP_FAR, 0, 0 };
+static const int kWarpAcross[] = { 600, -600, 900, -900, 0, 0, 900, -900 };
+
 int MpWarpToPlayer(int playerId)
 {
 	MP_PLAYER* me;
@@ -6431,13 +6501,6 @@ int MpWarpToPlayer(int playerId)
 	CAR_DATA* tgt;
 	int tx, ty, tz, dir, fx, fz, rx, rz, i;
 	int bestX = 0, bestZ = 0, bestRoad = 0, found = 0;
-
-	/* The candidate ring, in the target's own axes: `along` is measured along
-	 * their FORWARD axis and every value is <= 0, which is the definition of
-	 * "not in their trajectory". Beside first (least in the way), then behind,
-	 * then further out. */
-	static const int kAlong[]  = { -MP_WARP_NEAR, -MP_WARP_NEAR, -900, -900, -1600, -MP_WARP_FAR, 0, 0 };
-	static const int kAcross[] = { 600, -600, 900, -900, 0, 0, 900, -900 };
 
 	if (!gMp.running)
 		return 0;
@@ -6466,8 +6529,10 @@ int MpWarpToPlayer(int playerId)
 	tz = tgt->hd.where.t[2];
 	dir = tgt->hd.direction;
 
-	/* Stream the destination BEFORE reading the ground under it. */
-	jer_map_spool_to(tx, tz);
+	/* Aim the streamer at the TARGET first, so the region its neighbours fall in
+	 * has a chance of being present before the candidates are judged. Harmless
+	 * when the spot the target is standing on is not landable. */
+	MpWarpStreamTo(tx, tz);
 
 	/* The target's axes: forward (fx,fz) and a perpendicular (rx,rz). The offsets
 	 * are in those, so "behind" stays behind whichever way they are pointing
@@ -6477,18 +6542,24 @@ int MpWarpToPlayer(int playerId)
 	rx = fz;
 	rz = -fx;
 
-	for (i = 0; i < (int)(sizeof(kAlong) / sizeof(kAlong[0])); i++)
+	for (i = 0; i < (int)(sizeof(kWarpAlong) / sizeof(kWarpAlong[0])); i++)
 	{
-		int px = tx + ((fx * kAlong[i] + rx * kAcross[i]) >> 12);
-		int pz = tz + ((fz * kAlong[i] + rz * kAcross[i]) >> 12);
+		int px = tx + ((fx * kWarpAlong[i] + rx * kWarpAcross[i]) >> 12);
+		int pz = tz + ((fz * kWarpAlong[i] + rz * kWarpAcross[i]) >> 12);
 		int onRoad;
 
+		/* Test the GROUND this candidate stands on, not the target's: a region
+		 * that is not resident is not a landing site, however good its coordinates
+		 * look. No spooling here - one destination gets streamed below, because
+		 * forcing region after region evicts the ones just loaded (four barrels). */
 		if (!MpWarpSpotOk(px, pz))
 			continue;
 
 		onRoad = JerRoadAt(px, ty, pz) ? 1 : 0;
 
-		/* A clear road point beats anything already found. */
+		/* A clear road point beats anything already found, and anything is better
+		 * than nothing: this is also the "nearest road node to where we meant to
+		 * go" fallback, since the ring starts beside the target and rings out. */
 		if (!found || (onRoad && !bestRoad))
 		{
 			bestX = px;
@@ -6503,12 +6574,30 @@ int MpWarpToPlayer(int playerId)
 
 	if (!found)
 	{
-		MpNotify("Warp: no clear ground near that player");
+		MpNotify("Warp: no ground there to land on");
 
 		if (gMpCtx != NULL)
 			gMpCtx->jer_log(gMpCtx,
-				"[mp] warp: no clear spot near player %d (%s) at %d,%d - staying put\n",
-				tp->id, tp->name, tx, tz);
+				"[mp] warp: nothing to land on near player %d (%s) at %d,%d "
+				"(region %d data=%d resident=%d) - staying put\n",
+				tp->id, tp->name, tx, tz, jer_map_region_of(tx, tz),
+				jer_map_region_has_data(jer_map_region_of(tx, tz)),
+				jer_map_region_resident(jer_map_region_of(tx, tz)));
+
+		return 0;
+	}
+
+	/* Make the CHOSEN spot real, once, and confirm it: the single stream, and the
+	 * answer afterwards is what says whether we may land. */
+	if (!MpWarpStreamTo(bestX, bestZ))
+	{
+		MpNotify("Warp: could not stream the ground there");
+
+		if (gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx,
+				"[mp] warp: chosen spot %d,%d (region %d) still not resident after "
+				"spooling - REFUSING rather than landing in the void\n",
+				bestX, bestZ, jer_map_region_of(bestX, bestZ));
 
 		return 0;
 	}
