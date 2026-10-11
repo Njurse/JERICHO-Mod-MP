@@ -179,17 +179,20 @@ void MpSetSubGame(int n)
 	gSubGameNumber = n;
 }
 
-/* The stock city screen was confirmed. While a LAN session is being set up we
- * take it over: ask Singleplayer or Multiplayer BEFORE the stock flow
- * continues to time-of-day/car select. `defer` stops the stock continuation
- * and we open our mode menu instead. */
+/* The stock city screen was confirmed. Ask Singleplayer or Multiplayer BEFORE the
+ * stock flow continues to time-of-day/car select -- for the LAN setup AND for a
+ * plain singleplayer take-a-ride alike, since the answer also picks the MAP
+ * (full city vs the city's multiplayer arena). Gate on the take-a-ride game type
+ * so the mission/cutscene city screen (which reaches the same hook with a
+ * different GameType) is left alone. `defer` stops the stock continuation and we
+ * open our mode menu instead. */
 static int MpOnFrontendConfirm(void* userdata, void* args)
 {
 	JER_ARGS_FRONTEND* fe = (JER_ARGS_FRONTEND*)args;
 
 	(void)userdata;
 
-	if (gMp.role != MP_ROLE_NONE && !gMp.running && fe->defer == 0)
+	if (fe->gameType == GAME_TAKEADRIVE && !gMp.running && fe->defer == 0)
 	{
 		fe->defer = 1;
 
@@ -206,10 +209,11 @@ static int MpOnFrontendConfirm(void* userdata, void* args)
 	{
 		/* Why the prompt did NOT open. Before this the only evidence was the
 		 * ABSENCE of the line above -- which is the same evidence as "this hook
-		 * never fired at all", and those are different bugs: a session that is
-		 * not in the hosting role, versus a hook that is not registered. */
-		gMpCtx->jer_log(gMpCtx, "[mp] city confirmed - NOT asking (role=%d running=%d defer=%d)\n",
-			(int)gMp.role, (int)gMp.running, (int)fe->defer);
+		 * never fired at all", and those are different bugs: a screen the hook
+		 * does not serve (gameType != take-a-ride), versus a hook that is not
+		 * registered. */
+		gMpCtx->jer_log(gMpCtx, "[mp] city confirmed - NOT asking (gameType=%d running=%d defer=%d)\n",
+			fe->gameType, (int)gMp.running, (int)fe->defer);
 	}
 
 	return JER_RESULT_CONTINUE;

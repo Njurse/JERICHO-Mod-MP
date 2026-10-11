@@ -549,7 +549,10 @@ Multiplayer, and mp owns it: `mp.mode` is opened from the city-confirm hook
 Take-a-Ride city screen — SCRS.BIN screen 1 — and from the cutscene city
 screen). The answer sets the map the session loads, so `Single Player` is the
 full city and `Multiplayer` is the city's small multiplayer map, with the arena
-taken from the stock per-city multiplayer level list.
+taken from the stock per-city multiplayer level list. It now opens on a plain
+singleplayer take-a-ride too, not just while a LAN session is being set up: the
+hook fires whenever `gameType == GAME_TAKEADRIVE`, so the cutscene/mission city
+screen (a different GameType) is left alone.
 
 **The real path, with the frontend press lever.** The frontend reads
 `Pads[0].mapnew` straight out of `ReadControllers()` and a module cannot inject
