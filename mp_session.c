@@ -116,6 +116,25 @@ void MpNoteLocalPad(int pad)
 
 void MpSessionReset(void)
 {
+	/* THE OLD SESSION'S LISTENER GOES WITH IT, and this is where, because this is the one
+	 * primitive EVERY "the session is over" path goes through - MpReturnToFrontend and both
+	 * Begin* calls (which reset before they establish anything new).
+	 *
+	 * It used to be closed only from MpLeaveSession, so a HOST that ended its match any other
+	 * way (a lost connection, a refusal, the host ending the game) came back to the frontend
+	 * with gMp.listenersUp still set. That is not just a bound port: the presim hook runs
+	 * MpNetPoll whenever listenersUp is set, so an abandoned host kept ACCEPTING peers into a
+	 * session that no longer existed, and the next session inherited a stale listener. The
+	 * "first join worked but I could not reconnect" report was a symptom, and a join being a
+	 * handover only papered over it. Guarded, so a fresh Begin (listener already down, and
+	 * this is a no-op) does not log a teardown of nothing. Discovery advertises this host, so
+	 * it stops here too. */
+	if (gMp.listenersUp)
+	{
+		MpHostEnd();
+		MpDiscoveryStop();
+	}
+
 	gMpLaunched = 0;
 	gMpLocalAppliedPad = -1;
 	gMp.gamemode = MP_GAMEMODE_TAKEADRIDE;
@@ -130,6 +149,13 @@ void MpSessionReset(void)
 	gMp.leaving = 0;
 	gMp.modsMatched = 1;
 	gMp.localPlaced = 0;
+
+	/* ...and a "change car" still waiting for a spare slot is session state too: it must not
+	 * outlive the session it was asked in. MpLeaveSession forgets it, but every OTHER way back
+	 * to the frontend (MpReturnToFrontend) went through this function without doing so, so the
+	 * wait kept counting down in the menus and fired a change against whatever car happened to
+	 * be under the player there. */
+	MpCarChangeWaitForget();
 
 	/* the palette-correction log is throttled per reported value; clear that
 	 * memory so a fresh session reports its first correction */
