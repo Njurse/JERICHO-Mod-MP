@@ -27,6 +27,7 @@
 #include "jer_events.h"
 #include "jer_frontend.h"
 #include "jer_console.h"		/* the status stream (join/leave, chat) */
+#include "jer_screen.h"		/* jer_screen_remap_x: 3D->framebuffer x under widescreen */
 #include "mp.h"
 
 /* The engine's text primitives (declared in Game/C/pres.h, which pulls in the
@@ -1154,6 +1155,11 @@ void MpConsoleChat(const char* name, int colorOn, int r, int g, int b, const cha
 }
 
 
+/* The pre-remap projection, kept only so the throttled debug line can show both
+ * numbers - "did the widescreen remap fire, and by how much" is otherwise a
+ * screenshot question. */
+static int gMpTagRawX;
+
 /* The other players' name, drawn ABOVE them: over the car's roof when they are
  * driving, over their head when they are on foot. Yaw-only projection (the
  * camera pitch is small enough not to matter for a label). */
@@ -1209,6 +1215,13 @@ static int MpProjectWorldToScreen(int wx, int wy, int wz, int* sx, int* sy, int*
 	f = 520.0f / rz;
 	ox = 160 + (int)(rx * f);
 	oy = 120 - (int)(dy * f);
+
+	/* WIDESCREEN. Everything above projects into the MAPPED viewport, but
+	 * PrintString draws in the 320x240 buffer, so at 16:9 the tag would sit off its
+	 * car (further, the wider the aspect - the reported bug). Bring the projection
+	 * back the way the engine brings the sun back (sky.c); identity at 4:3. */
+	gMpTagRawX = ox;
+	ox = jer_screen_remap_x(ox);
 
 	if (ox < 6 || ox > 308 || oy < 6 || oy > 232)
 		return 0;
@@ -1326,8 +1339,8 @@ static void MpDrawNameTags(void)
 			{
 				lastTagMs = MpNowMs();
 				gMpCtx->jer_log(gMpCtx,
-					"[mp] nametag: %s at screen %d,%d depth %d scale %.3f colour %d,%d,%d\n",
-					name, sx, sy, depth, scale, r, g, b);
+					"[mp] nametag: %s at screen %d,%d (raw x %d) depth %d scale %.3f colour %d,%d,%d\n",
+					name, sx, sy, gMpTagRawX, depth, scale, r, g, b);
 			}
 		}
 	}
