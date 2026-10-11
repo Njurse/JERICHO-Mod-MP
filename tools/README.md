@@ -569,13 +569,26 @@ a pad, so a screen that is only left by a real press is unreachable in a padless
 run. `JERICHO_TEST_FEPRESS` drives those presses — a comma-separated list of
 `<screen>[:<row>]` steps (row = the cursor walked down from the top):
 
-    JERICHO_TEST_FEPRESS="0:3,43:0,44:0,45:0,1:0,46:1,35:0,3:0,42:2" \
+    JERICHO_TEST_FEPRESS="0:3,43:0,44:0,45:0R,45:1R,45:2R,45:3R,45:4,1:0,46:1,35:0,3:0,42:2" \
       JERICHO_dev.exe -nointro -nofmv -frames 1500
 
-That is: main menu's Multiplayer row (3) -> mp.root -> mp.lan -> mp.host -> the
-Take-a-Ride city screen (1) -> the confirm -> `mp.mode` (46) row 1 =
-Multiplayer -> the city's MP level list (35) -> time of day -> carhacks' car
-menu (42) "Ride". A healthy run logs
+That is: main menu's Multiplayer row (3) -> mp.root -> mp.lan -> the Host Game
+page (45) -> leave the session settings on rows 0-3 with a RIGHT each -> Take a
+Ride (row 4) -> the Take-a-Ride city screen (1) -> the confirm -> `mp.mode` (46)
+row 1 = Multiplayer -> the city's MP level list (35) -> time of day -> carhacks'
+car menu (42) "Ride". A healthy run logs
+
+A step is `<screen>[:<row>[<action>]]`; the action is optional and defaults to a
+single Cross:
+- (nothing) = Cross
+- `R` / `L` = RIGHT / LEFT, one press — **the ADJUST rows need these**
+- `R<n>` / `L<n>` = n presses
+
+The Host Game page is a wall to a Cross-only walk: its first four rows are
+left/right session settings, so pressing Cross there toggles a value instead of
+leaving the page and the rest of the list never runs. `45:0R,...,45:4` is the way
+through it; the RIGHT presses are logged by name, so the log says which value
+was chosen as well as that the page was passed.
 
     [mp] city confirmed - asking Single Player / Multiplayer
     [mp] opening mp.mode (resolved idx 4)
