@@ -13,7 +13,7 @@ rem the second 7z command if someone wants the movies.
 rem
 rem DRIVER\D1CARS IS NOT SHIPPED, and that is deliberate: it is baked out of
 rem Driver 1's copyrighted data. What IS shipped is the way to make it -- the
-rem d1cars bake tools and BAKE_D1_CARS.bat at the package root, which reads the
+rem d1cars bake tools and BAKE_D1_CARS.bat / .sh at the package root, which reads the
 rem player's OWN Driver 1 data from DRIVER\ and writes DRIVER\D1CARS\. The d1cars
 rem MODULE is linked into the exe (JERICHO_RELEASE_MODS), so nothing else is
 rem missing; carhacks offers a D1 city only once its DRIVER\D1CARS\<CITY>.LEV is
@@ -21,8 +21,7 @@ rem on disk (chkCityAssetsPresent), so before the bake the five cities simply ar
 rem not offered - the feature degrades to absent rather than to broken.
 rem
 rem The tools are copied out of the REPO below because the dev mirror EXCLUDES
-rem d1cars (premake JER_MIRROR_EXCLUDE, it is a private submodule), so bin\Release
-rem never gets them.
+rem d1cars (premake JER_MIRROR_EXCLUDE), so bin\Release never gets them.
 setlocal
 set "HERE=%~dp0"
 set "ROOT=%HERE%..\..\..\..\.."
@@ -46,7 +45,7 @@ if exist "%ROOT%\JERICHO\MODS\d1cars\tools" (
     xcopy /E /I /Y "%ROOT%\JERICHO\MODS\d1cars\tools" "%EXEDIR%\JERICHO\MODS\d1cars\tools" >nul
 ) else (
     echo make_lan_package: no JERICHO\MODS\d1cars\tools in the repo - the package
-    echo                  will ship without BAKE_D1_CARS.bat's tools. See the
+    echo                  will ship without the BAKE_D1_CARS tools. See the
     echo                  d1cars submodule ^(JERICHO-D1^).
 )
 
@@ -57,7 +56,7 @@ pushd "%EXEDIR%" || exit /b 1
 popd
 
 pushd "%HERE%" || exit /b 1
-"%SEVENZ%" a -t7z -mx=5 "%OUT%" PLAY_HOST.bat PLAY_JOIN.bat mp_bot_client.bat FIREWALL_FIX.bat BAKE_D1_CARS.bat README_LAN.txt README_LAN_TEST.txt
+"%SEVENZ%" a -t7z -mx=5 "%OUT%" PLAY_HOST.bat PLAY_JOIN.bat mp_bot_client.bat FIREWALL_FIX.bat BAKE_D1_CARS.bat BAKE_D1_CARS.sh README_LAN.txt README_LAN_TEST.txt
 popd
 
 rem The remote-testing agent, staged at the package ROOT (next to the exe) so the

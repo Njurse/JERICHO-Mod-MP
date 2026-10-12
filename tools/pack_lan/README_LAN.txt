@@ -126,7 +126,8 @@ WHAT TO EXPECT (the honest v1 limits)
      NEWCASTLE -- appear in the car lists only after you bake them, which this package
      does not do for you because that data belongs to Driver 1. If you own Driver 1,
      put its game data in the DRIVER folder next to DRIVER2 (the layout the game uses,
-     so DRIVER\LEVELS\*.LEV is there) and run BAKE_D1_CARS.bat once. It needs Python.
+     so DRIVER\LEVELS\*.LEV is there) and run BAKE_D1_CARS.bat (Windows) or
+     BAKE_D1_CARS.sh (Linux) once. It needs Python 3.
      Until then the five cities are simply not offered; nothing is broken.
    * Damage is not shared on a PLAYER car: if your car is badly bent on your
      screen it can look straight on the other player's, and vice versa. Damage to

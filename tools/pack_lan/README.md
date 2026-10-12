@@ -6,7 +6,7 @@ want depends on whether Driver 1 content is going with it.
 
 | You want… | Use | Ships |
 | --- | --- | --- |
-| the public LAN package | `make_lan_package.bat` | the **Release** exe, four mods (carhacks, crumple, d1cars, mp), the game data minus its movies, plus `BAKE_D1_CARS.bat` and the d1cars bake tools |
+| the public LAN package | `make_lan_package.bat` | the **Release** exe, four mods (carhacks, crumple, d1cars, mp), the game data minus its movies, plus `BAKE_D1_CARS.bat` / `BAKE_D1_CARS.sh` and the d1cars bake tools |
 | a private hand-off, with Driver 1 | `make_lan_package_micheal.sh` | the **dev** exe, **six** mods (those four plus levelhacks and sandbox), no game data at all |
 
 ## Why there are two, and why they cannot be one
@@ -15,12 +15,15 @@ want depends on whether Driver 1 content is going with it.
 pre-included modules (`JERICHO_RELEASE_MODS` in `premake5.lua`): carhacks, crumple,
 d1cars and mp. **The d1cars module ships; the Driver 1 car DATA does not.** It is
 baked out of Driver 1's copyrighted files, so the package carries the way to make it
-instead -- the bake tools plus `BAKE_D1_CARS.bat` at the package root, which reads the
-player's own Driver 1 data from `DRIVER\` and writes `DRIVER\D1CARS\`.
+instead -- the bake tools plus `BAKE_D1_CARS.bat` / `BAKE_D1_CARS.sh` at the package
+root, which read the player's own Driver 1 data from `DRIVER\` and write
+`DRIVER\D1CARS\`.
 
 That is why the packager copies `JERICHO\MODS\d1cars\tools` out of the REPO: the dev
-mirror excludes d1cars (premake `JER_MIRROR_EXCLUDE`, it is a private submodule), so
-`bin\Release` never has it and the package would otherwise ship with no way to bake.
+mirror excludes d1cars (premake `JER_MIRROR_EXCLUDE`), so `bin\Release` never has it
+and the package would otherwise ship with no way to bake. The bake script comes in two
+flavours, `.bat` for Windows and `.sh` for Linux/macOS, so whichever machine you are on
+one of them runs. The CI release archives are staged the same way (see `docs/CI.md`).
 
 The rest of `DRIVER\` is out either way -- it is the Driver 1 game's own levels and
 586 MB of movies, which the car cities do not read.
@@ -80,6 +83,7 @@ listed above.
 | File | What it is |
 | --- | --- |
 | `PLAY_HOST.bat` / `PLAY_JOIN.bat` | the launchers the recipients run; `PLAY_HOST.bat [port]`, `PLAY_JOIN.bat <host-ip>` |
+| `BAKE_D1_CARS.bat` / `.sh` | the Driver 1 bake, run once by a player who owns Driver 1; identical steps, one per platform |
 | `mp_bot_client.bat` | a second, self-driving copy of the game to be chased by |
 | `FIREWALL_FIX.bat` | adds the inbound firewall rule for the session port |
 | `README_LAN.txt` | the one-page "how two people play" |
