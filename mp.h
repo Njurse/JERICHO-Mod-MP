@@ -175,6 +175,9 @@ typedef struct MP_STATE
 					 * MP_CHAT_TEXT_MAX -- not the notify one, which
 					 * happens to be the same 96 today) */
 	int chatOpen;				/* 1 = the chat prompt is up */
+	int chatSwallowText;			/* drop the next text event: it is the key that
+					 * OPENED the prompt (T arrives as text right after
+					 * its keydown), not something typed into it */
 
 	MP_PLAYER players[MP_MAX_PLAYERS];
 	int playerCount;		/* number of active registry rows */

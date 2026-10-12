@@ -43,7 +43,21 @@ extern MpTextInputFn g_cfg_gameOnTextInput;
 
 #define MP_KEY_CHAT_OPEN	23	/* SDL_SCANCODE_T */
 #define MP_KEY_CHAT_SEND	40	/* SDL_SCANCODE_RETURN */
+#define MP_KEY_CHAT_SEND_KP	88	/* SDL_SCANCODE_KP_ENTER */
 #define MP_KEY_CHAT_CANCEL	41	/* SDL_SCANCODE_ESCAPE */
+
+/* Either Enter sends the chat line.
+ *
+ * The keypad Enter is a SEPARATE scancode (88) and it reaches this hook like any
+ * other key -- PsyX only special-cases the main RETURN, never KP_ENTER. Some
+ * remotes and X11 servers deliver KP_ENTER for a key the user thinks of as
+ * "Enter", so matching only scancode 40 made "Enter does not send" depend on
+ * which Enter the client happened to send. Accept both; the CANCEL key (Esc) has
+ * no such twin to worry about. */
+static int MpIsChatSendKey(int nKey)
+{
+	return nKey == MP_KEY_CHAT_SEND || nKey == MP_KEY_CHAT_SEND_KP;
+}
 
 #include "driver2.h"
 #include "system.h"		/* CITY_COUNT: the city registry MPCC_MAX_CITIES tracks */
@@ -694,9 +708,22 @@ static void MpOnTextInput(const char* text)
 
 	if (!gMp.chatOpen)
 	{
-		/* not ours: pass it on untouched */
+		/* not ours: pass it on untouched. Drop any swallow left over, so the next
+		 * prompt cannot eat a real keystroke. */
+		gMp.chatSwallowText = 0;
+
 		if (gMpPrevTextInput != NULL)
 			gMpPrevTextInput(text);
+		return;
+	}
+
+	/* The key that OPENED the prompt is delivered as TEXT as well on this pump: a
+	 * keydown and its text event are separate SDL events, in that order, so the
+	 * line used to begin with the character that opened it (every message started
+	 * with "t"). Drop exactly that one event -- not a keystroke meant for the line. */
+	if (gMp.chatSwallowText)
+	{
+		gMp.chatSwallowText = 0;
 		return;
 	}
 
@@ -731,7 +758,13 @@ static void MpOnTextInput(const char* text)
 
 static void MpOnDebugKey(int nKey, char down)
 {
-	if (gMpPrevDebugKeys != NULL)
+	/* Chain to whoever held this hook BEFORE us -- the engine's own key handlers and
+	 * any earlier module -- EXCEPT while the chat prompt is up. The keyboard then
+	 * belongs to the line being typed, and every letter in it is also a key the
+	 * engine would act on: "wasd" drives the free camera, "`" opens the console,
+	 * 1/2/3/0 hit the game debug keys. Our own prompt keys (Enter/Escape) are
+	 * consumed below and must not be passed on either. */
+	if (!gMp.chatOpen && gMpPrevDebugKeys != NULL)
 		gMpPrevDebugKeys(nKey, down);
 
 	if (!down)
@@ -741,7 +774,7 @@ static void MpOnDebugKey(int nKey, char down)
 	 * gate below: while it is editing it owns Enter and Escape. */
 	if (MpUiManualEditing())
 	{
-		if (nKey == MP_KEY_CHAT_SEND)
+		if (MpIsChatSendKey(nKey))
 			MpUiManualCommit();
 		else if (nKey == MP_KEY_CHAT_CANCEL)
 			MpUiManualCancel();
@@ -759,7 +792,7 @@ static void MpOnDebugKey(int nKey, char down)
 		MpChatOpen();
 		MpChatGrabKeyboard(1);	/* the prompt owns the keyboard while it is up */
 	}
-	else if (nKey == MP_KEY_CHAT_SEND && gMp.chatOpen)
+	else if (MpIsChatSendKey(nKey) && gMp.chatOpen)
 	{
 		/* Enter sends: the owner echoes the line and the host fans it out. */
 		MpChatSendText(gMp.chatBuf);
@@ -2258,6 +2291,16 @@ static int MpOnNetInput(void* userdata, void* args)
 				in->pad = 0;
 				in->handled = 1;
 			}
+			else if (gMp.chatOpen)
+			{
+				/* ...and the CHAT PROMPT owns the keyboard: the pad is built from the
+				 * raw keyboard state (PsyX_pad.cpp), so every letter typed into a
+				 * line is also a pad button -- typing "wasd" steered and
+				 * accelerated the car under the player. Swallow our own pad for as
+				 * long as the prompt is up, exactly as the pause menu does. */
+				in->pad = 0;
+				in->handled = 1;
+			}
 			else if (MpBotEnabled())
 			{
 				if ((gMp.frame % 60) == 0 && gMpCtx != NULL)
@@ -2364,9 +2407,11 @@ static int MpOnPedInput(void* userdata, void* args)
 		return JER_RESULT_CONTINUE;
 
 	/* The pause menu owns the pad while it is up: hold the ped still too, so
-	 * menu navigation never walks the player. (No `handled` field on this hook,
-	 * so zeroing the bits is the swallow.) */
-	if (pauseflag != 0 && (PLAYER*)in->player == &player[0])
+	 * menu navigation never walks the player. The chat prompt owns the KEYBOARD the
+	 * same way -- the ped pad comes from the same raw keyboard state -- so typing a
+	 * line must not walk us either. (No `handled` field on this hook, so zeroing
+	 * the bits is the swallow.) */
+	if ((pauseflag != 0 || gMp.chatOpen) && (PLAYER*)in->player == &player[0])
 	{
 		in->pad = 0;
 		return JER_RESULT_CONTINUE;

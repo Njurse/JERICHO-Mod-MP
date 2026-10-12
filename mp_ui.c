@@ -1414,6 +1414,7 @@ void MpChatOpen(void)
 
 	gMp.chatOpen = 1;
 	gMp.chatBuf[0] = '\0';
+	gMp.chatSwallowText = 1;	/* the key that opened this also arrives as text */
 }
 
 void MpChatSendText(const char* text)
