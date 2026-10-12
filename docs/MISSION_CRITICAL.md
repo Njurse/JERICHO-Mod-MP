@@ -82,10 +82,12 @@ is adopted **verbatim** — the owner is trusted for its own car. Correct for a 
 for a forwarded port, and the docs should say so where a player will read it.
 
 **B3. Cross-city is the flagship car feature and is exactly where the open defects
-live.** Two guest cities collide in the shared palette/page pool ("v1 is one guest city
-per session"), and a cross-city live join can mis-slot because the host's mapping is not
-yet authoritative. Same-city is healthy — measured: cross-city picks agree on both seats
-and release their old slots cleanly.
+live.** The palette bank holds **three** guest-city blocks and the old "one guest city"
+import gate is gone, so a session mixes as many source cities as the bank has room for;
+what remains is that a set with no palette row of its own collapses onto its city's base
+row (the colours are still imperfect), and a cross-city live join can mis-slot because the
+host's mapping is not yet authoritative. Same-city is healthy — measured: cross-city picks
+agree on both seats and release their old slots cleanly.
 
 **B4. Player-car damage is not synced.** `totalDamage`/`ap.damage[]` never leave the
 machine, so a wrecked player car looks straight on a peer. The collision handoff is one
@@ -104,7 +106,8 @@ are mostly buried in internals docs:
   ninth player can be seated (`MP_MAX_PLAYERS`, `MpAssignedCarModel`).
 - **One gamemode** (Take a Ride).
 - **No host migration** — the host's exit ends the match for everyone.
-- **One guest city per session** (the palette/page collision above).
+- **Up to three guest cities per session** (the palette bank: `civ_clut` rows 8..31, one
+  8-row block each). The one-guest-city import gate is gone.
 - **Traffic motion** is replicated as *state*, not matched; ambient pedestrians are each
   machine's own.
 - **A TCP session** for a real-time sim, and a mod list that must be clean when testing.

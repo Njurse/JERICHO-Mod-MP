@@ -288,6 +288,8 @@ inert unless `MP_BOT` asks for it.
 | `chase` | the HOST flees, the joiner chases |
 | `fight` | both charge each other |
 | `pursuit` | MUTUAL chase: both cars hunt each other, so the pair reliably meets and collides |
+| `catmouse` | the pathfinder-driven set: one car is the cat, the rest scatter and are hunted (flee/destination logic, not the canned pad) |
+| `off` (also `0`) | drive nothing -- use this to reproduce a HUMAN report, since the bot drives a real player's car |
 
 `mp_localpair.py --bot <mode>` sets it on both instances. `pursuit` is the one to
 reach for when you want the pair actually driving a distance around scenery (so the

@@ -610,13 +610,15 @@ the thing to watch if it ever becomes a complaint.
 
 **14. Joining a session already in progress is best-effort.** A client that joins a *running* match must have the peer cars it names built on the fly. Most of that machinery has landed — the **hotload** (geometry, cosmetics, texture pages) and the **poll-gap credit** that stopped a level load being read as a dead peer — so a same-city joiner is fine and §13's "late joiner dropped for `timeout`" no longer applies. But a cross-city joiner still leans on the host's slot authority (item 16), and a car the host's level cannot serve is **reported, not loaded**. Treat "join a live session" as best-effort; a session joined at the start is the reliable path.
 
-**15. Two guest cities at once collide in the shared palette/page pool.** On the host, a
-*second* imported city's textures and colours come out wrong while the first is right
-("the vegas car imported proper but not the havana one's textures and colors"); and the
-machine that imported a car gets its **scenery** textures contaminated. Both are
-collisions in the shared pool/bank — not missing imports — because the bank holds three
-guest-city `civ_clut` blocks (rows 8..31) and the import admits one foreign city by
-default. **v1 is one guest city per session.** Details: `carhacks/MP_ADAPTER.md`.
+**15. Multi-city palette placement is still imperfect.** A *second* imported city can come
+out with wrong textures/colours on the host ("the vegas car imported proper but not the
+havana one's textures and colors"), and the machine that imported a car can get its
+**scenery** textures contaminated — collisions in the shared page pool and palette bank,
+not missing imports. The bank holds **three** guest-city `civ_clut` blocks (rows 8..31) and
+the old "one foreign city by default" import gate is **gone**, so a session may name as many
+source cities as it has room for; what remains is the *placement* (a set with no palette row
+of its own collapses onto its city's base row). Details: `carhacks/MP_ADAPTER.md`,
+`carhacks/docs/PALETTES.md` §7.
 
 **16. Host slot authority on a cross-city live join.** When a client's own level load
 precedes a lower-id peer's pick, the two can derive different resident slots (measured:

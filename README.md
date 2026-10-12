@@ -119,16 +119,22 @@ join handshake then admits or refuses clients by their enabled-mod manifest.
 While the pause menu is open, the players are listed down the left of the screen:
 the host first and in cyan, then each player's name, index, the vehicle they are
 in (`-1` = on foot) and their ping. The order is the roster's, so it reads the way
-the match was built. `MP_PAUSE=1` holds the pause menu open for testing and
-`MP_DEBUG` logs each row.
+the match was built. `MP_PAUSE=1` **logs** the player rows for a test (it does not open or
+hold the pause -- `MP_OPENPAUSE=<secs>` does that), and `MP_DEBUG` logs each row.
 
 The engine's own pause menu keeps working, and the module adds a `Multiplayer`
-page to it with three rows:
+page to it with nine rows:
 
 | Row | What it does |
 | --- | --- |
-| `Change car` | pick a city and one of its cars, then "Respawn as this car": your vehicle is replaced in place, and every peer re-models its copy of you. The city row offers the whole session when carhacks is installed (a session can mix cities' car data), and the session's own city alone when it is not. The page also works in SINGLE PLAYER, where the change is a purely local re-model of the car you are driving and the list offers only cars the level can build right now; a pick that cannot be built is refused, with a reason, and leaves your car alone |
+| `Vehicle Options` | the car submenu: a city cycler, a car cycler, `Respawn as this car` and `Repair car`. Your vehicle is replaced in place, and every peer re-models its copy of you. The city row offers every city carhacks can serve and the session's own city alone when carhacks is absent. The page also works in SINGLE PLAYER, where the change is a purely local re-model of the car you are driving; the picker offers the whole roster of every city there too, because choosing a car that is not here yet IS the request that imports it. A pick that cannot be loaded is refused, with a reason, and leaves your car alone |
+| `Warp To Player` | move your car to another player's |
+| `Invincibility` | on/off: you take no damage |
+| `Immunity` | on/off: the police leave you alone |
+| `Respawn` | put YOU back at the world start, in your car, repaired, with no wanted level (in a session this does not rebuild the level) |
 | `My colour` | your character's suit colour, on or off, plus RGB. Off (the default) keeps the game's own colours |
+| `Kick player` | (host) remove a peer from the session |
+| `Clear felony` | clear your wanted level |
 | `Write diagnostics now` | writes `mp_diag.txt` next to the game |
 
 `Restart` is handled specially in a match: instead of rebuilding the level under
@@ -146,12 +152,18 @@ no wanted level, and the session carries on.
 | `mod_check` | `0` | host lobby mod policy: 0 off, 1 by id, 2 by id+version |
 | `strict_version` | `0` | host lobby setting: 1 also requires an identical build hash (off by default, because that hash tracks `git describe`) |
 
-**The file wins over the command line.** `port` is read before the arguments are
-applied, so `-host 1400` / `-join host:1400` do not move a session off the ini's port.
+**The ini's port is the base; the command line can move it -- but not under the shipped
+launchers.** `mp.ini` is read at module activation, *before* the arguments are parsed, so it
+supplies the default port; a plain `-host 4000` masks it (`mp.c`, the `-host` handler), and
+the listener opens on 4000. What actually *pins* a session to the ini's port is
+`MP_AUTOSTART`, which the packaged launchers set: that opens the listener at BOOT, on the
+ini's port, and the later `-host` has nothing left to do (`MpBeginHost` returns early when
+we are already hosting). So if you launch through `PLAY_HOST.bat` / `mp_host.bat`, set the
+port in `mp.ini`; a bare `-host <port>` does move it.
 If two machines disagree about the port, nothing connects and nothing in the UI says
 why: the dev build's default is `1318` while the shipped LAN package's is `1400`, so
-set the same port in both `mp.ini`, or change it in the ini rather than on the command
-line. (`-join` is still the way to pick the *address*; the port in it is a hint only.)
+make both sides agree -- in the ini when you use a launcher. (`-join` is the way to pick
+the *address*; the port in it is used for the connect.)
 
 ### A dev build and a release build can play together
 
@@ -287,7 +299,9 @@ them):
 | --- | --- |
 | `MP_TEST_ONFOOT=<secs>` | get out of the car that many seconds in, so the on-foot path runs at all |
 | `MP_BOT` | drives the cars AND the on-foot Tanner (see `mp_bot.c`), so a run has motion without a human. `mp_localpair.py` defaults it to `chase` (the host flees, every joiner chases); `pursuit` hunts mutually; `catmouse` is the same pair DRIVEN BY THE PATHFINDER - the mouse runs to a place it chooses (far from the cat, preferring the road, reachable) and the cat plans to where the mouse is; `off` leaves a real player's car alone |
-| `MP_TEST_PAUSECAR=<secs>[,<city>[,<model>]][;...]` | runs the pause menu's `Change car` apply path, so a mid-match vehicle change (including a cross-city one, with carhacks) is reproducible headlessly. A `;`-separated list (`30,3,1;45,1,2`) makes one change per entry, in order, each at its own time, counted in seconds from when the session starts running - enough to switch until the spare slots would run out. Also runs OUTSIDE a session (from the frame hook, since the lockstep tick it normally rides on needs a session), which is the only padless way to exercise the single-player swap: `MP_TEST_PAUSECAR=10,3` with `-level rio` switches to Rio's second car |
+| `MP_TEST_PAUSECAR=<secs>[,<city>[,<model>]][;...]` | runs the pause menu's `Vehicle Options` apply path, so a mid-match vehicle change (including a cross-city one, with carhacks) is reproducible headlessly. A `;`-separated list (`30,3,1;45,1,2`) makes one change per entry, in order, each at its own time, counted in seconds from when the session starts running - enough to switch until the spare slots would run out. Also runs OUTSIDE a session (from the frame hook, since the lockstep tick it normally rides on needs a session), which is the only padless way to exercise the single-player swap: `MP_TEST_PAUSECAR=10,3` with `-level rio` switches to Rio's second car |
+| `MP_TEST_CITYCHANGE=<secs>,<city>[,<slot>]` | drives the same path to a car from **another city**, through `MpChangeCar`. `city` indexes the cities the car mods know (`MpCarQueryCities`), so it is inert unless the city list offers it - and it is the lever that proves the city list is populated |
+| `MP_OPENPAUSE=<secs>` | opens the engine pause for real (nothing else can, headlessly) and HOLDS it - it re-arms while the pause is closed, so a capture cannot land on a frame it happened to be shut. **Session only**: it rides the frame hook's `gMp.running` gate |
 | `MP_TEST_RESTART=<secs>` | fires the engine's own pause-menu answer, so a pass means the multiplayer soft restart is wired end to end |
 
 The driving bots work from what the engine's own scenery test can see and have **no route

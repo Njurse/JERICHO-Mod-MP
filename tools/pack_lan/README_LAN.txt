@@ -115,9 +115,12 @@ WHAT TO EXPECT (the honest v1 limits)
      cars and a ninth cannot be seated.
    * ONE gamemode: the stock Take a Ride free-roam. There is no race and no
      mission, and nothing here is a scoreboard -- the pause list is who is in.
-   * ONE guest city at a time. You may pick a car from any city, but importing a
-     SECOND city's car data can colour the wrong cars and can touch the scenery.
-     Stay with one guest city per session.
+   * Guest-city cars: up to THREE cities at once. You may pick a car from any city
+     (carhacks offers every city's roster, and picking one imports it), but the more
+     foreign cities you add, the more likely a foreign car's PAINT comes out wrong --
+     the extra cities share a palette bank of three blocks, and a set with no row of
+     its own can wear another's colours. Two or three cities is playable; the paint is
+     where you would notice.
    * Damage is not shared on a PLAYER car: if your car is badly bent on your
      screen it can look straight on the other player's, and vice versa. Damage to
      TRAFFIC cars IS shared, so a wreck you caused looks the same to both of you.
@@ -158,5 +161,5 @@ NOTES
      PLAYING AGAINST THE BOT above for the one-command way to be chased.
    * Take a Ride with the two of you is the supported path for now. Read WHAT TO
      EXPECT above before you play: the notable ones are that the host leaving ends
-     the match, that only one guest city is safe, and that player-car damage is not
-     shared.
+     the match, that adding several guest cities can paint a car wrong, and that
+     player-car damage is not shared.

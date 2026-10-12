@@ -1155,13 +1155,13 @@ while it runs, and pulling a LIVE log is the point -- `ReadAllBytes` fails with
 Both of these are things the ENGINE does not know how to do in a match, and both
 are reachable from the Multiplayer pause page.
 
-### Change car
+### Vehicle Options (the car page)
 
-`Multiplayer` -> `Change car` is a two-row cycler and an apply row (`mp.c`,
-mirroring the colour editor): a city, one of that city's cars, then "Respawn as
-this car". A row is a CYCLER and not a list because the pause menu's item set is
-fixed when the page opens and a module menu cannot nest a second level
-(`jer_pause_menu.h`) -- so a 12-car roster is reached by cycling.
+`Multiplayer` -> `Vehicle Options` is a four-row page (`mp.c`): a city cycler, a car
+cycler, `Respawn as this car`, then `Repair car`. It is a CYCLER and not a list because
+the pause menu's item set is fixed when the page opens and a module menu cannot nest a
+second level (`jer_pause_menu.h`) -- so a long roster is reached by cycling. (It began as
+a two-row cycler plus an apply row; `Repair car` joined it in `b6b67f1c`.)
 
 Applying it calls `MpChangeCar(city, model)` (`mp_session.c`), which does the
 SAME in-place re-model a peer's car goes through (`MpAdoptCar`, the session-free
@@ -1190,12 +1190,13 @@ A pick that still cannot be loaded is refused with a reason
 
 **Where the cities come from.** mp can only offer what this machine can actually
 hold, and a second city's car data is carhacks' business, so mp ASKS:
-`mp_carquery.h` is a three-event contract (custom JERICHO event ids, so no shared
+`mp_carquery.h` is a four-event contract (custom JERICHO event ids, so no shared
 header needed beyond that one file) answered by `carhacks/mplive.c`:
 
 | event | question | answer |
 | --- | --- | --- |
 | `MP_CARQ_CITIES` | which cities can this session offer? | every car-data city (9: CHICAGO..RIO + Driver 1's five), or 0 = "nobody knows" |
+| `MP_CARQ_SLOTS` | which slots may this city be offered in, and what model is in each? | parallel slot/model lists, or 0 = "nobody knows" (mp then keeps the engine's own table) |
 | `MP_CARQ_LOAD` | make `(city, model)` available here | `ok` |
 | `MP_CARQ_CHOSEN` | (notice) the local player now drives `(city, model)`, or the switch did not happen | none - carhacks tells the session and releases the old car's slot |
 

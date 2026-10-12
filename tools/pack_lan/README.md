@@ -6,16 +6,16 @@ want depends on whether Driver 1 content is going with it.
 
 | You want… | Use | Ships |
 | --- | --- | --- |
-| the public LAN package | `make_lan_package.bat` | the **Release** exe, four mods (carhacks, crumple, levelhacks, mp), the game data minus its movies |
-| a private hand-off, with Driver 1 | `make_lan_package_micheal.sh` | the **dev** exe, **six** mods (those four plus d1cars and sandbox), no game data at all |
+| the public LAN package | `make_lan_package.bat` | the **Release** exe, three mods (carhacks, crumple, mp), the game data minus its movies |
+| a private hand-off, with Driver 1 | `make_lan_package_micheal.sh` | the **dev** exe, **six** mods (those three plus levelhacks, d1cars and sandbox), no game data at all |
 
 ## Why there are two, and why they cannot be one
 
 `make_lan_package.bat` packages `bin/Release`, and the Release exe **cannot carry
 d1cars** — it is built against `JERICHO_RELEASE_MODS` in `premake5.lua`, which
-pre-includes four modules and leaves d1cars out so the Driver 1 content can be
-revealed on its own. The Driver 1 module and its baked data are therefore only
-reachable from a **dev** build, which is what the second packager uses.
+pre-includes three modules (carhacks, crumple, mp) and leaves d1cars out so the Driver 1
+content can be revealed on its own. The Driver 1 module and its baked data are therefore
+only reachable from a **dev** build, which is what the second packager uses.
 
 The dev build also mirrors every module into `bin/Release_dev/JERICHO/MODS`,
 *except* d1cars and gaildrv2 (`JER_MIRROR_EXCLUDE`). That exclusion matters more
