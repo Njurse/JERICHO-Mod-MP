@@ -84,6 +84,7 @@ listed above.
 | --- | --- |
 | `PLAY_HOST.bat` / `PLAY_JOIN.bat` | the launchers the recipients run; `PLAY_HOST.bat [port]`, `PLAY_JOIN.bat <host-ip>` |
 | `BAKE_D1_CARS.bat` / `.sh` | the Driver 1 bake, run once by a player who owns Driver 1; identical steps, one per platform |
+| `update_jericho.bat` / `.sh` | updates an install from the latest **release** (never the `alpha` pre-release) after checking it against `SHA256SUMS`; keeps `CONFIG/`, `DRIVER/` and any mod you added. `update_jericho.bat dev` / `./update_jericho.sh dev` takes the release's `Release_dev` build instead |
 | `mp_bot_client.bat` | a second, self-driving copy of the game to be chased by |
 | `FIREWALL_FIX.bat` | adds the inbound firewall rule for the session port |
 | `README_LAN.txt` | the one-page "how two people play" |
