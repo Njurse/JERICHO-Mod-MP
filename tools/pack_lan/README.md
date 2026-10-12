@@ -6,16 +6,26 @@ want depends on whether Driver 1 content is going with it.
 
 | You want… | Use | Ships |
 | --- | --- | --- |
-| the public LAN package | `make_lan_package.bat` | the **Release** exe, three mods (carhacks, crumple, mp), the game data minus its movies |
-| a private hand-off, with Driver 1 | `make_lan_package_micheal.sh` | the **dev** exe, **six** mods (those three plus levelhacks, d1cars and sandbox), no game data at all |
+| the public LAN package | `make_lan_package.bat` | the **Release** exe, four mods (carhacks, crumple, d1cars, mp), the game data minus its movies, plus `DRIVER\D1CARS\` (~1.8 MB) |
+| a private hand-off, with Driver 1 | `make_lan_package_micheal.sh` | the **dev** exe, **six** mods (those four plus levelhacks and sandbox), no game data at all |
 
 ## Why there are two, and why they cannot be one
 
-`make_lan_package.bat` packages `bin/Release`, and the Release exe **cannot carry
-d1cars** — it is built against `JERICHO_RELEASE_MODS` in `premake5.lua`, which
-pre-includes three modules (carhacks, crumple, mp) and leaves d1cars out so the Driver 1
-content can be revealed on its own. The Driver 1 module and its baked data are therefore
-only reachable from a **dev** build, which is what the second packager uses.
+`make_lan_package.bat` packages `bin/Release`, and that exe carries the four
+pre-included modules (`JERICHO_RELEASE_MODS` in `premake5.lua`): carhacks, crumple,
+d1cars and mp. **d1cars is part of the public release now** -- the five Driver 1
+car-data cities are a shipped feature, not a separate package -- so the packager
+stages `DRIVER\D1CARS\` (about 1.8 MB of baked car data and cosmetics) beside the
+exe. The rest of `DRIVER\` stays out: it is the Driver 1 game's own levels and
+586 MB of movies, which the car cities do not read.
+
+carhacks only offers a D1 city whose data is on disk (`chkCityAssetsPresent`, which
+tests `DRIVER\D1CARS\<CITY>.LEV`), so a package built without that line would simply
+not show the cities rather than offer cars it cannot build.
+
+The private packager exists for the things a public release does not carry: the
+`levelhacks` and `sandbox` modules, and a dev exe. It stages the same `DRIVER\D1CARS`
+content the public one now does.
 
 The dev build also mirrors every module into `bin/Release_dev/JERICHO/MODS`,
 *except* d1cars and gaildrv2 (`JER_MIRROR_EXCLUDE`). That exclusion matters more

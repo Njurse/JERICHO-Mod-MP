@@ -45,9 +45,9 @@ if errorlevel 1 (
 popd
 
 rem ------------------------------------------------------------------- 3) build
-rem The RELEASE build, not the dev one: a release pre-includes only carhacks +
-rem crumple + mp (premake5.lua JERICHO_RELEASE_MODS), and bin\Release is what this
-rem package ships.
+rem The RELEASE build, not the dev one: a release pre-includes only the release
+rem modules -- carhacks + crumple + d1cars + mp (premake5.lua
+rem JERICHO_RELEASE_MODS) -- and bin\Release is what this package ships.
 rem
 rem exports.def is generated from a LINKER MAP, and the committed copy is shaped
 rem for the DEV build -- it names every mod's entry symbol. A release links only

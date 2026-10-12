@@ -4,7 +4,7 @@ rem
 rem   make_lan_package.bat [output.7z]
 rem
 rem Ships the RELEASE build (bin\Release\JERICHO.exe): the public build, which
-rem pre-includes only carhacks + crumple + mp. It is NOT the dev build -- a dev
+rem pre-includes carhacks + crumple + d1cars + mp. It is NOT the dev build -- a dev
 rem build carries every mod and stays local. See premake5.lua JERICHO_RELEASE_MODS.
 rem
 rem Ships the exe, the DLLs, the game data and JERICHO -- but NOT the 1.5 GB of
@@ -12,13 +12,13 @@ rem FMV videos, which are the bulk of the build and are not needed by the
 rem launchers (they pass -nofmv, which the game supports). Add DRIVER2\FMV to
 rem the second 7z command if someone wants the movies.
 rem
-rem DRIVER\D1CARS IS NOT SHIPPED, and neither is the d1cars module. It is the
-rem baked Driver 1 car content, and it is released SEPARATELY so it can be
-rem revealed on its own. A package made by this script therefore CANNOT select
-rem the five Driver 1 cities -- that is deliberate. A local DEV build keeps
-rem DRIVER\D1CARS and d1cars for testing (bin/ is the dev tree); the release
-rem does not carry either. To ship the Driver 1 cities, ship the separate d1cars
-rem package alongside this one, never inside it.
+rem DRIVER\D1CARS IS SHIPPED, and so is the d1cars module: the five Driver 1
+rem car-data cities (MIAMI, FRISCO, LA, NEWYORK, NEWCASTLE) are part of the
+rem release now, not a separate package. It is small -- about 1.8 MB of baked car
+rem data and cosmetics -- while the rest of DRIVER\ is the Driver 1 game's own
+rem levels and 586 MB of movies, which the car cities do not need. carhacks offers
+rem a D1 city only when its DRIVER\D1CARS\<CITY>.LEV is on disk (chkCityAssetsPresent),
+rem so a package built without this line would simply not show the cities.
 setlocal
 set "HERE=%~dp0"
 set "ROOT=%HERE%..\..\..\..\.."
@@ -38,7 +38,7 @@ echo packaging %EXEDIR% -^> %OUT%
 pushd "%EXEDIR%" || exit /b 1
 "%SEVENZ%" a -t7z -mx=5 "-xr!FMV" "%OUT%" ^
     JERICHO.exe SDL2.dll OpenAL32.dll soft_oal.dll config.ini ^
-    VERSION.txt DRIVER2 JERICHO
+    VERSION.txt DRIVER2 DRIVER\D1CARS JERICHO
 popd
 
 pushd "%HERE%" || exit /b 1
