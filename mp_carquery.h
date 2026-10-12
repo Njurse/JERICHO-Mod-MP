@@ -43,10 +43,13 @@
 
 /* MP_CARQ_CITIES -> ARGS.count city indices written to ARGS.cities[].
  *
- * `city` is a 0..3 index (CHICAGO/HAVANA/VEGAS/RIO). A handler that has
- * nothing to add leaves count at 0 rather than repeating the session's own
- * city, because 0 is what tells mp "nobody knows better": mp then offers the
- * session's city alone. */
+ * `city` is an index into the engine's city registry (CHICAGO/HAVANA/VEGAS/RIO, then
+ * Driver 1's car-data cities), the same space `MP_CARQ_SLOTS` and `carNumLookup` use.
+ * A handler that has nothing to add leaves count at 0 rather than repeating the
+ * session's own city, because 0 is what tells mp "nobody knows better": mp then
+ * offers the session's city alone. (carhacks answers with every city it can serve,
+ * whether or not the config-driven cross-city hack is on -- a PICK is what imports
+ * the car, so the city row and the car list are owned by the same roster hack.) */
 typedef struct MP_CARQ_CITIES_ARGS
 {
 	int* cities;	/* out: city indices, most preferred first */

@@ -1195,14 +1195,18 @@ header needed beyond that one file) answered by `carhacks/mplive.c`:
 
 | event | question | answer |
 | --- | --- | --- |
-| `MP_CARQ_CITIES` | which cities can this session offer? | 0..3 indices, or 0 = "nobody knows" |
+| `MP_CARQ_CITIES` | which cities can this session offer? | every car-data city (9: CHICAGO..RIO + Driver 1's five), or 0 = "nobody knows" |
 | `MP_CARQ_LOAD` | make `(city, model)` available here | `ok` |
 | `MP_CARQ_CHOSEN` | (notice) the local player now drives `(city, model)`, or the switch did not happen | none - carhacks tells the session and releases the old car's slot |
 
 No answer is not an error: mp falls back to the session's own city and its
 frontend roster (`CarAvailability[city][slot]` + `carNumLookup[city][slot]`,
 the same two arrays the stock car screen and carhacks' own picker read), which is
-the whole feature minus the cross-city half.
+the whole feature minus the cross-city half. The city answer and the slot answer are
+gated by the same carhacks hack (`unlock_extra_vehicles`, the one that fills the
+frontend roster) so the pause picker and the frontend car screen cannot disagree,
+and a mid-match pick imports the car whether or not the config-driven
+`cross_city_vehicles` hack is on.
 
 `MP_CARQ_LOAD` is not new machinery on carhacks' side either: it is the sequence a
 mid-match peer pick already goes through -- put the car in the session's canonical
