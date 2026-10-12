@@ -5,20 +5,24 @@ rem   make_lan_package.bat [output.7z]
 rem
 rem Ships the RELEASE build (bin\Release\JERICHO.exe): the public build, which
 rem pre-includes carhacks + crumple + d1cars + mp. It is NOT the dev build -- a dev
-rem build carries every mod and stays local. See premake5.lua JERICHO_RELEASE_MODS.
-rem
+rem build carries every mod and stays local. See premake5.lua JERICHO_RELEASE_MODS.rem
 rem Ships the exe, the DLLs, the game data and JERICHO -- but NOT the 1.5 GB of
 rem FMV videos, which are the bulk of the build and are not needed by the
 rem launchers (they pass -nofmv, which the game supports). Add DRIVER2\FMV to
 rem the second 7z command if someone wants the movies.
 rem
-rem DRIVER\D1CARS IS SHIPPED, and so is the d1cars module: the five Driver 1
-rem car-data cities (MIAMI, FRISCO, LA, NEWYORK, NEWCASTLE) are part of the
-rem release now, not a separate package. It is small -- about 1.8 MB of baked car
-rem data and cosmetics -- while the rest of DRIVER\ is the Driver 1 game's own
-rem levels and 586 MB of movies, which the car cities do not need. carhacks offers
-rem a D1 city only when its DRIVER\D1CARS\<CITY>.LEV is on disk (chkCityAssetsPresent),
-rem so a package built without this line would simply not show the cities.
+rem DRIVER\D1CARS IS NOT SHIPPED, and that is deliberate: it is baked out of
+rem Driver 1's copyrighted data. What IS shipped is the way to make it -- the
+rem d1cars bake tools and BAKE_D1_CARS.bat at the package root, which reads the
+rem player's OWN Driver 1 data from DRIVER\ and writes DRIVER\D1CARS\. The d1cars
+rem MODULE is linked into the exe (JERICHO_RELEASE_MODS), so nothing else is
+rem missing; carhacks offers a D1 city only once its DRIVER\D1CARS\<CITY>.LEV is
+rem on disk (chkCityAssetsPresent), so before the bake the five cities simply are
+rem not offered - the feature degrades to absent rather than to broken.
+rem
+rem The tools are copied out of the REPO below because the dev mirror EXCLUDES
+rem d1cars (premake JER_MIRROR_EXCLUDE, it is a private submodule), so bin\Release
+rem never gets them.
 setlocal
 set "HERE=%~dp0"
 set "ROOT=%HERE%..\..\..\..\.."
@@ -35,14 +39,25 @@ if not exist "%SEVENZ%" (
 )
 
 echo packaging %EXEDIR% -^> %OUT%
+
+rem The bake tools, out of the repo: the dev mirror excludes d1cars, so the exe
+rem dir has no copy of them and the package would ship without a way to bake.
+if exist "%ROOT%\JERICHO\MODS\d1cars\tools" (
+    xcopy /E /I /Y "%ROOT%\JERICHO\MODS\d1cars\tools" "%EXEDIR%\JERICHO\MODS\d1cars\tools" >nul
+) else (
+    echo make_lan_package: no JERICHO\MODS\d1cars\tools in the repo - the package
+    echo                  will ship without BAKE_D1_CARS.bat's tools. See the
+    echo                  d1cars submodule ^(JERICHO-D1^).
+)
+
 pushd "%EXEDIR%" || exit /b 1
 "%SEVENZ%" a -t7z -mx=5 "-xr!FMV" "%OUT%" ^
     JERICHO.exe SDL2.dll OpenAL32.dll soft_oal.dll config.ini ^
-    VERSION.txt DRIVER2 DRIVER\D1CARS JERICHO
+    VERSION.txt DRIVER2 JERICHO
 popd
 
 pushd "%HERE%" || exit /b 1
-"%SEVENZ%" a -t7z -mx=5 "%OUT%" PLAY_HOST.bat PLAY_JOIN.bat mp_bot_client.bat FIREWALL_FIX.bat README_LAN.txt README_LAN_TEST.txt
+"%SEVENZ%" a -t7z -mx=5 "%OUT%" PLAY_HOST.bat PLAY_JOIN.bat mp_bot_client.bat FIREWALL_FIX.bat BAKE_D1_CARS.bat README_LAN.txt README_LAN_TEST.txt
 popd
 
 rem The remote-testing agent, staged at the package ROOT (next to the exe) so the
