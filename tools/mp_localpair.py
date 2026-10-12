@@ -192,55 +192,12 @@ def safe_remove(path):
         pass
 
 
-def _minimize_window_soon(pid):
-    """Minimize the game's window once it exists (best effort, background).
-
-    Deliberately done AFTER launch rather than with a STARTUPINFO at Popen time:
-    passing STARTF_USESHOWWINDOW there made SDL create the window at a strange, tiny
-    size (it reads the show-command during window creation).
-    """
-    if os.name != "nt":
-        return
-
-    import ctypes
-    from ctypes import wintypes
-
-    def worker():
-        user32 = ctypes.windll.user32
-        cb_t = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
-
-        for _ in range(150):        # ~15 s is plenty for the window to appear
-            hits = []
-
-            def cb(hwnd, _l):
-                wpid = wintypes.DWORD()
-                user32.GetWindowThreadProcessId(hwnd, ctypes.byref(wpid))
-                if wpid.value == pid and user32.IsWindowVisible(hwnd):
-                    hits.append(hwnd)
-                return True
-
-            try:
-                user32.EnumWindows(cb_t(cb), 0)
-            except OSError:
-                return
-
-            if hits:
-                for h in hits:
-                    user32.ShowWindow(h, 6)     # SW_MINIMIZE
-                return
-
-            time.sleep(0.1)
-
-    threading.Thread(target=worker, daemon=True).start()
-
-
 def launch(run_dir, exe, args, env_extra):
     env = dict(os.environ)
     env.update(env_extra)
     p = subprocess.Popen([os.path.join(run_dir, exe)] + args, cwd=run_dir, env=env,
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     STARTED.append(p)
-    _minimize_window_soon(p.pid)
     return p
 
 
