@@ -640,7 +640,15 @@ static void MpAutostartFromEnv(void)
  *
  * `T` is chosen because the default PsyX keyboard map does not bind it to a pad
  * button (X/V/Z/C, LSHIFT, the arrows, SPACE and RETURN are all taken), so
- * opening chat does not also steer the car. ESCAPE closes the prompt again. */
+ * opening chat does not also steer the car. ESCAPE closes the prompt again.
+ *
+ * RETURN is the SEND (MP_KEY_CHAT_SEND below), and that only works because PsyX
+ * now delivers it: it used to consume RETURN in its event loop for the Alt+Enter
+ * fullscreen gesture -- out of the switch, before DoDebugKeys -- so no module
+ * ever saw the key. Fixed engine-side (Njurse/PsyCross d94b2d1, bumped by the
+ * superproject): RETURN is consumed for that gesture only. Do not "simplify"
+ * this handler on the assumption that the key arrives, and do not re-bind SEND
+ * to something the pad owns. */
 static MpDebugKeysFn gMpPrevDebugKeys = NULL;
 static MpTextInputFn gMpPrevTextInput = NULL;
 
