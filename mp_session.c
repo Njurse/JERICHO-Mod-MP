@@ -6210,10 +6210,62 @@ int MpSoftRestart(void)
 	if (PlayerStartInfo[0] != NULL)
 	{
 		LONGVECTOR4 start;
+		int sx = PlayerStartInfo[0]->position.vx;
+		int sz = PlayerStartInfo[0]->position.vz;
 
-		start[0] = PlayerStartInfo[0]->position.vx;
+		/* STREAM THE DESTINATION FIRST, or a restart from far away is a restart into the
+		 * void. Put back at the level's start after driving off, this is a long
+		 * teleport - and a region you are dropped into is never put into a barrel by the
+		 * streamer, so the ground there never loads and MapHeight answers 0. The car is
+		 * then placed with start[1] = 0 over nothing and falls out of the world. Same
+		 * contract as the hop below, including the static: spoolXZ must outlive the call.
+		 *
+		 * Only stream when the region is genuinely NOT resident. jer_map_spool_to runs a
+		 * synchronous spool pass (CheckLoadAreaData + StartSpooling + UpdateSpool), and
+		 * calling it when the region is already in stalled both a pair run and a 3-seat
+		 * run - that is what the gather's own note records as measured. A restart taken
+		 * near the start costs nothing here. */
+		if (jer_map_ready())
+		{
+			int region = jer_map_region_of(sx, sz);
+
+			if (region >= 0 && jer_map_region_has_data(region) &&
+				!jer_map_region_resident(region))
+			{
+				static VECTOR sRestartSpool;	/* spoolXZ must outlive this call */
+				VECTOR* oldSpoolXZ = MainPlayer.spoolXZ;
+
+				sRestartSpool.vx = sx;
+				sRestartSpool.vy = 0;
+				sRestartSpool.vz = sz;
+				sRestartSpool.pad = 0;
+				MainPlayer.spoolXZ = &sRestartSpool;
+
+				/* 0 = there is nothing there to stream, so we must not place at all:
+				 * leaving the player where they are beats dropping them into a void
+				 * they cannot drive out of. */
+				if (!jer_map_spool_to(sx, sz))
+				{
+					MainPlayer.spoolXZ = oldSpoolXZ;
+					MpNotify("Restart: the level start is not streamable - staying put");
+					return 0;
+				}
+
+				/* Hand the streamer back: the engine's own convention is the player
+				 * car's position vector (cutscene.c points spoolXZ at it), which is the
+				 * car we are moving, so it already follows us. Ours pointed at a static. */
+				MainPlayer.spoolXZ = oldSpoolXZ;
+
+				if (gMpCtx != NULL)
+					gMpCtx->jer_log(gMpCtx,
+						"[mp] soft restart: region %d was not resident at %d,%d - streamed it before placing\n",
+						region, sx, sz);
+			}
+		}
+
+		start[0] = sx;
 		start[1] = 0;		/* the engine resolves the ground under the car */
-		start[2] = PlayerStartInfo[0]->position.vz;
+		start[2] = sz;
 		start[3] = 0;
 
 		InitCarPhysics(cp, &start, PlayerStartInfo[0]->rotation);
