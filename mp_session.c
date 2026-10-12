@@ -6850,8 +6850,37 @@ static void MpHandleCarState(int connIndex, const unsigned char* p, int len)
 			continue;
 		}
 
+		/* HEAL: the owner's own carstate says they are DRIVING, but this machine
+		 * holds no car for them. Believe the owner -- it is the authority for its
+		 * car, and this message is current (a player on foot sends NO_CAR, handled
+		 * just above, so reaching here with carId < 0 cannot mean "on foot").
+		 *
+		 * This is a deadlock, not a race. carId is only ever assigned by a spawn,
+		 * and the pose adopt below bails on carId < 0, so once a get-OUT had set
+		 * carId = -1 / onFoot = 1 nothing here ever looked at the owner's next
+		 * "I have a car" again. The re-seat pass (MpSpawnLateJoiners) skips anyone
+		 * with onFoot set, so the pair never broke: no car drawn on this machine
+		 * for the rest of the match, and the stand-in pedestrian -- whose pedstate
+		 * stops the instant its owner is back in a car -- stayed where it was,
+		 * walking the spot and playing footstep sounds.
+		 *
+		 * Clearing onFoot is the whole fix: the re-seat pass runs every 30 frames
+		 * and will seat them on its next one. Logged once per get-out/get-in
+		 * cycle, so the heal is visible when diagnosing. */
 		if (pl->carId < 0 || pl->carId >= MAX_CARS)
+		{
+			if (pl->onFoot)
+			{
+				pl->onFoot = 0;
+
+				if (gMpCtx != NULL)
+					gMpCtx->jer_log(gMpCtx,
+						"[mp] heal: player %d's carstate says they are driving but we have "
+						"no car for them - re-seating them\n", pl->id);
+			}
+
 			continue;
+		}
 
 		cp = &car_data[pl->carId];
 
