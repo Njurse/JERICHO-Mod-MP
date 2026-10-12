@@ -1900,6 +1900,7 @@ static int mpCcModelCount;
 static int mpCcModelIdx;
 static int mpCcLoggedCity = -1;	/* the city this picker last described */
 static int mpCcLoggedCount = -1;	/* ...and how many slots it offered then */
+static int mpCcLoggedCities = -1;	/* ...and how many CITIES its city row could cycle */
 
 /* Which city the picker is showing: an index into mpCcCities. -1 (or an empty
  * list) means the session's own city. */
@@ -1953,6 +1954,33 @@ static void MpCcRebuild(void)
 	}
 
 	city = MpCcCity();
+
+	/* SAY WHICH CITIES THE ROW OFFERS, not just the one showing. "the picker only shows
+	 * the host city" is a report this line answers directly: it names the list the row will
+	 * cycle, so a run can tell a one-city list (nobody answered MP_CARQ_CITIES, or the car
+	 * mods' roster hack is off) from the full one. Logged when it changes, like the roster
+	 * line below, so a list that shrinks is as visible as one that grows. */
+	if (mpCcLoggedCities != mpCcCityCount)
+	{
+		char names[192];
+		int i;
+
+		mpCcLoggedCities = mpCcCityCount;
+		names[0] = 0;
+
+		for (i = 0; i < mpCcCityCount; i++)
+		{
+			size_t used = strlen(names);
+
+			if (used < sizeof(names) - 16)
+				snprintf(names + used, sizeof(names) - used, "%s%s",
+					(i > 0) ? " " : "", MpCarCityName(mpCcCities[i]));
+		}
+
+		if (gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx, "[mp] car select: %d city/cities on the row - %s\n",
+				mpCcCityCount, (names[0] != 0) ? names : "(none)");
+	}
 
 	/* Ask the car mods, not the engine's table: in a session CarAvailability is still its
 	 * initialiser (four cars a city), because the FRONTEND car screen is what writes it and
