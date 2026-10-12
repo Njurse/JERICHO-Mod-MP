@@ -86,10 +86,10 @@ rem listened on 1318 while PLAY_HOST/PLAY_JOIN and the firewall rule in
 rem README_LAN all said 1400 -- a join by address could never connect. Keep these
 rem three in step: this line, PLAY_HOST's default, and README_LAN's firewall note.
 >> "%STAGE%\JERICHO\CONFIG\mp.ini" echo port = 1400
-rem The RELEASE modlist is written by the Release build itself (premake copies
-rem gen/modlist_release.ini over bin/Release/JERICHO/CONFIG/modlist.ini), so the
-rem package ships exactly the pre-included three and never a module it does not
-rem carry. Nothing is staged here for it.
+rem No modlist is staged here, and none ships: a Release build DELETES
+rem bin/Release/JERICHO/CONFIG/modlist.ini rather than writing one, so installing
+rem this package can never replace a machine's own module toggles. Each module then
+rem runs from its mod.toml default, which jer_registry.c bakes in.
 pushd "%STAGE%" || exit /b 1
 "%SEVENZ%" a -t7z -mx=5 "%OUT%" JERICHO\CONFIG\mp.ini
 popd
