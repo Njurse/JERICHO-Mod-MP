@@ -62,6 +62,7 @@ static int MpIsChatSendKey(int nKey)
 #include "driver2.h"
 #include "system.h"		/* CITY_COUNT: the city registry MPCC_MAX_CITIES tracks */
 #include "main.h"
+#include "pause.h"	/* gJerPauseRestartAsRespawn: relabel the main menu's Restart in a session */
 #include "mission.h"
 #include "pad.h"
 #include "players.h"
@@ -974,6 +975,11 @@ static int MpOnFrame(void* userdata, void* args)
 	gMpFrameHookTicks++;	/* one add a frame; the MP_WATCH log reads it */
 	MpWatchTick();		/* prints the stage the LAST frame reached */
 	gMpStage = "frame";
+
+	/* The engine's main pause menu reads this to relabel "Restart" as "Respawn".
+	 * Sync it every frame so it is always right by the time the pause opens (and
+	 * cleared the frame after the session ends). */
+	gJerPauseRestartAsRespawn = gMp.running ? 1 : 0;
 
 	/* A Change car that asked for a car this machine does not hold yet and was told to
 	 * wait (a spare slot busy for a frame or two): retry it here, once a frame, in the
@@ -2367,8 +2373,10 @@ static int MpOnNetInput(void* userdata, void* args)
  * in a match takes every OTHER player's session down with it -- one player's
  * "restart" is not theirs to do to everyone.
  *
- * So mp CLAIMS restart and does the soft reset instead: this player back at the
- * level's own start, in their car, repaired, wanted level cleared, session intact.
+ * So mp CLAIMS restart and turns it into a RESPAWN instead: the engine's main
+ * pause menu relabels that item "Respawn" (gJerPauseRestartAsRespawn), and here the
+ * claimed restart becomes "back onto the nearest road, repaired" rather than the
+ * soft reset -- one player's restart must not rebuild the level under everyone.
  * Claiming means the engine runs none of its endings, so we also unpause -- the
  * pause menu has already closed itself by the time this fires.
  *
@@ -2388,7 +2396,7 @@ static int MpOnGameQuit(void* userdata, void* args)
 	if (q->code != JER_PAUSE_QUIT_RESTART)
 		return JER_RESULT_CONTINUE;
 
-	if (!MpSoftRestart())
+	if (!MpRespawnOnRoad())
 		return JER_RESULT_CONTINUE;
 
 	pauseflag = 0;
