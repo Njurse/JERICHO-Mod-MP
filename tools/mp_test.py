@@ -27,7 +27,7 @@ import sys
 import threading
 import time
 
-PROTO = 10                    # must match mp_proto.h MP_PROTO_VERSION -- the game drops any frame whose envelope version differs
+PROTO = 11                    # mp_proto.h MP_PROTO_VERSION (11: MP_WELCOME.rules) -- the game drops any frame whose envelope version differs
 SDK = 2                       # JERICHO_SDK_VERSION
 MP_VER = "0.1.0"              # JERICHO/MODS/mp/mod.toml version -- always advertised
 NUL = bytes([0])
