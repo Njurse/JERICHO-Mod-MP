@@ -64,7 +64,16 @@ def run_rig(name, argv, timeout_secs):
 
     lines = [l for l in out.splitlines() if l.strip()]
 
-    # The tail is what a reader needs; the whole log lives in the pair dirs.
+    # The tail is what a reader needs for the VERDICT; the head is what says which run this
+    # was. carstress rolls its level per run, and the roll and its seed are its first lines -
+    # a failing run is only replayable if they survive, so show both ends.
+    for l in lines[:3]:
+        print("  " + l)
+
+    if len(lines) > 15:
+        print("  ...")
+
+    # The whole log lives in the pair dirs.
     for l in lines[-12:]:
         print("  " + l)
 

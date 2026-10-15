@@ -708,6 +708,14 @@ case correctly rather than calling it clean, which is why it is safe to keep; bu
 SINGLE gate run is not yet a stable verdict, and a red `carstress` line should be read
 together with its `car change(s)` count -- `0` means the rig never started.
 
+**Third thing: *which level* the run was on.** `carstress` now rolls its level per run
+(chicago / havana / vegas / rio) instead of inheriting `mp_localpair`'s `rio` default. The
+hot-load path's symptoms differ by level -- which resident slots the level holds, what it
+streams, which cars its list offers -- so a red line on one level says nothing about
+another. The roll and its seed are printed at the top *and* next to the verdict, so it
+survives `run_gate.py` keeping only the tail of a rig's output; `SEED=<n>` replays that
+exact run, `--level <city>` pins one on purpose.
+
 ### Why `carstress` fails: the spare-slot pool saturates EXACTLY (measured 2026-10-10)
 
 The rig counts `no spare resident slot`, and the engine's own message carries the whole

@@ -14,6 +14,12 @@ It uses mp_localpair.py for the session and MP_TEST_CARCYCLE for the driving, so
 go through the same call the pause menu's Apply row makes. The list is the session's own
 (MpCarListForCity), not a guess at model numbers.
 
+The LEVEL is rolled per run (chicago / havana / vegas / rio). This rig used to inherit
+mp_localpair's `rio` default, so it only ever exercised rio's hot-load path - and those
+symptoms are level-specific (which resident slots a level holds, what it streams, which cars
+its list offers), so a run on one level says nothing about another. The roll and its seed are
+printed: `SEED=<n>` replays it, `--level <city>` pins it.
+
 What it reports, per seat: how many cars it actually drove, how many DISTINCT ones (the
 coverage claim - "every car" is only true if this reaches the whole list), how many passes it
 finished, and every sign of trouble:
@@ -30,6 +36,7 @@ Exit code is 0 only when every seat cycled its whole list with none of the above
 import argparse
 import collections
 import os
+import random
 import re
 import subprocess
 import sys
@@ -38,6 +45,11 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 PAIR = os.path.join(HERE, "mp_localpair.py")
 
 SEATS = ["host", "client", "client1", "client2", "client3", "client4", "client5", "client6"]
+
+# The mp levels a pair can boot into (mp_localpair's --level). Rolled per run: the
+# hot-load path's symptoms differ by level, so a rig pinned to one level only ever
+# finds that level's.
+LEVELS = ("chicago", "havana", "vegas", "rio")
 
 TROUBLE = (
     ("MISSING", re.compile(r"MISSING")),
@@ -127,17 +139,38 @@ def main():
         "src_rebuild", "bin", "Release_dev"))
     ap.add_argument("--keep", action="store_true")
     ap.add_argument("--bot", default="off", help="leave it off: a parked car is a still picture")
+    ap.add_argument("--level", default=None, choices=LEVELS,
+                    help="the mp level to run on. Default: a RANDOM one, because the hot-load "
+                         "path's symptoms differ by level and a rig pinned to one only ever "
+                         "finds that level's. The roll and its seed are printed")
+    ap.add_argument("--seed", type=int, default=None,
+                    help="pin the level roll (default: the SEED environment variable, else a "
+                         "fresh roll). Printed either way, so any run can be replayed")
     a = ap.parse_args()
 
     if not os.path.exists(PAIR):
         print("cannot find %s" % PAIR)
         return 2
 
+    # Roll the level (or honour --level / SEED=). Seeded means deterministic, and the seed is
+    # printed either way, so a pasted-back SEED is worth something.
+    seed = a.seed
+    if seed is None:
+        env = (os.environ.get("SEED") or "").strip()
+        seed = int(env) if env.lstrip("-").isdigit() else None
+    if seed is None:
+        seed = random.randrange(1, 1 << 30)
+
+    rng = random.Random(seed)
+    rolled = a.level is None
+    level = a.level if a.level is not None else rng.choice(LEVELS)
+
     seats = SEATS[:a.players]
     cmd = [sys.executable, PAIR,
            "--game-dir", a.game_dir,
            "--players", str(a.players),
            "--seconds", str(a.seconds),
+           "--level", level,
            "--bot", a.bot]
 
     for s in seats:
@@ -146,8 +179,10 @@ def main():
     if a.keep:
         cmd.append("--keep")
 
-    print("stress: %d seat(s), a change every %d ms each (~%d ms somewhere in the session)"
-          % (a.players, a.interval_ms, max(1, a.interval_ms // a.players)))
+    print("stress: %d seat(s) on %s, a change every %d ms each (~%d ms somewhere in the session)"
+          % (a.players, level, a.interval_ms, max(1, a.interval_ms // a.players)))
+    print("        level %s (%s, seed %d - SEED=%d replays this run)"
+          % (level, "rolled" if rolled else "pinned with --level", seed, seed))
     print("        " + " ".join(cmd))
     print()
     cmd.append("--vramview")
@@ -187,6 +222,10 @@ def main():
     print()
     print("%d car change(s) in %ds = %.1f/s somewhere in the session"
           % (totals["changes"], a.seconds, totals["changes"] / max(1, a.seconds)))
+    # Repeated here so the roll travels with the verdict: a caller that keeps only the tail of
+    # this output (run_gate.py keeps 12 lines) would otherwise lose which level ran.
+    print("level %s (%s) - SEED=%d replays this run"
+          % (level, "rolled" if rolled else "pinned with --level", seed))
 
     # A run that cycled NOTHING is not a pass. This rig's whole job is to cycle cars,
     # and with zero changes the per-seat lines are vacuous -- measured: a 40 s run
