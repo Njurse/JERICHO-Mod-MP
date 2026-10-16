@@ -32,6 +32,14 @@ SDK = 2                       # JERICHO_SDK_VERSION
 MP_VER = "0.1.0"              # JERICHO/MODS/mp/mod.toml version -- always advertised
 NUL = bytes([0])
 
+# Shared protocol constants, mirrored from mp_proto.h so the tools never hard-code
+# them twice. servers/proto_check.py asserts these (and the struct sizes below) still
+# match the C header, because a mirror that drifts fails silently on the wire.
+MAX_PLAYERS = 8               # mp_proto.h MP_MAX_PLAYERS
+NAME_MAX = 32                 # mp_proto.h MP_NAME_MAX (MP_BEACON.hostName / MP_HELLO.playerName)
+MOD_ID_MAX = 24               # mp_proto.h MP_MOD_ID_MAX (MP_MOD_INFO.id)
+MOD_VER_MAX = 16              # mp_proto.h MP_MOD_VER_MAX (MP_MOD_INFO.version)
+
 TAG = {
     "hello": b"JPHL", "welcome": b"JPWL", "reject": b"JPRJ",
     "start": b"JPST", "input": b"JPIN",
@@ -47,7 +55,7 @@ UDP_MAGIC = 0x31504D4A
 ENV = struct.Struct("<I4sBBH")
 HELLO = struct.Struct("<HHHH32s4B")      # 44 bytes
 MODI = struct.Struct("<24s16sBB")        # 42 bytes
-WELCOME = struct.Struct("<12BIB")        # 17 bytes: 12xu8, u32 seed, u8 hostCar (matches mp_proto.h; NOT <13BI, which shifts seed/hostCar by one)
+WELCOME = struct.Struct("<12BIBB")      # 18 bytes: 12xu8, u32 seed, u8 hostCar, u8 rules (mp_proto.h static_assert -- v11 ADDED `rules`; a 17-byte <12BIB is refused by MpHandleWelcome's length gate)
 REJECT = struct.Struct("<4B64s")         # 68 bytes
 BEACON = struct.Struct("<IHH32s6BHH")    # 50 bytes
 CHANNEL = struct.Struct("<16sHIBB2B")    # 26 bytes
@@ -159,7 +167,7 @@ def mode_host(args):
                 pass
         conn.close()
         return 0
-    welcome = WELCOME.pack(1, 8, 0, 1, 1 if args.start else 0, 0, 0, 0, 0, args.city, 1, 0, 1234, 0xFF)
+    welcome = WELCOME.pack(1, 8, 0, 1, 1 if args.start else 0, 0, 0, 0, 0, args.city, 1, 0, 1234, 0xFF, 0)
     send_frame(conn, TAG["welcome"], welcome)
     print("[mock-host] sent WELCOME (playerId=1) -- PASS")
 
@@ -275,9 +283,11 @@ def mode_client(args):
             break
 
     if tag == TAG["welcome"]:
-        pid, maxp, enforce, matched, running, subgame, _r1, _r2, gm, city, tod, wx, seed, hostcar = WELCOME.unpack_from(payload, 0)
+        (pid, maxp, enforce, matched, running, subgame, _r1, _r2, gm, city, tod, wx,
+         seed, hostcar, rules) = WELCOME.unpack_from(payload, 0)
         print(f"[mock-client] WELCOME: playerId={pid} max={maxp} enforced={enforce} "
-              f"matched={matched} running={running} subgame={subgame} gamemode={gm} city={city} tod={tod} weather={wx} seed={seed}")
+              f"matched={matched} running={running} subgame={subgame} gamemode={gm} city={city} "
+              f"tod={tod} weather={wx} seed={seed} hostCar={hostcar} rules={rules:#x}")
         if args.channel:
             body = b"hello-from-python"
             hdr = CHANNEL.pack(args.channel.encode()[:15], len(body), 0, 0, 1, 0, 0)
