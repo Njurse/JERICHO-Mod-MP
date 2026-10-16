@@ -192,13 +192,17 @@ class Dedicated:
             pid = self.free_id()
             if pid is None:
                 try:
-                    m.send_frame(conn, m.TAG["welcome"], self._welcome(0, running=1))
+                    # The real host answers a full server with a REJECT alone --
+                    # a WELCOME here would tell the client it got in.
                     m.send_frame(conn, m.TAG["reject"], m.REJECT.pack(1, 0, 0, 0, b"server is full"))
                 except OSError:
                     pass
                 conn.close()
+                # len(self.clients), not self.player_count(): we are INSIDE the
+                # lock, and player_count() takes it too -> a non-reentrant Lock
+                # would deadlock this thread with the lock held forever.
                 self.log.warning("refused %s: server is full (%d/%d)"
-                                 % (who, self.player_count(), self.max_players))
+                                 % (who, len(self.clients), self.max_players))
                 return
             self.clients[conn] = {"id": pid, "name": name, "addr": who}
 
