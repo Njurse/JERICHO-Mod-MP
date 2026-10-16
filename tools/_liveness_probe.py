@@ -5,7 +5,7 @@ Usage: _liveness_probe.py <port> [seconds]
   - connects, sends HELLO, waits for WELCOME (+ START if it comes)
   - sends a PING, then waits `seconds` for PONG / any traffic
   - watches for the socket closing (EOF) at any point
-Deletes nothing; run against mp_dediserver.py or mp_test.py host --start.
+Deletes nothing; run against servers/dediserver/dediserver.py or mp_test.py host --start.
 """
 import os
 import socket

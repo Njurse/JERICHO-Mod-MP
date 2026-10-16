@@ -1,0 +1,129 @@
+# dediserver — a headless dedicated server for the mp mod
+
+A real multiplayer session with **no game window**. It accepts players, hands out
+ids, relays car-state and chat, answers `PING` with `PONG`, and beacons on UDP so
+the in-game LAN browser lists it. Use it to leave a host up for a while, or to give
+a client something to join on a machine that has no game build at all — the server
+is pure Python and never loads the game.
+
+    JERICHO\MODS\mp\tools\mp_dedi.bat                 # from a checkout, the quick way
+    python JERICHO/MODS/mp/tools/servers/dediserver/dediserver.py
+
+Then join it from anywhere:
+
+    JERICHO_dev.exe -nointro -nofmv -join 127.0.0.1
+    JERICHO_dev.exe -nointro -nofmv -join 127.0.0.1:1400
+
+## Options
+
+```
+--config FILE        JSON config (default: dediserver.json beside this script)
+--port N             TCP session port (default 1318)
+--name "..."         name shown in the browser / registered with the master
+--city N             GameLevel the clients should load (0..3)
+--gamemode N
+--max-players N      slots 1..N-1 are given to clients (0 belongs to the server)
+--beacon / --no-beacon
+--beacon-ms N        beacon cadence (default 1000)
+--idle-drop S        seconds of real silence that drop a client (0 = never)
+--log-level debug|info|warning
+--log-file FILE      also append logs to FILE
+--master URL         register with a master discovery service, e.g. http://host:8100
+--master-name "..."  name to register (default: --name)
+--master-interval S  heartbeat cadence (default 20; keep well under the master's ttl)
+```
+
+CLI flags override the config file. The config file is optional — with none, the
+built-in defaults are used.
+
+## `dediserver.json`
+
+```jsonc
+{
+  "port": 1318,
+  "name": "Dedicated",
+  "city": 0,
+  "gamemode": 0,
+  "max_players": 8,
+  "beacon": true,
+  "beacon_ms": 1000,
+  "idle_drop_s": 30.0,      // 0 = never drop a silent client
+  "live": true,             // advertise as a live match (the level is always up)
+  "log_level": "info",
+  "log_file": "",
+  "master": "",             // "" disables registration; e.g. "http://master.example.com:8100"
+  "master_name": "",
+  "master_interval_s": 20.0,
+  "master_timeout_s": 5.0
+}
+```
+
+## Ports
+
+| Port | Protocol | Direction | Needed for |
+| --- | --- | --- | --- |
+| `port` (1318) | TCP | **inbound** | the session itself — every client connects here |
+| `port` (1318) | UDP | inbound + outbound | the LAN discovery beacon, so the in-game browser lists the server |
+| master port (8100) | TCP | **outbound** | only with `--master`: registering for the internet listing |
+
+* **LAN play:** open nothing. The beacon and the session both work on the local
+  network as-is.
+* **Internet play (direct connect):** forward **TCP 1318** to the server. Add
+  **UDP 1318** only if you also want LAN clients on the server's own network to
+  find it in the browser; it is not needed for internet clients.
+* **Internet listing:** with `--master`, the server makes an outbound TCP
+  connection to the master, so no inbound port for that. See
+  [`../masterserver/README.md`](../masterserver/README.md). (Listing a server on
+  the internet is a game-side feature still to come — see
+  [`docs/MASTER_SERVER.md`](../../docs/MASTER_SERVER.md).)
+
+## Running it for a long time
+
+* **It is self-contained.** No game, no assets, no display. Run it on any machine
+  with Python 3.
+* **Log to a file.** Set `log_file` (or `--log-file`) so a dropped client is
+  still legible in the morning; the file is appended, never truncated.
+* **`--idle-drop 0`** if you would rather never drop a quiet client than drop a
+  client that is merely paused or loading. The default (30 s) matches the game's
+  own idle timeout.
+* **Restart on crash** with whatever your platform offers (a service unit, a
+  `while true` loop, Task Scheduler). It is stateless: a restart is just a fresh
+  session. If it registered with a master, it re-registers on start.
+* **A clean stop unregisters.** `Ctrl-C`, `SIGTERM` or Windows `Ctrl-Break` closes
+  the sockets and removes the server from the master's listing at once, instead of
+  leaving it to lapse.
+
+## Reading the log
+
+Every line is timestamped and levelled. The ones that matter:
+
+```
+[INFO] listening on TCP/1318 (city 0, up to 8 players); Ctrl-C to stop
+[INFO] player 1 'Bob' joined from 192.168.1.44:53120 (mods=2, build 0x74cc)
+[INFO] player 1 'Bob' left (0/8)
+[WARNING] player 1 'Bob' timed out (30s silent)
+[WARNING] refused 192.168.1.44:53122: server is full (8/8)
+[INFO] registered with master http://master.example.com:8100 as 203.0.113.5:1318
+[WARNING] master ... unreachable (...); retrying in 4s
+```
+
+A client that **never** appears has a transport problem (firewall, wrong address).
+A client that joins and then leaves on its own has a client-side problem. That
+distinction is the whole point of logging joins and leaves.
+
+## Liveness
+
+The server answers a client's `PING` with a `PONG` echoing the tick, and pings on
+its own timer so a quiet client is never given up just for being quiet. A client
+that gets nothing after the handshake drops itself at its idle timeout; the server
+does the same after `idle_drop_s`.
+
+## Testing
+
+`../test_e2e.py` starts this server and the master together on loopback and
+checks registration, heartbeat, a client handshake, re-registration after a
+master restart, and unregister-on-shutdown — no game, no assets:
+
+```sh
+python JERICHO/MODS/mp/tools/servers/test_e2e.py
+```

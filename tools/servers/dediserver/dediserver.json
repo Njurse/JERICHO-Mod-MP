@@ -1,0 +1,17 @@
+{
+  "port": 1318,
+  "name": "Dedicated",
+  "city": 0,
+  "gamemode": 0,
+  "max_players": 8,
+  "beacon": true,
+  "beacon_ms": 1000,
+  "idle_drop_s": 30.0,
+  "live": true,
+  "log_level": "info",
+  "log_file": "",
+  "master": "",
+  "master_name": "",
+  "master_interval_s": 20.0,
+  "master_timeout_s": 5.0
+}

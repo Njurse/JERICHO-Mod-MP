@@ -126,8 +126,10 @@ connected and was then dropped. Ctrl-C stops it.
 | `mp_localpair.py` | the two-instance harness `mp_pair.bat` wraps; prints a PASS/FAIL verdict and reads `JERICHO.log` (also runs 3..8 seats -- see `--players`) |
 | `mp_smoke.py` | the smoke GATE around `mp_localpair.py`: turns the verdict into an exit code (PASS + `lost=0` + `dumps=0` + not STALLED). Exits 2 (skip) where the game assets are absent, so a CI job can tell "not runnable here" from "failed"; `--require-assets` makes a skip a failure |
 | `mp_crashrate.py` | repeat `mp_localpair.py` N times and report the CRASH RATE, plus the free car-slot count the `PingInCivCar` breadcrumbs print. Exits non-zero if any run crashed |
-| `mp_test.py` | mock host / client / beacon, plus the protocol checks |
-| `mp_dediserver.py` | the dedicated server `mp_dedi.bat` wraps |
+| `mp_test.py` | mock host / client / beacon, plus the protocol checks. Its `WELCOME`/`MAX_PLAYERS`/... are the single Python source of truth for the wire format; `servers/proto_check.py` proves they still match `mp_proto.h` |
+| `servers/proto_check.py` | fails if the `mp_test.py` wire mirror has drifted from `mp_proto.h` (it caught a real 17-vs-18-byte `MP_WELCOME` drift) |
+| `servers/dediserver/dediserver.py` | the dedicated server `mp_dedi.bat` wraps; `--master` registers it with the discovery server |
+| `servers/masterserver/masterserver.py` | the master discovery service (a **separate project** — see `servers/README.md`) |
 | `check_debug_independence.py` | fails if any debug `getenv` guard wraps control flow or state (see the traps doc) |
 | `_liveness_probe.py` | connects as a bare client and reports WELCOME/START/PONG/EOF -- the quick way to tell a server that answers from one that is silent |
 

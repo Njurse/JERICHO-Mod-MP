@@ -1,0 +1,471 @@
+#!/usr/bin/env python3
+"""dediserver.py -- a headless dedicated server for the JERICHO mp mod.
+
+It hosts a real session with no game window: it accepts players, hands out ids,
+relays their car-state and chat, answers PING with PONG, and optionally beacons
+on UDP so the in-game LAN browser lists it. A client has something to join and
+the server can be left up while the client side restarts.
+
+    python dediserver.py                       # TCP + UDP on 1318, beaconing
+    python dediserver.py --config dediserver.json
+    python dediserver.py --port 1400 --name "Bob's 24/7" --no-beacon
+    python dediserver.py --master http://master.example.com:8100
+
+Then point a client at it:
+
+    JERICHO_dev.exe -nointro -nofmv -join 127.0.0.1
+    JERICHO_dev.exe -nointro -nofmv -join 127.0.0.1:1400
+
+The wire format lives in mp_test.py (imported so there is only one copy), and
+servers/proto_check.py fails at startup if that mirror has drifted from
+mp_proto.h. With --master the server registers with a master discovery service
+(servers/masterserver/) and heartbeats, so internet clients can find it.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import signal
+import socket
+import struct
+import sys
+import threading
+import time
+import urllib.error
+import urllib.request
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+TOOLS = os.path.dirname(os.path.dirname(HERE))      # .../mp/tools
+SERVERS = os.path.dirname(HERE)                      # .../mp/tools/servers
+sys.path.insert(0, TOOLS)
+sys.path.insert(0, SERVERS)
+import mp_test as m            # noqa: E402  the single Python source of truth
+import proto_check            # noqa: E402  the wire-mirror guard
+
+
+# ------------------------------------------------------------------------ config
+DEFAULTS = {
+    "port": 1318,
+    "name": "Dedicated",
+    "city": 0,                 # GameLevel the clients should load (0..3)
+    "gamemode": 0,
+    "max_players": 8,          # a client takes a slot 1..max_players-1 (0 is the server)
+    "beacon": True,            # advertise on UDP so the LAN browser lists us
+    "beacon_ms": 1000,
+    "idle_drop_s": 30.0,       # real silence before a client is dropped (0 = never)
+    "live": True,              # advertise as a live match (the level is always up)
+    "log_level": "info",
+    "log_file": "",
+    # master discovery (optional). master = "" disables registration.
+    "master": "",
+    "master_name": "",         # name to register ("" = use `name`)
+    "master_interval_s": 20.0, # heartbeat cadence; keep well under the master's ttl
+    "master_timeout_s": 5.0,
+}
+
+CONFIG_NAME = "dediserver.json"
+
+
+def load_config(path):
+    cfg = dict(DEFAULTS)
+    if path and os.path.exists(path):
+        with open(path, "r", encoding="utf-8") as f:
+            cfg.update(json.load(f))
+    return cfg
+
+
+# --------------------------------------------------------------------------- log
+LEVELS = {"debug": 10, "info": 20, "warning": 30, "error": 40}
+
+
+class Log:
+    """stdout, and optionally a file. Join/leave/error lines are the ones that
+    matter when a client "never connected" vs "connected and was dropped"."""
+
+    def __init__(self, level="info", path=""):
+        self.min = LEVELS.get(level, 20)
+        self.lock = threading.Lock()
+        self.fh = None
+        if path:
+            self.fh = open(path, "a", encoding="utf-8", buffering=1)
+
+    def _emit(self, lvl, msg):
+        if LEVELS[lvl] < self.min:
+            return
+        line = "%s [%s] %s" % (time.strftime("%Y-%m-%d %H:%M:%S"), lvl.upper(), msg)
+        with self.lock:
+            print(line, flush=True)
+            if self.fh:
+                self.fh.write(line + "\n")
+
+    def debug(self, msg):
+        self._emit("debug", msg)
+
+    def info(self, msg):
+        self._emit("info", msg)
+
+    def warning(self, msg):
+        self._emit("warning", msg)
+
+    def error(self, msg):
+        self._emit("error", msg)
+
+
+# ---------------------------------------------------------------------- the server
+class Dedicated:
+    def __init__(self, cfg, log):
+        self.cfg = cfg
+        self.log = log
+        self.lock = threading.Lock()
+        self.clients = {}        # conn -> {"id", "name", "addr"}
+        self.cars = {}           # playerId -> one MP_CARSTATE_ENTRY
+        self.stop = threading.Event()
+        self.started = time.time()
+
+    # -- helpers
+    @property
+    def max_players(self):
+        return int(self.cfg["max_players"])
+
+    @property
+    def port(self):
+        return int(self.cfg["port"])
+
+    @property
+    def city(self):
+        return int(self.cfg["city"])
+
+    def player_count(self):
+        with self.lock:
+            return len(self.clients)
+
+    def free_id(self):
+        for i in range(1, self.max_players):
+            if all(c["id"] != i for c in self.clients.values()):
+                return i
+        return None
+
+    def carstate_union(self, frame):
+        with self.lock:
+            rows = list(self.cars.items())
+        hdr = m.CARSTATE.pack(frame & 0xFFFFFFFF, len(rows), 0, 0, 0)
+        return hdr + b"".join(e for _, e in rows)
+
+    def broadcast(self, payload, tag, skip=None):
+        with self.lock:
+            conns = [c for c in self.clients if c is not skip]
+        for c in conns:
+            try:
+                m.send_frame(c, tag, payload)
+            except OSError:
+                pass
+
+    # -- one client
+    def serve(self, conn, addr):
+        who = "%s:%d" % (addr[0], addr[1])
+        try:
+            conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        except OSError:
+            pass
+        conn.settimeout(self.cfg["idle_drop_s"] or 1.0)
+
+        try:
+            tag, payload = m.recv_frame(conn)
+        except (OSError, socket.timeout):
+            conn.close()
+            return
+        if tag != m.TAG["hello"]:
+            self.log.warning("%s: bad handshake (tag %r), dropping" % (who, tag))
+            conn.close()
+            return
+        try:
+            _proto, _sdk, build, _sp, name32, _mesh, modc, _a, _b = m.HELLO.unpack_from(payload, 0)
+        except Exception:
+            self.log.warning("%s: malformed HELLO, dropping" % who)
+            conn.close()
+            return
+
+        name = name32.split(b"\0")[0].decode("latin1", "replace") or "Player"
+
+        with self.lock:
+            pid = self.free_id()
+            if pid is None:
+                try:
+                    m.send_frame(conn, m.TAG["welcome"], self._welcome(0, running=1))
+                    m.send_frame(conn, m.TAG["reject"], m.REJECT.pack(1, 0, 0, 0, b"server is full"))
+                except OSError:
+                    pass
+                conn.close()
+                self.log.warning("refused %s: server is full (%d/%d)"
+                                 % (who, self.player_count(), self.max_players))
+                return
+            self.clients[conn] = {"id": pid, "name": name, "addr": who}
+
+        self.log.info("player %d '%s' joined from %s (mods=%d, build %#06x)"
+                      % (pid, name, who, modc, build))
+
+        seed = int(time.time()) & 0xFFFFFFFF
+        sess = m.SESSION.pack(0, self.city, 1, 0, seed,
+                              max(2, self.player_count() + 1), 1, 0)
+        try:
+            m.send_frame(conn, m.TAG["welcome"], self._welcome(pid, running=0, seed=seed))
+            m.send_frame(conn, m.TAG["start"], sess)
+        except OSError:
+            pass
+
+        # Poll fast so we can keep the link fresh from OUR side too: a dedicated
+        # server should not depend on the client to prove the link is alive.
+        conn.settimeout(1.0)
+        silent = 0
+        idle_drop = float(self.cfg["idle_drop_s"])
+
+        while not self.stop.is_set():
+            try:
+                tag, payload = m.recv_frame(conn)
+            except socket.timeout:
+                silent += 1
+                # Send our own keepalive PING and only give the client up after
+                # `idle_drop_s` of real silence. Without this a quiet client (a
+                # lobby, a load) would be dropped by our own timeout.
+                if idle_drop and silent >= idle_drop:
+                    self.log.warning("player %d '%s' timed out (%.0fs silent)" % (pid, name, idle_drop))
+                    break
+                try:
+                    m.send_frame(conn, m.TAG["ping"],
+                                 struct.pack("<I", int(time.time() * 1000) & 0xFFFFFFFF))
+                except OSError:
+                    break
+                continue
+            except Exception:
+                break
+            if tag is None:
+                break
+            silent = 0
+
+            if tag == m.TAG["carstate"]:
+                with self.lock:
+                    _f, count, _a, _b, _c = m.CARSTATE.unpack_from(payload, 0)
+                    for i in range(count):
+                        off = m.CARSTATE.size + i * m.CARSTATE_ENTRY.size
+                        e = payload[off:off + m.CARSTATE_ENTRY.size]
+                        if len(e) == m.CARSTATE_ENTRY.size:
+                            self.cars[e[0]] = e
+                self.broadcast(self.carstate_union(int(time.time() * 30)), m.TAG["carstate"], skip=conn)
+            elif tag == m.TAG["chat"]:
+                self.broadcast(payload, m.TAG["chat"], skip=conn)
+            elif tag == m.TAG["ping"]:
+                # Liveness. Echo the tick; with no PONG the client's last-receive
+                # clock stops advancing and it drops itself at its idle timeout.
+                try:
+                    m.send_frame(conn, m.TAG["pong"], payload or b"\x00\x00\x00\x00")
+                except OSError:
+                    break
+            elif tag == m.TAG["leave"]:
+                break
+
+        with self.lock:
+            info = self.clients.pop(conn, None)
+            if info:
+                self.cars.pop(info["id"], None)
+        if info:
+            self.log.info("player %d '%s' left (%d/%d)"
+                          % (info["id"], info["name"], self.player_count(), self.max_players))
+        try:
+            conn.close()
+        except OSError:
+            pass
+
+    def _welcome(self, pid, running, seed=0):
+        # 15 values: playerId, maxPlayers, modsEnforced, modsMatched, running,
+        # subGame, mpLevel, arena, gamemode, city, timeOfDay, weather, seed,
+        # hostCar, rules  (mp_proto.h MP_WELCOME, 18 bytes since v11).
+        return m.WELCOME.pack(pid, self.max_players, 0, 1, running, 0, 0, 0,
+                              int(self.cfg["gamemode"]), self.city, 1, 0, seed, 0xFF, 0)
+
+    # -- UDP beacon (LAN discovery)
+    def beacon_loop(self):
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        host = self.cfg["name"].encode()[:31] + b"\0" * 32
+        host = host[:32]
+        while not self.stop.is_set():
+            pkt = m.BEACON.pack(m.UDP_MAGIC, m.PROTO, self.port, host,
+                                self.player_count(), self.max_players,
+                                int(self.cfg["gamemode"]), 0, self.city,
+                                1 if self.cfg["live"] else 0, 0, 0)
+            try:
+                s.sendto(pkt, ("255.255.255.255", self.port))
+            except OSError:
+                pass
+            self.stop.wait(self.cfg["beacon_ms"] / 1000.0)
+        s.close()
+
+    # -- master discovery registration
+    def master_loop(self):
+        url = self.cfg["master"].rstrip("/")
+        if url and "://" not in url:
+            url = "http://" + url
+        base = url
+        token = None
+        interval = float(self.cfg["master_interval_s"])
+        timeout = float(self.cfg["master_timeout_s"])
+        backoff = 2.0
+
+        def post(path, body):
+            req = urllib.request.Request(base + path, data=json.dumps(body).encode(),
+                                         headers={"Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                return r.status, json.loads(r.read().decode())
+
+        while not self.stop.is_set():
+            try:
+                if token is None:
+                    st, body = post("/v1/register", {
+                        "name": self.cfg["master_name"] or self.cfg["name"],
+                        "port": self.port, "city": self.city,
+                        "gamemode": int(self.cfg["gamemode"]),
+                        "players": self.player_count(), "maxPlayers": self.max_players,
+                        "inProgress": 1 if self.cfg["live"] else 0,
+                        "protoVersion": m.PROTO, "sdkVersion": m.SDK,
+                    })
+                    if st not in (200, 201):
+                        raise OSError("register returned %s" % st)
+                    token = body["token"]
+                    self.log.info("registered with master %s as %s:%d"
+                                  % (base, body.get("host"), body.get("port")))
+                    backoff = 2.0
+                else:
+                    try:
+                        post("/v1/heartbeat", {"token": token, "players": self.player_count()})
+                    except urllib.error.HTTPError as e:
+                        if e.code == 404:      # expired / master restarted -> re-register
+                            self.log.warning("master forgot us; re-registering")
+                            token = None
+                            continue
+                        raise
+                self.stop.wait(interval)
+            except (OSError, ValueError, KeyError) as e:
+                self.log.warning("master %s unreachable (%s); retrying in %.0fs"
+                                 % (base, e, backoff))
+                self.stop.wait(backoff)
+                backoff = min(backoff * 2, 60.0)
+                token = None
+
+        if token is not None:
+            try:
+                post("/v1/unregister", {"token": token})
+                self.log.info("unregistered from master")
+            except OSError:
+                pass
+
+    # -- lifecycle
+    def run(self):
+        srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            srv.bind(("0.0.0.0", self.port))
+        except OSError as e:
+            self.log.error("could not bind TCP/%d: %s" % (self.port, e))
+            return 1
+        srv.listen(self.max_players)
+        srv.settimeout(0.5)
+        self.log.info("listening on TCP/%d (city %d, up to %d players); Ctrl-C to stop"
+                      % (self.port, self.city, self.max_players))
+
+        threads = []
+        if self.cfg["beacon"]:
+            threads.append(threading.Thread(target=self.beacon_loop, daemon=True))
+        if self.cfg["master"]:
+            threads.append(threading.Thread(target=self.master_loop, daemon=True))
+        for t in threads:
+            t.start()
+
+        try:
+            while not self.stop.is_set():
+                try:
+                    conn, addr = srv.accept()
+                except socket.timeout:
+                    continue
+                except OSError:
+                    break
+                threading.Thread(target=self.serve, args=(conn, addr), daemon=True).start()
+        finally:
+            self.stop.set()
+            srv.close()
+            self.log.info("shutting down (uptime %.0fs, %d player(s))"
+                          % (time.time() - self.started, self.player_count()))
+        for t in threads:
+            t.join(timeout=3)
+        return 0
+
+
+# ------------------------------------------------------------------------- main
+def parse_args(argv):
+    ap = argparse.ArgumentParser(description="headless dedicated server for the JERICHO mp mod")
+    ap.add_argument("--config", default=None,
+                    help="JSON config file (default: dediserver.json beside this script)")
+    ap.add_argument("--port", type=int)
+    ap.add_argument("--name")
+    ap.add_argument("--city", type=int, help="GameLevel the clients load (0..3)")
+    ap.add_argument("--gamemode", type=int)
+    ap.add_argument("--max-players", type=int)
+    ap.add_argument("--beacon", dest="beacon", action="store_true", default=None)
+    ap.add_argument("--no-beacon", dest="beacon", action="store_false")
+    ap.add_argument("--beacon-ms", type=int)
+    ap.add_argument("--idle-drop", type=float, dest="idle_drop_s", help="seconds of silence that drop a client (0 = never)")
+    ap.add_argument("--log-level", choices=sorted(LEVELS))
+    ap.add_argument("--log-file")
+    ap.add_argument("--master", help="master discovery URL, e.g. http://host:8100 ('' disables)")
+    ap.add_argument("--master-name", help="name to register with the master (default: --name)")
+    ap.add_argument("--master-interval", type=float, dest="master_interval_s")
+    return ap.parse_args(argv)
+
+
+def build_config(argv):
+    args = parse_args(argv)
+    path = args.config
+    if path is None:
+        default_path = os.path.join(HERE, CONFIG_NAME)
+        path = default_path if os.path.exists(default_path) else ""
+    cfg = load_config(path)
+    for flag, key in (
+        ("port", "port"), ("name", "name"), ("city", "city"), ("gamemode", "gamemode"),
+        ("max_players", "max_players"), ("beacon", "beacon"), ("beacon_ms", "beacon_ms"),
+        ("idle_drop_s", "idle_drop_s"), ("log_level", "log_level"), ("log_file", "log_file"),
+        ("master", "master"), ("master_name", "master_name"),
+        ("master_interval_s", "master_interval_s"),
+    ):
+        v = getattr(args, flag)
+        if v is not None:
+            cfg[key] = v
+    return cfg, path
+
+
+def main(argv=None):
+    cfg, path = build_config(argv)
+    log = Log(cfg.get("log_level", "info"), cfg.get("log_file", ""))
+    if path:
+        log.debug("config: %s" % path)
+    proto_check.assert_ok()
+
+    server = Dedicated(cfg, log)
+
+    def on_signal(signum, _frame):
+        log.info("signal %d received" % signum)
+        server.stop.set()
+
+    for name in ("SIGINT", "SIGTERM", "SIGBREAK"):
+        sig = getattr(signal, name, None)
+        if sig is None:
+            continue
+        try:
+            signal.signal(sig, on_signal)
+        except (ValueError, OSError):
+            pass
+
+    return server.run()
+
+
+if __name__ == "__main__":
+    sys.exit(main())
