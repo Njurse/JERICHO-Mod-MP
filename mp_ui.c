@@ -953,18 +953,26 @@ static JER_FE_ITEM gOnlineItems[JER_FE_MAX_ITEMS];
 static JER_FE_MENU gOnlineMenu = { "mp.online", gOnlineItems, 0, NULL, NULL,
 				   "JERICHO DISCOVERY SERVER" };
 static int gOnlineRev = -1;		/* the list revision these rows were built from */
+static int gOnlineRows;			/* how many of item_count are SERVER rows: the rows
+					 * above the two fixed ones (Manual, Back),
+					 * which is what the draw loop must stop at */
 static char gOnlineApplied[160];	/* the master URL already handed to the client */
 
 /* Hand the config's address to the fetcher, at most once per distinct value.
  * MpOnlineSetMaster RESOLVES, and this runs on a menu press -- the same place,
- * and for the same reason, that a join resolves its host. */
-static void OnlineApplyConfig(void)
+ * and for the same reason, that a join resolves its host.
+ *
+ * Returns 1 when it handed the address over (the set already refreshed), so the
+ * caller does not open a second socket for the same visit. */
+static int OnlineApplyConfig(void)
 {
 	if (strcmp(gOnlineApplied, gMp.config.masterUrl) == 0)
-		return;
+		return 0;
 
 	snprintf(gOnlineApplied, sizeof(gOnlineApplied), "%s", gMp.config.masterUrl);
 	MpOnlineSetMaster(gMp.config.masterUrl);
+
+	return 1;
 }
 
 /* Why the list is empty. A player staring at an empty table should not have to
@@ -1019,11 +1027,11 @@ static void OnlineOnEnter(void* ud)
 
 	(void)ud;
 
-	OnlineApplyConfig();
-
-	/* A fresh look every time the screen opens: a stale address is worse than
-	 * none, and the fetch is asynchronous -- the rows appear as they arrive. */
-	MpOnlineRefresh();
+	/* A fresh look every time the screen opens: a stale list is worse than none,
+	 * and the fetch is asynchronous -- the rows appear as they arrive. Skipped on
+	 * the visit that just set the address, because that already fetched. */
+	if (!OnlineApplyConfig())
+		MpOnlineRefresh();
 
 	count = MpOnlineCount();
 
@@ -1034,6 +1042,8 @@ static void OnlineOnEnter(void* ud)
 		gOnlineItems[k].on_activate = ActJoinOnline;
 		k++;
 	}
+
+	gOnlineRows = k;		/* how many rows above are servers */
 
 	if (count == 0)
 	{
@@ -1075,6 +1085,12 @@ void MpUiDrawOnline(void)
 	count = gOnlineMenu.item_count;
 	servers = MpOnlineCount();
 
+	/* Stop at the SERVER rows. item_count also carries Manual and Back, and those
+	 * two have labels of their own -- a server row painted over them would be two
+	 * strings in one row. gOnlineRows was set by the same loop that built them. */
+	if (gOnlineRows < servers)
+		servers = gOnlineRows;
+
 	/* One line the first time the table is actually painted with rows: it is the
 	 * only thing an automated run can check about a screen whose whole point is
 	 * what it LOOKS like (the pixels are checked by hand). */
@@ -1091,7 +1107,6 @@ void MpUiDrawOnline(void)
 				ONLINE_COL_CITY, ONLINE_COL_PING, ONLINE_SCALE);
 		}
 	}
-
 	/* the column headings, one row pitch above the first row. Orange, like the
 	 * engine's own menu headings, and passed at full brightness because the ink is
 	 * halved on the way to the font (a "mid grey" 190 renders as 95 and reads as
@@ -1275,6 +1290,7 @@ void MpUiTick(void)
 	 * a screen from inside the hook that wants it does not take. */
 	{
 		static int menuTries = -1;
+		static int menuOpened = 0;
 		const char* want = getenv("MP_TEST_OPENMENU");
 
 		if (want != NULL && menuTries < 0)
@@ -1288,11 +1304,18 @@ void MpUiTick(void)
 
 			if (idx >= 0 && jer_frontend_current_menu() == idx)
 			{
-				menuTries = 0;	/* it took */
+				menuTries = 0;		/* it took */
 			}
 			else if (idx >= 0)
 			{
-				jer_frontend_open(idx);
+				/* open ONCE: jer_frontend_open pushes a screen stack entry and runs
+				 * the menu's on_enter, so opening every retry would stack visits and
+				 * re-fetch. From here we only wait for the switch to take. */
+				if (menuOpened == 0)
+				{
+					menuOpened = 1;
+					jer_frontend_open(idx);
+				}
 			}
 			else
 			{

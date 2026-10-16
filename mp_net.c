@@ -2715,7 +2715,7 @@ static int MpOnlineParse(const char* body)
 		p = close + 1;
 	}
 
-	memcpy(gOnline, tmp, sizeof(tmp));
+	memcpy(gOnline, tmp, (size_t)count * sizeof(tmp[0]));
 
 	/* the ROW COUNT is what a menu has to rebuild for; the values inside a row
 	 * are read live by the draw, so they need no revision of their own */
