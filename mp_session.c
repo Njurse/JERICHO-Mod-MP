@@ -6829,6 +6829,12 @@ int MpRespawnOnRoad(void)
 		CreateDentableCar(cp);
 		cp->ap.needsDenting = 0;
 
+		/* Respawn implies repair AND a clean slate: drop the wanted level so the
+		 * cops we just escaped are not instantly back on us from the old rating.
+		 * (Repair alone leaves the felony, which is the "I repaired but they are
+		 * still chasing me" surprise.) */
+		MpSelfClearFelony();
+
 		player[0].cameraAngle = cp->hd.direction + 1536;
 		player[0].cameraCarId = cp->id;
 
