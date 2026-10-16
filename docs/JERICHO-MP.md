@@ -26,11 +26,12 @@ That is the whole design. Everything below is a consequence of it.
 1. **Host** — the frontend gets a multiplayer menu (`-host` does the same). The
    host opens a TCP listener on port 1318 and starts advertising a UDP beacon, so
    the game appears in everyone else's LAN list.
-2. **Join** — pick a game from the LAN list, or type an address in the manual field
-   (`-join <host>[:port]` does the same). The host may be named by a **domain** as
-   readily as by an IP, so `-join play.example.net:1318` and typing that into the
-   menu both work. The client connects, says hello, and gets a car and a player
-   number.
+2. **Join** — pick a game from the LAN list, from the **`Online`** list (the ones a
+   discovery server knows about, set with `master_url` in `mp.ini`), or type an
+   address in the manual field (`-join <host>[:port]` does the same). The host may be
+   named by a **domain** as readily as by an IP, so `-join play.example.net:1318` and
+   typing that into the menu both work. The client connects, says hello, and gets a
+   car and a player number.
 3. **Choose the match** — the host picks these on the ENGINE'S OWN screens: the city
    screen, then the combined **Time of Day / Condition** screen that the Single Player
    prompt hands over to (time of day and weather both live there). The multiplayer map

@@ -230,7 +230,13 @@ typedef struct MP_BEACON
 	uint8_t  city;
 	uint8_t  inProgress;		/* 1 once the level has launched */
 	uint16_t modHash;		/* short digest of the host manifest */
-	uint16_t spare;
+	uint16_t rules;			/* the host's SESSION RULES, MP_RULES_PACK'd -- the SAME
+				 * packed byte MP_WELCOME.rules carries, so a browser can name
+				 * the mode (COPS N ROBBERS vs TAKE A RIDE) without joining.
+				 * This field was `spare`; the offset and size are unchanged, so
+				 * the beacon is identical on the wire, and a peer that predates
+				 * it reads 0 (MP_RULES_PACK'd "no rules"), which is the old
+				 * behaviour exactly. */
 } MP_BEACON;
 
 /* UDP datagram magic -- 'JMP1' little-endian. */
@@ -299,10 +305,11 @@ typedef struct MP_REJECT
 	char     text[MP_REJECT_TEXT_MAX];
 } MP_REJECT;
 
-/* The host's SESSION RULES, packed into ONE byte. They travel two ways and the
- * two must stay in step: MP_WELCOME.rules (join in progress) and the free bits
+/* The host's SESSION RULES, packed into ONE byte. They travel three ways and the
+ * three must stay in step: MP_WELCOME.rules (join in progress), the free bits
  * of MP_SESSION.spare (the launch path, shifted up by one because spare's bit 0
- * is the map shape). MP_RULES_PACK and its readers are the only writers. */
+ * is the map shape), and MP_BEACON.rules (so a browser can NAME the mode of a
+ * server it has not joined). MP_RULES_PACK and its readers are the only writers. */
 #define MP_RULE_COPS		0x1	/* 1 = police cars spawn (CopsAllowed = 1), 0 = off */
 #define MP_RULE_INVULN		0x2	/* 1 = no car can be damaged (gInvincibleCar) */
 #define MP_RULE_DIFF_SHIFT	2	/* 2 bits: gCopDifficultyLevel, 0..3 */

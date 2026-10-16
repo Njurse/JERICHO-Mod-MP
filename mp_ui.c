@@ -28,6 +28,7 @@
 #include "jer_frontend.h"
 #include "jer_console.h"		/* the status stream (join/leave, chat) */
 #include "jer_screen.h"		/* jer_screen_remap_x: 3D->framebuffer x under widescreen */
+#include "jer_text.h"		/* measure + draw at an x: the Online table's columns */
 #include "mp.h"
 
 /* The engine's text primitives (declared in Game/C/pres.h, which pulls in the
@@ -53,6 +54,7 @@ enum
 	 * by id after registration - see MpResolveMenus. */
 	M_ROOT = 0,
 	M_LAN,
+	M_ONLINE,	/* the discovery-server browser (was: not a screen at all) */
 	M_HOST,
 	M_MODE,			/* the "mp.mode" menu (was M_HOSTSET: the registered id has
 				 * said `mode` for a while, so the enum now matches it) */
@@ -67,7 +69,7 @@ enum
 /* Each mp menu's id, in the enum's order, and the index it ACTUALLY registered at
  * (-1 = not registered). */
 static const char* const kMenuIds[M_COUNT] = {
-	"mp.root", "mp.lan", "mp.host", "mp.mode", "mp.join",
+	"mp.root", "mp.lan", "mp.online", "mp.host", "mp.mode", "mp.join",
 	"mp.lobby", "mp.options", "mp.name", "mp.manual"
 };
 static int gMenuIdx[M_COUNT];
@@ -552,11 +554,14 @@ static int ActNameDone(void* ud)
 /* ------------------------------------------------------------------ */
 static JER_FE_ITEM kRootItems[] =
 {
+	/* ONLINE first: it is the one row that reaches past the LAN, and the screen a
+	 * player who has been told an address wants. */
+	{ "Online",       NULL, NULL, NULL,           NULL, -1, 0 },
 	{ "LAN",          NULL, NULL, NULL,           NULL, -1, 0 },
 	{ "Split-Screen", NULL, NULL, ActSplitScreen, NULL, -1,    0 },
 	{ "Back",         NULL, NULL, NULL,           NULL, -1,    1 },
 };
-static const JER_FE_MENU kRootMenu = { "mp.root", kRootItems, 3, NULL, NULL };
+static const JER_FE_MENU kRootMenu = { "mp.root", kRootItems, 4, NULL, NULL };
 
 static JER_FE_ITEM kLanItems[] =
 {
@@ -616,7 +621,8 @@ static void MpResolveMenus(void)
 			gMpCtx->jer_log(gMpCtx, "[mp] frontend menu '%s' is NOT registered\n", kMenuIds[i]);
 	}
 
-	kRootItems[0].submenu = gMenuIdx[M_LAN];
+	kRootItems[0].submenu = gMenuIdx[M_ONLINE];
+	kRootItems[1].submenu = gMenuIdx[M_LAN];
 	kLanItems[0].submenu = gMenuIdx[M_HOST];
 	kLanItems[1].submenu = gMenuIdx[M_JOIN];
 	kLanItems[2].submenu = gMenuIdx[M_OPTIONS];
@@ -918,12 +924,223 @@ static void ManualOnEnter(void* ud)
 	gManualMenu.item_count = k;
 }
 
+/* ------------------------------------------------------------------ */
+/* The Online browser (the discovery server's list)                    */
+/* ------------------------------------------------------------------ */
+/* Five columns, which is the whole reason jer_text.h exists: a row's label is ONE
+ * proportional string in the engine's fixed 256-unit box, and no amount of
+ * padding lines columns up in a proportional font. So a server row carries an
+ * EMPTY label (the engine draws nothing for it and still navigates and
+ * highlights it) and the table is painted from JER_EVENT_FRONTEND_DRAW, once the
+ * engine has drawn the screen -- see mp.c's MpOnFrontendDraw. Drawing from
+ * JER_EVENT_FRAME does not work: that fires BEFORE DrawScreen and the menu box
+ * lands on top of anything drawn there.
+ *
+ * The column offsets sit inside that box and the text is drawn at 55% of the
+ * console's size, which is what fits five columns where one console line fits
+ * one. Both numbers are answers a screenshot gives, not constants of nature. */
+#define ONLINE_SCALE		55
+#define ONLINE_COL_NAME		4
+#define ONLINE_COL_PLAYERS	86
+#define ONLINE_COL_MODE		112
+#define ONLINE_COL_CITY		188
+#define ONLINE_COL_PING		240
+#define ONLINE_NAME_CHARS	15	/* what the NAME column holds before it is cut */
+
+static JER_FE_ITEM gOnlineItems[JER_FE_MAX_ITEMS];
+/* The heading is the screen's name, as the design calls for: it is the one piece
+ * of this screen the engine draws (rows are ours). */
+static JER_FE_MENU gOnlineMenu = { "mp.online", gOnlineItems, 0, NULL, NULL,
+				   "JERICHO DISCOVERY SERVER" };
+static int gOnlineRev = -1;		/* the list revision these rows were built from */
+static char gOnlineApplied[160];	/* the master URL already handed to the client */
+
+/* Hand the config's address to the fetcher, at most once per distinct value.
+ * MpOnlineSetMaster RESOLVES, and this runs on a menu press -- the same place,
+ * and for the same reason, that a join resolves its host. */
+static void OnlineApplyConfig(void)
+{
+	if (strcmp(gOnlineApplied, gMp.config.masterUrl) == 0)
+		return;
+
+	snprintf(gOnlineApplied, sizeof(gOnlineApplied), "%s", gMp.config.masterUrl);
+	MpOnlineSetMaster(gMp.config.masterUrl);
+}
+
+/* Why the list is empty. A player staring at an empty table should not have to
+ * guess whether the address is unset, the fetch is still running, or it failed. */
+static const char* OnlineStateText(void)
+{
+	switch (MpOnlineState())
+	{
+	case MP_ONLINE_OFF:			return "(no discovery server set)";
+	case MP_ONLINE_CONNECTING:
+	case MP_ONLINE_READING:			return "(contacting the discovery server...)";
+	case MP_ONLINE_FAILED:			return "(the discovery server is unavailable)";
+	default:				return "(no servers listed)";
+	}
+}
+
+static void OnlineRowClear(int k)
+{
+	gOnlineItems[k].label = NULL;
+	gOnlineItems[k].get_label = NULL;
+	gOnlineItems[k].userdata = NULL;
+	gOnlineItems[k].on_activate = NULL;
+	gOnlineItems[k].on_adjust = NULL;
+	gOnlineItems[k].submenu = -1;
+	gOnlineItems[k].is_back = 0;
+}
+
+static int ActJoinOnline(void* ud)
+{
+	int idx = (int)(intptr_t)ud;
+	const MP_ONLINE_SERVER* s = MpOnlineGet(idx);
+
+	/* Say exactly what we are joining: a listed address is the one thing here
+	 * that can be stale, and the only symptom is "connection lost". */
+	if (gMpCtx != NULL)
+		gMpCtx->jer_log(gMpCtx, "[mp] joining listed '%s' %s:%d (%d/%d, %s, city %d)\n",
+			s != NULL ? s->name : "?", s != NULL ? s->host : "?", s != NULL ? s->port : -1,
+			s != NULL ? s->players : -1, s != NULL ? s->maxPlayers : -1,
+			MpModeName(s != NULL ? s->rules : 0), s != NULL ? s->city : -1);
+
+	/* asynchronous, exactly like the LAN rows: the lobby shows progress while
+	 * the socket connects instead of the menu freezing */
+	if (s != NULL && MpBeginJoinAsync(s->host, s->port))
+		jer_frontend_open(gMenuIdx[M_LOBBY]);
+
+	return 1;
+}
+
+static void OnlineOnEnter(void* ud)
+{
+	int i, k = 0, count;
+
+	(void)ud;
+
+	OnlineApplyConfig();
+
+	/* A fresh look every time the screen opens: a stale address is worse than
+	 * none, and the fetch is asynchronous -- the rows appear as they arrive. */
+	MpOnlineRefresh();
+
+	count = MpOnlineCount();
+
+	for (i = 0; i < count && k < JER_FE_MAX_ITEMS - 2; i++)
+	{
+		OnlineRowClear(k);
+		gOnlineItems[k].userdata = (void*)(intptr_t)i;
+		gOnlineItems[k].on_activate = ActJoinOnline;
+		k++;
+	}
+
+	if (count == 0)
+	{
+		OnlineRowClear(k);
+		gOnlineItems[k].label = OnlineStateText();
+		k++;
+	}
+
+	/* Manual address: the way in for a host that is not listed (yet), or one
+	 * behind a name the player already knows. */
+	OnlineRowClear(k);
+	gOnlineItems[k].get_label = LblManualIp;
+	gOnlineItems[k].submenu = gMenuIdx[M_MANUAL];
+	k++;
+
+	OnlineRowClear(k);
+	gOnlineItems[k].label = "Back";
+	gOnlineItems[k].is_back = 1;
+	k++;
+
+	gOnlineMenu.item_count = k;
+
+	/* what this list was built from, so MpUiTick rebuilds only on a real change */
+	gOnlineRev = MpOnlineRevision();
+}
+
+/* The table. Called from the frontend draw hook (after the engine has drawn the
+ * screen), and only while this menu is on screen. */
+void MpUiDrawOnline(void)
+{
+	int count, servers, i, x, y, w, h;
+
+	if (!gInFrontend || gMpCtx == NULL)
+		return;
+
+	if (!MpMenuIs(M_ONLINE) || gOnlineMenu.item_count <= 0)
+		return;
+
+	count = gOnlineMenu.item_count;
+	servers = MpOnlineCount();
+
+	/* One line the first time the table is actually painted with rows: it is the
+	 * only thing an automated run can check about a screen whose whole point is
+	 * what it LOOKS like (the pixels are checked by hand). */
+	if (servers > 0 && MpDebugOn() && gMpCtx != NULL)
+	{
+		static int logged = 0;
+
+		if (!logged)
+		{
+			logged = 1;
+			gMpCtx->jer_log(gMpCtx,
+				"[mp] online table drawn: %d server row(s) of %d, five columns at x=%d,%d,%d,%d,%d (scale %d)\n",
+				servers, count, ONLINE_COL_NAME, ONLINE_COL_PLAYERS, ONLINE_COL_MODE,
+				ONLINE_COL_CITY, ONLINE_COL_PING, ONLINE_SCALE);
+		}
+	}
+
+	/* the column headings, one row pitch above the first row. Orange, like the
+	 * engine's own menu headings, and passed at full brightness because the ink is
+	 * halved on the way to the font (a "mid grey" 190 renders as 95 and reads as
+	 * smudge next to the rows). */
+	if (servers > 0 && jer_frontend_row_rect(0, count, &x, &y, &w, &h))
+	{
+		int hy = y - 16;
+
+		jer_text_draw_at(1, ONLINE_SCALE, x + ONLINE_COL_NAME,    hy, "SERVER NAME", 255, 190, 90);
+		jer_text_draw_at(1, ONLINE_SCALE, x + ONLINE_COL_PLAYERS, hy, "PLAYERS",     255, 190, 90);
+		jer_text_draw_at(1, ONLINE_SCALE, x + ONLINE_COL_MODE,    hy, "GAMEMODE",    255, 190, 90);
+		jer_text_draw_at(1, ONLINE_SCALE, x + ONLINE_COL_CITY,    hy, "CITY",        255, 190, 90);
+		jer_text_draw_at(1, ONLINE_SCALE, x + ONLINE_COL_PING,    hy, "PING",        255, 190, 90);
+	}
+
+	for (i = 0; i < servers && i < count; i++)
+	{
+		const MP_ONLINE_SERVER* s = MpOnlineGet(i);
+		char cell[24];
+		char name[ONLINE_NAME_CHARS + 1];
+
+		if (s == NULL || !jer_frontend_row_rect(i, count, &x, &y, &w, &h))
+			continue;
+
+		snprintf(name, sizeof(name), "%.*s", ONLINE_NAME_CHARS, s->name);
+		jer_text_draw_at(1, ONLINE_SCALE, x + ONLINE_COL_NAME, y, name, 235, 235, 235);
+
+		snprintf(cell, sizeof(cell), "%d/%d", s->players, s->maxPlayers);
+		jer_text_draw_at(1, ONLINE_SCALE, x + ONLINE_COL_PLAYERS, y, cell, 235, 235, 235);
+
+		jer_text_draw_at(1, ONLINE_SCALE, x + ONLINE_COL_MODE, y, MpModeName(s->rules), 235, 235, 235);
+		jer_text_draw_at(1, ONLINE_SCALE, x + ONLINE_COL_CITY, y, MpCityLabel(s->city), 235, 235, 235);
+
+		if (s->pingMs > 0)
+			snprintf(cell, sizeof(cell), "%d", s->pingMs);
+		else
+			snprintf(cell, sizeof(cell), "-");	/* not measured yet */
+
+		jer_text_draw_at(1, ONLINE_SCALE, x + ONLINE_COL_PING, y, cell, 235, 235, 235);
+	}
+}
+
 static void WireDynamic(void)
 {
 	gJoinMenu.on_enter = JoinOnEnter;
 	gLobbyMenu.on_enter = LobbyOnEnter;
 	gNameMenu.on_enter = NameOnEnter;
 	gManualMenu.on_enter = ManualOnEnter;
+	gOnlineMenu.on_enter = OnlineOnEnter;
 }
 
 /* ------------------------------------------------------------------ */
@@ -1038,6 +1255,53 @@ void MpUiTick(void)
 
 		gJoinBrowsing = 0;
 		gJoinScanStart = 0;
+	}
+
+	/* The Online browser's fetch. Non-blocking by construction, so it is safe
+	 * every frame, and it has to run whether or not the screen is up: the reply
+	 * is what the screen is waiting for. */
+	MpOnlinePoll();
+
+	/* Rebuild the Online rows only when the list they were built from changed --
+	 * the same rule the LAN browser follows, and for the same reason: rebuilding
+	 * every frame would fight the engine's selection. */
+	if (MpMenuIs(M_ONLINE) && MpOnlineRevision() != gOnlineRev)
+		jer_frontend_refresh();
+
+	/* TEST LEVER (MP_TEST_OPENMENU=<menu id>): open a named frontend menu once the
+	 * frontend is up. A module menu has no headless driver otherwise, so a screen
+	 * that has to be LOOKED at (the Online table) cannot be reached in an
+	 * automated run without one. Deferred and retried like gModeMenuArmed: opening
+	 * a screen from inside the hook that wants it does not take. */
+	{
+		static int menuTries = -1;
+		const char* want = getenv("MP_TEST_OPENMENU");
+
+		if (want != NULL && menuTries < 0)
+			menuTries = 60;		/* ~1 s at 60 fps */
+
+		if (menuTries > 0 && gInFrontend && gMenusResolved)
+		{
+			int idx = jer_frontend_find(want);
+
+			menuTries--;
+
+			if (idx >= 0 && jer_frontend_current_menu() == idx)
+			{
+				menuTries = 0;	/* it took */
+			}
+			else if (idx >= 0)
+			{
+				jer_frontend_open(idx);
+			}
+			else
+			{
+				menuTries = 0;
+
+				if (gMpCtx != NULL)
+					gMpCtx->jer_log(gMpCtx, "[mp] test: no menu '%s' to open (MP_TEST_OPENMENU)\n", want);
+			}
+		}
 	}
 }
 
@@ -1438,6 +1702,7 @@ void MpUiInit(void)
 
 	jer_frontend_register_menu(&kRootMenu);
 	jer_frontend_register_menu(&kLanMenu);
+	jer_frontend_register_menu(&gOnlineMenu);
 	jer_frontend_register_menu(&kHostMenu);
 	jer_frontend_register_menu(&kHostSetMenu);
 	jer_frontend_register_menu(&gJoinMenu);

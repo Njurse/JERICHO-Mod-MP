@@ -120,6 +120,11 @@ void MpConfigLoad(void)
 		snprintf(gMp.config.hostName, sizeof(gMp.config.hostName), "%s", s);
 	else
 		snprintf(gMp.config.hostName, sizeof(gMp.config.hostName), "%s's game", gMp.config.playerName);
+
+	/* Empty by default: the Online browser is opt-in -- it needs a server to
+	 * point at, and there is no address worth guessing. */
+	s = jer_config_get_str("mp", "master_url", "");
+	snprintf(gMp.config.masterUrl, sizeof(gMp.config.masterUrl), "%s", (s != NULL) ? s : "");
 }
 
 void MpConfigSave(void)
@@ -144,6 +149,7 @@ void MpConfigSave(void)
 	jer_config_set_int("mp", "color_b", gMp.config.colorB);
 	jer_config_set_str("mp", "player_name", gMp.config.playerName);
 	jer_config_set_str("mp", "host_name", gMp.config.hostName);
+	jer_config_set_str("mp", "master_url", gMp.config.masterUrl);
 }
 
 /* A short digest of the enabled-module manifest (id + version), used in

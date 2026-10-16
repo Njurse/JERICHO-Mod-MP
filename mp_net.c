@@ -2272,6 +2272,9 @@ static void MpBeaconSend(void)
 	b.city = (uint8_t)gMp.city;
 	b.inProgress = (uint8_t)gMp.running;
 	b.modHash = MpModHash();
+	/* The third carrier of the packed rules byte (mp_proto.h): the browser reads
+	 * it to NAME a server's mode before anyone joins it. */
+	b.rules = (uint16_t)MpRulesForPeer();
 
 	/* the beacon goes to the FIXED discovery port; b.port carries the session
 	 * port so the browser knows where to connect. Sent once per broadcast
@@ -2341,6 +2344,7 @@ static void MpServerTouch(const char* ip, const MP_BEACON* b)
 				    gServers[i].city != b->city ||
 				    gServers[i].modsEnforced != b->modsEnforced ||
 				    gServers[i].inProgress != b->inProgress ||
+				    gServers[i].rules != b->rules ||
 				    gServers[i].modHash != b->modHash ||
 				    strcmp(gServers[i].hostName, name) != 0)
 					gDiscoveryRev++;
@@ -2352,6 +2356,7 @@ static void MpServerTouch(const char* ip, const MP_BEACON* b)
 				gServers[i].city = b->city;
 				gServers[i].modsEnforced = b->modsEnforced;
 				gServers[i].inProgress = b->inProgress;
+				gServers[i].rules = b->rules;
 				gServers[i].modHash = b->modHash;
 				gServers[i].lastSeenMs = MpClockMs();
 				return;
@@ -2377,14 +2382,15 @@ static void MpServerTouch(const char* ip, const MP_BEACON* b)
 	gServers[freeIdx].city = b->city;
 	gServers[freeIdx].modsEnforced = b->modsEnforced;
 	gServers[freeIdx].inProgress = b->inProgress;
+	gServers[freeIdx].rules = b->rules;
 	gServers[freeIdx].modHash = b->modHash;
 	gServers[freeIdx].lastSeenMs = MpClockMs();
 	gDiscoveryRev++;		/* a new row appeared in the browser */
 
 	if (gMpCtx)
-		gMpCtx->jer_log(gMpCtx, "[mp] server found: '%s' %s:%d (%d/%d players, mode %d, city %d)\n",
+		gMpCtx->jer_log(gMpCtx, "[mp] server found: '%s' %s:%d (%d/%d players, %s, city %d)\n",
 			gServers[freeIdx].hostName, ip, b->port,
-			b->players, b->maxPlayers, b->gamemode, b->city);
+			b->players, b->maxPlayers, MpModeName(b->rules), b->city);
 }
 
 static void MpBeaconRecv(void)
@@ -2490,4 +2496,535 @@ MP_SERVER* MpDiscoveryGet(int index)
 int MpDiscoveryRevision(void)
 {
 	return (int)gDiscoveryRev;
+}
+
+/* ------------------------------------------------------------------ */
+/* The discovery server (master): the Online browser's list            */
+/* ------------------------------------------------------------------ */
+/* An internet host is not on our broadcast domain, so the LAN beacon cannot
+ * find it: the list is FETCHED from the master (tools/servers/masterserver) and
+ * kept here, separately from gServers -- MpDiscoveryStop wipes those on every
+ * browse stop, and this list must survive one.
+ *
+ * The same three rules the session sockets follow apply, for the same reasons:
+ *
+ *   - the socket is NON-blocking and the fetch is a state machine driven from
+ *     the frame poll, so a slow or dead master cannot stall the frontend;
+ *   - getaddrinfo BLOCKS, so the name is resolved ONCE in MpOnlineSetMaster,
+ *     which a menu press or a config change calls -- never the frame path;
+ *   - the reply is read by a FIXED-SUBSET JSON reader with bounded buffers. A
+ *     general JSON parser is a lot of code to trust for six fields, and a reply
+ *     it cannot follow must leave the previous list ALONE rather than leave a
+ *     half-replaced one behind.
+ */
+
+#define MP_ONLINE_TIMEOUT_MS	5000
+#define MP_ONLINE_BUF_SIZE		8192
+
+static SOCKET gOnlineSock = INVALID_SOCKET;
+static struct sockaddr_in gOnlineAddr;
+static int  gOnlineState = MP_ONLINE_OFF;
+static unsigned long gOnlineSinceMs;
+static char gOnlineReq[320];
+static int  gOnlineReqLen, gOnlineReqSent;
+static char gOnlineBuf[MP_ONLINE_BUF_SIZE];
+static int  gOnlineLen;
+static MP_ONLINE_SERVER gOnline[MP_ONLINE_MAX];
+static int  gOnlineCount;
+static unsigned gOnlineRev;
+static char gOnlineError[96];
+static char gOnlineUrl[160];		/* what the config said, for the log */
+static char gOnlineHostHdr[160];	/* host:port, for the request's Host: */
+
+/* --- a fixed-subset JSON reader ------------------------------------ */
+
+static const char* MpJsonSkipWs(const char* p, const char* end)
+{
+	while (p < end && (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n'))
+		p++;
+
+	return p;
+}
+
+/* The value of "key" within [obj, end), or NULL. A key that is not followed by a
+ * colon is skipped and the search continues, so a nested object cannot hide a
+ * later match. */
+static const char* MpJsonValue(const char* obj, const char* end, const char* key)
+{
+	char pat[40];
+	size_t klen = strlen(key);
+	const char* p = obj;
+
+	if (klen + 3 > sizeof(pat))
+		return NULL;
+
+	pat[0] = '"';
+	memcpy(pat + 1, key, klen);
+	pat[klen + 1] = '"';
+	pat[klen + 2] = '\0';
+
+	while (p < end)
+	{
+		const char* hit = strstr(p, pat);
+
+		if (hit == NULL || hit >= end)
+			return NULL;
+
+		hit = MpJsonSkipWs(hit + klen + 2, end);
+
+		if (hit < end && *hit == ':')
+		{
+			hit = MpJsonSkipWs(hit + 1, end);
+
+			return (hit < end) ? hit : NULL;
+		}
+
+		p = hit;
+	}
+
+	return NULL;
+}
+
+static int MpJsonInt(const char* obj, const char* end, const char* key, int def)
+{
+	const char* v = MpJsonValue(obj, end, key);
+	char* stop = NULL;
+	long n;
+
+	if (v == NULL)
+		return def;
+
+	n = strtol(v, &stop, 10);
+
+	if (stop == v || stop > end)
+		return def;
+
+	return (int)n;
+}
+
+/* A JSON string into `out`. Escapes are unescaped one character deep, which is
+ * all a server name needs; a name can never overrun `out`. */
+static void MpJsonStr(const char* obj, const char* end, const char* key, char* out, size_t n)
+{
+	const char* v = MpJsonValue(obj, end, key);
+	size_t w = 0;
+
+	if (n > 0)
+		out[0] = '\0';
+
+	if (v == NULL || *v != '"' || n == 0)
+		return;
+
+	v++;
+
+	while (v < end && *v != '"' && w + 1 < n)
+	{
+		if (*v == '\\' && (v + 1) < end)
+			v++;
+
+		out[w++] = *v++;
+	}
+
+	out[w] = '\0';
+}
+
+/* The matching '}' for the '{' at `p`, or NULL. Strings are skipped, so a brace
+ * inside a name cannot end the object early. */
+static const char* MpJsonObjectEnd(const char* p, const char* end)
+{
+	int depth = 0, inStr = 0;
+
+	while (p < end)
+	{
+		char c = *p++;
+
+		if (inStr)
+		{
+			if (c == '\\')
+			{
+				p++;
+				continue;
+			}
+
+			if (c == '"')
+				inStr = 0;
+
+			continue;
+		}
+
+		if (c == '"')
+			inStr = 1;
+		else if (c == '{')
+			depth++;
+		else if (c == '}')
+		{
+			if (--depth == 0)
+				return p - 1;
+		}
+	}
+
+	return NULL;
+}
+
+/* Replace the list from a reply BODY. Returns 0 -- and changes nothing -- if the
+ * body is not the shape the master documents. */
+static int MpOnlineParse(const char* body)
+{
+	MP_ONLINE_SERVER tmp[MP_ONLINE_MAX];
+	const char* end = body + strlen(body);
+	const char* arr = MpJsonValue(body, end, "servers");
+	const char* p;
+	int count = 0;
+
+	if (arr == NULL || *arr != '[')
+		return 0;
+
+	p = arr + 1;
+
+	while (p < end && *p != ']' && count < MP_ONLINE_MAX)
+	{
+		const char* close;
+		MP_ONLINE_SERVER* s;
+
+		if (*p != '{')
+		{
+			p++;
+			continue;
+		}
+
+		close = MpJsonObjectEnd(p, end);
+
+		if (close == NULL)
+			return 0;		/* truncated */
+
+		s = &tmp[count];
+		memset(s, 0, sizeof(*s));
+
+		MpJsonStr(p, close, "name", s->name, sizeof(s->name));
+		MpJsonStr(p, close, "host", s->host, sizeof(s->host));
+		s->port = MpJsonInt(p, close, "port", 0);
+		s->players = MpJsonInt(p, close, "players", 0);
+		s->maxPlayers = MpJsonInt(p, close, "maxPlayers", 0);
+		s->city = MpJsonInt(p, close, "city", 0);
+		s->rules = MpJsonInt(p, close, "rules", 0);
+
+		/* a row with nowhere to connect to is not a row */
+		if (s->host[0] != '\0' && s->port > 0 && s->port <= 65535)
+			count++;
+
+		p = close + 1;
+	}
+
+	memcpy(gOnline, tmp, sizeof(tmp));
+
+	/* the ROW COUNT is what a menu has to rebuild for; the values inside a row
+	 * are read live by the draw, so they need no revision of their own */
+	if (count != gOnlineCount)
+		gOnlineRev++;
+
+	gOnlineCount = count;
+
+	return 1;
+}
+
+/* --- the fetch ------------------------------------------------------ */
+
+static void MpOnlineClose(void)
+{
+	MpCloseSock(&gOnlineSock);
+	gOnlineReqSent = 0;
+}
+
+static void MpOnlineFail(const char* why)
+{
+	MpOnlineClose();
+	gOnlineState = MP_ONLINE_FAILED;
+
+	snprintf(gOnlineError, sizeof(gOnlineError), "%s", why);
+
+	if (gMpCtx != NULL)
+		gMpCtx->jer_log(gMpCtx, "[mp] discovery server %s: %s\n", gOnlineHostHdr, why);
+}
+
+void MpOnlineReset(void)
+{
+	MpOnlineClose();
+	gOnlineState = MP_ONLINE_OFF;
+	gOnlineError[0] = '\0';
+	gOnlineUrl[0] = '\0';
+	gOnlineHostHdr[0] = '\0';
+
+	if (gOnlineCount > 0)
+	{
+		memset(gOnline, 0, sizeof(gOnline));
+		gOnlineCount = 0;
+		gOnlineRev++;
+	}
+}
+
+/* Kick off (or retry) the fetch. The address is already resolved. */
+void MpOnlineRefresh(void)
+{
+	SOCKET s;
+	int rc;
+
+	if (gOnlineHostHdr[0] == '\0')
+		return;			/* nothing configured */
+
+	MpOnlineClose();
+	gOnlineError[0] = '\0';
+
+	s = socket(AF_INET, SOCK_STREAM, 0);
+
+	if (s == INVALID_SOCKET)
+	{
+		MpOnlineFail("could not open a socket");
+		return;
+	}
+
+	MpSetNonBlocking(s, 1);
+
+	rc = connect(s, (struct sockaddr*)&gOnlineAddr, sizeof(gOnlineAddr));
+
+	if (rc != 0 && !MpWouldBlock())
+	{
+		MpCloseSock(&s);
+		MpOnlineFail("connection refused");
+		return;
+	}
+
+	gOnlineSock = s;
+
+	snprintf(gOnlineReq, sizeof(gOnlineReq),
+		"GET /v1/servers?limit=%d HTTP/1.1\r\n"
+		"Host: %s\r\n"
+		"User-Agent: jericho-mp\r\n"
+		"Accept: application/json\r\n"
+		"Connection: close\r\n"
+		"\r\n",
+		MP_ONLINE_MAX, gOnlineHostHdr);
+
+	gOnlineReqLen = (int)strlen(gOnlineReq);
+	gOnlineReqSent = 0;
+	gOnlineLen = 0;
+	gOnlineSinceMs = MpNowMs();
+	gOnlineState = MP_ONLINE_CONNECTING;
+}
+
+void MpOnlineSetMaster(const char* url)
+{
+	char host[128];
+	const char* p;
+	char* colon;
+	int port = 80;
+
+	MpOnlineClose();
+	gOnlineError[0] = '\0';
+	gOnlineHostHdr[0] = '\0';
+
+	if (url == NULL || url[0] == '\0')
+	{
+		gOnlineState = MP_ONLINE_OFF;
+		gOnlineUrl[0] = '\0';
+		return;
+	}
+
+	snprintf(gOnlineUrl, sizeof(gOnlineUrl), "%s", url);
+
+	/* take a scheme and a path off, so both "master.example.com:8100" and
+	 * "http://master.example.com:8100/v1" are usable as typed */
+	p = url;
+
+	if (strncmp(p, "http://", 7) == 0)
+		p += 7;
+
+	snprintf(host, sizeof(host), "%s", p);
+
+	{
+		char* slash = strchr(host, '/');
+
+		if (slash != NULL)
+			*slash = '\0';
+	}
+
+	colon = strrchr(host, ':');
+
+	if (colon != NULL)
+	{
+		port = atoi(colon + 1);
+		*colon = '\0';
+	}
+
+	if (host[0] == '\0' || port <= 0 || port > 65535)
+	{
+		MpOnlineFail("that is not a usable address");
+		return;
+	}
+
+	snprintf(gOnlineHostHdr, sizeof(gOnlineHostHdr), "%s:%d", host, port);
+
+	/* BLOCKING, so it happens HERE and not in the poll */
+	if (!MpResolveHost(host, port, &gOnlineAddr))
+	{
+		MpOnlineFail("the name does not resolve");
+		return;
+	}
+
+	if (gMpCtx != NULL)
+		gMpCtx->jer_log(gMpCtx, "[mp] discovery server set to %s (from '%s')\n",
+			gOnlineHostHdr, url);
+
+	MpOnlineRefresh();
+}
+
+void MpOnlinePoll(void)
+{
+	fd_set wfds, efds;
+	struct timeval tv;
+	unsigned long now;
+	int err = 0;
+#ifdef _WIN32
+	int elen = (int)sizeof(err);
+#else
+	socklen_t elen = sizeof(err);
+#endif
+
+	if (gOnlineState != MP_ONLINE_CONNECTING && gOnlineState != MP_ONLINE_READING)
+		return;
+
+	if (gOnlineSock == INVALID_SOCKET)
+		return;
+
+	now = MpNowMs();
+
+	if (MpElapsedMs(now, gOnlineSinceMs) > (unsigned long)MP_ONLINE_TIMEOUT_MS)
+	{
+		MpOnlineFail("timed out");
+		return;
+	}
+
+	if (gOnlineState == MP_ONLINE_CONNECTING)
+	{
+		if (gOnlineReqSent == 0)
+		{
+			/* wait for the connect to complete before sending anything */
+			FD_ZERO(&wfds);
+			FD_SET(gOnlineSock, &wfds);
+			FD_ZERO(&efds);
+			FD_SET(gOnlineSock, &efds);
+			tv.tv_sec = 0;
+			tv.tv_usec = 0;
+
+			if (select((int)gOnlineSock + 1, NULL, &wfds, &efds, &tv) <= 0)
+				return;		/* still connecting */
+
+			if (getsockopt(gOnlineSock, SOL_SOCKET, SO_ERROR, (char*)&err, &elen) != 0 || err != 0)
+			{
+				MpOnlineFail("connection refused");
+				return;
+			}
+		}
+
+		while (gOnlineReqSent < gOnlineReqLen)
+		{
+			int n = send(gOnlineSock, gOnlineReq + gOnlineReqSent,
+				gOnlineReqLen - gOnlineReqSent, 0);
+
+			if (n > 0)
+			{
+				gOnlineReqSent += n;
+				continue;
+			}
+
+			if (n < 0 && MpWouldBlock())
+				return;		/* the rest goes next frame */
+
+			MpOnlineFail("the request could not be sent");
+			return;
+		}
+
+		gOnlineLen = 0;
+		gOnlineState = MP_ONLINE_READING;
+
+		return;
+	}
+
+	/* READING: one bounded recv per frame, then parse on close */
+	while (gOnlineLen < (int)sizeof(gOnlineBuf) - 1)
+	{
+		int n = recv(gOnlineSock, gOnlineBuf + gOnlineLen,
+			(int)sizeof(gOnlineBuf) - 1 - gOnlineLen, 0);
+
+		if (n > 0)
+		{
+			gOnlineLen += n;
+			continue;
+		}
+
+		if (n == 0)
+		{
+			const char* body;
+			int ok = 0;
+
+			gOnlineBuf[gOnlineLen] = '\0';
+			body = strstr(gOnlineBuf, "\r\n\r\n");
+
+			if (body == NULL)
+			{
+				MpOnlineFail("the reply had no body");
+				return;
+			}
+
+			/* a 200 is the only answer that carries a list; anything else
+			 * (a 404 from a master behind a path rewrite, a 502 from a proxy)
+			 * says so rather than being parsed as empty */
+			if (strstr(gOnlineBuf, " 200 ") == NULL)
+			{
+				MpOnlineFail("the discovery server refused the request");
+				return;
+			}
+
+			ok = MpOnlineParse(body + 4);
+
+			MpOnlineClose();
+
+			if (!ok)
+			{
+				gOnlineState = MP_ONLINE_FAILED;
+				snprintf(gOnlineError, sizeof(gOnlineError), "the reply could not be read");
+
+				if (gMpCtx != NULL)
+					gMpCtx->jer_log(gMpCtx, "[mp] discovery server: the reply could not be read\n");
+				return;
+			}
+
+			gOnlineState = MP_ONLINE_READY;
+
+			if (gMpCtx != NULL)
+				gMpCtx->jer_log(gMpCtx, "[mp] discovery server: %d server(s)\n", gOnlineCount);
+			return;
+		}
+
+		if (MpWouldBlock())
+			return;			/* more next frame */
+
+		MpOnlineFail("the connection was lost");
+		return;
+	}
+
+	/* the buffer filled without a body end: not something we can read */
+	MpOnlineFail("the reply was too large");
+}
+
+int MpOnlineState(void)		{ return gOnlineState; }
+const char* MpOnlineError(void)	{ return gOnlineError; }
+int MpOnlineCount(void)		{ return gOnlineCount; }
+int MpOnlineRevision(void)	{ return (int)gOnlineRev; }
+
+const MP_ONLINE_SERVER* MpOnlineGet(int index)
+{
+	if (index < 0 || index >= gOnlineCount)
+		return NULL;
+
+	return &gOnline[index];
 }

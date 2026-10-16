@@ -2567,6 +2567,21 @@ static int MpOnFrontendIdle(void* userdata, void* args)
 	return JER_RESULT_CONTINUE;
 }
 
+/* JERICHO-HOOK: the frontend has drawn the current screen.
+ *
+ * The one place a module can put text ON a menu row: JER_EVENT_FRAME fires
+ * before DrawScreen, so anything drawn there is covered by the menu box. The
+ * Online browser's five-column table is the reason this exists. */
+static int MpOnFrontendDraw(void* userdata, void* args)
+{
+	(void)userdata;
+	(void)args;
+
+	MpUiDrawOnline();
+
+	return JER_RESULT_CONTINUE;
+}
+
 /* JERICHO-HOOK: the multiplayer map.
  *
  * The blips live in mp_map.c (MpOnDrawMap) -- this file only registers it. The
@@ -3089,6 +3104,7 @@ JER_MODULE_ENTRY(jer_module_mp_entry)(JERICHO_CONTEXT* ctx)
 	ctx->jer_register_hook(ctx, JER_EVENT_GAME_START, MpOnGameStart, NULL, 0);
 	ctx->jer_register_hook(ctx, JER_EVENT_DRAW_MAP, MpOnDrawMap, NULL, 0);
 	ctx->jer_register_hook(ctx, JER_EVENT_FRONTEND_IDLE, MpOnFrontendIdle, NULL, 0);
+	ctx->jer_register_hook(ctx, JER_EVENT_FRONTEND_DRAW, MpOnFrontendDraw, NULL, 0);
 	ctx->jer_register_hook(ctx, JER_EVENT_PAUSE_MENU, MpOnPauseMenu, NULL, 0);
 
 	/* A player's own character, in their own colour -- as a DEFAULT. Priority

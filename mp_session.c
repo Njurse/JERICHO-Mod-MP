@@ -1366,10 +1366,12 @@ void MpSetMapShape(int mpLevel, int arena)
 }
 
 /* The host's SESSION RULES, packed for the wire. ONE packed byte (MP_RULES_*),
- * carried two ways: MP_WELCOME.rules for a client that joins a running match,
- * and the free bits of MP_SESSION.spare for the launch. These two functions and
- * the spare/welcome sites are the only readers and writers, deliberately -- the
- * map shape already showed how easy it is for the two carriers to drift. */
+ * carried three ways: MP_WELCOME.rules for a client that joins a running match,
+ * the free bits of MP_SESSION.spare for the launch, and MP_BEACON.rules so a
+ * LAN browser can name the mode of a server it has not joined. These two
+ * functions and those three sites are the only readers and writers,
+ * deliberately -- the map shape already showed how easy it is for two carriers
+ * to drift. */
 static uint32_t MpRulesFromConfig(void)
 {
 	return MP_RULES_PACK(gMp.config.cops, gMp.config.invuln, gMp.config.copDifficulty,
@@ -1379,8 +1381,12 @@ static uint32_t MpRulesFromConfig(void)
 /* What the HOST should publish right now: the rules the running session was
  * launched with once there is one, otherwise the lobby defaults from the menu.
  * The difference matters -- a host that edits the menu mid-match must not
- * retro-fit new rules onto the players already in it. */
-static uint32_t MpRulesForPeer(void)
+ * retro-fit new rules onto the players already in it.
+ *
+ * Not static: mp_net.c's beacon is the third carrier of this byte (the browser
+ * reads it to name a server's mode), and a second copy of the decision here is
+ * exactly the drift the comment above warns about. */
+uint32_t MpRulesForPeer(void)
 {
 	if (gMp.ruleSet)
 		return MP_RULES_PACK(gMp.ruleCops, gMp.ruleInvuln, gMp.ruleDiff, gMp.ruleImmune);
@@ -5432,6 +5438,34 @@ const char* MpCarCityName(int city)
 
 	if (city < 0 || city >= CITY_COUNT || LevelNames[city] == NULL)
 		return "the session city";
+
+	return LevelNames[city];
+}
+
+/* The MODE a server advertises, named from its packed rules byte (mp_proto.h).
+ *
+ * The rules are the source, not a separate gamemode number: MP_BEACON.rules /
+ * MP_WELCOME.rules are what the host actually runs with, so this cannot disagree
+ * with the match. Only cops names a mode today -- everything else is the one
+ * gamemode there is. Keep it in step with the tools' mode_name() (mp_test.py).
+ *
+ * `rules` is a packed byte; a server that predates the beacon field reads 0,
+ * which names the same mode it actually plays. */
+const char* MpModeName(int rules)
+{
+	return (rules & MP_RULE_COPS) ? "COPS N ROBBERS" : "TAKE A RIDE";
+}
+
+/* The city name for a ROW of somebody else's server: the engine's own name, or
+ * "-" for a city the engine has no row for.
+ *
+ * Deliberately NOT MpCarCityName: that answers "the session city" for a missing
+ * row, which is right for a local picker (where the player's own city is the
+ * alternative) and meaningless in a list of servers that are not ours. */
+const char* MpCityLabel(int city)
+{
+	if (city < 0 || city >= CITY_COUNT || LevelNames[city] == NULL)
+		return "-";
 
 	return LevelNames[city];
 }

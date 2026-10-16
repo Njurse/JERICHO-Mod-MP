@@ -68,6 +68,11 @@ typedef struct MP_CONFIG
 	 * Tanner, and every other machine sees that colour too. */
 	int  colorOn;			/* 0 = keep the original colours (default) */
 	int  colorR, colorG, colorB;	/* 0..255 */
+
+	/* THE DISCOVERY SERVER (master), for the Online browser. Empty = the Online
+	 * screen says so and lists nothing; that is an unset state, not a bad one.
+	 * "host", "host:port" and "http://host:port" are all accepted. */
+	char masterUrl[128];
 } MP_CONFIG;
 
 /* ------------------------------------------------------------------ */
@@ -340,6 +345,7 @@ typedef struct MP_SERVER
 	int  port;
 	char hostName[MP_NAME_MAX];
 	int  players, maxPlayers, gamemode, city, modsEnforced, inProgress;
+	int  rules;					/* MP_RULES_PACK'd, from the beacon: names the mode */
 	unsigned short modHash;
 	unsigned long lastSeenMs;
 } MP_SERVER;
@@ -351,6 +357,46 @@ void       MpDiscoveryPoll(unsigned long now);
 int        MpDiscoveryCount(void);
 MP_SERVER* MpDiscoveryGet(int index);
 int        MpDiscoveryRevision(void);	/* changes when the visible server set does */
+
+/* --- the discovery server (master): the Online browser's list ----------------
+ *
+ * The LAN beacon cannot serve this: a host on the internet is not on our
+ * broadcast domain, so the list is FETCHED over HTTP from the master and kept
+ * separately from gServers (which MpDiscoveryStop wipes).
+ *
+ * MpOnlineSetMaster resolves the name, and getaddrinfo BLOCKS, so call it from a
+ * menu press or a config change -- never from the frame poll. */
+#define MP_ONLINE_MAX	32		/* rows the master's reply is trimmed to */
+
+enum
+{
+	MP_ONLINE_OFF = 0,		/* no master configured */
+	MP_ONLINE_CONNECTING,
+	MP_ONLINE_READING,
+	MP_ONLINE_READY,		/* the list below is a real reply */
+	MP_ONLINE_FAILED
+};
+
+typedef struct MP_ONLINE_SERVER
+{
+	char name[MP_NAME_MAX];
+	char host[64];			/* as the master reported it (the peer's address) */
+	int  port;
+	int  players, maxPlayers;
+	int  city;
+	int  rules;			/* MP_RULES_PACK'd, so the row can name the mode */
+	int  pingMs;			/* 0 = not measured yet */
+} MP_ONLINE_SERVER;
+
+void MpOnlineSetMaster(const char* url);	/* "" disables. Resolves -- off the frame path */
+void MpOnlineRefresh(void);
+void MpOnlineReset(void);
+void MpOnlinePoll(void);			/* non-blocking; safe every frame */
+int  MpOnlineState(void);
+const char* MpOnlineError(void);
+int  MpOnlineCount(void);
+const MP_ONLINE_SERVER* MpOnlineGet(int index);
+int  MpOnlineRevision(void);			/* changes when the list does */
 
 /* Short digest of the enabled-module manifest (implemented in mp.c). */
 unsigned short MpModHash(void);
@@ -373,6 +419,9 @@ int  MpInputForPlayer(int id);		/* the pad to apply to this player's car */
 int MpIsValidAddress(const char* host);	/* dotted-quad check (no DNS in this module) */
 void MpUiInit(void);			/* register the frontend menus (jer_frontend) */
 void MpUiTick(void);			/* refresh the live lobby menu when needed */
+void MpUiDrawOnline(void);		/* paint the Online table over the menu rows --
+					 * from JER_EVENT_FRONTEND_DRAW, never FRAME (the
+					 * menu box is drawn after FRAME) */
 
 /* The local resident SLOT that holds (city, model) here, or -1 when none does.
  * `city` is -1 for the session's own city. A model number alone is not enough --
@@ -407,6 +456,17 @@ int MpChangeCar(int city, int model);
 
 /* A city's display name (a 0..3 index, or -1 for the session's own city). */
 const char* MpCarCityName(int city);
+
+/* The mode a server advertises, named from its packed rules byte (mp_proto.h):
+ * the rules ARE the source, so it cannot disagree with the match. Paired with
+ * the tools' mode_name() in mp_test.py. */
+const char* MpModeName(int rules);
+
+/* The city name for a row of SOMEONE ELSE'S server: the engine's name, or "-"
+ * when the engine has no row for that city. Not MpCarCityName, which says "the
+ * session city" -- right for a local picker, wrong in a list of other people's
+ * servers. */
+const char* MpCityLabel(int city);
 
 /* The live-car questions mp puts to other modules (carhacks) -- see
  * mp_carquery.h. Both are "no answer is not an error": 0 means nobody knew
@@ -460,6 +520,10 @@ void MpCameraPose(int* x, int* y, int* z, int* yaw);	/* camera position + yaw */
 int  MpGetGameLevel(void);		/* the frontend's current city (GameLevel) */
 void MpSetSubGame(int n);		/* the multiplayer sub-level (gSubGameNumber) */
 void MpSetMapShape(int mpLevel, int arena);	/* the session's map: 0 = the full city, 1 = the multiplayer map */
+
+/* The host's session rules, MP_RULES_PACK'd, as they should be published right
+ * now. mp_net.c's beacon is the third carrier of this byte (see mp_proto.h). */
+uint32_t MpRulesForPeer(void);
 void MpUiOpenModeMenu(void);		/* open the Single Player / Multiplayer menu */
 void MpUiArmModeMenu(void);		/* ask for it on the NEXT frame - call this from a hook */
 void MpUiOpenCarSelect(void);		/* open the stock car select (joining player picks a car) */

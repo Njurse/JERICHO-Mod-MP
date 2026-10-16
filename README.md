@@ -23,6 +23,7 @@ engine through the JERICHO frontend-menu API (`jer_frontend.h`):
 
 ```
 Multiplayer
+  Online ............ the discovery server's list, five columns (see below)
   LAN ............... Host Game / Join Game / Options
   Split-Screen ...... returns to the stock 2-pad flow
 
@@ -43,6 +44,21 @@ publish a different level shape, and the shape travels to every client in
 different `-mp`, or none, is corrected by the host). Both screens the player can
 confirm a city on fire `JER_EVENT_FRONTEND`, so this prompt appears on the
 Take-a-Ride screen itself.
+
+**`Online`** is the discovery server's list: five columns -- `SERVER NAME`,
+`PLAYERS`, `GAMEMODE`, `CITY`, `PING` -- one per server the master knows, with
+`Manual address` and `Back` under them. Picking a row joins it through the same
+`MpBeginJoinAsync` the LAN list uses, so a listed host lands in the normal lobby.
+
+It is the one screen whose rows the MODULE draws. A menu row is a single
+proportional string in a fixed box, so columns cannot be padded into line; the
+rows carry empty labels (the engine still navigates and highlights them) and the
+table is painted from `JER_EVENT_FRONTEND_DRAW` with `jer_text.h` and
+`jer_frontend_row_rect()`. **Not** `JER_EVENT_FRAME`: that fires before the
+engine draws the screen and the menu box lands on top of anything drawn there.
+The mode and city names come from the host's own rules (`MpModeName`) and the
+engine's city registry (`MpCityLabel`), and `PING` shows `-` until a probe
+answers.
 
 There is deliberately **no mp screen for the city, time of day or weather**: those are
 the engine's own screens, and `MpStartMatch` seeds the session from what the host
@@ -151,6 +167,7 @@ no wanted level, and the session carries on.
 | `beacon_ms` | `1000` | discovery beacon interval |
 | `mod_check` | `0` | host lobby mod policy: 0 off, 1 by id, 2 by id+version |
 | `strict_version` | `0` | host lobby setting: 1 also requires an identical build hash (off by default, because that hash tracks `git describe`) |
+| `master_url` | *(empty)* | the discovery server the `Online` screen lists: `host`, `host:port` or `http://host:port`. Empty = the screen says "no discovery server set". Read when the screen opens, so an edit takes effect on the next open |
 
 **The ini's port is the base; the command line can move it -- but not under the shipped
 launchers.** `mp.ini` is read at module activation, *before* the arguments are parsed, so it
@@ -235,9 +252,15 @@ Three things to know before relying on it:
 
 - **No authentication and no encryption.** Anything that can reach the port can
   join, and the traffic is plain text. Forward the port deliberately.
-- **No internet server browser.** Discovery is UDP broadcast, which stops at the
-  router, so a remote game never appears in the list and has to be typed in. A DDNS
-  name makes that a one-time thing.
+- **No internet server browser WORTH the name... yet.** Discovery is UDP broadcast,
+  which stops at the router, so a remote game never appears in the LAN list and has
+  to be typed in. The `Online` screen is the way past that: it lists what a
+  DISCOVERY SERVER (the master) knows, which is how a host is found without being
+  told an address. Set the server once in `mp.ini` (`master_url`) and the screen
+  fills in. **The host has to register with it too** -- that is `dediserver.py
+  --master`, or the module's own hosting once the in-game half lands (see
+  `docs/MASTER_SERVER.md`). With no `master_url` configured the screen says so
+  rather than pretending the internet is empty.
 - **LAN-tuned feel.** There is no client-side prediction, so at 100-200 ms ping the
   other cars move in visible steps. Fine for a drive, not for a race.
 
