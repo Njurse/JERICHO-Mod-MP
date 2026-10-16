@@ -13,6 +13,7 @@ The deployment target (a Linux VPS, likely Docker) is a separate step — see
 python JERICHO/MODS/mp/tools/servers/local_stack.py                    # master + dedi + 1 real client
 python .../local_stack.py --clients 2 --seconds 60                     # two clients
 python .../local_stack.py --clients 2 --beacon --keep                  # and leave the logs behind
+python .../local_stack.py --browser --seconds 13 --shots /tmp/shots     # the Online screen, photographed
 ```
 
 It starts, in order:
@@ -236,29 +237,47 @@ it (9 beacons in 4 s), carrying the same identity the listing shows:
 [beacon] from 172.18.208.1: proto=11 port=1401 host='LocalStack' players=0/8 mode=0 city=0 enforced=0 inProgress=1 modHash=0x0000
 ```
 
-### The in-game Join browser is **not** headlessly drivable
+### The in-game Join browser is **not** headlessly drivable — but `Online` is
 
-The module's only frontend-menu test lever is `MP_TEST_MANUALADDR` (`mp_ui.c`), so a
-run can fill the manual address field but cannot open the browser and read its rows.
-That half stays a **by-hand check** (host with `--beacon`, open Join, look).
+The module's frontend-menu levers are `MP_TEST_MANUALADDR` (`mp_ui.c`) and
+`MP_TEST_OPENMENU`; the first fills the manual address field, the second **opens a
+named menu**. So `mp.online` CAN be reached and photographed in a run, while the LAN
+`Join` browser still cannot be *navigated* (no lever drives the pad), and reading its
+rows stays a by-hand check (host with `--beacon`, open Join, look).
 
-What *is* verified headlessly is the path a player would use without a browser row —
-typing the address — and it works against the dedi:
+What is verified headlessly:
 
-```
-[mp] test: manual address <- '127.0.0.1:1400' (MP_TEST_MANUALADDR)
-[mp] connecting to 127.0.0.1:1400
-```
+* the manual address path a player uses without any browser row
+  (`local_stack.py --join-manual`):
 
-(`local_stack.py --join-manual` drives exactly this.)
+  ```
+  [mp] test: manual address <- '127.0.0.1:1400' (MP_TEST_MANUALADDR)
+  [mp] connecting to 127.0.0.1:1400
+  ```
 
-### The boundary: internet listing does not exist yet
+* the **Online** screen end to end (`local_stack.py --browser`): the master, two
+  registered dedis, a real client whose `mp.ini` names the master, and the table:
 
-`--master` proves **registration**, not in-game internet browsing. A client cannot
-list remote games from inside the game until the C-side work in
-[`docs/MASTER_SERVER.md`](../../docs/MASTER_SERVER.md) lands — so "internet discovery"
-is at present: hosts register (any process), and clients join by IP:port. Nothing in
-the rig above should be read as having tested more than that.
+  ```
+  [mp] discovery server set to 127.0.0.1:8100 (from 'http://127.0.0.1:8100')
+  [mp] discovery server: 2 server(s)
+  [mp] online table drawn: 2 server row(s) of 4, five columns at x=4,86,112,188,240 (scale 55)
+  ```
+
+  The rig writes the screenshot and prints its path. `--browser-menu mp.root` runs
+the same stack with the control screen open instead, which is how the table's
+pixels are located: the two frames differ ONLY inside the menu box
+(`(466,341)-(1600,634)` at 1920x1080), which is what proves the table is on the
+rows rather than behind the menu or off-screen.
+
+### The boundary now
+
+**Listing is in the game; registering from the game is not.** A client can list and
+join remote games from `Multiplayer -> Online` (above), but an in-game HOST still
+does not register itself — that reaches the master through
+[`dediserver/`](dediserver/README.md) `--master` today. So "internet discovery" is:
+hosts register (any process), clients list IN GAME and join. The remaining half is
+[`docs/MASTER_SERVER.md`](../../docs/MASTER_SERVER.md) sections 1-2.
 
 ## Ranking — what each finding blocks
 

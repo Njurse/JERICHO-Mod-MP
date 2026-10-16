@@ -126,6 +126,73 @@ def tail(text, patterns, limit=6):
     return hits[-limit:]
 
 
+def run_browser(args, run_root, master_url):
+    """Open the Online browser (mp.online) in a real client and photograph it.
+
+    This is a FRONTEND screen, so nothing joins and the stack is only there to
+    give the browser a list to draw. Two things it needs are the real ones, not
+    test substitutes: the seat's mp.ini is pointed at the local master (that is
+    how a player configures it, and the fetch is what the screen is FOR), and
+    MP_TEST_OPENMENU opens the screen -- module menus have no headless driver,
+    so an automated run cannot reach one otherwise.
+
+    A second host is registered too, so the table shows two rows with DIFFERENT
+    modes and cities rather than one row twice.
+    """
+    if not master_url:
+        log("FAIL: --browser needs the master (do not pass --no-master)")
+        return 1
+
+    second_port = args.dedi_port + 1
+    second_log = os.path.join(run_root, "dedi2.log")
+    second, _ = spawn(
+        [sys.executable, DEDI_PY, "--port", str(second_port),
+         "--name", "Second Game", "--city", str((args.city + 2) % 4),
+         "--rules", "1",                    # COPS N ROBBERS
+         "--no-beacon",
+         "--master", master_url, "--master-interval", str(args.master_interval),
+         "--log-level", "info"], second_log)
+    if not wait_log(second_log, "listening on TCP/%d" % second_port):
+        log("FAIL: the second dedi never reported itself listening")
+        stop_server(second, "dedi2")
+        return 1
+
+    time.sleep(2.0)                        # let both registrations land
+    listing = master_listing(args.master_port)
+    log(f"master lists {listing['count'] if listing else '?'} server(s)")
+
+    run_dir = os.path.join(run_root, "browser")
+    lp.safe_remove(run_dir)
+    lp.build_run_dir(args.game_dir, run_dir, "BrowserSeat", args.dedi_port)
+
+    # the REAL config path for the master address (there is no lever for it)
+    with open(os.path.join(run_dir, "JERICHO", "CONFIG", "mp.ini"), "a", encoding="utf-8") as f:
+        f.write(f"master_url = {master_url}\n")
+
+    env = {} if args.no_debug else {"MP_DEBUG": "1"}
+    env["JERICHO_LOG_FLUSH"] = "1"
+    env["MP_TEST_OPENMENU"] = args.browser_menu
+
+    proc = lp.launch(run_dir, args.exe, ["-nointro", "-nofmv"], env)
+    log(f"browser seat pid {proc.pid}: frontend, MP_TEST_OPENMENU={args.browser_menu}")
+
+    time.sleep(args.seconds)               # let the fetch land and the table draw
+
+    png = args.browser_shot or os.path.join(args.shots or run_root, "online.png")
+    os.makedirs(os.path.dirname(os.path.abspath(png)), exist_ok=True)
+    rc = subprocess.call([sys.executable, os.path.join(TOOLS, "mpshots.py"), "grab",
+                          "--pid", str(proc.pid), "--out", png])
+    log(f"screenshot: {png}" if rc == 0 else f"FAIL: mpshots.py grab exited {rc}")
+
+    text = lp.read_log(run_dir) or ""
+    for pat in ("frontend:", "discovery server", "online table drawn", "opening menu"):
+        for line in tail(text, (pat,), 3):
+            log("  seat: " + line.strip())
+
+    stop_server(second, "dedi2")
+    return 0
+
+
 # ----------------------------------------------------------------------- main
 def parse_args(argv):
     ap = argparse.ArgumentParser(description="run the mp master + dedi + real clients on one PC")
@@ -153,6 +220,14 @@ def parse_args(argv):
     ap.add_argument("--no-debug", action="store_true", help="run WITHOUT MP_DEBUG, like a player does")
     ap.add_argument("--keep", action="store_true", help="leave the run dirs and logs behind")
     ap.add_argument("--shots", default=None, metavar="DIR", help="photograph the seats with mpshots.py")
+    ap.add_argument("--browser", action="store_true",
+                    help="open the Online browser (mp.online) in a frontend client pointed "
+                         "at the local master and photograph it, instead of joining")
+    ap.add_argument("--browser-shot", default=None, metavar="PNG",
+                    help="where to write that screenshot (default <shots>/online.png)")
+    ap.add_argument("--browser-menu", default="mp.online", metavar="ID",
+                    help="which menu MP_TEST_OPENMENU opens (default mp.online; another id "
+                         "is the control for a pixel diff)")
     return ap.parse_args(argv)
 
 
@@ -170,6 +245,10 @@ def main(argv=None):
 
     run_root = os.path.join(args.game_dir, SCRATCH, "stack")
     master_proc = dedi_proc = None
+    # the client loop's bookkeeping, hoisted so the finally below is safe on every
+    # path out of the try (the --browser path returns before the loop runs)
+    procs = {}
+    shots_proc = None
     master_log = os.path.join(run_root, "master.log")
     dedi_log = os.path.join(run_root, "dedi.log")
     os.makedirs(run_root, exist_ok=True)
@@ -229,14 +308,18 @@ def main(argv=None):
             log(f"waiting {args.settle}s before the first client...")
             time.sleep(args.settle)
 
+        # -- the Online browser (frontend only) ---------------------------
+        # Nothing joins here: the stack exists to give the screen a list, and the
+        # screenshot is the verification (the pixels are judged by eye).
+        if args.browser:
+            return run_browser(args, run_root, master_url)
+
         # -- clients ------------------------------------------------------
         env = {} if args.no_debug else {"MP_DEBUG": "1"}
         env["JERICHO_LOG_FLUSH"] = "1"     # judge what actually happened, not a buffer
         env["MP_HEARTBEAT"] = "1"          # so a frozen seat is distinguishable from a quiet one
         env.pop("MP_AUTOSTART", None)      # a client must never host as well
 
-        procs = {}
-        shots_proc = None
         seat_args = []
         for i, key in enumerate(sorted(seats)):
             run_dir = seats[key]

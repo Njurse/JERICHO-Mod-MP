@@ -55,6 +55,7 @@ DEFAULTS = {
     "beacon_ms": 1000,
     "idle_drop_s": 30.0,       # real silence before a client is dropped (0 = never)
     "live": True,              # advertise as a live match (the level is always up)
+    "rules": 0,                # MP_RULES_PACK'd session rules (1 = cops); names the mode
     "log_level": "info",
     "log_file": "",
     # master discovery (optional). master = "" disables registration.
@@ -314,7 +315,8 @@ class Dedicated:
             pkt = m.BEACON.pack(m.UDP_MAGIC, m.PROTO, self.port, host,
                                 self.player_count(), self.max_players,
                                 int(self.cfg["gamemode"]), 0, self.city,
-                                1 if self.cfg["live"] else 0, 0, 0)
+                                1 if self.cfg["live"] else 0, 0,
+                                int(self.cfg["rules"]))
             try:
                 s.sendto(pkt, ("255.255.255.255", self.port))
             except OSError:
@@ -346,6 +348,9 @@ class Dedicated:
                         "name": self.cfg["master_name"] or self.cfg["name"],
                         "port": self.port, "city": self.city,
                         "gamemode": int(self.cfg["gamemode"]),
+                        # the same packed byte the beacon carries, so a browser
+                        # can name the mode from either source
+                        "rules": int(self.cfg["rules"]),
                         "players": self.player_count(), "maxPlayers": self.max_players,
                         "inProgress": 1 if self.cfg["live"] else 0,
                         "protoVersion": m.PROTO, "sdkVersion": m.SDK,
@@ -435,6 +440,7 @@ def parse_args(argv):
     ap.add_argument("--no-beacon", dest="beacon", action="store_false")
     ap.add_argument("--beacon-ms", type=int)
     ap.add_argument("--idle-drop", type=float, dest="idle_drop_s", help="seconds of silence that drop a client (0 = never)")
+    ap.add_argument("--rules", type=int, help="MP_RULES_PACK'd session rules (1 = cops); names the mode")
     ap.add_argument("--log-level", choices=sorted(LEVELS))
     ap.add_argument("--log-file")
     ap.add_argument("--master", help="master discovery URL, e.g. http://host:8100 ('' disables)")
@@ -453,7 +459,8 @@ def build_config(argv):
     for flag, key in (
         ("port", "port"), ("name", "name"), ("city", "city"), ("gamemode", "gamemode"),
         ("max_players", "max_players"), ("beacon", "beacon"), ("beacon_ms", "beacon_ms"),
-        ("idle_drop_s", "idle_drop_s"), ("log_level", "log_level"), ("log_file", "log_file"),
+        ("idle_drop_s", "idle_drop_s"), ("rules", "rules"),
+        ("log_level", "log_level"), ("log_file", "log_file"),
         ("master", "master"), ("master_name", "master_name"),
         ("master_interval_s", "master_interval_s"),
     ):

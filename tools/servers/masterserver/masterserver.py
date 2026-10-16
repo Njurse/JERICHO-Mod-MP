@@ -87,7 +87,7 @@ class Log:
 # ----------------------------------------------------------------------- registry
 class Entry:
     __slots__ = (
-        "name", "host", "port", "city", "gamemode", "players", "maxPlayers",
+        "name", "host", "port", "city", "gamemode", "rules", "players", "maxPlayers",
         "inProgress", "modsEnforced", "modHash", "protoVersion", "sdkVersion",
         "gameBuild", "token", "last_seen",
     )
@@ -113,6 +113,7 @@ class Entry:
             "maxPlayers": self.maxPlayers,
             "city": self.city,
             "gamemode": self.gamemode,
+            "rules": self.rules,
             "inProgress": self.inProgress,
             "modsEnforced": self.modsEnforced,
             "modHash": self.modHash,
@@ -188,6 +189,7 @@ class Registry:
             e = Entry(
                 name=fields["name"], host=host, port=port,
                 city=fields.get("city", 0), gamemode=fields.get("gamemode", 0),
+                rules=fields.get("rules", 0),
                 players=fields.get("players", 0),
                 maxPlayers=fields.get("maxPlayers", 8),
                 inProgress=fields.get("inProgress", 0),
@@ -213,7 +215,7 @@ class Registry:
             e = self.by_key.get(key)
             if e is None:
                 return None
-            for k in ("players", "inProgress"):
+            for k in ("players", "inProgress", "rules"):
                 if k in fields:
                     e.__setattr__(k, int(fields[k]))
             e.last_seen = time.time()
@@ -347,13 +349,14 @@ class Handler(BaseHTTPRequestHandler):
             "<p>%d live. This page is a convenience; the API is "
             "<a href=\"/v1/servers\">/v1/servers</a>.</p>" % len(rows),
             "<table border=1 cellpadding=4><tr><th>name<th>address<th>players"
-            "<th>city<th>mode<th>live<th>last seen</tr>",
+            "<th>city<th>mode<th>rules<th>live<th>last seen</tr>",
         ]
         for r in rows:
             parts.append(
-                "<tr><td>%s<td>%s:%d<td>%d/%d<td>%d<td>%d<td>%s<td>%.0fs ago</tr>"
+                "<tr><td>%s<td>%s:%d<td>%d/%d<td>%d<td>%d<td>%d<td>%s<td>%.0fs ago</tr>"
                 % (html.escape(str(r["name"])), html.escape(str(r["host"])), r["port"],
                    r["players"], r["maxPlayers"], r["city"], r["gamemode"],
+                   r.get("rules") or 0,
                    "yes" if r["inProgress"] else "no", r["ageSeconds"])
             )
         parts.append("</table>")
@@ -397,6 +400,7 @@ class Handler(BaseHTTPRequestHandler):
             "name": name, "port": port,
             "city": _clamp(body.get("city", 0), 0, 3),
             "gamemode": _clamp(body.get("gamemode", 0), 0, 255),
+            "rules": _clamp(body.get("rules", 0), 0, 65535),
             "players": _clamp(body.get("players", 0), 0, 255),
             "maxPlayers": _clamp(body.get("maxPlayers", 8), 1, 255),
             "inProgress": 1 if body.get("inProgress") else 0,

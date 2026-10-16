@@ -40,6 +40,25 @@ NAME_MAX = 32                 # mp_proto.h MP_NAME_MAX (MP_BEACON.hostName / MP_
 MOD_ID_MAX = 24               # mp_proto.h MP_MOD_ID_MAX (MP_MOD_INFO.id)
 MOD_VER_MAX = 16              # mp_proto.h MP_MOD_VER_MAX (MP_MOD_INFO.version)
 
+# Session rules, packed into ONE byte (mp_proto.h MP_RULES_PACK). The beacon now
+# carries this so a browser can NAME a server's mode without joining it.
+MP_RULE_COPS = 0x1            # 1 = police cars spawn
+
+
+def mode_name(rules):
+    """The name a browser shows for a packed rules byte.
+
+    Only cops names a mode today; everything else is the one gamemode there is.
+    Keep this in step with the C side's table (mp_ui.c).
+    """
+    return "COPS N ROBBERS" if (rules & MP_RULE_COPS) else "TAKE A RIDE"
+
+
+def city_name(city):
+    """The engine's city names, in GameLevel order (LevelNames in the engine)."""
+    names = ("CHICAGO", "HAVANA", "LAS VEGAS", "RIO")
+    return names[city] if 0 <= city < len(names) else "UNKNOWN"
+
 TAG = {
     "hello": b"JPHL", "welcome": b"JPWL", "reject": b"JPRJ",
     "start": b"JPST", "input": b"JPIN",
@@ -57,7 +76,7 @@ HELLO = struct.Struct("<HHHH32s4B")      # 44 bytes
 MODI = struct.Struct("<24s16sBB")        # 42 bytes
 WELCOME = struct.Struct("<12BIBB")      # 18 bytes: 12xu8, u32 seed, u8 hostCar, u8 rules (mp_proto.h static_assert -- v11 ADDED `rules`; a 17-byte <12BIB is refused by MpHandleWelcome's length gate)
 REJECT = struct.Struct("<4B64s")         # 68 bytes
-BEACON = struct.Struct("<IHH32s6BHH")    # 50 bytes
+BEACON = struct.Struct("<IHH32s6BHH")    # 50 bytes; the last u16 is `rules` (mp_proto.h renamed MP_BEACON's `spare` to it -- same offset, same size, so the wire is unchanged)
 CHANNEL = struct.Struct("<16sHIBB2B")    # 26 bytes
 CHAT = struct.Struct("<B3B96s")          # 100 bytes: playerId, reserved[3], text[96]
 SESSION = struct.Struct("<4BIBBH")       # 12 bytes (gamemode,city,tod,weather,seed,numPlayers,state,spare)
@@ -241,7 +260,8 @@ def beacon_start(port, name, session_port, in_progress, interval):
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
         body = BEACON.pack(UDP_MAGIC, PROTO, session_port,
-                           name.encode()[:31], 1, 8, 0, 0, 0, in_progress, 0x1234, 0)
+                           name.encode()[:31], 1, 8, 0, 0, 0, in_progress, 0x1234,
+                           0)   # rules: this mock host carries none
         n = 0
         while True:
             try:
@@ -392,12 +412,13 @@ def mode_beacon(args):
             continue
         if len(data) < BEACON.size:
             continue
-        magic, proto, port, host, players, maxp, gm, enforce, city, inprog, mhash, _ = BEACON.unpack_from(data, 0)
+        magic, proto, port, host, players, maxp, gm, enforce, city, inprog, mhash, rules = BEACON.unpack_from(data, 0)
         if magic != UDP_MAGIC:
             continue
         print(f"[beacon] from {addr[0]}: proto={proto} port={port} "
               f"host={cstr(host)!r} players={players}/{maxp} "
-              f"mode={gm} city={city} enforced={enforce} inProgress={inprog} modHash={mhash:#06x}")
+              f"mode={gm} ({mode_name(rules)}) city={city} ({city_name(city)}) "
+              f"enforced={enforce} inProgress={inprog} modHash={mhash:#06x} rules={rules:#04x}")
         seen += 1
     print(f"[beacon] {'PASS' if seen else 'FAIL'}: {seen} beacon(s)")
     return 0 if seen else 1

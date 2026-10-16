@@ -8,6 +8,7 @@
   "beacon_ms": 1000,
   "idle_drop_s": 30.0,
   "live": true,
+  "rules": 0,
   "log_level": "info",
   "log_file": "",
   "master": "",
