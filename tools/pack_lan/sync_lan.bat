@@ -49,39 +49,18 @@ rem The RELEASE build, not the dev one: a release pre-includes only the release
 rem modules -- carhacks + crumple + d1cars + mp (premake5.lua
 rem JERICHO_RELEASE_MODS) -- and bin\Release is what this package ships.
 rem
-rem exports.def is generated from a LINKER MAP, and the committed copy is shaped
-rem for the DEV build -- it names every mod's entry symbol. A release links only
-rem the three, so that def fails the link with LNK2001s. So: link once against a
-rem throwaway empty def (that pass is what writes the map), regenerate the def
-rem from that map, then relink. The CI workflow does the same. The committed,
-rem dev-shaped def is restored afterwards, so the repo is left as it was found.
-rem
-rem build_jericho.bat passes msbuild a RELATIVE path (build\JERICHO.vcxproj), so
-rem it must be invoked with src_rebuild as the current directory.
+rem exports.def is generated from a LINKER MAP, so the committed copy matches one
+rem configuration only. build_jericho.bat owns that: it saves the def, links,
+rem regenerates the def from the Release map, relinks, then puts the committed
+rem copy back. It hands msbuild a RELATIVE path, so src_rebuild must be the
+rem current directory when it is called.
 echo [sync_lan] building Release (this takes a few minutes)...
 pushd "%SRC%" || exit /b 1
-copy /Y "%SRC%\exports.def" "%SRC%\exports.def.keep" >nul
-> "%SRC%\exports.def" echo EXPORTS
 call "%SRC%\build_jericho.bat"
 if errorlevel 1 (
-    copy /Y "%SRC%\exports.def.keep" "%SRC%\exports.def" >nul & del "%SRC%\exports.def.keep" >nul
-    echo [sync_lan] BUILD FAILED (pass 1) - nothing was packaged
+    echo [sync_lan] BUILD FAILED - nothing was packaged
     popd & exit /b 1
 )
-"%SRC%\bin\Release\gen_exports.exe" "%SRC%\bin\Release\JERICHO.map" "%SRC%\exports.def"
-if errorlevel 1 (
-    copy /Y "%SRC%\exports.def.keep" "%SRC%\exports.def" >nul & del "%SRC%\exports.def.keep" >nul
-    echo [sync_lan] gen_exports FAILED - nothing was packaged
-    popd & exit /b 1
-)
-call "%SRC%\build_jericho.bat"
-if errorlevel 1 (
-    copy /Y "%SRC%\exports.def.keep" "%SRC%\exports.def" >nul & del "%SRC%\exports.def.keep" >nul
-    echo [sync_lan] BUILD FAILED (pass 2) - nothing was packaged
-    popd & exit /b 1
-)
-copy /Y "%SRC%\exports.def.keep" "%SRC%\exports.def" >nul
-del "%SRC%\exports.def.keep" >nul
 popd
 
 rem ------------------------------------------------------------------ 4) stamp in
