@@ -1201,6 +1201,87 @@ static int MpOnFrame(void* userdata, void* args)
 		}
 	}
 
+	/* Test lever: MP_TEST_RESPAWN=<secs> fires the pause menu's Respawn --- the
+	 * nearest-road respawn, MpRespawnOnRoad --- that many seconds in, so the
+	 * repair + clear-felony side of Respawn is checkable with no pad and no menu.
+	 * Inert unless set. */
+	{
+		static unsigned long rsAtMs = 0;
+		const char* s = getenv("MP_TEST_RESPAWN");
+
+		if (s != NULL && gMpCtx != NULL)
+		{
+			if (rsAtMs == 0 && gMp.running)
+				rsAtMs = MpNowMs() + (unsigned long)(atoi(s) * 1000);
+
+			if (rsAtMs != 0 && rsAtMs != (unsigned long)-1 && MpNowMs() >= rsAtMs)
+			{
+				MP_PLAYER* me = MpLocalPlayer();
+				int hasCar = (me != NULL && me->carId >= 0 && me->carId < MAX_CARS);
+				int injured = hasCar ? car_data[me->carId].totalDamage : -1;
+				int before = hasCar ? car_data[me->carId].felonyRating : -1;
+				int ok;
+
+				rsAtMs = (unsigned long)-1;	/* once */
+				ok = MpRespawnOnRoad();
+				gMpCtx->jer_log(gMpCtx,
+					"[mp] test: MP_TEST_RESPAWN -> returned %d; damage %d -> %d, felony %d -> %d\n",
+					ok, injured, hasCar ? car_data[me->carId].totalDamage : -1,
+					before, hasCar ? car_data[me->carId].felonyRating : -1);
+			}
+		}
+	}
+
+	/* Test lever: MP_TEST_FELONY=<value> sets the local car's felony rating, so a
+	 * respawn's clear-felony is observable (felony otherwise needs collisions to
+	 * rise, which a padless run does not cause). Inert unless set. */
+	{
+		static int felonyDone = 0;
+		const char* s = getenv("MP_TEST_FELONY");
+
+		if (s != NULL && !felonyDone && gMp.running && gMpCtx != NULL)
+		{
+			MP_PLAYER* me = MpLocalPlayer();
+
+			if (me != NULL && me->carId >= 0 && me->carId < MAX_CARS)
+			{
+				felonyDone = 1;
+				car_data[me->carId].felonyRating = atoi(s);
+				gMpCtx->jer_log(gMpCtx,
+					"[mp] test: MP_TEST_FELONY -> car felony = %d\n",
+					car_data[me->carId].felonyRating);
+			}
+		}
+	}
+
+	/* Test lever: MP_TEST_RULES=<secs> adopts the configured session rules
+	 * (mirroring MpRulesAdopt) that many seconds in, so MpSessionRulesTick's
+	 * per-frame re-assertion --- and the cops count gate it opens --- is
+	 * checkable without the host menu ever running. Inert unless set. */
+	{
+		static unsigned long rlAtMs = 0;
+		const char* s = getenv("MP_TEST_RULES");
+
+		if (s != NULL && gMpCtx != NULL)
+		{
+			if (rlAtMs == 0 && gMp.running)
+				rlAtMs = MpNowMs() + (unsigned long)(atoi(s) * 1000);
+
+			if (rlAtMs != 0 && rlAtMs != (unsigned long)-1 && MpNowMs() >= rlAtMs)
+			{
+				rlAtMs = (unsigned long)-1;	/* once */
+				gMp.ruleCops = gMp.config.cops;
+				gMp.ruleInvuln = gMp.config.invuln;
+				gMp.ruleImmune = gMp.config.immune;
+				gMp.ruleDiff = gMp.config.copDifficulty;
+				gMp.ruleSet = 1;
+				gMpCtx->jer_log(gMpCtx,
+					"[mp] test: MP_TEST_RULES -> adopted cops=%d diff=%d\n",
+					gMp.ruleCops, gMp.ruleDiff);
+			}
+		}
+	}
+
 	if (gMp.pendingLaunch)
 	{
 		gMp.pendingLaunch = 0;
