@@ -31,6 +31,8 @@ is exactly why the discovery server is placed here rather than in `JERICHO/`.
 
 * Running a 24/7 host → [`dediserver/README.md`](dediserver/README.md).
 * Operating the public listing service → [`masterserver/README.md`](masterserver/README.md).
+* **Running and testing the whole stack on one PC** →
+  [`TESTING.md`](TESTING.md) (the `local_stack.py` rig, and what it has found).
 * The game-side work still needed for internet play (registering a host and
   listing remote servers from inside the game) →
   [`docs/MASTER_SERVER.md`](../../docs/MASTER_SERVER.md).
