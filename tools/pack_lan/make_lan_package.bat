@@ -6,10 +6,9 @@ rem
 rem Ships the RELEASE build (bin\Release\JERICHO.exe): the public build, which
 rem pre-includes carhacks + crumple + d1cars + mp. It is NOT the dev build -- a dev
 rem build carries every mod and stays local. See premake5.lua JERICHO_RELEASE_MODS.rem
-rem Ships the exe, the DLLs, the game data and JERICHO -- but NOT the 1.5 GB of
-rem FMV videos, which are the bulk of the build and are not needed by the
-rem launchers (they pass -nofmv, which the game supports). Add DRIVER2\FMV to
-rem the second 7z command if someone wants the movies.
+rem Ships the exe, the DLLs and JERICHO -- but NOT DRIVER2\ (the game data),
+rem which is the player's own Driver 2 files and is not redistributed (the repo
+rem copy is placeholders). The player drops their own DRIVER2\ next to the exe.
 rem
 rem DRIVER\D1CARS IS NOT SHIPPED, and that is deliberate: it is baked out of
 rem Driver 1's copyrighted data. What IS shipped is the way to make it -- the
@@ -52,7 +51,7 @@ if exist "%ROOT%\JERICHO\MODS\d1cars\tools" (
 pushd "%EXEDIR%" || exit /b 1
 "%SEVENZ%" a -t7z -mx=5 "-xr!FMV" "%OUT%" ^
     JERICHO.exe SDL2.dll OpenAL32.dll soft_oal.dll config.ini ^
-    VERSION.txt DRIVER2 JERICHO
+    VERSION.txt JERICHO
 popd
 
 pushd "%HERE%" || exit /b 1

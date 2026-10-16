@@ -11,6 +11,7 @@
 #    CONFIG/    your module toggles and settings: modlist.ini, carhacks.ini,
 #               mp.ini, crumple.ini, config.ini. Never written.
 #    DRIVER/    your baked Driver 1 car data, if you have any. Never written.
+#    DRIVER2/   your own game data (levels, models, cutscenes). Never written.
 #    MODS/<x>/  any module you added yourself. Files are only ever overwritten,
 #               never deleted, so nothing of yours can disappear.
 #  It only ever overwrites files the release itself carries.
@@ -102,13 +103,15 @@ echo "[4/5] unpacking ..."
 mkdir -p "$TMP/x" || say_fail "could not create a temporary folder."
 tar -xzf "$TMP/$ASSET" -C "$TMP/x" || say_fail "could not unpack the release."
 
-echo "[5/5] copying over this install, leaving CONFIG/ and DRIVER/ alone ..."
+echo "[5/5] copying over this install, leaving CONFIG/, DRIVER/ and DRIVER2/ alone ..."
 # Directories first so an empty one the release carries still exists.
 ( cd "$TMP/x" && find . -type d -exec mkdir -p "$HERE/{}" \; ) \
 	|| say_fail "could not create the release's folders."
-# Every file EXCEPT the ones under the one directory that must never be written.
-copied=$( cd "$TMP/x" && find . -type f ! -path './JERICHO/CONFIG/*' | wc -l )
-( cd "$TMP/x" && find . -type f ! -path './JERICHO/CONFIG/*' -exec cp -f {} "$HERE/{}" \; ) \
+# Every file EXCEPT the ones under the directories that must never be written.
+# DRIVER/ and DRIVER2/ are absent from a release already, but the belt keeps
+# them safe if one ever ships data there again.
+copied=$( cd "$TMP/x" && find . -type f ! -path './JERICHO/CONFIG/*' ! -path './DRIVER/*' ! -path './DRIVER2/*' | wc -l )
+( cd "$TMP/x" && find . -type f ! -path './JERICHO/CONFIG/*' ! -path './DRIVER/*' ! -path './DRIVER2/*' -exec cp -f {} "$HERE/{}" \; ) \
 	|| say_fail "could not copy the release over this install."
 
 # cp -f does not carry the mode; the things you run need to stay runnable.
@@ -122,6 +125,7 @@ echo "update_jericho: done. $copied file(s) written."
 echo "  updated:  the game, JERICHO/ and its released modules"
 echo "  kept:     CONFIG/   your toggles and settings"
 echo "            DRIVER/   your baked Driver 1 car data"
+echo "            DRIVER2/  your own game data (levels, models, cutscenes)"
 echo "            any module you added under MODS/"
 echo
 echo "Note: files are overwritten, never deleted, so an old file this release no"
