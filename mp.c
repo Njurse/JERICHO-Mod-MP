@@ -940,6 +940,27 @@ static void MpSessionRulesTick(void)
 	CopsAllowed = gMp.ruleCops;
 	gCopDifficultyLevel = gMp.ruleDiff;
 
+	/* CopsAllowed alone is not enough: the arena missions (M498..M505) ship
+	 * cops.max == 0, so LoadMission set maxCopCars = 0 and ControlNumberOfCops
+	 * clamps the wanted count to it — CopsAllowed = 1 with maxCopCars = 0 still
+	 * pings nothing. The police model already sits in resident slot 3
+	 * (residentModels[3] == 0, the siren), so only the count gate needs
+	 * overriding: re-assert the pursuit budget the way mission.c:699-725 would
+	 * for a mission that carries cops. gDontPingInCops = 0 because nothing places
+	 * cops in an arena — they must ping in on their own. */
+	if (gMp.ruleCops)
+	{
+		maxCopCars = 4;
+		gMinimumCops = 0;
+		gDontPingInCops = 0;
+	}
+	else
+	{
+		maxCopCars = 0;
+		gMinimumCops = 0;
+		gDontPingInCops = 1;
+	}
+
 	/* The two invincibility flags are a FLOOR, not an override. A rule that turns
 	 * one ON grants it to everyone and cannot be switched off locally; a rule that
 	 * leaves it OFF leaves each player's own pause-menu switch in charge. Forcing
@@ -961,9 +982,9 @@ static void MpSessionRulesTick(void)
 
 		if (gMpCtx != NULL)
 			gMpCtx->jer_log(gMpCtx,
-				"[mp] session rules IN FORCE: rules cops=%d diff=%d immune=%d invuln=%d -> CopsAllowed=%d gCopDifficultyLevel=%d gPlayerImmune=%d gInvincibleCar=%d\n",
+				"[mp] session rules IN FORCE: rules cops=%d diff=%d immune=%d invuln=%d -> CopsAllowed=%d maxCopCars=%d gDontPingInCops=%d gCopDifficultyLevel=%d gPlayerImmune=%d gInvincibleCar=%d\n",
 				gMp.ruleCops, gMp.ruleDiff, gMp.ruleImmune, gMp.ruleInvuln,
-				CopsAllowed, gCopDifficultyLevel, gPlayerImmune, gInvincibleCar);
+				CopsAllowed, maxCopCars, gDontPingInCops, gCopDifficultyLevel, gPlayerImmune, gInvincibleCar);
 	}
 }
 
