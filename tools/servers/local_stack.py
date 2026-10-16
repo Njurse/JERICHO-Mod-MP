@@ -185,7 +185,7 @@ def run_browser(args, run_root, master_url):
     log(f"screenshot: {png}" if rc == 0 else f"FAIL: mpshots.py grab exited {rc}")
 
     text = lp.read_log(run_dir) or ""
-    for pat in ("frontend:", "discovery server", "online table drawn", "opening menu"):
+    for pat in ("frontend:", "discovery server", "online table drawn", "online ping", "opening menu"):
         for line in tail(text, (pat,), 3):
             log("  seat: " + line.strip())
 

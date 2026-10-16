@@ -2536,6 +2536,10 @@ static char gOnlineError[96];
 static char gOnlineUrl[160];		/* what the config said, for the log */
 static char gOnlineHostHdr[160];	/* host:port, for the request's Host: */
 
+/* Defined with the ping probe below, and used by the parse (a new list invalidates
+ * every measurement) and by MpOnlineReset. */
+static void MpOnlinePingReset(void);
+
 /* --- a fixed-subset JSON reader ------------------------------------ */
 
 static const char* MpJsonSkipWs(const char* p, const char* end)
@@ -2717,6 +2721,10 @@ static int MpOnlineParse(const char* body)
 
 	memcpy(gOnline, tmp, (size_t)count * sizeof(tmp[0]));
 
+	/* a new list means new addresses: every measurement is now about a row that
+	 * no longer exists, so the probes start again */
+	MpOnlinePingReset();
+
 	/* the ROW COUNT is what a menu has to rebuild for; the values inside a row
 	 * are read live by the draw, so they need no revision of their own */
 	if (count != gOnlineCount)
@@ -2749,6 +2757,7 @@ static void MpOnlineFail(const char* why)
 void MpOnlineReset(void)
 {
 	MpOnlineClose();
+	MpOnlinePingReset();
 	gOnlineState = MP_ONLINE_OFF;
 	gOnlineError[0] = '\0';
 	gOnlineUrl[0] = '\0';
@@ -2877,6 +2886,131 @@ void MpOnlineSetMaster(const char* url)
 	MpOnlineRefresh();
 }
 
+/* --- the ping probe --------------------------------------------------
+ * One row at a time, a non-blocking connect whose COMPLETION TIME is the
+ * measurement. A connect is a single round trip, which is what a player wants to
+ * know before committing to a join, and it needs nothing from the peer -- no
+ * protocol, and no cooperation from a master we do not run.
+ *
+ * The host a master reports is the peer's own address, so it is an IP literal in
+ * practice, and MpResolveHost has an IPv4 fast path that never reaches the
+ * resolver for one. A NAME would block, which is why the queue is drained here
+ * (from the fetch's own arrival) rather than anywhere more time-critical.
+ *
+ * A row that cannot be measured keeps MP_ONLINE_PING_UNSET and the browser shows
+ * a dash: "no measurement" and "a slow server" must not look the same.
+ *
+ * The reading is quantised by the FRAME -- the connect is started one frame and
+ * noticed one or more frames later -- so a round trip shorter than a frame
+ * reports as one frame (~16 ms at 60 fps) and a loopback server reads ~30. That
+ * is the honest resolution of this method, and it is enough to separate "near"
+ * from "far", which is what the column is for. */
+#define MP_ONLINE_PING_TIMEOUT_MS	1200
+
+static SOCKET gOnlinePingSock = INVALID_SOCKET;
+static int  gOnlinePingIndex = -1;	/* the row being probed, -1 = idle */
+static int  gOnlinePingNext;		/* the next row to probe */
+static unsigned long gOnlinePingStartMs;
+
+static void MpOnlinePingReset(void)
+{
+	MpCloseSock(&gOnlinePingSock);
+
+	gOnlinePingIndex = -1;
+	gOnlinePingNext = 0;
+}
+
+static void MpOnlinePingStart(int index)
+{
+	struct sockaddr_in addr;
+	SOCKET s;
+
+	/* A LITERAL that does not parse is not a name to look up: the master already
+	 * told us the address, so a failure here is a failure of that address. */
+	if (!MpResolveHost(gOnline[index].host, gOnline[index].port, &addr))
+		return;
+
+	s = socket(AF_INET, SOCK_STREAM, 0);
+
+	if (s == INVALID_SOCKET)
+		return;
+
+	MpSetNonBlocking(s, 1);
+	connect(s, (struct sockaddr*)&addr, sizeof(addr));	/* never blocks */
+
+	gOnlinePingSock = s;
+	gOnlinePingIndex = index;
+	gOnlinePingStartMs = MpNowMs();
+}
+
+static void MpOnlinePingPoll(void)
+{
+	fd_set wfds, efds;
+	struct timeval tv;
+	int err = 0;
+#ifdef _WIN32
+	int elen = (int)sizeof(err);
+#else
+	socklen_t elen = sizeof(err);
+#endif
+
+	if (gOnlinePingIndex >= 0)
+	{
+		if (gOnlinePingSock == INVALID_SOCKET)
+		{
+			gOnlinePingIndex = -1;
+			return;
+		}
+
+		FD_ZERO(&wfds);
+		FD_SET(gOnlinePingSock, &wfds);
+		FD_ZERO(&efds);
+		FD_SET(gOnlinePingSock, &efds);
+		tv.tv_sec = 0;
+		tv.tv_usec = 0;
+
+		if (select((int)gOnlinePingSock + 1, NULL, &wfds, &efds, &tv) <= 0)
+		{
+			if (MpElapsedMs(MpNowMs(), gOnlinePingStartMs) > (unsigned long)MP_ONLINE_PING_TIMEOUT_MS)
+			{
+				MpCloseSock(&gOnlinePingSock);
+				gOnlinePingIndex = -1;
+			}
+
+			return;			/* still connecting */
+		}
+
+		if (getsockopt(gOnlinePingSock, SOL_SOCKET, SO_ERROR, (char*)&err, &elen) == 0 && err == 0)
+		{
+			gOnline[gOnlinePingIndex].pingMs = (int)MpElapsedMs(MpNowMs(), gOnlinePingStartMs);
+
+			if (MpDebugOn() && gMpCtx != NULL)
+				gMpCtx->jer_log(gMpCtx, "[mp] online ping: row %d %s:%d = %d ms\n",
+					gOnlinePingIndex, gOnline[gOnlinePingIndex].host,
+					gOnline[gOnlinePingIndex].port, gOnline[gOnlinePingIndex].pingMs);
+		}
+
+		MpCloseSock(&gOnlinePingSock);
+		gOnlinePingIndex = -1;
+
+		return;				/* one measurement per frame */
+	}
+
+	/* idle: take the next row nobody has measured yet */
+	while (gOnlinePingNext >= 0 && gOnlinePingNext < gOnlineCount)
+	{
+		int i = gOnlinePingNext++;
+
+		if (gOnline[i].pingMs == MP_ONLINE_PING_UNSET)
+		{
+			MpOnlinePingStart(i);
+			return;
+		}
+	}
+
+	gOnlinePingNext = -1;			/* the queue is drained */
+}
+
 void MpOnlinePoll(void)
 {
 	fd_set wfds, efds;
@@ -2888,6 +3022,11 @@ void MpOnlinePoll(void)
 #else
 	socklen_t elen = sizeof(err);
 #endif
+
+	/* The ping queue advances whenever the list is real, whether or not a menu is
+	 * looking at it: the numbers are only worth having if they are already there
+	 * when the screen opens. It drains itself and then does nothing. */
+	MpOnlinePingPoll();
 
 	if (gOnlineState != MP_ONLINE_CONNECTING && gOnlineState != MP_ONLINE_READING)
 		return;

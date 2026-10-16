@@ -58,7 +58,10 @@ table is painted from `JER_EVENT_FRONTEND_DRAW` with `jer_text.h` and
 engine draws the screen and the menu box lands on top of anything drawn there.
 The mode and city names come from the host's own rules (`MpModeName`) and the
 engine's city registry (`MpCityLabel`), and `PING` shows `-` until a probe
-answers.
+answers. The probe is a non-blocking CONNECT whose completion time is the
+measurement, so it resolves per frame: a loopback server reads ~30 ms rather than
+<1 ms. It separates near from far, which is what the column is for, and it needs
+no protocol and no cooperation from the host.
 
 There is deliberately **no mp screen for the city, time of day or weather**: those are
 the engine's own screens, and `MpStartMatch` seeds the session from what the host

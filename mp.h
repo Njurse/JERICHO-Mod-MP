@@ -367,6 +367,8 @@ int        MpDiscoveryRevision(void);	/* changes when the visible server set doe
  * MpOnlineSetMaster resolves the name, and getaddrinfo BLOCKS, so call it from a
  * menu press or a config change -- never from the frame poll. */
 #define MP_ONLINE_MAX	32		/* rows the master's reply is trimmed to */
+#define MP_ONLINE_PING_UNSET	0	/* a row nobody has measured (the browser shows a
+					 * dash: "not measured" must not look like "fast") */
 
 enum
 {
