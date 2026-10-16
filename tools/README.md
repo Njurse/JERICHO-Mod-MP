@@ -21,6 +21,7 @@ launchers they ship, and its own README explaining which to use.
 | join, by hand, two machines | `mp_join.bat` |
 | drive the real game as a client with no second machine | `mp_mock_host.bat` |
 | leave a session running with no game window | `mp_dedi.bat` |
+| let internet clients find a server | [`servers/masterserver/`](servers/masterserver/README.md) — a **separate project**, see [`servers/README.md`](servers/README.md) |
 | answer "is this build shippable?" in one command | **`run_gate.py`** |
 
 ## The delivery gate — `run_gate.py`
@@ -119,6 +120,25 @@ server can be left up while the client side restarts. It logs joins and leaves,
 which is the fastest way to tell a client that never connected from one that
 connected and was then dropped. Ctrl-C stops it.
 
+It is now a thin wrapper around [`servers/dediserver/`](servers/dediserver/README.md),
+which is pure Python and needs no game build: JSON config (`dediserver.json`), CLI
+overrides, levelled file logging, and `--master <url>` to register with the
+discovery server so internet clients can find it. **That README has the ports to
+open** for LAN, direct internet join, and master listing.
+
+## The server kit — `servers/`
+
+| Path | What it is |
+| --- | --- |
+| `servers/dediserver/` | the dedicated server (`mp_dedi.bat` wraps it) + `dediserver.json` + its README |
+| `servers/masterserver/` | the **master discovery service** — a separate project, not part of the mod (see `servers/README.md`) |
+| `servers/proto_check.py` | fails if the `mp_test.py` wire mirror has drifted from `mp_proto.h` |
+| `servers/test_e2e.py` | master + dedi + client end-to-end on loopback, no game needed |
+
+`tools/` is never mirrored into a build, so nothing here can ride along in a mod
+package by accident; `servers/README.md` explains why that matters for the master
+server in particular.
+
 ## The Python underneath
 
 | File | What it is |
@@ -138,8 +158,9 @@ connected and was then dropped. Ctrl-C stops it.
 nothing after the handshake drops itself at its idle timeout. The mock used to close
 0.5 s after `WELCOME` and the dedi never replied to `PING`, so both looked like
 instant drops. The wire format lives in `mp_test.py` -- when `mp_proto.h` changes,
-update it there (e.g. `WELCOME` is `<12BIB`, 12xu8 + u32 seed + u8 hostCar; a
-`<13BI` there crashes both simulated hosts). That includes *removals*: a retired tag
+update it there (e.g. `WELCOME` is `<12BIBB`, 12xu8 + u32 seed + u8 hostCar + u8
+rules -- v11 added `rules`, and `servers/proto_check.py` fails if this drifts from
+`mp_proto.h`). That includes *removals*: a retired tag
 is dropped from `TAG` too, so the mirror never advertises a tag the code does not have
 (it no longer carries `JPSS`).
 

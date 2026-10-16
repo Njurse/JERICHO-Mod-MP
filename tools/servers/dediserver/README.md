@@ -75,7 +75,7 @@ built-in defaults are used.
   connection to the master, so no inbound port for that. See
   [`../masterserver/README.md`](../masterserver/README.md). (Listing a server on
   the internet is a game-side feature still to come — see
-  [`docs/MASTER_SERVER.md`](../../docs/MASTER_SERVER.md).)
+  [`docs/MASTER_SERVER.md`](../../../docs/MASTER_SERVER.md).)
 
 ## Running it for a long time
 

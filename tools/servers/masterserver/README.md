@@ -24,7 +24,7 @@
 It is deliberately **additive**: it does not touch the mp binary wire protocol
 (`mp_proto.h`) at all. The game's LAN discovery keeps working exactly as before;
 this is the internet listing on top. See
-[`docs/MASTER_SERVER.md`](../../docs/MASTER_SERVER.md) for the game-side work this
+[`docs/MASTER_SERVER.md`](../../../docs/MASTER_SERVER.md) for the game-side work this
 will eventually need.
 
 ## Run it
