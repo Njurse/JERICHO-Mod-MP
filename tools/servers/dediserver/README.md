@@ -26,7 +26,7 @@ Then join it from anywhere:
 --beacon / --no-beacon
 --beacon-ms N        beacon cadence (default 1000)
 --idle-drop S        seconds of real silence that drop a client (0 = never)
---log-level debug|info|warning
+--log-level debug|info|warning|error
 --log-file FILE      also append logs to FILE
 --master URL         register with a master discovery service, e.g. http://host:8100
 --master-name "..."  name to register (default: --name)

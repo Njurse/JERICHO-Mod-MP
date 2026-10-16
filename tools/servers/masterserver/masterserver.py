@@ -95,7 +95,10 @@ class Entry:
     def __init__(self, **kw):
         for k in self.__slots__:
             setattr(self, k, kw.get(k))
-        self.last_seen = time.time()
+        # Keep a persisted last_seen (reload) instead of stamping "now", or every
+        # entry reloaded from disk would look freshly heartbeated and never expire.
+        saved = kw.get("last_seen")
+        self.last_seen = float(saved) if saved else time.time()
 
     def age(self, now=None):
         return (time.time() if now is None else now) - self.last_seen
@@ -129,6 +132,7 @@ class Registry:
         self.cfg = cfg
         self.log = log
         self.lock = threading.Lock()
+        self.save_lock = threading.Lock()
         self.by_key = {}      # (host, port) -> Entry
         self.by_token = {}    # token -> (host, port)
         self.started = time.time()
@@ -142,14 +146,19 @@ class Registry:
     def _save(self):
         if not self.persist_path:
             return
-        try:
+        # Snapshot under the registry lock (the sweeper may be mutating by_key),
+        # then serialise the write so two savers cannot collide on the temp file.
+        with self.lock:
             data = [e.persist() for e in self.by_key.values()]
-            tmp = self.persist_path + ".tmp"
-            with open(tmp, "w", encoding="utf-8") as f:
-                json.dump({"version": API_VERSION, "entries": data}, f)
-            os.replace(tmp, self.persist_path)
-        except OSError as e:
-            self.log.warning("could not persist registry: %s" % e)
+        blob = json.dumps({"version": API_VERSION, "entries": data})
+        with self.save_lock:
+            try:
+                tmp = "%s.%d.tmp" % (self.persist_path, threading.get_ident())
+                with open(tmp, "w", encoding="utf-8") as f:
+                    f.write(blob)
+                os.replace(tmp, self.persist_path)
+            except OSError as e:
+                self.log.warning("could not persist registry: %s" % e)
 
     def _load(self):
         if not os.path.exists(self.persist_path):
@@ -267,7 +276,11 @@ class Handler(BaseHTTPRequestHandler):
         cap = int(self.cfg.get("max_body_bytes", 4096))
         try:
             n = int(self.headers.get("Content-Length", "0"))
-        except ValueError:
+        except (ValueError, TypeError):
+            return None, "bad_length"
+        # A negative length is not a small body: read(-1) would block until EOF and
+        # buffer without bound, so refuse it here.
+        if n < 0:
             return None, "bad_length"
         if n > cap:
             return None, "too_large"
@@ -307,9 +320,9 @@ class Handler(BaseHTTPRequestHandler):
         # Everything is listed by default -- a live match must not be hidden from a
         # client that did not ask for anything special. The filters are opt-in
         # EXCLUSIONS: ?exclude_full=1 / ?exclude_inprogress=1.
-        if q.get("exclude_full"):
+        if _flag(q, "exclude_full"):
             rows = [r for r in rows if r["players"] < r["maxPlayers"]]
-        if q.get("exclude_inprogress"):
+        if _flag(q, "exclude_inprogress"):
             rows = [r for r in rows if not r["inProgress"]]
         rows.sort(key=lambda r: r["ageSeconds"])
         if "limit" in q:
@@ -436,6 +449,16 @@ def _clamp(v, lo, hi):
         return max(lo, min(hi, int(v)))
     except (TypeError, ValueError):
         return lo
+
+
+def _flag(query, name):
+    """A boolean query flag: present and not an explicit false-ish value.
+
+    `?exclude_full=0` must NOT exclude -- a bare truthiness test on the parsed
+    value would treat the non-empty list ['0'] as true.
+    """
+    v = query.get(name)
+    return bool(v) and v[0].strip().lower() not in ("", "0", "false", "no", "off")
 
 
 # ---------------------------------------------------------------------- config

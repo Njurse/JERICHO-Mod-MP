@@ -17,6 +17,7 @@ import os
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -76,6 +77,74 @@ def wait_up(base, timeout=10):
             pass
         time.sleep(0.2)
     return False
+
+
+def start_master(port, persist=None):
+    cmd = [sys.executable, SERVER, "--bind", "127.0.0.1", "--port", str(port),
+           "--ttl", str(TTL), "--sweep", "1", "--log-level", "warning"]
+    if persist:
+        cmd += ["--persist", persist]
+    return subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def stop(proc):
+    if proc is None or proc.poll() is not None:
+        return
+    proc.terminate()
+    try:
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+
+
+def raw_request(port, request_bytes, timeout=3):
+    """Send a hand-written request over a raw socket (urllib cannot set a bad header)."""
+    s = socket.create_connection(("127.0.0.1", port), timeout=timeout)
+    try:
+        s.sendall(request_bytes)
+        return s.recv(4096)
+    except OSError:
+        return b""
+    finally:
+        s.close()
+
+
+def check_persistence():
+    """A registered host survives a master restart, and a reloaded entry that has
+    aged past the TTL expires rather than looking freshly heartbeated."""
+    port = free_port()
+    base = "http://127.0.0.1:%d" % port
+    pfile = os.path.join(tempfile.gettempdir(), "mp_masterserver_test_%d.json" % port)
+    if os.path.exists(pfile):
+        os.remove(pfile)
+
+    proc = start_master(port, persist=pfile)
+    try:
+        if not wait_up(base):
+            check("persistence: master starts", False, "no health response")
+            return
+        call(base, "/v1/register", {"name": "Persist", "port": 1318})
+    finally:
+        stop(proc)
+    check("persistence: the registry is written to disk", os.path.exists(pfile))
+
+    proc = start_master(port, persist=pfile)
+    try:
+        ok = wait_up(base)
+        st, body = call(base, "/v1/servers") if ok else (0, {})
+        check("persistence: the host is reloaded after a restart",
+              ok and body.get("count") == 1, json.dumps(body))
+        print("       waiting %.1fs for the reloaded entry to age out..." % SLEEP)
+        time.sleep(SLEEP)
+        st, body = call(base, "/v1/servers")
+        check("persistence: a reloaded entry expires (its last_seen is kept)",
+              body.get("count") == 0, json.dumps(body))
+    finally:
+        stop(proc)
+        try:
+            os.remove(pfile)
+        except OSError:
+            pass
 
 
 def main():
@@ -176,12 +245,31 @@ def main():
         check("both hosts are listed", body["count"] == 2, json.dumps(body))
         call(base, "/v1/unregister", {"token": dns["token"]})
 
+        # -- the exclude flags are opt-in exclusions, and their VALUE matters
+        st, full = call(base, "/v1/register", {"name": "Full", "port": 5000,
+                                               "players": 8, "maxPlayers": 8})
+        st, body = call(base, "/v1/servers")
+        check("a full server is listed by default", body["count"] == 2, json.dumps(body))
+        st, body = call(base, "/v1/servers?exclude_full=1")
+        check("exclude_full=1 hides a full server", body["count"] == 1, json.dumps(body))
+        st, body = call(base, "/v1/servers?exclude_full=0")
+        check("exclude_full=0 does NOT hide a full server", body["count"] == 2, json.dumps(body))
+        call(base, "/v1/unregister", {"token": full["token"]})
+
+        # -- a hand-written request with a negative Content-Length is refused
+        #    (int('-1') is not > cap, and read(-1) would block and buffer)
+        resp = raw_request(port, b"POST /v1/register HTTP/1.1\r\nHost: x\r\n"
+                                 b"Content-Length: -1\r\n\r\n")
+        check("negative Content-Length -> 400", b" 400 " in resp, repr(resp[:60]))
+
     finally:
         proc.terminate()
         try:
             proc.wait(timeout=5)
         except subprocess.TimeoutExpired:
             proc.kill()
+
+    check_persistence()
 
     print()
     if failures:

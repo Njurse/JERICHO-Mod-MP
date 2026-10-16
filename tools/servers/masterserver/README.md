@@ -193,7 +193,7 @@ a browser. Not an API — it links to `/v1/servers`.
 | `max_entries` | `512` | cap on registered hosts |
 | `max_body_bytes` | `4096` | request body cap (larger → 413) |
 | `persist_path` | `""` | JSON file to persist the registry ("" = off) |
-| `log_level` | `info` | `debug` / `info` / `warning` |
+| `log_level` | `info` | `debug` / `info` / `warning` / `error` |
 | `log_file` | `""` | append logs here as well as stdout ("" = stdout only) |
 | `public_url` | `""` | shown on the `GET /` page, e.g. the DNS name clients use |
 

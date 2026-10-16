@@ -223,62 +223,79 @@ class Dedicated:
         conn.settimeout(1.0)
         silent = 0
         idle_drop = float(self.cfg["idle_drop_s"])
+        info = None
 
-        while not self.stop.is_set():
-            try:
-                tag, payload = m.recv_frame(conn)
-            except socket.timeout:
-                silent += 1
-                # Send our own keepalive PING and only give the client up after
-                # `idle_drop_s` of real silence. Without this a quiet client (a
-                # lobby, a load) would be dropped by our own timeout.
-                if idle_drop and silent >= idle_drop:
-                    self.log.warning("player %d '%s' timed out (%.0fs silent)" % (pid, name, idle_drop))
-                    break
-                try:
-                    m.send_frame(conn, m.TAG["ping"],
-                                 struct.pack("<I", int(time.time() * 1000) & 0xFFFFFFFF))
-                except OSError:
-                    break
-                continue
-            except Exception:
-                break
-            if tag is None:
-                break
-            silent = 0
-
-            if tag == m.TAG["carstate"]:
-                with self.lock:
-                    _f, count, _a, _b, _c = m.CARSTATE.unpack_from(payload, 0)
-                    for i in range(count):
-                        off = m.CARSTATE.size + i * m.CARSTATE_ENTRY.size
-                        e = payload[off:off + m.CARSTATE_ENTRY.size]
-                        if len(e) == m.CARSTATE_ENTRY.size:
-                            self.cars[e[0]] = e
-                self.broadcast(self.carstate_union(int(time.time() * 30)), m.TAG["carstate"], skip=conn)
-            elif tag == m.TAG["chat"]:
-                self.broadcast(payload, m.TAG["chat"], skip=conn)
-            elif tag == m.TAG["ping"]:
-                # Liveness. Echo the tick; with no PONG the client's last-receive
-                # clock stops advancing and it drops itself at its idle timeout.
-                try:
-                    m.send_frame(conn, m.TAG["pong"], payload or b"\x00\x00\x00\x00")
-                except OSError:
-                    break
-            elif tag == m.TAG["leave"]:
-                break
-
-        with self.lock:
-            info = self.clients.pop(conn, None)
-            if info:
-                self.cars.pop(info["id"], None)
-        if info:
-            self.log.info("player %d '%s' left (%d/%d)"
-                          % (info["id"], info["name"], self.player_count(), self.max_players))
+        # The whole loop is wrapped so the cleanup below ALWAYS runs: a malformed
+        # frame (a bad CARSTATE header) must not unwind the thread and strand the
+        # socket open with its slot still taken.
         try:
-            conn.close()
-        except OSError:
-            pass
+            while not self.stop.is_set():
+                try:
+                    tag, payload = m.recv_frame(conn)
+                except socket.timeout:
+                    silent += 1
+                    # Send our own keepalive PING and only give the client up after
+                    # `idle_drop_s` of real silence. Without this a quiet client (a
+                    # lobby, a load) would be dropped by our own timeout.
+                    if idle_drop and silent >= idle_drop:
+                        self.log.warning("player %d '%s' timed out (%.0fs silent)"
+                                         % (pid, name, idle_drop))
+                        break
+                    try:
+                        m.send_frame(conn, m.TAG["ping"],
+                                     struct.pack("<I", int(time.time() * 1000) & 0xFFFFFFFF))
+                    except OSError:
+                        break
+                    continue
+                except Exception:
+                    break
+                if tag is None:
+                    break
+                silent = 0
+
+                if tag == m.TAG["carstate"]:
+                    try:
+                        with self.lock:
+                            _f, count, _a, _b, _c = m.CARSTATE.unpack_from(payload, 0)
+                            # bound the loop by what actually arrived: a bogus count
+                            # must not spin, and a short frame must not read past it
+                            avail = (len(payload) - m.CARSTATE.size) // m.CARSTATE_ENTRY.size
+                            for i in range(min(count, max(0, avail))):
+                                off = m.CARSTATE.size + i * m.CARSTATE_ENTRY.size
+                                e = payload[off:off + m.CARSTATE_ENTRY.size]
+                                if len(e) == m.CARSTATE_ENTRY.size:
+                                    self.cars[e[0]] = e
+                    except Exception:
+                        # a malformed frame is this connection's problem, not the
+                        # server's: skip it and keep serving
+                        self.log.debug("player %d '%s': ignoring a malformed carstate frame"
+                                       % (pid, name))
+                        continue
+                    self.broadcast(self.carstate_union(int(time.time() * 30)),
+                                   m.TAG["carstate"], skip=conn)
+                elif tag == m.TAG["chat"]:
+                    self.broadcast(payload, m.TAG["chat"], skip=conn)
+                elif tag == m.TAG["ping"]:
+                    # Liveness. Echo the tick; with no PONG the client's last-receive
+                    # clock stops advancing and it drops itself at its idle timeout.
+                    try:
+                        m.send_frame(conn, m.TAG["pong"], payload or b"\x00\x00\x00\x00")
+                    except OSError:
+                        break
+                elif tag == m.TAG["leave"]:
+                    break
+        finally:
+            with self.lock:
+                info = self.clients.pop(conn, None)
+                if info:
+                    self.cars.pop(info["id"], None)
+            if info:
+                self.log.info("player %d '%s' left (%d/%d)"
+                              % (info["id"], info["name"], self.player_count(), self.max_players))
+            try:
+                conn.close()
+            except OSError:
+                pass
 
     def _welcome(self, pid, running, seed=0):
         # 15 values: playerId, maxPlayers, modsEnforced, modsMatched, running,
