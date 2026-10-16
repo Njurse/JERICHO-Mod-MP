@@ -1,0 +1,12 @@
+{
+  "bind": "0.0.0.0",
+  "port": 8100,
+  "ttl_s": 60,
+  "sweep_s": 5,
+  "max_entries": 512,
+  "max_body_bytes": 4096,
+  "persist_path": "",
+  "log_level": "info",
+  "log_file": "",
+  "public_url": ""
+}
