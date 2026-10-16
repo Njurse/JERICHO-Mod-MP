@@ -11,6 +11,9 @@ rem
 rem  WHAT IT WILL NOT TOUCH
 rem    CONFIG\   your module toggles and settings: modlist.ini, carhacks.ini,
 rem              mp.ini, crumple.ini, config.ini. Never written.
+rem    config.ini  your window size and fullscreen settings. This is the one at the
+rem              install root (the release ships a default), NOT CONFIG\config.ini.
+rem              Never written.
 rem    DRIVER\   your baked Driver 1 car data, if you have any. Never written.
 rem    DRIVER2\  your own game data (levels, models, cutscenes). Never written.
 rem    MODS\<x>\ any module you added yourself. Files are only ever overwritten,
@@ -120,9 +123,13 @@ rem the /XD belt keeps them safe if one ever ships data there again.
 set "KEEPCONFIG=%TMP%\x\JERICHO\CONFIG"
 set "KEEPDRIVER=%TMP%\x\DRIVER"
 set "KEEPDRIVER2=%TMP%\x\DRIVER2"
+rem The ROOT config.ini holds the player's own window size and fullscreen, and the
+rem release carries a default one (from data\). /XF names that one file; CONFIG\
+rem is already kept whole above, so nothing else called config.ini is affected.
+set "KEEPINISRC=%TMP%\x\config.ini"
 
-echo [5/5] copying over this install, leaving CONFIG\, DRIVER\ and DRIVER2\ alone ...
-robocopy "%TMP%\x" "%CD%" /E /XD "%KEEPCONFIG%" "%KEEPDRIVER%" "%KEEPDRIVER2%" /NP /NFL /NDL /NJH /NJS /R:1 /W:1
+echo [5/5] copying over this install, leaving CONFIG\, config.ini, DRIVER\ and DRIVER2\ alone ...
+robocopy "%TMP%\x" "%CD%" /E /XD "%KEEPCONFIG%" "%KEEPDRIVER%" "%KEEPDRIVER2%" /XF "%KEEPINISRC%" /NP /NFL /NDL /NJH /NJS /R:1 /W:1
 rem robocopy reports 0..7 for success and 8+ for a real failure.
 if errorlevel 8 (
 	echo   FAILED: robocopy could not finish. Some files were NOT updated.
@@ -133,6 +140,7 @@ echo.
 echo update_jericho: done.
 echo   updated:  the game, JERICHO\ and its released modules
 echo   kept:     CONFIG\  (your toggles and settings)
+echo             config.ini  (your window size and fullscreen)
 echo             DRIVER\  (your baked Driver 1 car data)
 echo             any module you added under MODS\
 echo.
