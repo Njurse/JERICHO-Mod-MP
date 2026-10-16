@@ -947,11 +947,14 @@ static void MpSessionRulesTick(void)
 	 * (residentModels[3] == 0, the siren), so only the count gate needs
 	 * overriding: re-assert the pursuit budget the way mission.c:699-725 would
 	 * for a mission that carries cops. gDontPingInCops = 0 because nothing places
-	 * cops in an arena — they must ping in on their own. */
+	 * cops in an arena — they must ping in on their own. gMinimumCops = 1 for the same
+	 * reason mission.c now floors an mp map at one: RegisterFelony returns early unless a
+	 * cop can SEE the player, so with no cop on the ground there is no way for the chase
+	 * that raises the felony to begin - the cops would never appear at all. */
 	if (gMp.ruleCops)
 	{
 		maxCopCars = 4;
-		gMinimumCops = 0;
+		gMinimumCops = 1;
 		gDontPingInCops = 0;
 	}
 	else
