@@ -13,7 +13,8 @@ rem    CONFIG\   your module toggles and settings: modlist.ini, carhacks.ini,
 rem              mp.ini, crumple.ini, config.ini. Never written.
 rem    config.ini  your window size and fullscreen settings. This is the one at the
 rem              install root (the release ships a default), NOT CONFIG\config.ini.
-rem              Never written.
+rem              Never replaced: a key the release adds that yours lacks is appended,
+rem              and every value you already have is left alone.
 rem    DRIVER\   your baked Driver 1 car data, if you have any. Never written.
 rem    DRIVER2\  your own game data (levels, models, cutscenes). Never written.
 rem    MODS\<x>\ any module you added yourself. Files are only ever overwritten,
@@ -136,11 +137,20 @@ if errorlevel 8 (
 	goto :fail
 )
 
+rem config.ini was not copied, so you keep every value you set. But the release may carry a
+rem key yours has never seen, so add just those, under their sections. merge_config.ps1 ships
+rem with the release (unpacked into %TMP%\x) and this is best-effort: a release too old to
+rem carry it simply skips the step. The game's ini reader takes the FIRST match for a
+rem section+key, so nothing appended here can override a value of yours.
+set "JERICHO_CFG_REL=%TMP%\x\config.ini"
+set "JERICHO_CFG_USR=%CD%\config.ini"
+if exist "%TMP%\x\merge_config.ps1" powershell -NoProfile -ExecutionPolicy Bypass -File "%TMP%\x\merge_config.ps1" >nul 2>nul
+
 echo.
 echo update_jericho: done.
 echo   updated:  the game, JERICHO\ and its released modules
 echo   kept:     CONFIG\  (your toggles and settings)
-echo             config.ini  (your window size and fullscreen)
+echo             config.ini  your window size and fullscreen (new keys added, yours kept)
 echo             DRIVER\  (your baked Driver 1 car data)
 echo             any module you added under MODS\
 echo.

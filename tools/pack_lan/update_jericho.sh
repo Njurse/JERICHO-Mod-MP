@@ -12,7 +12,8 @@
 #               mp.ini, crumple.ini, config.ini. Never written.
 #    config.ini your window size and fullscreen settings. This is the one at the
 #               install root (the release ships a default), NOT CONFIG/config.ini.
-#               Never written.
+#               Never replaced: a key the release adds that yours lacks is appended,
+#               and every value you already have is left alone.
 #    DRIVER/    your baked Driver 1 car data, if you have any. Never written.
 #    DRIVER2/   your own game data (levels, models, cutscenes). Never written.
 #    MODS/<x>/  any module you added yourself. Files are only ever overwritten,
@@ -120,6 +121,49 @@ copied=$( cd "$TMP/x" && find . -type f ! -path './JERICHO/CONFIG/*' ! -path './
 ( cd "$TMP/x" && find . -type f ! -path './JERICHO/CONFIG/*' ! -path './DRIVER/*' ! -path './DRIVER2/*' ! -path './config.ini' -exec cp -f {} "$HERE/{}" \; ) \
 	|| say_fail "could not copy the release over this install."
 
+# config.ini is never REPLACED - it holds your window size, fullscreen, binds and options -
+# but a release may carry a key yours has never seen, so add just those and leave everything
+# you already have alone. Your value always wins: the game's ini reader (utils/ini.c)
+# returns the FIRST match for a section+key, so a duplicate could not override one of yours.
+merge_config_keys() {
+	rel="$TMP/x/config.ini"
+	usr="$HERE/config.ini"
+
+	[ -f "$rel" ] || return 0
+
+	if [ ! -f "$usr" ]; then
+		cp -f "$rel" "$usr"
+		return 0
+	fi
+
+	awk '
+		function skey(l) { sub(/[ \t]*=.*/, "", l); gsub(/[ \t\r]/, "", l); return tolower(l) }
+		function sect(l) { sub(/[ \t\r].*$/, "", l); return l }
+		FNR == NR {				# $1 = the release, as the template
+			if ($0 ~ /^[ \t]*\[/) s = sect($0)
+			else if ($0 ~ /^[ \t]*[A-Za-z_][A-Za-z0-9_]*[ \t]*=/) {
+				n++; tk[n] = s "|" skey($0); tl[n] = $0
+			}
+			next
+		}
+		{					# $2 = your file, echoed through unchanged
+			if ($0 ~ /^[ \t]*\[/) s = sect($0)
+			else if ($0 ~ /^[ \t]*[A-Za-z_][A-Za-z0-9_]*[ \t]*=/) have[s "|" skey($0)] = 1
+			print
+		}
+		END {
+			for (i = 1; i <= n; i++) {
+				if (tk[i] in have) continue
+				have[tk[i]] = 1
+				split(tk[i], a, "|")
+				if (a[1] != opened) { opened = a[1]; print ""; print opened }
+				print tl[i]
+			}
+		}
+	' "$rel" "$usr" > "$usr.jericho-merge" && mv -f "$usr.jericho-merge" "$usr"
+}
+merge_config_keys
+
 # cp -f does not carry the mode; the things you run need to stay runnable.
 [ -f "$HERE/jericho" ] && chmod +x "$HERE/jericho"
 for s in BAKE_D1_CARS.sh update_jericho.sh; do
@@ -130,7 +174,7 @@ echo
 echo "update_jericho: done. $copied file(s) written."
 echo "  updated:  the game, JERICHO/ and its released modules"
 echo "  kept:     CONFIG/   your toggles and settings"
-echo "            config.ini  your window size and fullscreen"
+echo "            config.ini  your window size and fullscreen (new keys added, yours kept)"
 echo "            DRIVER/   your baked Driver 1 car data"
 echo "            DRIVER2/  your own game data (levels, models, cutscenes)"
 echo "            any module you added under MODS/"
