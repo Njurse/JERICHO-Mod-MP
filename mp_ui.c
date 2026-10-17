@@ -1117,14 +1117,6 @@ static void OnlineOnEnter(void* ud)
 		k++;
 	}
 
-	/* Host Game: the same row the LAN screen has, so a player looking at the world's
-	 * servers can also put one up without walking back through the menus. It sits
-	 * with the controls, not with the servers, because it is not one of them. */
-	OnlineRowClear(k);
-	gOnlineItems[k].label = "Host Game";
-	gOnlineItems[k].on_activate = ActHostGame;
-	k++;
-
 	/* Manual address: the way in for a host that is not listed (yet), or one
 	 * behind a name the player already knows. The row does NOT print the address:
 	 * it is a door to the typing screen, and an address the player is about to
@@ -1133,6 +1125,14 @@ static void OnlineOnEnter(void* ud)
 	OnlineRowClear(k);
 	gOnlineItems[k].label = "Manual address ...";
 	gOnlineItems[k].submenu = gMenuIdx[M_MANUAL];
+	k++;
+
+	/* Host Game: the same row the LAN screen has, so a player looking at the world's
+	 * servers can put one up without walking back through the menus. It sits with the
+	 * controls, not with the servers, because it is not one of them. */
+	OnlineRowClear(k);
+	gOnlineItems[k].label = "Host Game";
+	gOnlineItems[k].on_activate = ActHostGame;
 	k++;
 
 	OnlineRowClear(k);
@@ -1205,7 +1205,7 @@ static int TableRowSource(int online, int index, TABLE_ROW* out)
  * screen), and only while the menu that shows it is on screen. */
 static void TableDraw(int online)
 {
-	int count, rows, item_rows, i, x, y, w, h, headY = 0;
+	int count, rows, item_rows, i, x, y, w, h, headY = 0, firstRowY = 0;
 
 	if (!gInFrontend || gMpCtx == NULL)
 		return;
@@ -1236,6 +1236,11 @@ static void TableDraw(int online)
 		headY -= TABLE_HEAD_GAP;
 	}
 
+	/* where the first ROSTER row actually landed: the engine may have centred the
+	 * list in the band above the controls, so this is not necessarily row_top */
+	if (rows > 0 && jer_frontend_row_rect(0, &x, &y, &w, &h))
+		firstRowY = y;
+
 	/* NO early return on an empty list: the browser still has to LOOK like a browser.
 	 * The heading line and the columns are drawn whether or not there are rows, so an
 	 * unset discovery server is an empty table rather than a sentence sitting where a
@@ -1251,20 +1256,29 @@ static void TableDraw(int online)
 	 * count is then 0, which is itself the answer. */
 	if (MpDebugOn() && gMpCtx != NULL)
 	{
-		static int loggedOnline = 0;
-		static int loggedLan = 0;
+		static int loggedOnline = 0, loggedOnlineRows = 0;
+		static int loggedLan = 0, loggedLanRows = 0;
 		int* logged = online ? &loggedOnline : &loggedLan;
+		int* loggedRows = online ? &loggedOnlineRows : &loggedLanRows;
 
-		if (!*logged)
+		/* The first paint, and then the first paint WITH ROWS -- a different thing,
+		 * because the list is usually still empty when the screen opens and the fetch
+		 * lands a moment later. The row count in the second line is the one that says
+		 * the screen is actually populated. */
+		if (!*logged || (!*loggedRows && rows > 0))
 		{
 			*logged = 1;
+
+			if (rows > 0)
+				*loggedRows = 1;
+
 			gMpCtx->jer_log(gMpCtx,
 				"[mp] %s table drawn: %d row(s) of %d, columns at x=%d,%d,%d,%d,%d "
 				"(scale %d, pitch %d, head gap %d, heading y %d, roster y %d)\n",
 				online ? "online" : "LAN", rows, count,
 				TABLE_COL_NAME, TABLE_COL_PLAYERS, TABLE_COL_MODE,
 				TABLE_COL_CITY, TABLE_COL_PING, TABLE_SCALE,
-				TABLE_ROW_STEP, TABLE_HEAD_GAP, headY, TABLE_ROW_TOP);
+				TABLE_ROW_STEP, TABLE_HEAD_GAP, headY, firstRowY);
 		}
 	}
 
@@ -1325,12 +1339,14 @@ static void WireDynamic(void)
 	gJoinMenu.row_step = TABLE_ROW_STEP;
 	gJoinMenu.bottom_items = 2;
 	gJoinMenu.row_bottom = TABLE_ROW_BOTTOM;
+	gJoinMenu.list_align = 1;
 
 	gOnlineMenu.row_w = TABLE_ROW_W;
 	gOnlineMenu.row_top = TABLE_ROW_TOP;
 	gOnlineMenu.row_step = TABLE_ROW_STEP;
 	gOnlineMenu.bottom_items = 3;
 	gOnlineMenu.row_bottom = TABLE_ROW_BOTTOM;
+	gOnlineMenu.list_align = 1;
 
 	gJoinMenu.on_enter = JoinOnEnter;
 	gLobbyMenu.on_enter = LobbyOnEnter;
