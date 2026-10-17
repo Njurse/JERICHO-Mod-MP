@@ -37,8 +37,8 @@ import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from serverkit import (LEVELS, Log, apply_overrides,   # noqa: E402
-                       install_signals, load_config)
+from serverkit import (LEVELS, Console, Log, apply_overrides,   # noqa: E402
+                       duration, install_signals, load_config)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 TOOLS = os.path.dirname(os.path.dirname(HERE))      # .../mp/tools
@@ -114,6 +114,18 @@ class Dedicated:
         self.clients = {}        # conn -> {"id", "name", "addr"}
         self.cars = {}           # playerId -> one MP_CARSTATE_ENTRY
         self.stop = threading.Event()
+        self.started = time.time()
+
+        # Reported by the console. The beacon can be turned off from there (a LAN
+        # you do not want to appear on) without stopping anything else, so the
+        # loop reads this rather than the config value directly.
+        self.beacon_on = bool(self.cfg["beacon"])
+
+        # What the master_loop last managed, for 'master' to print. Kept as its own
+        # small dict so the loop's local `token` stays local.
+        self.master_state = {"base": "", "registered": False, "last": ""}
+
+        self.console = None
         self.started = time.time()
 
     # -- helpers
@@ -390,6 +402,10 @@ class Dedicated:
         host = self.cfg["name"].encode()[:31] + b"\0" * 32
         host = host[:32]
         while not self.stop.is_set():
+            if not self.beacon_on:
+                self.stop.wait(self.cfg["beacon_ms"] / 1000.0)
+                continue
+
             pkt = m.BEACON.pack(m.UDP_MAGIC, m.PROTO, self.port, host,
                                 self.player_count(), self.max_players,
                                 int(self.cfg["gamemode"]), 0, self.city,
@@ -446,6 +462,9 @@ class Dedicated:
                     if st not in (200, 201):
                         raise OSError("register returned %s" % st)
                     token = body["token"]
+                    self.master_state.update(base=base, registered=True,
+                                             last="registered at %s"
+                                             % time.strftime("%H:%M:%S"))
                     self.log.info("registered with master %s as %s:%d"
                                   % (base, body.get("host"), body.get("port")))
                     backoff = 2.0
@@ -460,6 +479,8 @@ class Dedicated:
                         raise
                 self.stop.wait(interval)
             except (OSError, ValueError, KeyError) as e:
+                self.master_state.update(base=base, registered=False,
+                                         last="unreachable: %s" % e)
                 self.log.warning("master %s unreachable (%s); retrying in %.0fs"
                                  % (base, e, backoff))
                 self.stop.wait(backoff)
@@ -469,11 +490,143 @@ class Dedicated:
         if token is not None:
             try:
                 post("/v1/unregister", {"token": token})
+                self.master_state.update(registered=False, last="unregistered")
                 self.log.info("unregistered from master")
             except OSError:
                 pass
 
     # -- lifecycle
+    # -- console ----------------------------------------------------------
+    def console_commands(self):
+        """The operator's command table.
+
+        `help` is generated from this by the Console, so a command cannot exist
+        without being listed -- and every handler takes the rest of the typed line
+        as one string, so quoting is the operator's problem, not a parser's.
+        """
+        return [
+            ("status", "name, port, city, mode, players, uptime, beacon, master", self.cmd_status),
+            ("list", "connected players: id, name, address, how long", self.cmd_list),
+            ("say", "broadcast a line into every player's console: say <text>", self.cmd_say),
+            ("kick", "drop a player, telling them: kick <id>  ('list' shows ids)", self.cmd_kick),
+            ("beacon", "LAN beacon: beacon [on|off], or its state", self.cmd_beacon),
+            ("master", "discovery-server registration state", self.cmd_master),
+            ("stop", "close the server (unregisters from the master)", self.cmd_stop),
+            ("help", "list these commands", self.cmd_help),
+        ]
+
+    def cmd_help(self, _rest):
+        return self.console.help_text() if self.console is not None else ""
+
+    def cmd_status(self, _rest):
+        adv = ""
+        if self.cfg["advertise_host"] or int(self.cfg["advertise_port"]):
+            adv = " (advertised as %s:%d)" % (self.cfg["advertise_host"],
+                                              int(self.cfg["advertise_port"]) or self.port)
+        return "\n".join([
+            "name:      %s" % self.cfg["name"],
+            "session:   TCP/%d%s" % (self.port, adv),
+            "city:      %d" % self.city,
+            "gamemode:  %d (rules 0x%02x)" % (int(self.cfg["gamemode"]), int(self.cfg["rules"])),
+            "players:   %d/%d" % (self.player_count(), self.max_players),
+            "uptime:    %s" % duration(time.time() - self.started),
+            "beacon:    %s" % (("every %dms to UDP/%d"
+                                % (int(self.cfg["beacon_ms"]), m.DISCOVERY_PORT))
+                               if self.beacon_on else "off"),
+            "master:    %s" % (self.master_state["last"] or "not configured"),
+        ])
+
+    def cmd_list(self, _rest):
+        with self.lock:
+            rows = sorted((c["id"], c["name"], c["addr"],
+                           duration(time.time() - c.get("since", time.time())))
+                          for c in self.clients.values())
+
+        if not rows:
+            return "no players connected"
+
+        return "\n".join("%3d  %-20s %-21s %s" % r for r in rows)
+
+    def cmd_say(self, rest):
+        if not rest:
+            return "say what?  (say <text>)"
+
+        # 0xFF is not a player id, so the client's chat handler finds no name for it
+        # and prints the text on its own -- which is what a server line wants. The
+        # prefix is there because the text would otherwise read as a player's.
+        chat = m.CHAT.pack(0xFF, 0, 0, 0, ("SERVER: " + rest).encode()[:95])
+        self.broadcast(chat, m.TAG["chat"])
+        self.log.info("console: said %r" % rest)
+        return "said to %d player(s)" % self.player_count()
+
+    def cmd_kick(self, rest):
+        rest = (rest or "").strip()
+
+        if not rest.isdigit():
+            return "kick who?  (kick <id>; 'list' shows the ids)"
+
+        pid = int(rest)
+
+        with self.lock:
+            target = [(conn, c) for conn, c in self.clients.items() if c["id"] == pid]
+
+        if not target:
+            return "no player %d connected  ('list')" % pid
+
+        conn, c = target[0]
+
+        # The protocol already has this message, and the client handles it properly
+        # ("You were kicked by the host" then out to the frontend) -- so send that
+        # rather than just dropping the socket and leaving them guessing.
+        try:
+            m.send_frame(conn, m.TAG["kick"], m.KICK.pack(pid, 0, 0, 0))
+        except OSError:
+            pass
+
+        self.log.info("console: kicked player %d '%s' (%s)" % (pid, c["name"], c["addr"]))
+
+        try:
+            conn.shutdown(socket.SHUT_RDWR)      # wake their blocked recv; cleanup runs
+        except OSError:
+            pass
+
+        return "kicked player %d '%s'" % (pid, c["name"])
+
+    def cmd_beacon(self, rest):
+        arg = (rest or "").strip().lower()
+
+        if arg in ("on", "off"):
+            self.beacon_on = (arg == "on")
+            self.log.info("console: beacon %s" % arg)
+            return "beacon %s" % arg
+
+        if arg:
+            return "usage: beacon [on|off]"
+
+        return "beacon is %s (every %dms to UDP/%d)" % (
+            "on" if self.beacon_on else "off", int(self.cfg["beacon_ms"]), m.DISCOVERY_PORT)
+
+    def cmd_master(self, rest):
+        if (rest or "").strip():
+            return "usage: master"
+
+        st = self.master_state
+
+        if not st["base"]:
+            return "no discovery server configured  (config 'master' is empty)"
+
+        return "\n".join([
+            "discovery:  %s" % st["base"],
+            "registered: %s" % ("yes" if st["registered"] else "no"),
+            "last:       %s" % (st["last"] or "-"),
+            "heartbeat:  every %ss" % self.cfg["master_interval_s"],
+        ])
+
+    def cmd_stop(self, _rest):
+        self.log.info("console: stop requested")
+        self.stop.set()
+        return "stopping (unregisters from the master, closes players)..."
+
     def run(self):
         srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -573,6 +726,10 @@ def main(argv=None):
     server = Dedicated(cfg, log)
 
     log.debug("signals: %s" % ", ".join(install_signals(server.stop, log)))
+
+    console = Console(log, server.console_commands())
+    server.console = console
+    console.start()
 
     return server.run()
 

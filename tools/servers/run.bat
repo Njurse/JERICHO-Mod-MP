@@ -43,7 +43,7 @@ if /i "%VERB%"=="stack" (
 )
 if /i "%VERB%"=="checks" (
     set "FAIL=0"
-    for %%T in (proto_check.py check_images.py masterserver\test_masterserver.py rigs\test_e2e.py) do (
+    for %%T in (proto_check.py check_images.py console_selftest.py masterserver\test_masterserver.py masterserver\test_console.py dediserver\test_console.py test_console_stdin.py rigs\test_e2e.py) do (
         echo.
         echo == %%T
         "%MP_PYTHON%" "%HERE%%%T" || set "FAIL=1"

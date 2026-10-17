@@ -44,7 +44,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # The plumbing both servers share: Log, the config merge, signals, and (later) the
 # console. It sits one directory up, beside this file's parent -- the same place
 # proto_check lives, so one path insert serves both.
-from serverkit import LEVELS, Log, apply_overrides, install_signals, load_config  # noqa: E402
+from serverkit import (Console, LEVELS, Log, apply_overrides,   # noqa: E402
+                       duration, install_signals, load_config)
 
 try:
     import proto_check  # type: ignore
@@ -201,6 +202,41 @@ class Registry:
                 self.by_key.pop(key, None)
         self._save()
         return key is not None
+
+    def drop(self, what):
+        """Remove an entry by token, token prefix, or name. None if nothing matched.
+
+        The console needs this because an entry otherwise lives until its TTL: a
+        server that went away without unregistering sits in the listing until it
+        expires, and an operator who knows it is gone should be able to say so.
+        """
+        what = (what or "").strip()
+
+        if not what:
+            return None
+
+        low = what.lower()
+        hit = None
+
+        with self.lock:
+            for token, key in list(self.by_token.items()):
+                e = self.by_key.get(key)
+
+                if e is not None and (token == what or token.startswith(what)
+                                      or e.name.lower() == low):
+                    hit = (token, key, e)
+                    break
+
+            if hit is not None:
+                token, key, e = hit
+                self.by_key.pop(key, None)
+                self.by_token.pop(token, None)
+
+        if hit is None:
+            return None
+
+        self._save()
+        return hit[2]
 
     def sweep(self):
         now = time.time()
@@ -471,6 +507,82 @@ DEFAULTS = {
 }
 
 
+def console_commands(registry, stop, log):
+    """The master's command table.
+
+    Plain closures rather than methods: the master is a set of functions, and
+    taking its dependencies as arguments keeps the table buildable in a test with
+    no bound socket and no server running.
+    """
+    def cmd_help(_rest):
+        return holder[0].help_text() if holder[0] is not None else ""
+
+    def cmd_status(_rest):
+        return "\n".join([
+            "listening:  %s:%s" % (registry.cfg["bind"], registry.cfg["port"]),
+            "entries:    %d/%d" % (registry.count(), registry.max_entries),
+            "ttl:        %ss, swept every %ss" % (registry.ttl, registry.cfg["sweep_s"]),
+            "uptime:     %s" % duration(time.time() - registry.started),
+            "persist:    %s" % (registry.persist_path or "off (in memory only)"),
+            "public url: %s" % (registry.cfg.get("public_url") or "-"),
+        ])
+
+    def cmd_list(_rest):
+        with registry.lock:
+            rows = []
+            for token, key in registry.by_token.items():
+                e = registry.by_key.get(key)
+
+                if e is not None:
+                    rows.append((e.name, e.host, e.port, e.players, e.maxPlayers,
+                                 e.age(), token[:8]))
+
+        if not rows:
+            return "no servers listed"
+
+        rows.sort()
+        out = ["%-24s %-21s %5s  %8s  %s" % ("NAME", "ADDRESS", "PLRS", "AGE", "TOKEN")]
+        for name, host, port, players, max_players, age, token in rows:
+            out.append("%-24s %-21s %2d/%-2d  %8s  %s"
+                       % (name[:24], "%s:%d" % (host, port), players, max_players,
+                          duration(age), token))
+        return "\n".join(out)
+
+    def cmd_drop(rest):
+        e = registry.drop(rest)
+
+        if e is None:
+            return "nothing matched %r  ('list' shows names and tokens)" % (rest or "")
+
+        log.info("console: dropped %r at %s:%d" % (e.name, e.host, e.port))
+        return "dropped %r at %s:%d" % (e.name, e.host, e.port)
+
+    def cmd_persist(_rest):
+        if not registry.persist_path:
+            return "no persist path configured (nothing to write)"
+        registry._save()
+        return "saved %d entr(ies) to %s" % (registry.count(), registry.persist_path)
+
+    def cmd_stop(_rest):
+        log.info("console: stop requested")
+        # Only the flag: the watcher thread in serve() calls httpd.shutdown(), which
+        # BLOCKS until serve_forever returns -- doing it here would race the process
+        # exiting before this reply could be printed (it did, once).
+        stop.set()
+        return "stopping..."
+
+    holder = [None]
+
+    return holder, [
+        ("status", "listen address, entries, ttl, uptime, persistence", cmd_status),
+        ("list", "the listed servers: name, address, players, age, token", cmd_list),
+        ("drop", "remove a listing by token or name: drop <token|name>", cmd_drop),
+        ("persist", "write the registry to its file now", cmd_persist),
+        ("stop", "close the master", cmd_stop),
+        ("help", "list these commands", cmd_help),
+    ]
+
+
 def sweeper(registry, stop, log):
     interval = max(1.0, float(registry.cfg.get("sweep_s", 5)))
     while not stop.wait(interval):
@@ -501,6 +613,12 @@ def serve(cfg, log):
                      daemon=True).start()
 
     threading.Thread(target=sweeper, args=(registry, stop, log), daemon=True).start()
+
+    holder, commands = console_commands(registry, stop, log)
+    console = Console(log, commands)
+    holder[0] = console
+    console.start()
+
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:

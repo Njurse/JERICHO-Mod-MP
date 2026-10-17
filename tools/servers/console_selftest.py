@@ -1,6 +1,7 @@
 """Exercise the kit's console without a terminal: dispatch, help generation, and
 the no-tty path. Kept beside the module so it can be re-run while building on it."""
 
+import os
 import sys
 
 sys.path.insert(0, ".")
@@ -41,6 +42,14 @@ class NotATerminal:
     def readline(self):
         return ""
 
+
+print("-- and the JER_CONSOLE override, both ways: --")
+os.environ["JER_CONSOLE"] = "off"
+print("JER_CONSOLE=off with a terminal -> interactive():", c.interactive())
+os.environ["JER_CONSOLE"] = "on"
+sys.stdin = NotATerminal()
+print("JER_CONSOLE=on without a terminal -> interactive():", c.interactive())
+del os.environ["JER_CONSOLE"]
 
 real_stdin = sys.stdin
 sys.stdin = NotATerminal()

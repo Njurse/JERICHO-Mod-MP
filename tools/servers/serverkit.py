@@ -12,6 +12,7 @@ logging, config merging, signal handling, and the console's input loop.
 """
 
 import json
+import os
 import signal
 import sys
 import threading
@@ -123,6 +124,23 @@ def install_signals(stop, log, names=("SIGINT", "SIGTERM", "SIGBREAK")):
     return installed
 
 
+def duration(seconds):
+    """Seconds as '12s' / '4m 07s' / '1h 02m'.
+
+    Uptime and connection age are the two things an operator reads most, and a raw
+    float is useless for both. Shared because both servers' consoles print them.
+    """
+    seconds = int(max(0, seconds))
+
+    if seconds < 60:
+        return "%ds" % seconds
+
+    if seconds < 3600:
+        return "%dm %02ds" % (seconds // 60, seconds % 60)
+
+    return "%dh %02dm" % (seconds // 3600, (seconds % 3600) // 60)
+
+
 # ------------------------------------------------------------------------ console
 class Console:
     """An interactive command line on stdin, for a server run in a terminal.
@@ -159,7 +177,20 @@ class Console:
     # -- input ------------------------------------------------------------
     @staticmethod
     def interactive():
-        """Is there a person on the other end?"""
+        """Is there a person on the other end?
+
+        JER_CONSOLE=on/off overrides the guess. Without it a supervisor piping
+        commands in (or a test) could never reach the console, and with it the
+        guard stays the default: no terminal, no console, one line to say so.
+        """
+        forced = os.environ.get("JER_CONSOLE", "").strip().lower()
+
+        if forced in ("1", "on", "true", "force"):
+            return True
+
+        if forced in ("0", "off", "false", "none"):
+            return False
+
         try:
             return sys.stdin is not None and sys.stdin.isatty()
         except (ValueError, OSError):        # closed, or not a real stream

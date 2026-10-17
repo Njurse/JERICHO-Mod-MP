@@ -83,6 +83,8 @@ REJECT = struct.Struct("<4B64s")         # 68 bytes
 BEACON = struct.Struct("<IHH32s6BHH")    # 50 bytes; the last u16 is `rules` (mp_proto.h renamed MP_BEACON's `spare` to it -- same offset, same size, so the wire is unchanged)
 CHANNEL = struct.Struct("<16sHIBB2B")    # 26 bytes
 CHAT = struct.Struct("<B3B96s")          # 100 bytes: playerId, reserved[3], text[96]
+KICK = struct.Struct("<B3B")             # 4 bytes: playerId, reserved[3] -- the host
+                                         # removing a player (the client acts on it)
 SESSION = struct.Struct("<4BIBBH")       # 12 bytes (gamemode,city,tod,weather,seed,numPlayers,state,spare)
 INPUT = struct.Struct("<B3B")            # count, reserved[3] = 4 (the frame byte was dropped)
 PLAYER_INPUT = struct.Struct("<BHB")     # playerId, pad, spare = 4
