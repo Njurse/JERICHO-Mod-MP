@@ -396,6 +396,9 @@ typedef struct MP_ONLINE_SERVER
 
 void MpOnlineSetMaster(const char* url);	/* "" disables. Resolves -- off the frame path */
 void MpOnlineRefresh(void);
+/* The browser is on screen (1) or is not (0). Nothing contacts the master for a
+ * listing unless this is set; the advertise path is independent. */
+void MpOnlineSetWatching(int on);
 void MpOnlineReset(void);
 void MpOnlinePoll(void);			/* non-blocking; safe every frame */
 

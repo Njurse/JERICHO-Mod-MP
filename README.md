@@ -220,7 +220,7 @@ no wanted level, and the session carries on.
 | `beacon_ms` | `1000` | discovery beacon interval |
 | `mod_check` | `0` | host lobby mod policy: 0 off, 1 by id, 2 by id+version |
 | `strict_version` | `0` | host lobby setting: 1 also requires an identical build hash (off by default, because that hash tracks `git describe`) |
-| `master_url` | `http://jerichomp.animetiddi.es:8100` | the discovery server: `host`, `host:port` or `http://host:port`. It is BOTH what the `Online` screen lists and where a hosted game lists itself (see below). Empty = LAN-only: no listing, no advertisement, the beacon still works. Resolved at startup, so an edit takes effect on the next launch |
+| `master_url` | `http://jerichomp.animetiddi.es:8100` | the discovery server: `host`, `host:port` or `http://host:port`. It is BOTH what the `Online` screen lists and where a hosted game lists itself (see below). Empty = LAN-only: no listing, no advertisement, the beacon still works. Resolved on the first frame that needs it -- never at startup -- so an edit takes effect on the next launch and a launch that never opens the `Online` screen never speaks to the master at all |
 
 **The ini's port is the base; the command line can move it -- but not under the shipped
 launchers.** `mp.ini` is read at module activation, *before* the arguments are parsed, so it
@@ -309,7 +309,11 @@ Three things to know before relying on it:
   which stops at the router, so a remote game never appears in the LAN list and has
   to be typed in. The `Online` screen is the way past that: it lists what a
   DISCOVERY SERVER (the master) knows, which is how a host is found without being
-  told an address. Set the server once in `mp.ini` (`master_url`) and the screen
+  told an address. The browser is the ONLY thing that asks the master for a listing:
+  open it and it fetches, leave it (by any route) and the request and any pending
+  retry stop on the next frame. Hosting is the exception -- a hosted game lists
+  itself whether or not anyone is looking at the browser, because that is the point.
+  Set the server once in `mp.ini` (`master_url`) and the screen
   fills in. **The host has to register with it too** -- that is `dediserver.py
   --master`, or the module's own hosting once the in-game half lands (see
   `docs/MASTER_SERVER.md`). With no `master_url` configured the browser still opens,

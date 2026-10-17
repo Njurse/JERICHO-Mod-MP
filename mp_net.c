@@ -2549,6 +2549,22 @@ static int  gOnlineCount;
 static int  gOnlineRetries;		/* early failures already retried */
 static unsigned long gOnlineRetryAtMs;	/* when the next try is due */
 static int  gOnlineEverReady;		/* one fetch has completed: stop excusing */
+
+/* Is the server browser on screen? NOTHING talks to the master for a LISTING
+ * unless it is: the game used to resolve the discovery server and fetch at module
+ * activation, so every launch -- single-player included -- made a DNS lookup and an
+ * HTTP request for a screen nobody opened, and kept retrying. The banner-advertise
+ * path is separate and unaffected: a host lists itself whether or not it is looking
+ * at the browser, because that is the point of hosting. */
+static int  gOnlineWatching;
+
+/* The configured master, kept unresolved until something needs to dial it. The name
+ * used to be resolved in MpOnlineSetMaster, i.e. at module ACTIVATION -- a BLOCKING
+ * getaddrinfo on every launch, single-player included, for a server most launches
+ * never speak to. */
+static char gOnlineName[128];
+static int  gOnlinePort;
+static int  gOnlineAddrOk;
 static unsigned gOnlineRev;
 static char gOnlineError[96];
 static char gOnlineUrl[160];		/* what the config said, for the log */
@@ -2782,6 +2798,11 @@ static int MpOnlineParse(const char* body)
 #define MP_ONLINE_RETRIES		3
 #define MP_ONLINE_RETRY_MS		3000
 
+/* How old a listing may be before reopening the browser refreshes it. Short, because
+ * a player who opens the screen wants the current list; the point of the rest of this
+ * is that NOTHING happens while the screen is closed. */
+#define MP_ONLINE_WATCH_REFRESH_MS	15000
+
 static void MpOnlineClose(void)
 {
 	MpCloseSock(&gOnlineSock);
@@ -2831,6 +2852,8 @@ void MpOnlineReset(void)
 	gOnlineRetries = 0;
 	gOnlineRetryAtMs = 0;
 	gOnlineEverReady = 0;
+	gOnlineName[0] = '\0';
+	gOnlineAddrOk = 0;
 
 	if (gOnlineCount > 0)
 	{
@@ -2844,6 +2867,28 @@ void MpOnlineReset(void)
  * the browser's fetch and the advertisement's register/heartbeat/unregister -- so
  * there is one connect path, one timeout and one state machine to reason about.
  * Non-blocking: the connect itself completes in the poll. */
+/* Resolve the configured master, once, when something is about to use it. Returns
+ * 0 (and reports the failure the usual way) if there is nothing to resolve. */
+static int MpOnlineEnsureAddr(void)
+{
+	if (gOnlineAddrOk)
+		return 1;
+
+	if (gOnlineName[0] == '\0')
+		return 0;
+
+	/* BLOCKING, and that is why it is here and not in the poll -- but only ever on
+	 * the frame that is about to talk to the master, not on every launch. */
+	if (!MpResolveHost(gOnlineName, gOnlinePort, &gOnlineAddr))
+	{
+		MpOnlineFail("the name does not resolve");
+		return 0;
+	}
+
+	gOnlineAddrOk = 1;
+	return 1;
+}
+
 static void MpHttpKick(const char* req, int kind)
 {
 	SOCKET s;
@@ -2853,6 +2898,9 @@ static void MpHttpKick(const char* req, int kind)
 	gOnlineError[0] = '\0';
 
 	s = socket(AF_INET, SOCK_STREAM, 0);
+
+	if (!MpOnlineEnsureAddr())
+		return;
 
 	if (s == INVALID_SOCKET)
 	{
@@ -2960,18 +3008,19 @@ void MpOnlineSetMaster(const char* url)
 
 	snprintf(gOnlineHostHdr, sizeof(gOnlineHostHdr), "%s:%d", host, port);
 
-	/* BLOCKING, so it happens HERE and not in the poll */
-	if (!MpResolveHost(host, port, &gOnlineAddr))
-	{
-		MpOnlineFail("the name does not resolve");
-		return;
-	}
+	/* remember it; resolving waits until something is about to dial */
+	snprintf(gOnlineName, sizeof(gOnlineName), "%s", host);
+	gOnlinePort = port;
+	gOnlineAddrOk = 0;
+	gOnlineRetries = 0;
+	gOnlineRetryAtMs = 0;
 
 	if (gMpCtx != NULL)
 		gMpCtx->jer_log(gMpCtx, "[mp] discovery server set to %s (from '%s')\n",
 			gOnlineHostHdr, url);
 
-	MpOnlineRefresh();
+	/* NOT MpOnlineRefresh(): configuring the address must not contact anything.
+	 * The browser asks when it opens, and the advertise path resolves on demand. */
 }
 
 /* --- the ping probe --------------------------------------------------
@@ -3127,6 +3176,39 @@ static void MpOnlinePingPoll(void)
 	gOnlinePingNext = -1;			/* the queue is drained */
 }
 
+/* The browser opened or closed. Everything a LISTING needs hangs off this. */
+void MpOnlineSetWatching(int on)
+{
+	on = on ? 1 : 0;
+
+	if (on == gOnlineWatching)
+		return;
+
+	gOnlineWatching = on;
+
+	if (!on)
+	{
+		/* stop talking to the master: drop the request in flight and cancel a
+		 * pending retry. The rows stay, so reopening draws the last list while the
+		 * new one arrives -- and the next open refreshes it. */
+		if (gOnlineState == MP_ONLINE_CONNECTING || gOnlineState == MP_ONLINE_READING)
+		{
+			MpOnlineClose();
+			gOnlineState = MP_ONLINE_OFF;
+		}
+
+		gOnlineRetryAtMs = 0;
+
+		return;
+	}
+
+	/* Opening it: refresh if there is nothing to show, or what we have is old
+	 * enough that showing it would be a lie. */
+	if (gOnlineState == MP_ONLINE_OFF || gOnlineState == MP_ONLINE_FAILED
+	    || MpElapsedMs(MpNowMs(), gOnlineSinceMs) > (unsigned long)MP_ONLINE_WATCH_REFRESH_MS)
+		MpOnlineRefresh();
+}
+
 /* The retry, driven by the poll. A failed attempt leaves no socket and no state
  * machine to make progress with, so without this the retry would never fire. */
 static void MpOnlineRetryPoll(void)
@@ -3158,15 +3240,25 @@ void MpOnlinePoll(void)
 	socklen_t elen = sizeof(err);
 #endif
 
-	MpOnlineRetryPoll();
+	if (gOnlineWatching)
+		MpOnlineRetryPoll();
 
-	/* The ping queue advances whenever the list is real, whether or not a menu is
-	 * looking at it: the numbers are only worth having if they are already there
-	 * when the screen opens. It drains itself and then does nothing. */
-	MpOnlinePingPoll();
+	/* Ping measurements are for the screen that shows them, so they only advance
+	 * while it is open. */
+	if (gOnlineWatching)
+		MpOnlinePingPoll();
 
 	if (gOnlineState != MP_ONLINE_CONNECTING && gOnlineState != MP_ONLINE_READING)
 		return;
+
+	/* A LISTING request is abandoned the moment the browser closes; an ADVERTISE is
+	 * the host's own business and runs to completion either way. */
+	if (!gOnlineWatching && gOnlineKind == MPI_REQ_FETCH)
+	{
+		MpOnlineClose();
+		gOnlineState = MP_ONLINE_OFF;
+		return;
+	}
 
 	if (gOnlineSock == INVALID_SOCKET)
 		return;

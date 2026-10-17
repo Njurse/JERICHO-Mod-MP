@@ -1148,7 +1148,7 @@ static void OnlineOnEnter(void* ud)
 	 * and the fetch is asynchronous -- the rows appear as they arrive. Skipped on
 	 * the visit that just set the address, because that already fetched. */
 	if (!OnlineApplyConfig())
-		MpOnlineRefresh();
+		MpOnlineSetWatching(1);        /* fetch now; the tick stops it on the way out */
 
 	count = MpOnlineCount();
 
@@ -1422,6 +1422,15 @@ static void WireDynamic(void)
  * engine keeps the cursor across a live refresh, so scrolling does not jump. */
 void MpUiTick(void)
 {
+	/* The browser is the only thing that may talk to the master for a listing.
+	 * Starting is the browser's OWN business (OnlineOnEnter, where the screen knows
+	 * it is up); what the tick adds is the other half -- noticing that it LEFT, by
+	 * any route (Back, Escape, a breadcrumb, a session starting), and stopping the
+	 * request and any pending retry on the next frame. A launch that never opens the
+	 * browser therefore never speaks to the master at all. */
+	if (!MpMenuIs(M_ONLINE))
+		MpOnlineSetWatching(0);
+
 	OnlineAnnounce();
 
 	/* One line when the frontend first shows: how many menus the registry holds,
