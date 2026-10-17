@@ -2354,6 +2354,39 @@ static void MpHandleStart(const unsigned char* p, int len)
 		gMpCtx->jer_log(gMpCtx, "[mp] host started: mode %d city %d time %d weather %d\n",
 			gMp.gamemode, gMp.city, gMp.timeOfDay, gMp.weather);
 
+	/* A HUMAN JOINER PICKS THEIR CAR HERE.
+	 *
+	 * Joining a host that has not started yet is the ordinary LAN case: the client
+	 * waits in the lobby, the host presses Start, and this is the moment the
+	 * session becomes real. It used to launch straight into the level, so the
+	 * joiner drove whatever mp.ini said and never saw the stock car select --
+	 * while a joiner arriving at an ALREADY RUNNING match did see it, because
+	 * MpHandleWelcome opens it there. One session, two different answers to
+	 * "which car am I driving".
+	 *
+	 * The car select's Select is the START this module claims (mp.c), and that
+	 * claim launches us through MpClientLaunch, so everything adopted above is
+	 * exactly what it reads. The LEVEL is named first because the screen lists a
+	 * city's cars: the same ordering the live-match join uses.
+	 *
+	 * An AUTO session (-join / MP_AUTOSTART) has nobody to press anything, so it
+	 * still launches on the spot -- that is every headless rig. */
+	if (!gMp.autoSession)
+	{
+		GameLevel = gMp.city;
+
+		if (gMp.timeOfDay >= 0)
+			wantedTimeOfDay = gMp.timeOfDay;
+		if (gMp.weather >= 0)
+			wantedWeather = gMp.weather;
+
+		if (gMpCtx)
+			gMpCtx->jer_log(gMpCtx, "[mp] host started - pick a car\n");
+
+		MpUiOpenCarSelect();
+		return;
+	}
+
 	MpLaunchLocal();
 }
 
