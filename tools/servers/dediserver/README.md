@@ -73,6 +73,10 @@ built-in defaults are used.
   "beacon_ms": 1000,
   "idle_drop_s": 30.0,      // 0 = never drop a silent client
   "live": true,             // advertise as a live match (the level is always up)
+  "mod_check": 0,           // 0 = admit anyone, 1 = the enabled mod IDS must match,
+                            // 2 = ids AND versions (see "Mod lists" below)
+  "mods": [],               // the ids a client must have enabled when mod_check is on
+  "mod_versions": {},       // id -> version, only consulted by mod_check 2
   "log_level": "info",
   "log_file": "",
   "master": "http://jerichomp.animetiddi.es:8100",  // "" disables registration.
@@ -85,6 +89,31 @@ built-in defaults are used.
   "master_timeout_s": 5.0
 }
 ```
+
+## Mod lists
+
+The client sends its **mod manifest** in the handshake, and this server applies the
+same policy the game's own host does:
+
+| `mod_check` | what it does |
+| --- | --- |
+| `0` (default) | admit anyone. A mismatch is not an error; set the below if it is |
+| `1` | the set of **enabled mod ids** must equal `mods` (versions ignored, because the same mod's version differs between a dev and a release build) |
+| `2` | as 1, **and** the versions in `mod_versions` must match |
+
+A server that names no `mods` matches everyone, so leaving the check on is harmless.
+A client that does not match is refused with `REJECT: MODS` and the text "mod list
+does not match the server", which the game shows as a toast — and the refusal is
+written so the reason actually arrives (the socket is half-closed before it is
+closed; see TESTING.md F3).
+
+**What it does not do:** there is no `modHash` in the registration, so a browser
+cannot pre-warn about a mismatch — the check happens at join. The dedi logs what
+each client declared (`declares mods: mp 0.1.0, carhacks 1.0.0`) and the verdict
+(`modsMatched`), which is what to read when someone says they were refused.
+
+**Text chat** is relayed: a client's `JPCX` line goes to every other client, and
+`say <text>` in the console sends one from the server itself (`SERVER: ...`).
 
 ## Docker
 

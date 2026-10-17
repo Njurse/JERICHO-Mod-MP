@@ -308,7 +308,14 @@ def mode_client(args):
     mods = [("mp", MP_VER)]
     if args.mods not in ("empty", "mp"):
         mods.append((args.mods, "1.0.0"))
-    send_frame(s, TAG["hello"], build_hello(args.name, mods, args.build))
+    hello = build_hello(args.name, mods, args.build)
+
+    if args.proto is not None:
+        # the hello is <proto, sdk, ...>: overwrite the two version fields
+        hello = HELLO.pack(args.proto, SDK, args.build, 0,
+                           args.name.encode()[:NAME_MAX], len(mods), 0, 0, 0) + hello[HELLO.size:]
+
+    send_frame(s, TAG["hello"], hello)
     print(f"[mock-client] sent HELLO (name={args.name}, mods={[m[0] for m in mods]}, build={args.build:#06x})")
 
     # The host sends the ROSTER before the WELCOME (order is load-bearing: a live
@@ -319,12 +326,41 @@ def mode_client(args):
         if tag is None or tag not in (TAG["ping"], TAG["pong"], TAG["roster"]):
             break
 
+    if tag == TAG["reject"]:
+        reason, _r0, _r1, _r2, text = REJECT.unpack_from(payload, 0)
+        print(f"[mock-client] REJECT: reason={REJECT_NAMES.get(reason, reason)} "
+              f"text={cstr(text)!r}")
+        print("[mock-client] the refusal reached us, which is the point")
+        s.close()
+        return 0
+
     if tag == TAG["welcome"]:
         (pid, maxp, enforce, matched, running, subgame, _r1, _r2, gm, city, tod, wx,
          seed, hostcar, rules) = WELCOME.unpack_from(payload, 0)
         print(f"[mock-client] WELCOME: playerId={pid} max={maxp} enforced={enforce} "
               f"matched={matched} running={running} subgame={subgame} gamemode={gm} city={city} "
               f"tod={tod} weather={wx} seed={seed} hostCar={hostcar} rules={rules:#x}")
+        if args.watch > 0:
+            seen = 0
+            deadline = time.time() + args.watch
+            s.settimeout(0.5)
+
+            while time.time() < deadline:
+                try:
+                    t, pl = recv_frame(s)
+                except socket.timeout:
+                    continue
+
+                if t is None:
+                    break
+
+                if t == TAG["chat"]:
+                    who, _a, _b, _c, text = CHAT.unpack_from(pl, 0)
+                    print(f"[mock-client] CHAT from player {who}: {cstr(text)!r}")
+                    seen += 1
+
+            print(f"[mock-client] watched {args.watch:.0f}s, {seen} chat line(s) relayed")
+
         if args.channel:
             body = b"hello-from-python"
             hdr = CHANNEL.pack(args.channel.encode()[:15], len(body), 0, 0, 1, 0, 0)
@@ -490,6 +526,11 @@ def main():
     c.add_argument("--build", type=lambda v: int(v, 0), default=0x74cc,
                    help="game-build hash to send (default = current build; pass 0 to force a mismatch)")
     c.add_argument("--channel", default=None, help="after WELCOME, send an MP_CHANNEL payload on this channel name")
+    c.add_argument("--watch", type=float, default=0.0,
+                   help="after WELCOME, listen this many seconds and print CHAT frames, so a "
+                        "relayed line can be seen without a game client")
+    c.add_argument("--proto", type=int, default=None,
+                   help="protocol version to declare (default: this mirror's) -- for testing a refusal")
     c.set_defaults(func=mode_client)
 
     b = sub.add_parser("beacon", help="UDP listener for host beacons")

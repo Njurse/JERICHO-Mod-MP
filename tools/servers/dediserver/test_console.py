@@ -124,6 +124,28 @@ def main():
     check("a bare host is left exactly alone",
           d.normalise_host("203.0.113.5") == "203.0.113.5" and d.normalise_host("") == "")
 
+    # -- the mod-check policy, mirroring the real host's MpModsMatchHost
+    check("level 0 admits anyone",
+          d.mods_match([("mp", "9", 1)], ["mp", "carhacks"], {}, 0))
+    check("level 1 wants the same enabled ids",
+          d.mods_match([("mp", "1", 1), ("carhacks", "2", 1)], ["mp", "carhacks"], {}, 1)
+          and not d.mods_match([("mp", "1", 1)], ["mp", "carhacks"], {}, 1))
+    check("level 1 ignores versions",
+          d.mods_match([("mp", "9.9", 1)], ["mp"], {"mp": "1.0"}, 1))
+    check("level 2 compares versions",
+          not d.mods_match([("mp", "9.9", 1)], ["mp"], {"mp": "1.0"}, 2))
+    check("a disabled mod does not count",
+          not d.mods_match([("mp", "1", 1), ("carhacks", "1", 0)], ["mp", "carhacks"], {}, 1))
+    check("a server naming no mods matches everyone", d.mods_match([], [], {}, 2))
+
+    # -- the manifest rides after the hello header, in the same frame
+    hello = m.HELLO.pack(m.PROTO, m.SDK, 0, 0, b"X", 1, 0, 0, 0)
+    check("a manifest is parsed off the hello",
+          d.parse_manifest(hello + m.MODI.pack(b"mp", b"1.0", 1, 0)) == [("mp", "1.0", 1)])
+    check("two rows parse", len(d.parse_manifest(
+        hello + m.MODI.pack(b"mp", b"1.0", 1, 0) + m.MODI.pack(b"carhacks", b"2", 1, 0))) == 2)
+    check("a hello with no manifest parses as none", d.parse_manifest(hello) == [])
+
     # -- a co-hosted dedi must not list itself under an address nobody can dial
     check("loopback is caught", d.is_private_host("127.0.0.1") and d.is_private_host("localhost"))
     check("RFC1918 is caught",

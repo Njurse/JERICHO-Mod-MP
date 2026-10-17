@@ -156,6 +156,7 @@ flags: `limit=N`, and the opt-in *exclusions* `exclude_full=1` /
       "sdkVersion": 2,
       "gameBuild": 0,
       "ageSeconds": 12.5,
+      "modsEnforced": 1,
       "reachable": true,
       "probeMs": 31
     }
@@ -165,6 +166,10 @@ flags: `limit=N`, and the opt-in *exclusions* `exclude_full=1` /
 
 `ageSeconds` is how long ago the master last heard from that host (from the
 master's clock), so a client can render "12s ago".
+
+`modsEnforced` is the dedicated server's mod policy (0 admit anyone, 1 ids must
+match, 2 ids and versions), so a browser can warn before someone tries to join. It is the only mod information in a listing: there is no manifest hash, so the
+verdict itself only happens at join.
 
 `reachable` is whether anything **answers on the session port**, which is a
 different question from `ageSeconds`: an entry can heartbeat happily while nothing
