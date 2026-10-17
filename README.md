@@ -51,11 +51,14 @@ Take-a-Ride screen itself.
 `MpBeginJoinAsync` the LAN list uses, so a listed host lands in the normal lobby.
 
 It is the one screen whose rows the MODULE draws. A menu row is a single
-proportional string in a fixed box, so columns cannot be padded into line; the
-rows carry empty labels (the engine still navigates and highlights them) and the
-table is painted from `JER_EVENT_FRONTEND_DRAW` with `jer_text.h` and
-`jer_frontend_row_rect()`. **Not** `JER_EVENT_FRAME`: that fires before the
-engine draws the screen and the menu box lands on top of anything drawn there.
+proportional string, so columns cannot be padded into line; the rows carry empty
+labels (the engine still navigates and highlights them) and the table is painted
+from `JER_EVENT_FRONTEND_DRAW` with `jer_text.h` and `jer_frontend_row_rect()`.
+**Not** `JER_EVENT_FRAME`: that fires before the engine draws the screen and the
+menu box lands on top of anything drawn there. The menu asks the engine for a
+**wide row** (`JER_FE_MENU.row_w`) so five columns have somewhere to go, and the
+text is drawn in the FRONTEND's own face at the console's size — so the screen
+reads like the rest of the frontend rather than like an overlay.
 The mode and city names come from the host's own rules (`MpModeName`) and the
 engine's city registry (`MpCityLabel`), and `PING` shows `-` until a probe
 answers. The probe is a non-blocking CONNECT whose completion time is the

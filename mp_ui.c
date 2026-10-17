@@ -936,22 +936,26 @@ static void ManualOnEnter(void* ud)
  * JER_EVENT_FRAME does not work: that fires BEFORE DrawScreen and the menu box
  * lands on top of anything drawn there.
  *
- * The column offsets sit inside that box and the text is drawn at 55% of the
- * console's size, which is what fits five columns where one console line fits
- * one. Both numbers are answers a screenshot gives, not constants of nature. */
-#define ONLINE_SCALE		55
-#define ONLINE_COL_NAME		4
-#define ONLINE_COL_PLAYERS	86
-#define ONLINE_COL_MODE		112
-#define ONLINE_COL_CITY		188
-#define ONLINE_COL_PING		240
+ * The column offsets sit inside that box and the text is drawn in the FRONTEND's
+ * own face at the console's size, so the screen reads as one screen. The menu asks
+ * for a wide box (row_w) so five columns have somewhere to go: the stock 256-unit
+ * box cannot hold them at a readable size, and the engine's highlight grows with
+ * the box it was asked for. */
+#define ONLINE_SCALE		100	/* the console's size, in the frontend's face */
+#define ONLINE_COL_NAME		0
+#define ONLINE_COL_PLAYERS	196
+#define ONLINE_COL_MODE		268
+#define ONLINE_COL_CITY		434
+#define ONLINE_COL_PING		528
 #define ONLINE_NAME_CHARS	15	/* what the NAME column holds before it is cut */
+#define ONLINE_ROW_W		560	/* the menu's row width; the columns above fit it */
 
 static JER_FE_ITEM gOnlineItems[JER_FE_MAX_ITEMS];
 /* The heading is the screen's name, as the design calls for: it is the one piece
- * of this screen the engine draws (rows are ours). */
+ * of this screen the engine draws (rows are ours). row_w asks the engine for a box
+ * wide enough for five columns -- see the layout note above. */
 static JER_FE_MENU gOnlineMenu = { "mp.online", gOnlineItems, 0, NULL, NULL,
-				   "JERICHO DISCOVERY SERVER" };
+				   "JERICHO DISCOVERY SERVER", NULL, NULL, ONLINE_ROW_W };
 static int gOnlineRev = -1;		/* the list revision these rows were built from */
 static int gOnlineRows;			/* how many of item_count are SERVER rows: the rows
 					 * above the two fixed ones (Manual, Back),
@@ -1111,15 +1115,15 @@ void MpUiDrawOnline(void)
 	 * engine's own menu headings, and passed at full brightness because the ink is
 	 * halved on the way to the font (a "mid grey" 190 renders as 95 and reads as
 	 * smudge next to the rows). */
-	if (servers > 0 && jer_frontend_row_rect(0, count, &x, &y, &w, &h))
+	if (servers > 0 && jer_frontend_row_rect(0, &x, &y, &w, &h))
 	{
 		int hy = y - 16;
 
-		jer_text_draw_at(1, ONLINE_SCALE, x + ONLINE_COL_NAME,    hy, "SERVER NAME", 255, 190, 90);
-		jer_text_draw_at(1, ONLINE_SCALE, x + ONLINE_COL_PLAYERS, hy, "PLAYERS",     255, 190, 90);
-		jer_text_draw_at(1, ONLINE_SCALE, x + ONLINE_COL_MODE,    hy, "GAMEMODE",    255, 190, 90);
-		jer_text_draw_at(1, ONLINE_SCALE, x + ONLINE_COL_CITY,    hy, "CITY",        255, 190, 90);
-		jer_text_draw_at(1, ONLINE_SCALE, x + ONLINE_COL_PING,    hy, "PING",        255, 190, 90);
+		jer_text_draw_at(JER_TEXT_FE, ONLINE_SCALE, x + ONLINE_COL_NAME,    hy, "SERVER NAME", 255, 190, 90);
+		jer_text_draw_at(JER_TEXT_FE, ONLINE_SCALE, x + ONLINE_COL_PLAYERS, hy, "PLAYERS",     255, 190, 90);
+		jer_text_draw_at(JER_TEXT_FE, ONLINE_SCALE, x + ONLINE_COL_MODE,    hy, "GAMEMODE",    255, 190, 90);
+		jer_text_draw_at(JER_TEXT_FE, ONLINE_SCALE, x + ONLINE_COL_CITY,    hy, "CITY",        255, 190, 90);
+		jer_text_draw_at(JER_TEXT_FE, ONLINE_SCALE, x + ONLINE_COL_PING,    hy, "PING",        255, 190, 90);
 	}
 
 	for (i = 0; i < servers && i < count; i++)
@@ -1128,24 +1132,24 @@ void MpUiDrawOnline(void)
 		char cell[24];
 		char name[ONLINE_NAME_CHARS + 1];
 
-		if (s == NULL || !jer_frontend_row_rect(i, count, &x, &y, &w, &h))
+		if (s == NULL || !jer_frontend_row_rect(i, &x, &y, &w, &h))
 			continue;
 
 		snprintf(name, sizeof(name), "%.*s", ONLINE_NAME_CHARS, s->name);
-		jer_text_draw_at(1, ONLINE_SCALE, x + ONLINE_COL_NAME, y, name, 235, 235, 235);
+		jer_text_draw_at(JER_TEXT_FE, ONLINE_SCALE, x + ONLINE_COL_NAME, y, name, 235, 235, 235);
 
 		snprintf(cell, sizeof(cell), "%d/%d", s->players, s->maxPlayers);
-		jer_text_draw_at(1, ONLINE_SCALE, x + ONLINE_COL_PLAYERS, y, cell, 235, 235, 235);
+		jer_text_draw_at(JER_TEXT_FE, ONLINE_SCALE, x + ONLINE_COL_PLAYERS, y, cell, 235, 235, 235);
 
-		jer_text_draw_at(1, ONLINE_SCALE, x + ONLINE_COL_MODE, y, MpModeName(s->rules), 235, 235, 235);
-		jer_text_draw_at(1, ONLINE_SCALE, x + ONLINE_COL_CITY, y, MpCityLabel(s->city), 235, 235, 235);
+		jer_text_draw_at(JER_TEXT_FE, ONLINE_SCALE, x + ONLINE_COL_MODE, y, MpModeName(s->rules), 235, 235, 235);
+		jer_text_draw_at(JER_TEXT_FE, ONLINE_SCALE, x + ONLINE_COL_CITY, y, MpCityLabel(s->city), 235, 235, 235);
 
 		if (s->pingMs > 0)
 			snprintf(cell, sizeof(cell), "%d", s->pingMs);
 		else
 			snprintf(cell, sizeof(cell), "-");	/* not measured yet */
 
-		jer_text_draw_at(1, ONLINE_SCALE, x + ONLINE_COL_PING, y, cell, 235, 235, 235);
+		jer_text_draw_at(JER_TEXT_FE, ONLINE_SCALE, x + ONLINE_COL_PING, y, cell, 235, 235, 235);
 	}
 }
 
