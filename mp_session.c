@@ -2539,15 +2539,43 @@ void MpSendInput(int pad)
 		MpSendToHost(MP_TAG_INPUT, 0, buf, len);
 }
 
-static void MpHandleInput(const unsigned char* p, int len)
+/* Sender binding for a per-player row.
+ *
+ * Every state message names players by id, and an id on the wire is just a
+ * number. Without this check any peer could speak for any other player: send
+ * a row naming someone else and the hub would store it, then republish it as
+ * that player's own word.
+ *
+ * The rule differs by side because the TOPOLOGY does. The host is the hub: it
+ * receives one peer's own rows (so a row must name that peer) and rebroadcasts
+ * a merged set to everyone. A client only ever has ONE inbound connection --
+ * the host -- and its merged set legitimately carries every player, so there
+ * is nobody to bind against: `from` is the host, not the row's owner.
+ *
+ * `from` is -1 before a HELLO, which is exactly the window in which a stranger
+ * should not be able to name anybody at all. */
+static int MpRowOwnerOk(int from, int playerId)
+{
+	if (playerId < 0 || playerId >= MP_MAX_PLAYERS)
+		return 0;
+
+	if (!MpIsHost())
+		return 1;	/* the host already validated it, and it is our only peer */
+
+	return from >= 0 && playerId == from;
+}
+
+static void MpHandleInput(int connIndex, const unsigned char* p, int len)
 {
 	MP_INPUT h;
-	int n, i;
+	int n, i, from;
 
 	if (len < (int)sizeof(MP_INPUT))
 		return;
 
 	memcpy(&h, p, sizeof(h));
+
+	from = MpConnPlayerId(connIndex);
 
 	n = h.count;
 	if (n > MP_MAX_PLAYERS)
@@ -2569,6 +2597,18 @@ static void MpHandleInput(const unsigned char* p, int len)
 		 * truth for our own car, so leave it alone */
 		if (r.playerId == gMp.localPlayerId)
 			continue;
+
+		/* ...and a peer may only speak for ITSELF. Dropped rather than clamped:
+		 * a row that names someone else is not a mistake, it is the spoof. */
+		if (!MpRowOwnerOk(from, (int)r.playerId))
+		{
+			if (gMpCtx != NULL)
+				gMpCtx->jer_log(gMpCtx,
+					"[mp] input: dropped a row from player %d claiming player %d\n",
+					from, (int)r.playerId);
+
+			continue;
+		}
 
 		gMp.padForPlayer[r.playerId] = (int)r.pad;
 		gMp.inputHave[r.playerId] = 1;
@@ -7634,7 +7674,7 @@ void MpHandleMessage(int connIndex, const char* tag, const unsigned char* payloa
 
 	if (memcmp(tag, MP_TAG_INPUT, 4) == 0)
 	{
-		MpHandleInput(payload, len);
+		MpHandleInput(connIndex, payload, len);
 		return;
 	}
 
