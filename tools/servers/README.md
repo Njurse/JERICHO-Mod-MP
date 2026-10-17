@@ -74,11 +74,19 @@ docker compose up -d --build      # then: docker compose logs -f / ps / down
 [`dediserver/Dockerfile`](dediserver/Dockerfile)) and starts them with **host
 networking** — the dedi's LAN beacon is a UDP broadcast that a bridge network
 would keep to itself, and host networking is simply the tested configuration. So
-the ports are the host's: **open TCP 8100** (the master), **TCP 1400** (the
-session) and **UDP 1318** only if you want LAN browser discovery. `MASTER_PORT`,
-`DEDI_PORT`, `DEDI_NAME`, `DEDI_CITY`, `DEDI_RULES`, `DEDI_MAX_PLAYERS`,
-`ADVERTISE_HOST` and `LOG_LEVEL` are read from the environment (inline or a
-`.env`), and the two JSON configs stay on the host, mounted read-only.
+the ports are the host's: **open the master's TCP port** (8100) and **the dedi's
+session port** (its `port` in `dediserver.json`, 1318 as shipped), plus **UDP 1318**
+only if you want LAN browser discovery.
+
+**The dedicated server is configured by `dediserver/dediserver.json`** — mounted
+read-only into the container, and the only things the compose passes it are
+`--config` and the container log path. Its name, city, rules, max players, session
+port, `master` URL, advertise host/port, beacon and log level all come from that
+file. The compose used to pass those itself with defaults of its own, and command
+line beats the config — so editing the JSON did nothing and the server came up
+with a name and a loopback master nobody had asked for. The master keeps
+`MASTER_PORT` and `LOG_LEVEL` as environment overrides, since its port is also what
+the healthcheck and every player's `master_url` point at.
 
 ## Both on one VPS
 
@@ -95,20 +103,23 @@ docker compose up -d --build          # or: ./run.sh master &  and  ./run.sh ded
 
 Three things that decide whether the internet can actually use it:
 
-1. **Open both ports, in BOTH firewalls.** TCP/8100 (the master) and TCP/1318 (the
-   dedi's session port). `ufw allow …` is only the first; a cloud provider's
-   firewall sits *in front of* ufw and drops silently. UDP/1318 is only for LAN
-   discovery.
+1. **Open both ports, in BOTH firewalls.** TCP/8100 (the master) and the dedi's
+   session port — `dediserver.json`'s `port` (`1318` as shipped; the compose no
+   longer overrides it). `ufw allow …` is only the
+   first: a cloud provider's firewall sits *in front of* ufw and drops silently.
+   UDP/1318 is only for LAN discovery.
 2. **Do not point `master` at 127.0.0.1.** It is the obvious choice on one box, and
    it is wrong: the master records the address it saw you from — `127.0.0.1` — and
-   lists that to every internet client. Use the public name
-   (`"master": "http://jerichomp.animetiddi.es:8100"`) or set `advertise_host`. The
-   dedi now warns, and says so on its console, if it is listed under a loopback or
-   private address.
+   lists *that* to every internet client, so the row is undialable everywhere but
+   here. Use the public name (the shipped default is
+   `http://jerichomp.animetiddi.es:8100`; set `master` in `dediserver.json`) or set
+   `advertise_host`. The dedi warns in its log and on its
+   console when it is listed under a loopback or private address, because such a
+   listing looks perfectly healthy from this box.
 3. **Check it from somewhere else.** The master probes each listing's session port,
    but when both run on one box that probe reaches the server over the host's own
    address — it cannot see an external firewall. From another machine:
-   `python3 tools/mp_test.py client <host> --port 1318`.
+   `python3 tools/mp_test.py client <host> --port <session port>`.
 
 ## Consoles
 
