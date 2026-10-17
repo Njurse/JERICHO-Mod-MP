@@ -116,6 +116,14 @@ def main():
     a.close()
     b.close()
 
+    # -- config values that would otherwise fail QUIETLY
+    check("a scheme is stripped from advertise_host",
+          d.normalise_host("http://jerichomp.animetiddi.es") == "jerichomp.animetiddi.es")
+    check("a path, port and trailing dot go too",
+          d.normalise_host("https://play.example.net:1318/x.") == "play.example.net")
+    check("a bare host is left exactly alone",
+          d.normalise_host("203.0.113.5") == "203.0.113.5" and d.normalise_host("") == "")
+
     # -- a co-hosted dedi must not list itself under an address nobody can dial
     check("loopback is caught", d.is_private_host("127.0.0.1") and d.is_private_host("localhost"))
     check("RFC1918 is caught",

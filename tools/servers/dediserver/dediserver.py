@@ -80,6 +80,32 @@ ROSTER_REFRESH_S = 2.0
 CONFIG_NAME = "dediserver.json"
 
 
+def normalise_host(value):
+    """A registration host, cleaned: no scheme, no path, no port, no trailing dot.
+
+    `advertise_host` is what players DIAL, and it is easy to fill in with the URL you
+    have in your head -- "https://play.example.net/" -- which reads correctly and
+    lists wrongly: the master stores what it is given, so the address in every
+    client's browser becomes the scheme plus the name, and nothing can resolve it.
+    Only what cannot be part of a host is removed; nothing is guessed.
+    """
+    host = (value or "").strip()
+
+    if "://" in host:
+        host = host.split("://", 1)[1]
+
+    host = host.split("/", 1)[0].split("?", 1)[0].strip().rstrip(".")
+
+    # a port here is a mistake the operator means well by -- the port has its own key
+    if host.count(":") == 1:
+        name, _, tail = host.partition(":")
+
+        if tail.isdigit():
+            host = name
+
+    return host
+
+
 def is_private_host(host):
     """Is this an address that only works on the machine that owns it?
 
@@ -770,6 +796,41 @@ def main(argv=None):
     if path:
         log.debug("config: %s" % path)
     proto_check.assert_ok()
+
+    # -- the values that would otherwise fail quietly
+    cleaned = normalise_host(cfg["advertise_host"])
+
+    if cleaned != (cfg["advertise_host"] or ""):
+        log.warning("advertise_host %r -> %r (a scheme, path or port cannot be part "
+                    "of a host; the port has its own key)"
+                    % (cfg["advertise_host"], cleaned))
+        cfg["advertise_host"] = cleaned
+
+    # The listing's name comes from the wire's 32-byte field, and the master
+    # refuses anything outside 1..31 rather than truncating it itself -- so a long
+    # name costs the WHOLE registration (a 400 the log calls "master unreachable"),
+    # which reads like a network fault and is not one.
+    name = str(cfg["name"] or "")
+
+    if not (1 <= len(name) <= 31):
+        trimmed = (name.strip() or "JERICHO Server")[:31]
+        log.warning("name %r is %d characters; a listing's name is 1..31 (the wire "
+                    "field is 32 bytes with its terminator) and the master rejects the "
+                    "whole registration outside that, so it will be listed as %r"
+                    % (name, len(name), trimmed))
+        cfg["name"] = trimmed
+
+    if int(cfg["max_players"]) > m.MAX_PLAYERS:
+        log.warning("max_players %d is above the protocol's %d -- a player's slot is a "
+                    "number in MP_MAX_PLAYERS' range, and the client's roster holds %d, "
+                    "so the extra seats could not be used; using %d"
+                    % (int(cfg["max_players"]), m.MAX_PLAYERS, m.MAX_PLAYERS, m.MAX_PLAYERS))
+        cfg["max_players"] = m.MAX_PLAYERS
+
+    if int(cfg["city"]) < 0 or int(cfg["city"]) > 3:
+        log.warning("city %d is outside 0..3 (CHICAGO, HAVANA, LAS VEGAS, RIO); the "
+                    "clients will load whatever it names, if the level registry has it"
+                    % int(cfg["city"]))
 
     server = Dedicated(cfg, log)
 
