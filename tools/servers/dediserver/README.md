@@ -73,9 +73,9 @@ built-in defaults are used.
   find it in the browser; it is not needed for internet clients.
 * **Internet listing:** with `--master`, the server makes an outbound TCP
   connection to the master, so no inbound port for that. See
-  [`../masterserver/README.md`](../masterserver/README.md). (Listing a server on
-  the internet is a game-side feature still to come — see
-  [`docs/MASTER_SERVER.md`](../../../docs/MASTER_SERVER.md).)
+  [`../masterserver/README.md`](../masterserver/README.md). Players reach it from
+  the game's **Multiplayer -> Online** screen, which lists the master's servers
+  once `master_url` is set in `mp.ini`.
 
 ## Running it for a long time
 
