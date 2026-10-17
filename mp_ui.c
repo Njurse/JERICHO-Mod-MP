@@ -147,7 +147,7 @@ static void LblManualField(void* ud, char* o, int n)
 {
 	(void)ud;
 
-	snprintf(o, n, "%s %s%s", gManualEdit ? "Address (typing):" : "Address:",
+	snprintf(o, n, "%s %s%s", gManualEdit ? "" : "Address:",
 		gManualIp, gManualEdit ? "_" : "");
 }
 
@@ -763,7 +763,7 @@ static void JoinOnEnter(void* ud)
 	/* manual address -- its own submenu: there is somewhere to TYPE here, and a
 	 * DNS name would never fit on a single row with one adjust axis */
 	gJoinItems[k].label = NULL;
-	gJoinItems[k].label = "Manual address ...";
+	gJoinItems[k].label = "Manual Connect";
 	gJoinItems[k].userdata = NULL;
 	gJoinItems[k].on_activate = NULL;
 	gJoinItems[k].on_adjust = NULL;
@@ -805,7 +805,7 @@ static void LobbyOnEnter(void* ud)
 			snprintf(gLobbyStatus, sizeof(gLobbyStatus), "Connecting to %s:%d ...",
 				MpJoinTarget(), MpJoinTargetPort());
 		else
-			snprintf(gLobbyStatus, sizeof(gLobbyStatus), "(could not connect)");
+			snprintf(gLobbyStatus, sizeof(gLobbyStatus), "(Could not connect!)");
 
 		gLobbyItems[k].label = gLobbyStatus;
 		gLobbyItems[k].get_label = NULL;
@@ -1007,7 +1007,7 @@ static void ManualOnEnter(void* ud)
 					 * units under the screen title, which left nowhere for
 					 * a heading line: it landed ON the title */
 #define TABLE_ROW_STEP		24	/* the pitch BETWEEN servers: the tight one */
-#define TABLE_HEAD_GAP		34	/* headings -> first server. Deliberately LARGER than
+#define TABLE_HEAD_GAP		32	/* headings -> first server. Deliberately LARGER than
 					 * the pitch above, so the column headings read as
 					 * headings and not as another server row */
 #define TABLE_ROW_BOTTOM	474	/* where the pinned controls sit: the stock 462 leaves a

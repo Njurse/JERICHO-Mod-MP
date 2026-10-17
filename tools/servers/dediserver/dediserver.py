@@ -345,7 +345,13 @@ class Dedicated:
         sess = m.SESSION.pack(0, self.city, 1, 0, seed,
                               max(2, self.player_count() + 1), 1, 0)
         try:
-            m.send_frame(conn, m.TAG["welcome"], self._welcome(pid, running=0, seed=seed))
+            # running=1: a dedicated server IS a match in progress. It said 0, and
+            # the client takes its "the host has STARTed" branch only when this is
+            # set -- so a joiner was never offered the CAR SELECT and went straight
+            # into the session in whatever vehicle the module defaulted to. 0 is
+            # right for a host still sitting in its lobby; it is never right here.
+            m.send_frame(conn, m.TAG["welcome"],
+                         self._welcome(pid, running=1 if self.cfg["live"] else 0, seed=seed))
             m.send_frame(conn, m.TAG["start"], sess)
         except OSError:
             pass
