@@ -1177,6 +1177,12 @@ static void MpHandleRoster(const unsigned char* p, int len)
 	MP_ROSTER r;
 	int n, i;
 
+	/* A roster is the HOST's view of the match and nobody else's. Accepted only by
+	 * a client: a host that took one from a peer would adopt whatever the peer
+	 * wrote -- names, ids, and who is flagged as host. */
+	if (gMp.role != MP_ROLE_CLIENT)
+		return;
+
 	if (len < fixed || ((len - fixed) % (int)sizeof(MP_ROSTER_ENTRY)) != 0)
 		return;
 
@@ -1924,16 +1930,26 @@ void MpSendChat(const char* text)
 	}
 }
 
-static void MpHandleChat(const unsigned char* p, int len)
+static void MpHandleChat(int connIndex, const unsigned char* p, int len)
 {
 	MP_CHAT c;
 	MP_PLAYER* pl;
+	int from;
 
 	if (len < (int)sizeof(MP_CHAT))
 		return;
 
 	memcpy(&c, p, sizeof(c));
 	c.text[sizeof(c.text) - 1] = '\0';
+
+	/* The id in the frame says whose name a line is announced under, and the host is
+	 * the echo point -- so the host is the one place that can say who really spoke.
+	 * Without this a peer could post under any player's name (and the host would
+	 * relay it under that name to everybody). */
+	from = MpConnPlayerId(connIndex);
+
+	if (MpIsHost() && from >= 0)
+		c.playerId = (uint8_t)from;
 
 	pl = MpGetPlayer(c.playerId);
 
@@ -2096,6 +2112,11 @@ static void MpHandleWelcome(const unsigned char* p, int len)
 {
 	MP_WELCOME w;
 
+	/* host -> client only: a host that adopted a peer's welcome would take its own
+	 * player id, session rules and map shape from whoever sent it. */
+	if (gMp.role != MP_ROLE_CLIENT)
+		return;
+
 	if (len < (int)sizeof(MP_WELCOME))
 		return;
 
@@ -2223,6 +2244,12 @@ static void MpHandleReject(const unsigned char* p, int len)
 {
 	MP_REJECT r;
 
+	/* host -> client only. Received as a host this used to tear the session down
+	 * (role -> NONE, join -> FAILED), so one frame from any connected peer could
+	 * eject the host to the frontend. */
+	if (gMp.role != MP_ROLE_CLIENT)
+		return;
+
 	if (len < (int)sizeof(MP_REJECT))
 		return;
 
@@ -2283,6 +2310,12 @@ static void MpHandleChannel(int connIndex, const unsigned char* p, int len)
 
 static void MpHandleStart(const unsigned char* p, int len)
 {
+	/* host -> client only. A START received as a host is a peer choosing to launch
+	 * (or relaunch) THIS machine's level, with a city, weather and rules of its
+	 * choosing -- so it is dropped before even the auto-session effect below. */
+	if (gMp.role != MP_ROLE_CLIENT)
+		return;
+
 	/* An auto session launches itself here too: the usual case is that the host
 	 * was already waiting in its lobby, so it starts the match AFTER we join and
 	 * no welcome-time launch ever happened. Nothing here is re-entrant -- this
@@ -2660,6 +2693,12 @@ static void MpHandleInput(int connIndex, const unsigned char* p, int len)
 #define MP_HIT_SELF_FRAMES	4	/* our own engine reported this contact this recently */
 #define MP_HIT_PROBE_QUIET	90	/* ... and the probe stands down this long after one */
 
+/* The largest impulse a WELL-BEHAVED sender can produce, per axis: the normal is
+ * MP_FIXEDH-scaled and the push is capped at MP_HIT_MAX_PUSH. The wire carries an
+ * int32, so without this ceiling a peer could add +/-2^31 to a car's velocity at
+ * any distance -- see MpHandleHit. */
+#define MP_HIT_IMPULSE_MAX	(MP_FIXEDH * MP_HIT_MAX_PUSH)
+
 /* Contacts arm afresh in every match (see gMpHitArmFrame at the top of this file
  * for why the arm frame is session state and not a function local). */
 static int MpHitArmed(void)
@@ -2920,12 +2959,24 @@ static void MpHandleHit(int connIndex, const unsigned char* p, int len)
 {
 	MP_HIT h;
 	MP_PLAYER* me = MpLocalPlayer();
-	int from;
+	int from, i;
 
 	if (len < (int)sizeof(h))
 		return;
 
 	memcpy(&h, p, sizeof(h));
+
+	/* Clamp BEFORE anything acts on it. Nothing here checked the magnitude, and a
+	 * contact is reported by the peer that felt it -- so one message could have
+	 * flung any car it named across the map, from any distance. Clamped rather than
+	 * dropped so an over-large value still behaves like the hardest legal hit. */
+	for (i = 0; i < 3; i++)
+	{
+		if (h.impulse[i] > MP_HIT_IMPULSE_MAX)
+			h.impulse[i] = MP_HIT_IMPULSE_MAX;
+		else if (h.impulse[i] < -MP_HIT_IMPULSE_MAX)
+			h.impulse[i] = -MP_HIT_IMPULSE_MAX;
+	}
 
 	from = MpConnPlayerId(connIndex);
 
@@ -7763,7 +7814,7 @@ void MpHandleMessage(int connIndex, const char* tag, const unsigned char* payloa
 
 	if (memcmp(tag, MP_TAG_CHAT, 4) == 0)
 	{
-		MpHandleChat(payload, len);
+		MpHandleChat(connIndex, payload, len);
 		return;
 	}
 
