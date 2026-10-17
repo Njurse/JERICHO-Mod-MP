@@ -6,7 +6,7 @@ JERICHO_dev.exe clients that join the dedi, then reads every log and prints what
 each layer actually did. This is the "mock internet on one PC" rig: it needs no
 second machine, no port-forward and no internet.
 
-    python JERICHO/MODS/mp/tools/servers/local_stack.py                  # 1 client
+    python JERICHO/MODS/mp/tools/servers/rigs/local_stack.py                  # 1 client
     python .../local_stack.py --clients 2 --seconds 60
     python .../local_stack.py --clients 2 --beacon --keep
 
@@ -34,9 +34,9 @@ import time
 import urllib.error
 import urllib.request
 
-HERE = os.path.dirname(os.path.abspath(__file__))            # .../mp/tools/servers
-SERVERS = HERE
-TOOLS = os.path.dirname(HERE)                                 # .../mp/tools
+HERE = os.path.dirname(os.path.abspath(__file__))            # .../mp/tools/servers/rigs
+SERVERS = os.path.dirname(HERE)                               # .../mp/tools/servers
+TOOLS = os.path.dirname(SERVERS)                              # .../mp/tools
 REPO = os.path.abspath(os.path.join(TOOLS, "..", "..", "..", ".."))
 GAME_DIR_DEFAULT = os.path.join(REPO, "src_rebuild", "bin", "Release_dev")
 

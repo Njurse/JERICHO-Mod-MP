@@ -142,10 +142,10 @@ does the same after `idle_drop_s`.
 
 ## Testing
 
-`../test_e2e.py` starts this server and the master together on loopback and
+`../rigs/test_e2e.py` starts this server and the master together on loopback and
 checks registration, heartbeat, a client handshake, re-registration after a
 master restart, and unregister-on-shutdown — no game, no assets:
 
 ```sh
-python JERICHO/MODS/mp/tools/servers/test_e2e.py
+python JERICHO/MODS/mp/tools/servers/rigs/test_e2e.py
 ```

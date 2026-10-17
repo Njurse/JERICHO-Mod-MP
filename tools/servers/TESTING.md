@@ -10,7 +10,7 @@ The deployment target (a Linux VPS, likely Docker) is a separate step — see
 ## The rig — `local_stack.py`
 
 ```sh
-python JERICHO/MODS/mp/tools/servers/local_stack.py                    # master + dedi + 1 real client
+python JERICHO/MODS/mp/tools/servers/rigs/local_stack.py                    # master + dedi + 1 real client
 python .../local_stack.py --clients 2 --seconds 60                     # two clients
 python .../local_stack.py --clients 2 --beacon --keep                  # and leave the logs behind
 python .../local_stack.py --browser --seconds 13 --shots /tmp/shots     # the Online screen, photographed
@@ -62,7 +62,7 @@ Python layer is never mistaken for a real-client finding:
 ```sh
 python JERICHO/MODS/mp/tools/servers/proto_check.py
 python JERICHO/MODS/mp/tools/servers/masterserver/test_masterserver.py
-python JERICHO/MODS/mp/tools/servers/test_e2e.py
+python JERICHO/MODS/mp/tools/servers/rigs/test_e2e.py
 ```
 
 All three are in CI's **Checks** job and need no game assets.

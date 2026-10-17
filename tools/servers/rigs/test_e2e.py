@@ -27,10 +27,12 @@ import time
 import urllib.error
 import urllib.request
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-DEDI = os.path.join(HERE, "dediserver", "dediserver.py")
-MASTER = os.path.join(HERE, "masterserver", "masterserver.py")
-MOCK = os.path.join(os.path.dirname(HERE), "mp_test.py")   # tools/mp_test.py
+HERE = os.path.dirname(os.path.abspath(__file__))         # .../mp/tools/servers/rigs
+SERVERS = os.path.dirname(HERE)                           # .../mp/tools/servers
+TOOLS = os.path.dirname(SERVERS)                          # .../mp/tools
+DEDI = os.path.join(SERVERS, "dediserver", "dediserver.py")
+MASTER = os.path.join(SERVERS, "masterserver", "masterserver.py")
+MOCK = os.path.join(TOOLS, "mp_test.py")
 
 MASTER_TTL = 6
 HEARTBEAT = 2

@@ -16,13 +16,21 @@ launchers they ship, and its own README explaining which to use.
 
 | I want to… | Use |
 | --- | --- |
-| test anything, on one PC | **`mp_pair.bat`** |
-| host on this machine, by hand, two machines | `mp_host.bat` |
-| join, by hand, two machines | `mp_join.bat` |
-| drive the real game as a client with no second machine | `mp_mock_host.bat` |
-| leave a session running with no game window | `mp_dedi.bat` |
+| test anything, on one PC | **`mp_pair.bat`** / **`mp_pair.sh`** |
+| host on this machine, by hand, two machines | `mp_host.bat` / `mp_host.sh` |
+| join, by hand, two machines | `mp_join.bat` / `mp_join.sh` |
+| drive the real game as a client with no second machine | `mp_mock_host.bat` / `mp_mock_host.sh` |
+| leave a session running with no game window | `mp_dedi.bat` / `mp_dedi.sh` |
+| run the whole server stack (master + dedi + clients) | [`servers/run.sh`](servers/run.sh) / [`servers/run.bat`](servers/run.bat) |
 | let internet clients find a server | [`servers/masterserver/`](servers/masterserver/README.md) — a **separate project**, see [`servers/README.md`](servers/README.md) |
 | answer "is this build shippable?" in one command | **`run_gate.py`** |
+
+Every launcher in this folder has a **Linux/macOS twin** with the same name and the
+same arguments (`.sh` for `.bat`), so nothing here is Windows-only. The two
+differences are worth knowing: a `.sh` finds the binary without the `.exe` (Release on
+Linux is lowercased to `jericho`, Release_dev is `JERICHO_dev`), and it backgrounds the
+game with `nohup` and **prints the real PID**, where `start` in the `.bat` detaches
+and loses it.
 
 ## The delivery gate — `run_gate.py`
 
@@ -130,10 +138,13 @@ open** for LAN, direct internet join, and master listing.
 
 | Path | What it is |
 | --- | --- |
-| `servers/dediserver/` | the dedicated server (`mp_dedi.bat` wraps it) + `dediserver.json` + its README |
+| [`run.sh`](servers/run.sh) / [`run.bat`](servers/run.bat) | the one way in: `master`, `dedi`, `stack`, `checks`, `docker` |
+| [`docker-compose.yml`](servers/docker-compose.yml) | deploy the pair on a test server / VPS (host networking) |
+| `servers/dediserver/` | the dedicated server (`mp_dedi.bat`/`mp_dedi.sh` wrap it) + `dediserver.json` + its README |
 | `servers/masterserver/` | the **master discovery service** — a separate project, not part of the mod (see `servers/README.md`) |
 | `servers/proto_check.py` | fails if the `mp_test.py` wire mirror has drifted from `mp_proto.h` |
-| `servers/test_e2e.py` | master + dedi + client end-to-end on loopback, no game needed |
+| `servers/rigs/local_stack.py` | the rig: master + dedi + N real clients on this one PC |
+| `servers/rigs/test_e2e.py` | master + dedi + client end-to-end on loopback, no game needed |
 
 `tools/` is never mirrored into a build, so nothing here can ride along in a mod
 package by accident; `servers/README.md` explains why that matters for the master
