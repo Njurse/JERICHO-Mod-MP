@@ -2038,12 +2038,15 @@ static int MpColorAdjustB(void* ud, int dir) { (void)ud; return MpColorAdjust(&g
  * The CITIES come from carhacks when it is installed (a session can legitimately
  * mix cities' car data; that is what carhacks is for) and from the session's own
  * city alone when it is not. */
-#define MPCC_MAX_CITIES	CITY_COUNT	/* was 6, a guess from when only Driver 2's
-					 * four cities could be offered. carhacks answers
-					 * MP_CARQ_CITIES with CITY_COUNT entries now, and the
-					 * picker TRUNCATES to this - so at 6 the D1 cities past
-					 * the first two (LA, NEWYORK, NEWCASTLE) were silently
-					 * dropped and the menu showed only MIAMI and FRISCO. */
+#define MPCC_MAX_CITIES	CITY_COUNT	/* JERICHO: the engine's city ROW CAPACITY (stock nine +
+					 * 16 runtime bank slots), NOT the number of cities a
+					 * session has: carhacks answers MP_CARQ_CITIES with the
+					 * cities this install actually has (chkCityCount), and the
+					 * picker TRUNCATES to this. It was 6 when only Driver 2's
+					 * four cities could be offered, and the D1 cities past the
+					 * first two were silently dropped. Holding it at the
+					 * capacity means a runtime bank can never be the one that
+					 * gets truncated away. */
 #define MPCC_MAX_CARS	MP_CAR_LIST_MAX	/* NOT a literal: this is the `max` handed to
 					 * MpCarListForCity, whose contract IS
 					 * MP_CAR_LIST_MAX (mp.h). They must never

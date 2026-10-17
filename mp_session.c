@@ -4487,12 +4487,20 @@ static void MpTestCarCycleTick(void)
 		built = 1;
 		seed = (int)(0x2545F491u * (unsigned)(me->id + 1));	/* per seat: different orders */
 
+		/* JERICHO: the row capacity is the bound, but a bank row that is not
+		 * registered is not a city - a configured bank with no files leaves a hole,
+		 * and cycling a car out of it would build nothing on any peer. */
 		for (city = 0; city < CITY_COUNT && total < MP_TEST_CYCLE_MAX_CARS; city++)
 		{
 			int models[MP_CAR_LIST_MAX];
 			int slots[MP_CAR_LIST_MAX];
-			int count = MpCarListForCity(city, slots, models, MP_CAR_LIST_MAX);
+			int count;
 			int i;
+
+			if (!JerCityRegistered(city))
+				continue;
+
+			count = MpCarListForCity(city, slots, models, MP_CAR_LIST_MAX);
 
 			for (i = 0; i < count && total < MP_TEST_CYCLE_MAX_CARS; i++)
 			{
