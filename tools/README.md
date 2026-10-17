@@ -163,6 +163,7 @@ server in particular.
 | `servers/masterserver/masterserver.py` | the master discovery service (a **separate project** — see `servers/README.md`) |
 | `check_debug_independence.py` | fails if any debug `getenv` guard wraps control flow or state (see the traps doc) |
 | `_liveness_probe.py` | connects as a bare client and reports WELCOME/START/PONG/EOF -- the quick way to tell a server that answers from one that is silent |
+| `mp_spoof.py` | the peer-trust regression probe: joins as an ordinary client, then sends what a HOSTILE one would (an input row naming another player, a channel nobody registered) and reads the host's log to prove each was refused while the sender's own row still went through |
 
 **Liveness contract for any mock/dedi host.** A server here must answer a client's
 `PING` with a `PONG` (echo the tick) and keep the connection up; a client that gets
