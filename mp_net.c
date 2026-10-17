@@ -2940,7 +2940,16 @@ void MpOnlineRefresh(void)
 	gOnlineRetryAtMs = 0;
 
 	if (gOnlineHostHdr[0] == '\0')
-		return;			/* nothing configured */
+	{
+		/* An empty browser with no request on the wire looks, from outside, exactly
+		 * like a master that never answered -- so name which one it is. */
+		if (gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx,
+				"[mp] online: nothing to fetch (no discovery server; name '%s')\n",
+				gOnlineName);
+
+		return;
+	}
 
 	snprintf(req, sizeof(req),
 		"GET /v1/servers?limit=%d HTTP/1.1\r\n"
@@ -3185,6 +3194,10 @@ void MpOnlineSetWatching(int on)
 		return;
 
 	gOnlineWatching = on;
+
+	if (gMpCtx != NULL)
+		gMpCtx->jer_log(gMpCtx, "[mp] online: watching %s (state %d, name '%s')\n",
+			on ? "on" : "off", gOnlineState, gOnlineName);
 
 	if (!on)
 	{

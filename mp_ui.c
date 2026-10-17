@@ -1006,8 +1006,10 @@ static void ManualOnEnter(void* ud)
 #define TABLE_ROW_TOP		210	/* where the ROSTER starts. The stock 190 sits barely 24
 					 * units under the screen title, which left nowhere for
 					 * a heading line: it landed ON the title */
-#define TABLE_ROW_STEP		24	/* the pitch BETWEEN servers: the tight one */
-#define TABLE_HEAD_GAP		32	/* headings -> first server. Deliberately LARGER than
+#define TABLE_ROW_STEP		28	/* the pitch BETWEEN servers. Tighter than this and the
+					   rows stop reading as rows: at 100% the console's own
+					   line pitch is 26, so 24 had them sitting on each other */
+#define TABLE_HEAD_GAP		38	/* headings -> first server. Deliberately LARGER than
 					 * the pitch above, so the column headings read as
 					 * headings and not as another server row */
 #define TABLE_ROW_BOTTOM	474	/* where the pinned controls sit: the stock 462 leaves a
@@ -1428,8 +1430,30 @@ void MpUiTick(void)
 	 * any route (Back, Escape, a breadcrumb, a session starting), and stopping the
 	 * request and any pending retry on the next frame. A launch that never opens the
 	 * browser therefore never speaks to the master at all. */
-	if (!MpMenuIs(M_ONLINE))
-		MpOnlineSetWatching(0);
+	{
+		/* The screen starts the watch (OnlineOnEnter) but the engine does not
+		 * report it as CURRENT until after the enter callback, so an immediate
+		 * "not on screen" would cancel the fetch it had just begun -- which is
+		 * exactly what left the table empty while the master logged the request.
+		 * Only a screen that has been away for a moment ends the watch. */
+		static unsigned long offSince;
+
+		if (MpMenuIs(M_ONLINE))
+		{
+			offSince = 0;
+
+			/* STARTING cannot be left to on_enter: the engine runs it on screen
+			 * SETUP, and a screen that is already current when the module registers
+			 * never gets one -- which left the roster empty with the master never
+			 * being asked. SetWatching is idempotent, so this is one fetch per
+			 * visit, from whichever of the two paths gets there first. */
+			MpOnlineSetWatching(1);	/* idempotent: one fetch per visit */
+		}
+		else if (offSince == 0)
+			offSince = MpNowMs() ? MpNowMs() : 1;
+		else if ((MpNowMs() - offSince) >= 500)
+			MpOnlineSetWatching(0);
+	}
 
 	OnlineAnnounce();
 
