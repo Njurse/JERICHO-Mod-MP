@@ -961,6 +961,7 @@ static void MpJoinFail(const char* why)
 		gMp.role = MP_ROLE_NONE;
 
 	jer_error("Could not join the server at %s:%d", gConnectingHost, gConnectingPort);
+	jer_console_log("join failed: %s:%d (%s)", gConnectingHost, gConnectingPort, why);
 
 	MpConnEvent("join FAILED", -1, why);
 
@@ -1537,6 +1538,10 @@ static void MpDropConn(int idx, const char* why)
 	if (gMp.role == MP_ROLE_CLIENT && !gMp.leaving)
 	{
 		jer_error("Lost the server %s (%s)",
+			gConn[idx].peer[0] ? gConn[idx].peer : gConnectingHost,
+			MpStageName(gConn[idx].hsStage));
+
+		jer_console_log("lost the server %s (%s)",
 			gConn[idx].peer[0] ? gConn[idx].peer : gConnectingHost,
 			MpStageName(gConn[idx].hsStage));
 		MpReturnToFrontend();
@@ -2942,8 +2947,12 @@ void MpOnlineSetMaster(const char* url)
  * resolver for one. A NAME would block, which is why the queue is drained here
  * (from the fetch's own arrival) rather than anywhere more time-critical.
  *
- * A row that cannot be measured keeps MP_ONLINE_PING_UNSET and the browser shows
- * a dash: "no measurement" and "a slow server" must not look the same.
+ * A row nobody has measured keeps MP_ONLINE_PING_UNSET and the browser shows a
+ * dash: "no measurement" and "a slow server" must not look the same. A row whose
+ * connect FAILED gets MP_ONLINE_PING_FAILED and shows an x -- that is the cell
+ * that tells a player, before they click, that the listed server is not dialable
+ * (a shut port is the usual reason, and it was the reason this was added: a
+ * working listing, a shut session port, and nothing on screen to say so).
  *
  * The reading is quantised by the FRAME -- the connect is started one frame and
  * noticed one or more frames later -- so a round trip shorter than a frame
@@ -2956,6 +2965,23 @@ static SOCKET gOnlinePingSock = INVALID_SOCKET;
 static int  gOnlinePingIndex = -1;	/* the row being probed, -1 = idle */
 static int  gOnlinePingNext;		/* the next row to probe */
 static unsigned long gOnlinePingStartMs;
+
+/* The row is listed but nothing answers on it. Said in the console as well as the
+ * log, because the player reading the browser is the one who needs it -- the log
+ * is read by someone else, later. */
+static void MpOnlinePingFailed(int index)
+{
+	if (index < 0 || index >= gOnlineCount)
+		return;
+
+	gOnline[index].pingMs = MP_ONLINE_PING_FAILED;
+
+	jer_console_log("online: %s:%d does not answer", gOnline[index].host, gOnline[index].port);
+
+	if (gMpCtx != NULL)
+		gMpCtx->jer_log(gMpCtx, "[mp] online: %s:%d listed but unreachable\n",
+			gOnline[index].host, gOnline[index].port);
+}
 
 static void MpOnlinePingReset(void)
 {
@@ -3018,6 +3044,9 @@ static void MpOnlinePingPoll(void)
 		{
 			if (MpElapsedMs(MpNowMs(), gOnlinePingStartMs) > (unsigned long)MP_ONLINE_PING_TIMEOUT_MS)
 			{
+				/* a connect that never completes is as undialable as one that
+				 * is refused, so it gets the same mark */
+				MpOnlinePingFailed(gOnlinePingIndex);
 				MpCloseSock(&gOnlinePingSock);
 				gOnlinePingIndex = -1;
 			}
@@ -3033,6 +3062,10 @@ static void MpOnlinePingPoll(void)
 				gMpCtx->jer_log(gMpCtx, "[mp] online ping: row %d %s:%d = %d ms\n",
 					gOnlinePingIndex, gOnline[gOnlinePingIndex].host,
 					gOnline[gOnlinePingIndex].port, gOnline[gOnlinePingIndex].pingMs);
+		}
+		else
+		{
+			MpOnlinePingFailed(gOnlinePingIndex);
 		}
 
 		MpCloseSock(&gOnlinePingSock);

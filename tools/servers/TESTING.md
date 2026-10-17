@@ -309,6 +309,54 @@ does not register itself — that reaches the master through
 hosts register (any process), clients list IN GAME and join. The remaining half is
 [`docs/MASTER_SERVER.md`](../../docs/MASTER_SERVER.md) sections 1-2.
 
+### F4 — the join failed at a shut port, and nothing said so — 2026-10-17
+
+Reported as *"I try to join and it does not let me into the game"*. The servers were
+fine. The session port was not reachable from outside, and neither the game nor the
+master said a word about it.
+
+Measured from a machine that is not the VPS (recorded verbatim):
+
+```
+$ curl http://jerichomp.animetiddi.es:8100/v1/health
+{"ok": true, "version": 1, "uptimeSeconds": 10061.1, "servers": 1}
+
+$ curl http://jerichomp.animetiddi.es:8100/v1/servers
+..."name": "Dedicated", "host": "143.198.78.241", "port": 1318, "protoVersion": 11...
+
+$ python tools/mp_test.py client jerichomp.animetiddi.es --port 1318 --timeout 10
+TimeoutError: timed out
+```
+
+A registry listing a server that cannot be dialled, and a client that waits out the
+whole connect timeout before saying `timed out`. Both halves are answered now:
+
+* the browser marks a row whose connect **fails** with an `x` in `PING`
+  (`MP_ONLINE_PING_FAILED`) next to the `-` that means "not measured yet", so a
+  listed-but-shut server is visible *before* anyone clicks it, and the console says
+  `online: host:port does not answer`;
+* a join attempt says `joining host:port` when it starts and
+  `join failed: host:port (reason)` when it gives up, so the wait is not silent.
+
+Three places the port can be shut, in the order worth checking:
+
+1. **the host firewall** — `ufw status`, then `ufw allow 1318/tcp`;
+2. **the cloud provider's firewall**, which sits *in front of* ufw and is the one
+   people forget (DigitalOcean: Networking → Firewalls);
+3. **the container**, if the dedi runs in one. The compose uses host networking, so
+   the port is the host's; a bridge network would need `-p 1318:1318/tcp`.
+
+The check that answers it in one line, from any machine:
+
+```
+python tools/mp_test.py client <host> --port <session port> --timeout 8
+```
+
+A `TimeoutError` is a shut port. A clean run prints the `WELCOME`, and then the game
+will join. Also worth knowing: the master's own log now carries a `listing -> N
+entr(ies) to <ip>` line per fetch, so "is anything discovering me?" and "can anything
+reach my session?" are different questions with different answers in the same file.
+
 ## Ranking — what each finding blocks
 
 | # | finding | what it blocks | severity |
@@ -316,6 +364,7 @@ hosts register (any process), clients list IN GAME and join. The remaining half 
 | **F2** | ~~no `MP_TAG_ROSTER` → no client sees any other player~~ | **FIXED** — the dedi broadcasts the roster; three clients converge on two visible peers each | done |
 | **F1** | `mpLevel=0`/`arena=0` → a full city, on which the level self-ends (3 of 6 runs) | a stable session for even one real client | **BLOCKER** (intermittent) |
 | **F3** | a refused client is told nothing (no half-close) | legibility of a full/refused join | worth fixing |
+| **F4** | ~~a shut session port, with nothing on screen to say so~~ | **FIXED** — the browser's `PING` shows `x` for a listed-but-unreachable server, and a join says `joining`/`join failed (reason)`; the shut port itself is the operator's firewall | done |
 | **F\*** | a bare TCP connect is logged as `bad handshake` | nothing gameplay; log noise for an external monitor | cosmetic |
 
 **Three checks the plan named, and why they could not be measured yet:**

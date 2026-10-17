@@ -342,6 +342,12 @@ static int ActJoinServer(void* ud)
 			s != NULL ? s->inProgress : -1, s != NULL ? s->players : -1,
 			s != NULL ? s->maxPlayers : -1);
 
+	/* The attempt says itself in the console as well as the lobby: a join that
+	 * cannot reach the server used to be silent for the whole timeout, and a
+	 * player who sees nothing happen clicks again. */
+	if (s != NULL)
+		jer_console_log("joining %s:%d", s->ip, s->port);
+
 	/* asynchronous: the lobby shows "Connecting to <addr>..." while the
 	 * socket connects, instead of the menu freezing for up to 5 s */
 	if (s != NULL && MpBeginJoinAsync(s->ip, s->port))
@@ -462,6 +468,8 @@ static int ActManualConnect(void* ud)
 
 	if (gMpCtx != NULL)
 		gMpCtx->jer_log(gMpCtx, "[mp] joining manual %s:%d\n", host, port);
+
+	jer_console_log("joining %s:%d", host, port);
 
 	if (MpBeginJoinAsync(host, port))
 		jer_frontend_open(gMenuIdx[M_LOBBY]);
@@ -1365,6 +1373,8 @@ static void TableDraw(int online)
 
 		if (r.pingMs > 0)
 			snprintf(cell, sizeof(cell), "%d", r.pingMs);
+		else if (r.pingMs == MP_ONLINE_PING_FAILED)
+			snprintf(cell, sizeof(cell), "x");	/* listed, but nothing answers */
 		else
 			snprintf(cell, sizeof(cell), "-");	/* not measured yet */
 
