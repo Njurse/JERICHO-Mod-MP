@@ -6,7 +6,7 @@ rem
 rem   run.bat master             the DISCOVERY SERVER: the registry players list from
 rem   run.bat dedi [options]     a headless DEDICATED SERVER, registered with it
 rem   run.bat stack [options]    master + dedi + N real clients on this one PC (the rig)
-rem   run.bat checks             the three checks CI runs for this folder
+rem   run.bat checks             the checks CI runs for this folder
 rem   run.bat docker             docker compose up -d --build, for a VPS
 rem   run.bat help
 rem
@@ -43,7 +43,7 @@ if /i "%VERB%"=="stack" (
 )
 if /i "%VERB%"=="checks" (
     set "FAIL=0"
-    for %%T in (proto_check.py masterserver\test_masterserver.py rigs\test_e2e.py) do (
+    for %%T in (proto_check.py check_images.py masterserver\test_masterserver.py rigs\test_e2e.py) do (
         echo.
         echo == %%T
         "%MP_PYTHON%" "%HERE%%%T" || set "FAIL=1"

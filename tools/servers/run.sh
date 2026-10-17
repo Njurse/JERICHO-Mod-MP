@@ -6,7 +6,7 @@
 #   ./run.sh master             the DISCOVERY SERVER: the registry players list from
 #   ./run.sh dedi [options]     a headless DEDICATED SERVER, registered with it
 #   ./run.sh stack [options]    master + dedi + N real clients on this one PC (the rig)
-#   ./run.sh checks             the three checks CI runs for this folder
+#   ./run.sh checks             the checks CI runs for this folder
 #   ./run.sh docker             docker compose up -d --build, for a VPS
 #   ./run.sh help
 #
@@ -38,10 +38,10 @@ stack)
 	exec "$PY" "$HERE/rigs/local_stack.py" "$@"
 	;;
 checks)
-	# the same three the CI job runs, in the same order, stopping at the first
+	# the same set the CI job runs, in the same order, stopping at the first
 	# failure -- a green run here is what "the servers are fine" means
 	fail=0
-	for t in proto_check.py masterserver/test_masterserver.py rigs/test_e2e.py; do
+	for t in proto_check.py check_images.py masterserver/test_masterserver.py rigs/test_e2e.py; do
 		echo
 		echo "== $t"
 		"$PY" "$HERE/$t" || fail=1

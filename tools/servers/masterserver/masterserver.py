@@ -39,8 +39,14 @@ DEFAULT_PORT = 8100
 # The optional wire-mirror check. If the mp tools are not beside us (a standalone
 # copy of this project), the master still runs -- it just cannot warn about a
 # host whose protoVersion differs from this checkout's mirror.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+# The plumbing both servers share: Log, the config merge, signals, and (later) the
+# console. It sits one directory up, beside this file's parent -- the same place
+# proto_check lives, so one path insert serves both.
+from serverkit import LEVELS, Log, apply_overrides, install_signals, load_config  # noqa: E402
+
 try:
-    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     import proto_check  # type: ignore
     import mp_test as mp_proto  # type: ignore
 
@@ -48,40 +54,6 @@ try:
 except Exception:  # pragma: no cover - standalone copy
     proto_check = None
     EXPECTED_PROTO = None
-
-
-# --------------------------------------------------------------------------- log
-LEVELS = {"debug": 10, "info": 20, "warning": 30, "error": 40}
-
-
-class Log:
-    def __init__(self, level="info", path=""):
-        self.min = LEVELS.get(level, 20)
-        self.fh = None
-        if path:
-            self.fh = open(path, "a", encoding="utf-8", buffering=1)
-        self.lock = threading.Lock()
-
-    def _emit(self, lvl, msg):
-        if LEVELS[lvl] < self.min:
-            return
-        line = "%s [%s] %s" % (time.strftime("%Y-%m-%d %H:%M:%S"), lvl.upper(), msg)
-        with self.lock:
-            print(line, flush=True)
-            if self.fh:
-                self.fh.write(line + "\n")
-
-    def debug(self, m):
-        self._emit("debug", m)
-
-    def info(self, m):
-        self._emit("info", m)
-
-    def warning(self, m):
-        self._emit("warning", m)
-
-    def error(self, m):
-        self._emit("error", m)
 
 
 # ----------------------------------------------------------------------- registry
@@ -499,14 +471,6 @@ DEFAULTS = {
 }
 
 
-def load_config(path):
-    cfg = dict(DEFAULTS)
-    if path:
-        with open(path, "r", encoding="utf-8") as f:
-            cfg.update(json.load(f))
-    return cfg
-
-
 def sweeper(registry, stop, log):
     interval = max(1.0, float(registry.cfg.get("sweep_s", 5)))
     while not stop.wait(interval):
@@ -528,6 +492,14 @@ def serve(cfg, log):
              % (cfg["bind"], int(cfg["port"]), API_VERSION, cfg["ttl_s"], registry.count()))
 
     stop = threading.Event()
+    install_signals(stop, log)
+
+    # httpd.shutdown() blocks until serve_forever returns, so it cannot be called
+    # from this thread: a watcher waits for the stop event and asks the server to
+    # stop from outside. Without it a signal set the flag and nothing else.
+    threading.Thread(target=lambda: (stop.wait(), httpd.shutdown()),
+                     daemon=True).start()
+
     threading.Thread(target=sweeper, args=(registry, stop, log), daemon=True).start()
     try:
         httpd.serve_forever()
@@ -555,19 +527,16 @@ def main(argv=None):
     args = ap.parse_args(argv)
 
     try:
-        cfg = load_config(args.config)
+        cfg = load_config(args.config, DEFAULTS)
     except (OSError, ValueError) as e:
         sys.stderr.write("masterserver: could not read config %r: %s\n" % (args.config, e))
         return 1
 
-    for flag, key in (
+    apply_overrides(cfg, args, (
         ("bind", "bind"), ("port", "port"), ("ttl", "ttl_s"), ("sweep", "sweep_s"),
         ("max_entries", "max_entries"), ("persist", "persist_path"),
         ("log_level", "log_level"), ("log_file", "log_file"), ("public_url", "public_url"),
-    ):
-        v = getattr(args, flag)
-        if v is not None:
-            cfg[key] = v
+    ))
 
     log = Log(cfg.get("log_level", "info"), cfg.get("log_file", ""))
     if proto_check is not None:

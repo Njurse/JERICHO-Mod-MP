@@ -10,6 +10,7 @@ WORKDIR /mp
 COPY mp_proto.h                                   /mp/mp_proto.h
 COPY tools/mp_test.py                             /mp/tools/mp_test.py
 COPY tools/servers/proto_check.py                 /mp/tools/servers/proto_check.py
+COPY tools/servers/serverkit.py                   /mp/tools/servers/serverkit.py
 COPY tools/servers/dediserver/dediserver.py       /mp/tools/servers/dediserver/dediserver.py
 COPY tools/servers/dediserver/dediserver.json     /mp/tools/servers/dediserver/dediserver.json
 

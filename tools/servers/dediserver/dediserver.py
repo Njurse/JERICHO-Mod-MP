@@ -26,7 +26,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import signal
 import socket
 import struct
 import sys
@@ -35,6 +34,11 @@ from urllib.parse import urlsplit
 import time
 import urllib.error
 import urllib.request
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from serverkit import (LEVELS, Log, apply_overrides,   # noqa: E402
+                       install_signals, load_config)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 TOOLS = os.path.dirname(os.path.dirname(HERE))      # .../mp/tools
@@ -99,51 +103,6 @@ def master_base(url):
         return ""
 
     return "%s://%s:%d" % (parts.scheme or "http", host, parts.port or 8100)
-
-
-def load_config(path):
-    cfg = dict(DEFAULTS)
-    if path and os.path.exists(path):
-        with open(path, "r", encoding="utf-8") as f:
-            cfg.update(json.load(f))
-    return cfg
-
-
-# --------------------------------------------------------------------------- log
-LEVELS = {"debug": 10, "info": 20, "warning": 30, "error": 40}
-
-
-class Log:
-    """stdout, and optionally a file. Join/leave/error lines are the ones that
-    matter when a client "never connected" vs "connected and was dropped"."""
-
-    def __init__(self, level="info", path=""):
-        self.min = LEVELS.get(level, 20)
-        self.lock = threading.Lock()
-        self.fh = None
-        if path:
-            self.fh = open(path, "a", encoding="utf-8", buffering=1)
-
-    def _emit(self, lvl, msg):
-        if LEVELS[lvl] < self.min:
-            return
-        line = "%s [%s] %s" % (time.strftime("%Y-%m-%d %H:%M:%S"), lvl.upper(), msg)
-        with self.lock:
-            print(line, flush=True)
-            if self.fh:
-                self.fh.write(line + "\n")
-
-    def debug(self, msg):
-        self._emit("debug", msg)
-
-    def info(self, msg):
-        self._emit("info", msg)
-
-    def warning(self, msg):
-        self._emit("warning", msg)
-
-    def error(self, msg):
-        self._emit("error", msg)
 
 
 # ---------------------------------------------------------------------- the server
@@ -591,8 +550,8 @@ def build_config(argv):
     if path is None:
         default_path = os.path.join(HERE, CONFIG_NAME)
         path = default_path if os.path.exists(default_path) else ""
-    cfg = load_config(path)
-    for flag, key in (
+    cfg = load_config(path, DEFAULTS)
+    apply_overrides(cfg, args, (
         ("port", "port"), ("name", "name"), ("city", "city"), ("gamemode", "gamemode"),
         ("max_players", "max_players"), ("beacon", "beacon"), ("beacon_ms", "beacon_ms"),
         ("idle_drop_s", "idle_drop_s"), ("rules", "rules"),
@@ -600,10 +559,7 @@ def build_config(argv):
         ("master", "master"), ("master_name", "master_name"),
         ("advertise_host", "advertise_host"), ("advertise_port", "advertise_port"),
         ("master_interval_s", "master_interval_s"),
-    ):
-        v = getattr(args, flag)
-        if v is not None:
-            cfg[key] = v
+    ))
     return cfg, path
 
 
@@ -616,18 +572,7 @@ def main(argv=None):
 
     server = Dedicated(cfg, log)
 
-    def on_signal(signum, _frame):
-        log.info("signal %d received" % signum)
-        server.stop.set()
-
-    for name in ("SIGINT", "SIGTERM", "SIGBREAK"):
-        sig = getattr(signal, name, None)
-        if sig is None:
-            continue
-        try:
-            signal.signal(sig, on_signal)
-        except (ValueError, OSError):
-            pass
+    log.debug("signals: %s" % ", ".join(install_signals(server.stop, log)))
 
     return server.run()
 
