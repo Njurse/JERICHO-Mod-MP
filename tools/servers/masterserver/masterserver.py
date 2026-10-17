@@ -396,6 +396,19 @@ class Handler(BaseHTTPRequestHandler):
         if not (1 <= port <= 65535):
             return self._error(400, "bad_port", "port must be 1..65535")
 
+        # The port PLAYERS should dial, when NAT rewrites it. A host whose router maps
+        # public 30000 -> local 1318 registers port=1318 and advertisePort=30000, and
+        # the listing has to name the one that works. Everything downstream (the key,
+        # the listing, the log) then treats the advertised port as the entry's port.
+        try:
+            adv = int(body.get("advertisePort") or 0)
+        except (TypeError, ValueError):
+            return self._error(400, "bad_advertise_port", "advertisePort must be an integer")
+        if adv:
+            if not (1 <= adv <= 65535):
+                return self._error(400, "bad_advertise_port", "advertisePort must be 1..65535")
+            port = adv
+
         fields = {
             "name": name, "port": port,
             "city": _clamp(body.get("city", 0), 0, 3),

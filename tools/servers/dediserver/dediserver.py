@@ -62,6 +62,7 @@ DEFAULTS = {
     "master": "",
     "master_name": "",
     "advertise_host": "",     # public address players reach us on ("" = the address we register from); set this behind NAT
+    "advertise_port": 0,      # public port players dial (0 = our session port); set this when the router REMAPS it
     "master_interval_s": 20.0, # heartbeat cadence; keep well under the master's ttl
     "master_timeout_s": 5.0,
 }
@@ -347,6 +348,16 @@ class Dedicated:
         while not self.stop.is_set():
             try:
                 if token is None:
+                    # Where players actually reach us, when that is not where the master
+                    # sees us. Both halves matter behind NAT: the address it would record
+                    # is private, and a remapping router can hand out a public port that
+                    # differs from our session port.
+                    adv = {}
+                    if self.cfg["advertise_host"]:
+                        adv["advertiseHost"] = self.cfg["advertise_host"]
+                    if int(self.cfg["advertise_port"]):
+                        adv["advertisePort"] = int(self.cfg["advertise_port"])
+
                     st, body = post("/v1/register", {
                         "name": self.cfg["master_name"] or self.cfg["name"],
                         "port": self.port, "city": self.city,
@@ -357,12 +368,7 @@ class Dedicated:
                         "players": self.player_count(), "maxPlayers": self.max_players,
                         "inProgress": 1 if self.cfg["live"] else 0,
                         "protoVersion": m.PROTO, "sdkVersion": m.SDK,
-                        # The address PLAYERS reach us on, when that is not the
-                        # address we register from. Behind NAT it never is: the
-                        # master would list our private 192.168.x.x and nobody
-                        # outside could use the listing.
-                        **({"advertiseHost": self.cfg["advertise_host"]}
-                           if self.cfg["advertise_host"] else {}),
+                        **adv,
                     })
                     if st not in (200, 201):
                         raise OSError("register returned %s" % st)
@@ -454,6 +460,9 @@ def parse_args(argv):
     ap.add_argument("--log-file")
     ap.add_argument("--master", help="master discovery URL, e.g. http://host:8100 ('' disables)")
     ap.add_argument("--master-name", help="name to register with the master (default: --name)")
+    ap.add_argument("--advertise-port", metavar="N", type=int,
+                    help="the public port players dial, if the router remaps it (0 = this "
+                         "server's own --port). Only needed when the forward is not 1:1")
     ap.add_argument("--advertise-host", metavar="HOST",
                     help="the address players reach this server on, if that is not the "
                          "address the master sees (a NAT'd server: your public IP or hostname). "
@@ -475,7 +484,7 @@ def build_config(argv):
         ("idle_drop_s", "idle_drop_s"), ("rules", "rules"),
         ("log_level", "log_level"), ("log_file", "log_file"),
         ("master", "master"), ("master_name", "master_name"),
-        ("advertise_host", "advertise_host"),
+        ("advertise_host", "advertise_host"), ("advertise_port", "advertise_port"),
         ("master_interval_s", "master_interval_s"),
     ):
         v = getattr(args, flag)

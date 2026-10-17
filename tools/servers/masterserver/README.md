@@ -82,7 +82,9 @@ the previous entry and issues a fresh token.
   "protoVersion": 11,       // mp_proto.h MP_PROTO_VERSION
   "sdkVersion": 2,
   "gameBuild": 0,           // JERICHO build hash, optional
-  "advertiseHost": "game.example.com"   // OPTIONAL override of the public address
+  "advertiseHost": "game.example.com",  // OPTIONAL override of the public address
+  "advertisePort": 30000                // OPTIONAL override of the port players dial,
+                                        // for a router that REMAPS it (0/absent = `port`)
 }
 ```
 
@@ -180,6 +182,11 @@ a browser. Not an API — it links to `/v1/servers`.
 * **The public address is derived, not trusted.** `host` comes from the socket
   peer address. `advertiseHost` is an explicit override for a host behind a
   reverse proxy or with a known public DNS name; the master does not guess it.
+* **The port is the one players can dial.** `advertisePort`, when sent, becomes
+  the entry's port — the listing names it, and it is what identifies the entry.
+  A host whose router maps public `30000` to local `1318` registers
+  `port: 1318, advertisePort: 30000`, so the list shows `host:30000`. Without it
+  the master assumes the forward is 1:1, which is the usual case for a game rule.
 * **In memory.** v1 keeps the registry in memory. An optional `persist_path`
   writes it to JSON on change and reloads on start, so a master restart does not
   blank the list; it is off by default.

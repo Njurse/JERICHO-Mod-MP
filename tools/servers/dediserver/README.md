@@ -34,6 +34,8 @@ Then join it from anywhere:
 --advertise-host H   the address PLAYERS reach us on, if that is not the address the
                      master sees. Behind NAT this is your public IP or hostname; the
                      listing is unusable without it
+--advertise-port N   the public port players dial, when the router REMAPS ours
+                     (0 = --port). Only needed when the forward is not 1:1
 ```
 
 CLI flags override the config file. The config file is optional — with none, the
@@ -57,6 +59,7 @@ built-in defaults are used.
   "master": "",             // "" disables registration; e.g. "http://master.example.com:8100"
   "master_name": "",
   "advertise_host": "",
+  "advertise_port": 0,
   "master_interval_s": 20.0,
   "master_timeout_s": 5.0
 }
@@ -92,7 +95,8 @@ the master together (`docker compose up -d --build`), with `--port`, `--name`,
     player can reach. This does not affect LAN play: the beacon's address is
     taken from the packet, not from the listing.
   * Forward the **session port (TCP)** on the same address. `advertise_host` says
-    WHERE to connect; the port in the listing is the one `--port` set.
+    WHERE to connect. The port in the listing is `--port`, unless the router hands
+    out a different public port -- then `--advertise-port` says what players dial.
 
 ## Running it for a long time
 

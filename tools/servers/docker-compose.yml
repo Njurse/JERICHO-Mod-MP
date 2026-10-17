@@ -17,6 +17,8 @@
 #   DEDI_MAX_PLAYERS 8
 #   ADVERTISE_HOST   (empty)   your PUBLIC address, when the master would otherwise
 #                              see a NAT'd private one (see the READMEs)
+#   ADVERTISE_PORT   0         the public port to list, when the router REMAPS ours
+#                              (0 = --port); only needed when the forward is not 1:1
 #   LOG_LEVEL        info
 #
 # NETWORKING: host mode for both, deliberately.
@@ -106,6 +108,10 @@ services:
       # server has a public address; wrong behind NAT, where you set this)
       - --advertise-host
       - "${ADVERTISE_HOST:-}"
+      # 0 = list the session port; set this when the router hands out a different
+      # public port than the one we listen on
+      - --advertise-port
+      - "${ADVERTISE_PORT:-0}"
       - --beacon
       - --log-file
       - /data/dedi.log

@@ -186,6 +186,23 @@ def main():
               and row["port"] == 1318 and row["city"] == 1)
         check("row has ageSeconds", "ageSeconds" in row)
 
+        # -- an advertised port overrides the session port (a NAT that remaps it)
+        st, reg = call(base, "/v1/register",
+                       {"name": "Behind NAT", "port": 1318, "advertisePort": 30000,
+                        "city": 0, "protoVersion": 11})
+        check("register with advertisePort -> 201", st == 201, str(st))
+        nat_token = reg.get("token")
+        check("register echoes the ADVERTISED port", reg.get("port") == 30000, str(reg.get("port")))
+        st, body = call(base, "/v1/servers")
+        nat_row = [s for s in body["servers"] if s["name"] == "Behind NAT"]
+        check("the listing names the port players can dial",
+              len(nat_row) == 1 and nat_row[0]["port"] == 30000, json.dumps(body))
+        check("a bad advertisePort is refused",
+              call(base, "/v1/register",
+                   {"name": "Nope", "port": 1318, "advertisePort": 99999})[0] == 400)
+        # leave the registry as the later checks expect it
+        call(base, "/v1/unregister", {"token": nat_token})
+
         # -- heartbeat refreshes
         st, hb = call(base, "/v1/heartbeat", {"token": token, "players": 3, "inProgress": 1})
         check("heartbeat -> 200", st == 200, str(st))
