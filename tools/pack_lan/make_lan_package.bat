@@ -49,7 +49,10 @@ if exist "%ROOT%\JERICHO\MODS\d1cars\tools" (
 )
 
 pushd "%EXEDIR%" || exit /b 1
-"%SEVENZ%" a -t7z -mx=5 "-xr!FMV" "%OUT%" ^
+rem -xr! excludes are the "never ship car art or game data" rule: JERICHO\ is the
+rem mod mirror and can never carry a car-data bank (BC*.LEV/.LCF, BetterCars) or a
+rem *.sparse.bak a local bankfill left behind; DRIVER2\ is the player's own data.
+"%SEVENZ%" a -t7z -mx=5 "-xr!FMV" "-xr!BetterCars" "-xr!BC*.LEV" "-xr!BC*.LCF" "-xr!*.sparse.bak" "%OUT%" ^
     JERICHO.exe SDL2.dll OpenAL32.dll soft_oal.dll config.ini ^
     VERSION.txt JERICHO
 popd
