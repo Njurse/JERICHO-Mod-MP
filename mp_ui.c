@@ -1042,6 +1042,21 @@ static int OnlineApplyConfig(void)
  * cannot be reached at all, which is the case worth knowing about. */
 static int gOnlineAnnounced = -1;
 
+static void OnlineSay(const char* fmt, ...)
+{
+	char text[192];
+	va_list ap;
+
+	va_start(ap, fmt);
+	vsnprintf(text, sizeof(text), fmt, ap);
+	va_end(ap);
+
+	/* The whole sentence, which the 32-character menu row cannot hold. The console
+	 * mirrors its rows into the session log ("[console] ..."), so this is also what
+	 * an automated run reads -- the row itself lives about two seconds. */
+	jer_console_log("%s", text);
+}
+
 static void OnlineAnnounce(void)
 {
 	int st = MpOnlineState();
@@ -1054,14 +1069,14 @@ static void OnlineAnnounce(void)
 	switch (st)
 	{
 	case MP_ONLINE_CONNECTING:
-		jer_console_log("discovery: contacting %s", gMp.config.masterUrl);
+		OnlineSay("discovery: contacting %s", gMp.config.masterUrl);
 		break;
 	case MP_ONLINE_READY:
-		jer_console_log("discovery: %d server(s) from %s",
+		OnlineSay("discovery: %d server(s) from %s",
 			MpOnlineCount(), gMp.config.masterUrl);
 		break;
 	case MP_ONLINE_FAILED:
-		jer_console_log("discovery: cannot reach %s", gMp.config.masterUrl);
+		OnlineSay("discovery: cannot reach %s", gMp.config.masterUrl);
 		break;
 	default:
 		break;
