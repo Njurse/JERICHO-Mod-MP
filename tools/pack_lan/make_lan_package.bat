@@ -70,6 +70,28 @@ pushd "%HERE%..\remote" || exit /b 1
 "%SEVENZ%" a -t7z -mx=5 "%OUT%" mp_agent.ps1 START_AGENT.bat README_REMOTE.txt
 popd
 
+rem The DEDICATED SERVER, staged the same way and for the same reason: the dev
+rem mirror strips a mod's tools\ directory, so bin\Release has none of it. A
+rem release ships the dedi so a match can be left running, and ships NO master
+rem discovery service (that is the shared one every install points at), so the
+rem copy below leaves masterserver\ out and then proves it did.
+set "SRVSTAGE=%TEMP%\mp_lan_servers"
+if exist "%SRVSTAGE%" rd /s /q "%SRVSTAGE%"
+mkdir "%SRVSTAGE%\JERICHO\MODS\mp\tools\servers" 2>nul
+copy /y "%ROOT%\JERICHO\MODS\mp\tools\mp_test.py" "%SRVSTAGE%\JERICHO\MODS\mp\tools\" >nul
+xcopy /Y /I "%ROOT%\JERICHO\MODS\mp\tools\servers\*.py" "%SRVSTAGE%\JERICHO\MODS\mp\tools\servers\" >nul
+xcopy /Y /I "%ROOT%\JERICHO\MODS\mp\tools\servers\*.md" "%SRVSTAGE%\JERICHO\MODS\mp\tools\servers\" >nul
+xcopy /Y /I "%ROOT%\JERICHO\MODS\mp\tools\servers\run.*" "%SRVSTAGE%\JERICHO\MODS\mp\tools\servers\" >nul
+xcopy /E /I /Y "%ROOT%\JERICHO\MODS\mp\tools\servers\dediserver" "%SRVSTAGE%\JERICHO\MODS\mp\tools\servers\dediserver\" >nul
+if exist "%SRVSTAGE%\JERICHO\MODS\mp\tools\servers\masterserver" (
+    echo make_lan_package: refusing to package the master server - it is the shared
+    echo                  discovery service, not something to hand out.
+    exit /b 1
+)
+pushd "%SRVSTAGE%" || exit /b 1
+"%SEVENZ%" a -t7z -mx=5 "%OUT%" JERICHO\MODS\mp\tools\servers JERICHO\MODS\mp\tools\mp_test.py "-xr!__pycache__"
+popd
+
 rem Ship an mp.ini that REFUSES a build mismatch instead of half-working. The
 rem package is always copied whole, so the two machines' digests match; if someone
 rem later replaces only the exe on one side, the join is refused with a clear
