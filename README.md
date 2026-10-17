@@ -50,6 +50,13 @@ Take-a-Ride screen itself.
 `Manual address` and `Back` under them. Picking a row joins it through the same
 `MpBeginJoinAsync` the LAN list uses, so a listed host lands in the normal lobby.
 
+**The LAN `Join Game` screen is the same table**, over the beacons this machine
+can hear instead of the master's list (a LAN row also says `LIVE` when the host
+has started). The two lists stay separate on purpose: one is what arrived on the
+wire, the other is what another machine was told. Both ask the engine for the
+same layout -- a wide row, a tight pitch, the last two rows pinned to the bottom
+-- so the two screens read alike and neither reshuffles when the list changes.
+
 It is the one screen whose rows the MODULE draws. A menu row is a single
 proportional string, so columns cannot be padded into line; the rows carry empty
 labels (the engine still navigates and highlights them) and the table is painted

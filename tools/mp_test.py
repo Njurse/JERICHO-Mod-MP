@@ -70,6 +70,10 @@ TAG = {
 # a standalone session/lobby broadcast that nothing ever sent or handled. Keep this
 # table to the tags the code actually has; a retired one is dropped here too.
 UDP_MAGIC = 0x31504D4A
+DISCOVERY_PORT = 1318          # mp_proto.h MP_DISCOVERY_PORT -- FIXED and shared. A
+                               # beacon goes HERE; the session port travels INSIDE
+                               # the beacon (MP_BEACON.port), which is why a
+                               # listener binds this port and not the session's
 
 ENV = struct.Struct("<I4sBBH")
 HELLO = struct.Struct("<HHHH32s4B")      # 44 bytes

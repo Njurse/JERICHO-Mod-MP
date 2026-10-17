@@ -318,7 +318,9 @@ class Dedicated:
                                 1 if self.cfg["live"] else 0, 0,
                                 int(self.cfg["rules"]))
             try:
-                s.sendto(pkt, ("255.255.255.255", self.port))
+                # to the DISCOVERY port, never to our own session port: the session port
+                # travels INSIDE the beacon, and a browser listens on the fixed one
+                s.sendto(pkt, ("255.255.255.255", m.DISCOVERY_PORT))
             except OSError:
                 pass
             self.stop.wait(self.cfg["beacon_ms"] / 1000.0)

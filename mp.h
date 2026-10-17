@@ -424,6 +424,8 @@ void MpUiTick(void);			/* refresh the live lobby menu when needed */
 void MpUiDrawOnline(void);		/* paint the Online table over the menu rows --
 					 * from JER_EVENT_FRONTEND_DRAW, never FRAME (the
 					 * menu box is drawn after FRAME) */
+void MpUiDrawJoin(void);		/* the same table for the LAN browser, whose rows
+					 * come from the beacons instead of the master */
 
 /* The local resident SLOT that holds (city, model) here, or -1 when none does.
  * `city` is -1 for the session's own city. A model number alone is not enough --

@@ -270,6 +270,21 @@ pixels are located: the two frames differ ONLY inside the menu box
 (`(466,341)-(1600,634)` at 1920x1080), which is what proves the table is on the
 rows rather than behind the menu or off-screen.
 
+### Two things the rig caught in the LAN browser itself
+
+Both were real, and neither was visible without a real client on the wire:
+
+* **The dedicated server beaconed to its own SESSION port**, not to
+  `MP_DISCOVERY_PORT` (1318). A browser binds the fixed port and reads the session
+  port out of the packet, so no real client could ever hear `dediserver.py` — it
+  was invisible on a LAN. (`mp_test.py beacon --port <session>` had heard it fine,
+  because both ends were pointed at the same wrong port.) Fixed in the dedi; the
+  wire mirror now names the port so it cannot be re-guessed.
+* **The LAN `Join Game` screen did not own its scan.** Only the *row* that opens it
+  started discovery, so the screen could be on display with nothing ever arriving —
+  and it could not be tested. It now arms the scan on entry (idempotently, so a
+  rebuild does not restart the clock).
+
 ### The boundary now
 
 **Listing is in the game; registering from the game is not.** A client can list and

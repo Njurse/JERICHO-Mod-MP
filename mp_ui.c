@@ -636,7 +636,9 @@ static void MpResolveMenus(void)
 /* ------------------------------------------------------------------ */
 static JER_FE_ITEM gJoinItems[JER_FE_MAX_ITEMS];
 static JER_FE_MENU gJoinMenu = { "mp.join", gJoinItems, 0, NULL, NULL };
-static char gJoinLabel[JER_FE_MAX_ITEMS][64];
+static int  gJoinRows;			/* how many of gJoinMenu's items are SERVER rows:
+				 * the rest are the message row and the two pinned
+				 * controls, which the table must not paint over */
 
 static JER_FE_ITEM gLobbyItems[JER_FE_MAX_ITEMS];
 static JER_FE_MENU gLobbyMenu = { "mp.lobby", gLobbyItems, 0, NULL, NULL };
@@ -666,27 +668,36 @@ static void JoinOnEnter(void* ud)
 	int ns, i, k = 0, scanning;
 	(void)ud;
 
-	ns = MpDiscoveryCount();
+	/* The SCREEN owns its scan. The LAN row used to be the only thing that opened
+	 * the discovery socket, so the browser could sit on screen with nothing ever
+	 * arriving (and be impossible to test); arming it here means entering by any
+	 * route starts listening. The guard keeps a rebuild -- which re-runs this --
+	 * from restarting the scan clock. */
+	if (!gJoinBrowsing)
+	{
+		gJoinScanStart = MpNowMs();
+		gJoinScanning = 1;
+		gJoinBrowsing = 1;
 
+		MpDiscoveryStart(0);
+	}
+
+	ns = MpDiscoveryCount();
 	/* one beacon interval is the shortest wait before believing the LAN is
 	 * really empty -- a beacon already in flight still counts */
 	scanning = (gJoinScanStart != 0) && (MpNowMs() - gJoinScanStart) < MP_JOIN_SCAN_MS;
 	gJoinScanning = scanning;
 
+	/* The rows carry NO label. The engine draws nothing for them and still
+	 * navigates and highlights them, which is what lets the table be painted on
+	 * them: a menu row is ONE proportional string, so five columns cannot be
+	 * padded into line (see TableDraw). */
 	for (i = 0; i < ns && k < JER_FE_MAX_ITEMS - 2; i++)
 	{
-		MP_SERVER* s = MpDiscoveryGet(i);
-
-		if (s == NULL)
+		if (MpDiscoveryGet(i) == NULL)
 			continue;
 
-		/* LOBBY vs LIVE comes from the beacon's inProgress flag, which the
-		 * host sets from gMp.running. */
-		snprintf(gJoinLabel[k], sizeof(gJoinLabel[k]), "%s  %s:%d  %d/%d  %s",
-			s->hostName, s->ip, s->port, s->players, s->maxPlayers,
-			s->inProgress ? "LIVE" : "LOBBY");
-
-		gJoinItems[k].label = gJoinLabel[k];
+		gJoinItems[k].label = NULL;
 		gJoinItems[k].get_label = NULL;
 		gJoinItems[k].userdata = (void*)(intptr_t)i;
 		gJoinItems[k].on_activate = ActJoinServer;
@@ -695,6 +706,8 @@ static void JoinOnEnter(void* ud)
 		gJoinItems[k].is_back = 0;
 		k++;
 	}
+
+	gJoinRows = k;
 
 	if (ns == 0 && k < JER_FE_MAX_ITEMS - 2)
 	{
@@ -938,24 +951,28 @@ static void ManualOnEnter(void* ud)
  *
  * The column offsets sit inside that box and the text is drawn in the FRONTEND's
  * own face at the console's size, so the screen reads as one screen. The menu asks
- * for a wide box (row_w) so five columns have somewhere to go: the stock 256-unit
- * box cannot hold them at a readable size, and the engine's highlight grows with
- * the box it was asked for. */
-#define ONLINE_SCALE		100	/* the console's size, in the frontend's face */
-#define ONLINE_COL_NAME		0
-#define ONLINE_COL_PLAYERS	196
-#define ONLINE_COL_MODE		268
-#define ONLINE_COL_CITY		434
-#define ONLINE_COL_PING		528
-#define ONLINE_NAME_CHARS	15	/* what the NAME column holds before it is cut */
-#define ONLINE_ROW_W		560	/* the menu's row width; the columns above fit it */
+ * for a wide box (row_w) so five columns have somewhere to go, and for a tighter
+ * pitch (row_step) so more servers fit -- with the last two items pinned to the
+ * bottom (bottom_items), Manual and Back stop moving every time the list is
+ * rebuilt. The gap under the headings is deliberately bigger than the pitch: the
+ * headings are a header, not another row. */
+#define TABLE_SCALE		100	/* the console's size, in the frontend's face */
+#define TABLE_COL_NAME		0
+#define TABLE_COL_PLAYERS	196
+#define TABLE_COL_MODE		268
+#define TABLE_COL_CITY		434
+#define TABLE_COL_PING		528
+#define TABLE_NAME_CHARS	15	/* what the NAME column holds before it is cut */
+#define TABLE_ROW_W		560	/* the menu's row width; the columns above fit it */
+#define TABLE_ROW_STEP		26	/* the pitch BETWEEN servers (dense on purpose) */
+#define TABLE_HEAD_GAP		34	/* headings -> first server (bigger on purpose) */
 
 static JER_FE_ITEM gOnlineItems[JER_FE_MAX_ITEMS];
 /* The heading is the screen's name, as the design calls for: it is the one piece
  * of this screen the engine draws (rows are ours). row_w asks the engine for a box
  * wide enough for five columns -- see the layout note above. */
 static JER_FE_MENU gOnlineMenu = { "mp.online", gOnlineItems, 0, NULL, NULL,
-				   "JERICHO DISCOVERY SERVER", NULL, NULL, ONLINE_ROW_W };
+				   "JERICHO DISCOVERY SERVER", NULL, NULL, TABLE_ROW_W };
 static int gOnlineRev = -1;		/* the list revision these rows were built from */
 static int gOnlineRows;			/* how many of item_count are SERVER rows: the rows
 					 * above the two fixed ones (Manual, Back),
@@ -1074,87 +1091,166 @@ static void OnlineOnEnter(void* ud)
 	gOnlineRev = MpOnlineRevision();
 }
 
-/* The table. Called from the frontend draw hook (after the engine has drawn the
- * screen), and only while this menu is on screen. */
-void MpUiDrawOnline(void)
+/* --- the server table, and its two sources ---------------------------
+ * ONE table: the Online screen lists what the discovery server knows, the LAN
+ * screen lists the beacons this machine can hear. They are deliberately separate
+ * lists -- a LAN row arrived on the wire, an online row is what another machine
+ * was told -- but the columns, the box and the drawing are the same, so they are
+ * the same code over a normalised row.
+ */
+typedef struct TABLE_ROW
 {
-	int count, servers, i, x, y, w, h;
+	char name[MP_NAME_MAX + 8];	/* room for the LIVE marker a LAN row carries */
+	int  players, maxPlayers;
+	int  rules;
+	int  city;
+	int  pingMs;
+} TABLE_ROW;
+
+static int TableRowSource(int online, int index, TABLE_ROW* out)
+{
+	if (online)
+	{
+		const MP_ONLINE_SERVER* s = MpOnlineGet(index);
+
+		if (s == NULL)
+			return 0;
+
+		snprintf(out->name, sizeof(out->name), "%.*s", TABLE_NAME_CHARS, s->name);
+		out->players = s->players;
+		out->maxPlayers = s->maxPlayers;
+		out->rules = s->rules;
+		out->city = s->city;
+		out->pingMs = s->pingMs;		/* measured, or 0 = not yet */
+		return 1;
+	}
+
+	{
+		MP_SERVER* s = MpDiscoveryGet(index);
+
+		if (s == NULL)
+			return 0;
+
+		/* A LAN row says whether the host has STARTED, which a joiner wants to
+		 * know and an online row has no equivalent of (that list is live by
+		 * definition). It rides the NAME cell, clipped to make room, so the five
+		 * columns stay five. */
+		snprintf(out->name, sizeof(out->name), "%.*s%s", TABLE_NAME_CHARS - 5,
+			s->hostName, s->inProgress ? " LIVE" : "");
+		out->players = s->players;
+		out->maxPlayers = s->maxPlayers;
+		out->rules = s->rules;
+		out->city = s->city;
+		out->pingMs = 0;			/* no measurement for a beacon row */
+		return 1;
+	}
+}
+
+/* The table. Called from the frontend draw hook (after the engine has drawn the
+ * screen), and only while the menu that shows it is on screen. */
+static void TableDraw(int online)
+{
+	int count, rows, item_rows, i, x, y, w, h;
 
 	if (!gInFrontend || gMpCtx == NULL)
 		return;
 
-	if (!MpMenuIs(M_ONLINE) || gOnlineMenu.item_count <= 0)
+	if (!MpMenuIs(online ? M_ONLINE : M_JOIN))
 		return;
 
-	count = gOnlineMenu.item_count;
-	servers = MpOnlineCount();
+	count = online ? gOnlineMenu.item_count : gJoinMenu.item_count;
+	item_rows = online ? gOnlineRows : gJoinRows;
+	rows = online ? MpOnlineCount() : MpDiscoveryCount();
 
-	/* Stop at the SERVER rows. item_count also carries Manual and Back, and those
-	 * two have labels of their own -- a server row painted over them would be two
-	 * strings in one row. gOnlineRows was set by the same loop that built them. */
-	if (gOnlineRows < servers)
-		servers = gOnlineRows;
+	/* Stop at the rows that ARE servers: item_count also carries the message row
+	 * and the two pinned controls, and a server row painted over one of those
+	 * would be two strings in one row. g*Rows was set by the loop that built them. */
+	if (item_rows < rows)
+		rows = item_rows;
 
-	/* One line the first time the table is actually painted with rows: it is the
-	 * only thing an automated run can check about a screen whose whole point is
-	 * what it LOOKS like (the pixels are checked by hand). */
-	if (servers > 0 && MpDebugOn() && gMpCtx != NULL)
+	if (rows <= 0 || count <= 0)
+		return;
+
+	/* One line the first time a table is painted with rows: it is the only thing
+	 * an automated run can check about a screen whose whole point is what it LOOKS
+	 * like (the pixels are checked by hand). */
+	if (MpDebugOn() && gMpCtx != NULL)
 	{
-		static int logged = 0;
+		static int loggedOnline = 0;
+		static int loggedLan = 0;
+		int* logged = online ? &loggedOnline : &loggedLan;
 
-		if (!logged)
+		if (!*logged)
 		{
-			logged = 1;
+			*logged = 1;
 			gMpCtx->jer_log(gMpCtx,
-				"[mp] online table drawn: %d server row(s) of %d, five columns at x=%d,%d,%d,%d,%d (scale %d)\n",
-				servers, count, ONLINE_COL_NAME, ONLINE_COL_PLAYERS, ONLINE_COL_MODE,
-				ONLINE_COL_CITY, ONLINE_COL_PING, ONLINE_SCALE);
+				"[mp] %s table drawn: %d row(s) of %d, columns at x=%d,%d,%d,%d,%d "
+				"(scale %d, pitch %d, head gap %d)\n",
+				online ? "online" : "LAN", rows, count,
+				TABLE_COL_NAME, TABLE_COL_PLAYERS, TABLE_COL_MODE,
+				TABLE_COL_CITY, TABLE_COL_PING, TABLE_SCALE,
+				TABLE_ROW_STEP, TABLE_HEAD_GAP);
 		}
 	}
-	/* the column headings, one row pitch above the first row. Orange, like the
-	 * engine's own menu headings, and passed at full brightness because the ink is
-	 * halved on the way to the font (a "mid grey" 190 renders as 95 and reads as
-	 * smudge next to the rows). */
-	if (servers > 0 && jer_frontend_row_rect(0, &x, &y, &w, &h))
-	{
-		int hy = y - 16;
 
-		jer_text_draw_at(JER_TEXT_FE, ONLINE_SCALE, x + ONLINE_COL_NAME,    hy, "SERVER NAME", 255, 190, 90);
-		jer_text_draw_at(JER_TEXT_FE, ONLINE_SCALE, x + ONLINE_COL_PLAYERS, hy, "PLAYERS",     255, 190, 90);
-		jer_text_draw_at(JER_TEXT_FE, ONLINE_SCALE, x + ONLINE_COL_MODE,    hy, "GAMEMODE",    255, 190, 90);
-		jer_text_draw_at(JER_TEXT_FE, ONLINE_SCALE, x + ONLINE_COL_CITY,    hy, "CITY",        255, 190, 90);
-		jer_text_draw_at(JER_TEXT_FE, ONLINE_SCALE, x + ONLINE_COL_PING,    hy, "PING",        255, 190, 90);
+	/* The headings sit ABOVE the first row by more than the pitch: they are a
+	 * header, not another row. Orange, like the engine's own menu headings, and
+	 * passed at full brightness because the ink is halved on the way to the font
+	 * (a "mid grey" 190 renders as 95 and reads as smudge next to the rows). */
+	if (jer_frontend_row_rect(0, &x, &y, &w, &h))
+	{
+		int hy = y - TABLE_HEAD_GAP;
+
+		jer_text_draw_at(JER_TEXT_FE, TABLE_SCALE, x + TABLE_COL_NAME,    hy, "SERVER NAME", 255, 190, 90);
+		jer_text_draw_at(JER_TEXT_FE, TABLE_SCALE, x + TABLE_COL_PLAYERS, hy, "PLAYERS",     255, 190, 90);
+		jer_text_draw_at(JER_TEXT_FE, TABLE_SCALE, x + TABLE_COL_MODE,    hy, "GAMEMODE",    255, 190, 90);
+		jer_text_draw_at(JER_TEXT_FE, TABLE_SCALE, x + TABLE_COL_CITY,    hy, "CITY",        255, 190, 90);
+		jer_text_draw_at(JER_TEXT_FE, TABLE_SCALE, x + TABLE_COL_PING,    hy, "PING",        255, 190, 90);
 	}
 
-	for (i = 0; i < servers && i < count; i++)
+	for (i = 0; i < rows; i++)
 	{
-		const MP_ONLINE_SERVER* s = MpOnlineGet(i);
+		TABLE_ROW r;
 		char cell[24];
-		char name[ONLINE_NAME_CHARS + 1];
 
-		if (s == NULL || !jer_frontend_row_rect(i, &x, &y, &w, &h))
+		if (!TableRowSource(online, i, &r) || !jer_frontend_row_rect(i, &x, &y, &w, &h))
 			continue;
 
-		snprintf(name, sizeof(name), "%.*s", ONLINE_NAME_CHARS, s->name);
-		jer_text_draw_at(JER_TEXT_FE, ONLINE_SCALE, x + ONLINE_COL_NAME, y, name, 235, 235, 235);
+		jer_text_draw_at(JER_TEXT_FE, TABLE_SCALE, x + TABLE_COL_NAME, y, r.name, 235, 235, 235);
 
-		snprintf(cell, sizeof(cell), "%d/%d", s->players, s->maxPlayers);
-		jer_text_draw_at(JER_TEXT_FE, ONLINE_SCALE, x + ONLINE_COL_PLAYERS, y, cell, 235, 235, 235);
+		snprintf(cell, sizeof(cell), "%d/%d", r.players, r.maxPlayers);
+		jer_text_draw_at(JER_TEXT_FE, TABLE_SCALE, x + TABLE_COL_PLAYERS, y, cell, 235, 235, 235);
 
-		jer_text_draw_at(JER_TEXT_FE, ONLINE_SCALE, x + ONLINE_COL_MODE, y, MpModeName(s->rules), 235, 235, 235);
-		jer_text_draw_at(JER_TEXT_FE, ONLINE_SCALE, x + ONLINE_COL_CITY, y, MpCityLabel(s->city), 235, 235, 235);
+		jer_text_draw_at(JER_TEXT_FE, TABLE_SCALE, x + TABLE_COL_MODE, y, MpModeName(r.rules), 235, 235, 235);
+		jer_text_draw_at(JER_TEXT_FE, TABLE_SCALE, x + TABLE_COL_CITY, y, MpCityLabel(r.city), 235, 235, 235);
 
-		if (s->pingMs > 0)
-			snprintf(cell, sizeof(cell), "%d", s->pingMs);
+		if (r.pingMs > 0)
+			snprintf(cell, sizeof(cell), "%d", r.pingMs);
 		else
 			snprintf(cell, sizeof(cell), "-");	/* not measured yet */
 
-		jer_text_draw_at(JER_TEXT_FE, ONLINE_SCALE, x + ONLINE_COL_PING, y, cell, 235, 235, 235);
+		jer_text_draw_at(JER_TEXT_FE, TABLE_SCALE, x + TABLE_COL_PING, y, cell, 235, 235, 235);
 	}
 }
 
+void MpUiDrawOnline(void)	{ TableDraw(1); }
+void MpUiDrawJoin(void)		{ TableDraw(0); }
+
 static void WireDynamic(void)
 {
+	/* The tables' layout, asked of the engine rather than assumed: a wide box for
+	 * five columns, a tight pitch so the list holds as many servers as it can, and
+	 * the last two rows (Manual address, Back) pinned to the bottom so they do not
+	 * move every time the list is rebuilt. Both browsers show the same table, so
+	 * both ask for the same thing. */
+	gJoinMenu.row_w = TABLE_ROW_W;
+	gJoinMenu.row_step = TABLE_ROW_STEP;
+	gJoinMenu.bottom_items = 2;
+
+	gOnlineMenu.row_w = TABLE_ROW_W;
+	gOnlineMenu.row_step = TABLE_ROW_STEP;
+	gOnlineMenu.bottom_items = 2;
+
 	gJoinMenu.on_enter = JoinOnEnter;
 	gLobbyMenu.on_enter = LobbyOnEnter;
 	gNameMenu.on_enter = NameOnEnter;

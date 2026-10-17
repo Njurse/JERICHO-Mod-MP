@@ -2570,14 +2570,15 @@ static int MpOnFrontendIdle(void* userdata, void* args)
 /* JERICHO-HOOK: the frontend has drawn the current screen.
  *
  * The one place a module can put text ON a menu row: JER_EVENT_FRAME fires
- * before DrawScreen, so anything drawn there is covered by the menu box. The
- * Online browser's five-column table is the reason this exists. */
+ * before DrawScreen, so anything drawn there is covered by the menu box. Both
+ * server browsers draw their table here. */
 static int MpOnFrontendDraw(void* userdata, void* args)
 {
 	(void)userdata;
 	(void)args;
 
-	MpUiDrawOnline();
+	MpUiDrawOnline();	/* the discovery server's list */
+	MpUiDrawJoin();		/* the LAN beacons' list */
 
 	return JER_RESULT_CONTINUE;
 }
