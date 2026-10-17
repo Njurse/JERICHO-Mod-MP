@@ -80,6 +80,31 @@ ROSTER_REFRESH_S = 2.0
 CONFIG_NAME = "dediserver.json"
 
 
+def is_private_host(host):
+    """Is this an address that only works on the machine that owns it?
+
+    A dedicated server and a master on the SAME box is a good arrangement, and it
+    has one trap: point `master` at 127.0.0.1 (the obvious choice, since it is right
+    there) and the master honestly records the address it saw -- 127.0.0.1 -- and
+    lists THAT to every internet client, none of whom can dial it.
+    """
+    host = (host or "").strip().lower()
+
+    if host in ("localhost", "::1"):
+        return True
+
+    try:
+        ip = socket.inet_aton(host)          # IPv4 only
+    except OSError:
+        return False                          # a name: the operator's business
+
+    a, b = ip[0], ip[1]
+
+    return (a == 0 or a == 127 or a == 10
+            or (a == 172 and 16 <= b <= 31)
+            or (a == 192 and b == 168))
+
+
 def master_base(url):
     """The master's base URL, with the defaults filled in.
 
@@ -469,6 +494,25 @@ class Dedicated:
                     self.master_state.update(base=base, registered=True,
                                              last="registered at %s"
                                              % time.strftime("%H:%M:%S"))
+                    listed = str(body.get("host") or "")
+
+                    # The master lists whatever address it saw us from. Behind a
+                    # co-hosted master that is loopback or a private address unless
+                    # `master` names something public -- and then the listing is
+                    # useless to the internet while looking perfectly healthy here.
+                    if listed and not self.cfg["advertise_host"] and is_private_host(listed):
+                        why = ("loopback" if listed.startswith("127.") or listed == "localhost"
+                               else "a private address")
+                        msg = ("listed as %s:%d, which is %s: internet clients cannot "
+                               "reach that. Point master at a PUBLIC address (so the "
+                               "peer address it records is the right one), or set "
+                               "advertise_host to the public name"
+                               % (listed, self.port, why))
+                        self.log.warning(msg)
+
+                        if self.console is not None:
+                            self.console.say("WARNING: " + msg)
+
                     self.log.info("registered with master %s as %s:%d"
                                   % (base, body.get("host"), body.get("port")))
                     backoff = 2.0

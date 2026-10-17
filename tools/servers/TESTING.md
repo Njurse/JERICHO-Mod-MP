@@ -433,6 +433,13 @@ beside each server. What is already true, and what still needs re-checking there
   `255.255.255.255`, which a bridge network keeps entirely to itself, and host
   networking is the configuration that was actually tested (two processes on the
   host's interfaces). Consequence: the ports are the HOST's, nothing is published.
+* **Both on one host.** That is the intended arrangement (`docker compose` starts
+  both). Two consequences worth knowing: the dedi must not register over loopback
+  (point `master` at the public name, or set `--advertise-host` — it now warns and
+  says so on its console if the listing comes out as `127.0.0.1`), and the master's
+  reachability probe cannot see an external firewall from there, because it reaches
+  a co-hosted server over the host's own address. Use an outside client to check
+  the port: `python3 tools/mp_test.py client <host> --port 1318`.
 * **Ports to open** — the dedi's TCP session port (`--port`, `1400` in the compose),
   the master's HTTP port (`8100`), and UDP `1318` only if you want LAN browser
   discovery. Both servers already take a configurable bind address.

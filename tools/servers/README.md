@@ -80,6 +80,36 @@ session) and **UDP 1318** only if you want LAN browser discovery. `MASTER_PORT`,
 `ADVERTISE_HOST` and `LOG_LEVEL` are read from the environment (inline or a
 `.env`), and the two JSON configs stay on the host, mounted read-only.
 
+## Both on one VPS
+
+The intended deployment, and what `docker compose` gives you: one box runs the
+**master** (the registry, HTTP/8100) and the **dedicated server** (the relay,
+TCP/1318). They do different jobs and do not conflict — different ports, different
+processes, and the master never sees game traffic.
+
+```
+git pull
+cd JERICHO/MODS/mp/tools/servers
+docker compose up -d --build          # or: ./run.sh master &  and  ./run.sh dedi &
+```
+
+Three things that decide whether the internet can actually use it:
+
+1. **Open both ports, in BOTH firewalls.** TCP/8100 (the master) and TCP/1318 (the
+   dedi's session port). `ufw allow …` is only the first; a cloud provider's
+   firewall sits *in front of* ufw and drops silently. UDP/1318 is only for LAN
+   discovery.
+2. **Do not point `master` at 127.0.0.1.** It is the obvious choice on one box, and
+   it is wrong: the master records the address it saw you from — `127.0.0.1` — and
+   lists that to every internet client. Use the public name
+   (`"master": "http://jerichomp.animetiddi.es:8100"`) or set `advertise_host`. The
+   dedi now warns, and says so on its console, if it is listed under a loopback or
+   private address.
+3. **Check it from somewhere else.** The master probes each listing's session port,
+   but when both run on one box that probe reaches the server over the host's own
+   address — it cannot see an external firewall. From another machine:
+   `python3 tools/mp_test.py client <host> --port 1318`.
+
 ## Consoles
 
 Both servers have an interactive command line on **stdin** — not a network admin

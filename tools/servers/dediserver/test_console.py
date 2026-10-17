@@ -116,6 +116,15 @@ def main():
     a.close()
     b.close()
 
+    # -- a co-hosted dedi must not list itself under an address nobody can dial
+    check("loopback is caught", d.is_private_host("127.0.0.1") and d.is_private_host("localhost"))
+    check("RFC1918 is caught",
+          all(d.is_private_host(h) for h in ("10.1.2.3", "172.16.5.4", "192.168.1.9")))
+    check("a public address is not",
+          not d.is_private_host("143.198.78.241") and not d.is_private_host("172.32.5.4"))
+    check("a name is the operator's business, not a private address",
+          not d.is_private_host("jerichomp.animetiddi.es") and not d.is_private_host(""))
+
     # -- stop sets the event the run loop watches
     server.cmd_stop("")
     check("stop sets the stop event", server.stop.is_set())
