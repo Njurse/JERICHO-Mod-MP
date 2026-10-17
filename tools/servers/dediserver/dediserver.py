@@ -60,7 +60,8 @@ DEFAULTS = {
     "log_file": "",
     # master discovery (optional). master = "" disables registration.
     "master": "",
-    "master_name": "",         # name to register ("" = use `name`)
+    "master_name": "",
+    "advertise_host": "",     # public address players reach us on ("" = the address we register from); set this behind NAT
     "master_interval_s": 20.0, # heartbeat cadence; keep well under the master's ttl
     "master_timeout_s": 5.0,
 }
@@ -356,6 +357,12 @@ class Dedicated:
                         "players": self.player_count(), "maxPlayers": self.max_players,
                         "inProgress": 1 if self.cfg["live"] else 0,
                         "protoVersion": m.PROTO, "sdkVersion": m.SDK,
+                        # The address PLAYERS reach us on, when that is not the
+                        # address we register from. Behind NAT it never is: the
+                        # master would list our private 192.168.x.x and nobody
+                        # outside could use the listing.
+                        **({"advertiseHost": self.cfg["advertise_host"]}
+                           if self.cfg["advertise_host"] else {}),
                     })
                     if st not in (200, 201):
                         raise OSError("register returned %s" % st)
@@ -447,6 +454,10 @@ def parse_args(argv):
     ap.add_argument("--log-file")
     ap.add_argument("--master", help="master discovery URL, e.g. http://host:8100 ('' disables)")
     ap.add_argument("--master-name", help="name to register with the master (default: --name)")
+    ap.add_argument("--advertise-host", metavar="HOST",
+                    help="the address players reach this server on, if that is not the "
+                         "address the master sees (a NAT'd server: your public IP or hostname). "
+                         "The listing is unusable without it behind NAT")
     ap.add_argument("--master-interval", type=float, dest="master_interval_s")
     return ap.parse_args(argv)
 
@@ -464,6 +475,7 @@ def build_config(argv):
         ("idle_drop_s", "idle_drop_s"), ("rules", "rules"),
         ("log_level", "log_level"), ("log_file", "log_file"),
         ("master", "master"), ("master_name", "master_name"),
+        ("advertise_host", "advertise_host"),
         ("master_interval_s", "master_interval_s"),
     ):
         v = getattr(args, flag)

@@ -31,6 +31,9 @@ Then join it from anywhere:
 --master URL         register with a master discovery service, e.g. http://host:8100
 --master-name "..."  name to register (default: --name)
 --master-interval S  heartbeat cadence (default 20; keep well under the master's ttl)
+--advertise-host H   the address PLAYERS reach us on, if that is not the address the
+                     master sees. Behind NAT this is your public IP or hostname; the
+                     listing is unusable without it
 ```
 
 CLI flags override the config file. The config file is optional — with none, the
@@ -53,6 +56,7 @@ built-in defaults are used.
   "log_file": "",
   "master": "",             // "" disables registration; e.g. "http://master.example.com:8100"
   "master_name": "",
+  "advertise_host": "",
   "master_interval_s": 20.0,
   "master_timeout_s": 5.0
 }
@@ -72,10 +76,16 @@ built-in defaults are used.
   **UDP 1318** only if you also want LAN clients on the server's own network to
   find it in the browser; it is not needed for internet clients.
 * **Internet listing:** with `--master`, the server makes an outbound TCP
-  connection to the master, so no inbound port for that. See
-  [`../masterserver/README.md`](../masterserver/README.md). Players reach it from
+  connection to the master, so no inbound port for that. Players reach it from
   the game's **Multiplayer -> Online** screen, which lists the master's servers
   once `master_url` is set in `mp.ini`.
+  * **Behind NAT, set `--advertise-host`** (your public IP or hostname). The
+    master records the address it sees the registration come FROM, which behind
+    NAT is the server's private address -- the listing would name somewhere no
+    player can reach. This does not affect LAN play: the beacon's address is
+    taken from the packet, not from the listing.
+  * Forward the **session port (TCP)** on the same address. `advertise_host` says
+    WHERE to connect; the port in the listing is the one `--port` set.
 
 ## Running it for a long time
 

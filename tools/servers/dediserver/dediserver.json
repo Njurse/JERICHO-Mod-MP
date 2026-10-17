@@ -13,6 +13,7 @@
   "log_file": "",
   "master": "",
   "master_name": "",
+  "advertise_host": "",
   "master_interval_s": 20.0,
   "master_timeout_s": 5.0
 }
