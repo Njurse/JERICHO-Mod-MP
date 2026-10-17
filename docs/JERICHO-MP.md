@@ -32,6 +32,13 @@ That is the whole design. Everything below is a consequence of it.
    named by a **domain** as readily as by an IP, so `-join play.example.net:1318` and
    typing that into the menu both work. The client connects, says hello, and gets a
    car and a player number.
+
+   If it cannot, the reason is on screen rather than implied: the `Online` table's
+   `PING` shows `x` for a server nothing answers on (a dash still means "not measured
+   yet"), and the console keeps `joining host:port` / `join failed: host:port
+   (reason)` lines for a join that does not land. A shut session port is the common
+   cause, and it is an operator's firewall rather than a client's problem —
+   `tools/servers/TESTING.md` has the three places to look and the one-line check.
 3. **Choose the match** — the host picks these on the ENGINE'S OWN screens: the city
    screen, then the combined **Time of Day / Condition** screen that the Single Player
    prompt hands over to (time of day and weather both live there). The multiplayer map

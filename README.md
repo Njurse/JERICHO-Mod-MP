@@ -96,10 +96,22 @@ text is drawn in the FRONTEND's own face at the console's size — so the screen
 reads like the rest of the frontend rather than like an overlay.
 The mode and city names come from the host's own rules (`MpModeName`) and the
 engine's city registry (`MpCityLabel`), and `PING` shows `-` until a probe
-answers. The probe is a non-blocking CONNECT whose completion time is the
-measurement, so it resolves per frame: a loopback server reads ~30 ms rather than
-<1 ms. It separates near from far, which is what the column is for, and it needs
-no protocol and no cooperation from the host.
+answers, `x` when the probe **failed** — the row is listed, but nothing answers on
+that address, which is the single most useful thing this table can tell you (a
+shut port looks fine right up until a player clicks it). The probe is a
+non-blocking CONNECT whose completion time is the measurement, so it resolves per
+frame: a loopback server reads ~30 ms rather than <1 ms. It separates near from
+far, which is what the column is for, and it needs no protocol and no cooperation
+from the host.
+
+**The discovery status says itself in the console.** The screen's own status row is
+capped at 32 characters, so `contacting the discovery server...` arrives cut in
+half; the left-hand console rows (where the version toast lands) carry the whole
+sentence: which server it is contacting, how many it found, or that the row cannot
+be dialled. A join says `joining host:port` when it starts and keeps the reason on
+screen when it gives up. An early failure is retried three times over nine seconds
+before it is believed — the first attempt runs at module activation, where Winsock
+is not up yet, so the very first failure is a race rather than a verdict.
 
 There is deliberately **no mp screen for the city, time of day or weather**: those are
 the engine's own screens, and `MpStartMatch` seeds the session from what the host

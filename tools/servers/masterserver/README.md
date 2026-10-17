@@ -155,7 +155,9 @@ flags: `limit=N`, and the opt-in *exclusions* `exclude_full=1` /
       "protoVersion": 11,
       "sdkVersion": 2,
       "gameBuild": 0,
-      "ageSeconds": 12.5
+      "ageSeconds": 12.5,
+      "reachable": true,
+      "probeMs": 31
     }
   ]
 }
@@ -163,6 +165,19 @@ flags: `limit=N`, and the opt-in *exclusions* `exclude_full=1` /
 
 `ageSeconds` is how long ago the master last heard from that host (from the
 master's clock), so a client can render "12s ago".
+
+`reachable` is whether anything **answers on the session port**, which is a
+different question from `ageSeconds`: an entry can heartbeat happily while nothing
+listens on its port (a firewall, a container whose port is not published, a server
+that moved). `null` until the first probe, `false` when it stopped answering —
+and the master logs `UNREACHABLE: '<name>' at host:port` **once** when that
+changes, not once per sweep. `probeMs` is the connect time, at least 1.
+
+> **The one case it cannot see.** If the dedicated server runs on the SAME host as
+> the master, the probe connects over the host's own public address — which works
+> locally even when a firewall blocks it from the internet. `reachable: true` then
+> means "answers from here", not "answers from anywhere". The check that settles it
+> is from another machine: `python3 tools/mp_test.py client <host> --port <port>`.
 
 ### `GET /v1/health`
 
@@ -206,12 +221,15 @@ a browser. Not an API — it links to `/v1/servers`.
 | `port` | `8100` | HTTP port |
 | `ttl_s` | `60` | entry lifetime without a heartbeat |
 | `sweep_s` | `5` | how often expired entries are swept |
+| `probe_s` | `5` | how often each listing's session port is checked (0 disables) |
 | `max_entries` | `512` | cap on registered hosts |
 | `max_body_bytes` | `4096` | request body cap (larger → 413) |
 | `persist_path` | `""` | JSON file to persist the registry ("" = off) |
 | `log_level` | `info` | `debug` / `info` / `warning` / `error` |
 | `log_file` | `""` | append logs here as well as stdout ("" = stdout only) |
 | `public_url` | `""` | shown on the `GET /` page, e.g. the DNS name clients use |
+
+`--probe SECONDS` overrides `probe_s` from the command line.
 
 ## Testing
 

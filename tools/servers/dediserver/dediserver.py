@@ -242,7 +242,11 @@ class Dedicated:
             conn.close()
             return
         if tag != m.TAG["hello"]:
-            self.log.warning("%s: bad handshake (tag %r), dropping" % (who, tag))
+            # DEBUG, not a warning: a bare TCP connect is a health probe, a
+            # reachability check (the master runs one every few seconds), or a port
+            # scan -- none of which is an error, and warning about them buries the
+            # lines that matter.
+            self.log.debug("%s: connected without a HELLO (tag %r), dropping" % (who, tag))
             conn.close()
             return
         try:

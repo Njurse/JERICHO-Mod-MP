@@ -15,6 +15,23 @@ Then join it from anywhere:
     JERICHO_dev.exe -nointro -nofmv -join 127.0.0.1
     JERICHO_dev.exe -nointro -nofmv -join 127.0.0.1:1400
 
+## The console
+
+Run it in a shell and it has a command line; `help` lists what it takes. When stdin
+is not a terminal (a service, a container without `-it`, a captured run) it says so
+once and stays out of the way — `JER_CONSOLE=on` forces it on, which is how a
+supervisor (or a test) can pipe commands in.
+
+| command | what it does |
+| --- | --- |
+| `status` | name, session port, city, gamemode/rules, players, uptime, beacon, master |
+| `list` | connected players: id, name, address, how long connected |
+| `say <text>` | one line into every player's console, prefixed `SERVER:` |
+| `kick <id>` | drop a player — the protocol's own kick message, so they are told why |
+| `beacon [on|off]` | the LAN beacon's state, or turn it off (a LAN you do not want to appear on) |
+| `master` | discovery registration: the URL, whether registered, what last happened |
+| `stop` | close the server (unregisters from the master, closes players) |
+
 ## Options
 
 ```

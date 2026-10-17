@@ -80,6 +80,29 @@ session) and **UDP 1318** only if you want LAN browser discovery. `MASTER_PORT`,
 `ADVERTISE_HOST` and `LOG_LEVEL` are read from the environment (inline or a
 `.env`), and the two JSON configs stay on the host, mounted read-only.
 
+## Consoles
+
+Both servers have an interactive command line on **stdin** — not a network admin
+port: nothing listens, nothing authenticates, and the people who can use it already
+have a shell on the machine. Start one in a terminal and `help` lists its commands.
+
+With no terminal attached (a service, `docker compose up -d`, a captured run) the
+console says so once and stays out of the way. `JER_CONSOLE=on` forces it on — that
+is how a supervisor (or `test_console_stdin.py`) can pipe commands in:
+
+```sh
+printf 'status\nlist\nstop\n' | JER_CONSOLE=on ./run.sh dedi
+```
+
+| server | commands |
+| --- | --- |
+| master | `status`, `list`, `drop <token or name>`, `persist`, `stop` |
+| dedicated | `status`, `list`, `say <text>`, `kick <id>`, `beacon [on or off]`, `master`, `stop` |
+
+Both share `help`, and the implementations live in one place —
+[`serverkit.py`](serverkit.py) — with the logging, config loading and signal
+handling the two servers used to carry twice.
+
 ## Start here
 
 * Running a 24/7 host → [`dediserver/README.md`](dediserver/README.md).
