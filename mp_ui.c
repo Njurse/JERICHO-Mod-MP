@@ -1399,14 +1399,22 @@ static void WireDynamic(void)
 	gJoinMenu.row_step = TABLE_ROW_STEP;
 	gJoinMenu.bottom_items = 2;
 	gJoinMenu.row_bottom = TABLE_ROW_BOTTOM;
-	gJoinMenu.list_align = 1;
+
+	/* TOP-ANCHORED, not centred. Centring a list inside the band is right for a
+	 * menu of controls, and wrong for this one: the column headings are pinned to
+	 * the band's TOP, so a centred list leaves a hole under them that grows as the
+	 * server count shrinks -- measured at 1 row, the heading sat at y=172 and the
+	 * first server at y=286, four row pitches of nothing between them. Anchored to
+	 * row_top the first server is at 210, one heading gap (38) under the headings,
+	 * and every row after it steps by TABLE_ROW_STEP from there. */
+	gJoinMenu.list_align = 0;
 
 	gOnlineMenu.row_w = TABLE_ROW_W;
 	gOnlineMenu.row_top = TABLE_ROW_TOP;
 	gOnlineMenu.row_step = TABLE_ROW_STEP;
 	gOnlineMenu.bottom_items = 3;
 	gOnlineMenu.row_bottom = TABLE_ROW_BOTTOM;
-	gOnlineMenu.list_align = 1;
+	gOnlineMenu.list_align = 0;
 
 	gJoinMenu.on_enter = JoinOnEnter;
 	gLobbyMenu.on_enter = LobbyOnEnter;
