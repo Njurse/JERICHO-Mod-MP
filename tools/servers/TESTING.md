@@ -105,7 +105,22 @@ likely cause:** the dedi has no way to say "this is the multiplayer map" — it 
 `mpLevel=0, arena=0` into `WELCOME` unconditionally. Not verified further; this rig
 reports.
 
-### F2 — no `MP_TAG_ROSTER`: the client invents a phantom player 0
+### F2 — no `MP_TAG_ROSTER`: the client invents a phantom player 0 — **FIXED**
+
+**Fixed.** The dedi now builds and sends the roster (`roster_bytes`, refreshed by
+`_send_roster_if_due`): once before a joiner's welcome, then on the host's own cadence
+(the 120 frames `mp_session.c` refreshes it on, ~2 s) from *both* ways round the
+receive loop. Measured afterwards with three real clients: every seat converges on
+two remote players (`drew 2 remote blip(s)`), and the phantom is gone —
+`player 0 is no longer in the roster - taking their car out of the world` — because
+the server now names the real players and not itself.
+
+The first attempt tied the refresh to the socket TIMING OUT, which looked right and
+was wrong: a client that is driving sends a carstate every frame and so is never idle.
+The symptom was an asymmetry — the second client (whose join-time roster already
+listed the first) saw one peer, the first saw nobody. Both call sites are needed.
+
+The finding as it stood, kept for the reasoning:
 
 The dedi sends **no roster**. In a whole one-client run the client received exactly
 three frame types:
@@ -298,7 +313,7 @@ hosts register (any process), clients list IN GAME and join. The remaining half 
 
 | # | finding | what it blocks | severity |
 | --- | --- | --- | --- |
-| **F2** | no `MP_TAG_ROSTER` → no client sees any other player | the entire point of a dedicated server; therefore the LAN step | **BLOCKER** |
+| **F2** | ~~no `MP_TAG_ROSTER` → no client sees any other player~~ | **FIXED** — the dedi broadcasts the roster; three clients converge on two visible peers each | done |
 | **F1** | `mpLevel=0`/`arena=0` → a full city, on which the level self-ends (3 of 6 runs) | a stable session for even one real client | **BLOCKER** (intermittent) |
 | **F3** | a refused client is told nothing (no half-close) | legibility of a full/refused join | worth fixing |
 | **F\*** | a bare TCP connect is logged as `bad handshake` | nothing gameplay; log noise for an external monitor | cosmetic |
@@ -346,7 +361,7 @@ step's gate is:
 | step | what it means | gate to enter it |
 | --- | --- | --- |
 | **0. This PC** *(done)* | master + dedi + real clients on loopback; the Python floor in CI | — |
-| **1. LAN — the second PC** | a real remote client over the network, and the dedi in the in-game Join browser | **F1 and F2 fixed.** Without them a LAN run can only reproduce the same two failures: the client's level ending under it, and no client seeing any other. The rig for this step already exists — `mp_agent`/`mp_remote.py` drive the second PC, and `local_stack.py --external-dedi` points clients at one dedi |
+| **1. LAN — the second PC** | a real remote client over the network, and the dedi in the in-game Join browser | **F2 fixed** (the roster, measured with three clients on this PC). **F1 is open but did not reproduce** in two 45 s runs at `--city 1`: the level stayed up and both sims ran to the end. The dedi's map shape is a deliberate full city (`mpLevel=0`), so treat F1 as "watch for it" rather than "must fix first". The rig for this step already exists — `mp_agent`/`mp_remote.py` drive the second PC, and `local_stack.py --external-dedi` points clients at one dedi |
 | **2. Internet discovery** | hosts register with the master and clients list remote games **from inside the game** | the C-side work in [`docs/MASTER_SERVER.md`](../../docs/MASTER_SERVER.md) (`master_url`, register/heartbeat, a remote-row array, a non-blocking HTTP fetch). The **server** half is already proven (§Discovery): registration, live player counts, the beacon, and unregister-on-stop |
 | **3. Playtesting** | real players, and then bugs and discovery issues | a session that survives step 1 and a listing that works at step 2 |
 

@@ -89,6 +89,17 @@ PLAYER_INPUT = struct.Struct("<BHB")     # playerId, pad, spare = 4
 CARSTATE = struct.Struct("<IB3B")        # frame, count, reserved[3] = 8
 CARSTATE_ENTRY = struct.Struct("<BBBBB4h3ii3i3i")  # pid, flags, palette, model, modelCity, orient[4], x,y,z, heading, angVel[3], vel[3] = 53 (model 0xFF = on foot; modelCity 0xFF = the session city; angVel is int32; carSlot was dropped)
 
+# The roster (JPRS). The HOST broadcasts it before a launch and refreshes it every
+# couple of seconds; a client learns its PEERS only from it, and adopts their cars
+# when MP_ROSTER_FLAG_CAR_READY is set. Only the first `count` entries are on the
+# wire (the C side sends sizeof(MP_ROSTER) less the unused rows), which is why the
+# frame is a header + count*ROSTER_ENTRY rather than a fixed MP_ROSTER.
+ROSTER_NAME_MAX = 20          # mp_proto.h MP_ROSTER_NAME_MAX
+ROSTER_FLAG_HOST = 1          # mp_proto.h MP_ROSTER_FLAG_HOST
+ROSTER_FLAG_CAR_READY = 2     # mp_proto.h MP_ROSTER_FLAG_CAR_READY
+ROSTER = struct.Struct("<4B")          # count, reserved[3] = 4
+ROSTER_ENTRY = struct.Struct("<5B2H20s")  # id, carId, model, modelCity, flags, ping, palette, name[20] = 29 (model 0xFF = on foot)
+
 REJECT_NAMES = {0: "NONE", 1: "FULL", 2: "VERSION", 3: "MODS", 4: "INPROGRESS", 5: "CUSTOM"}
 REJECT_IDS = {v.lower(): k for k, v in REJECT_NAMES.items() if k != 0}
 

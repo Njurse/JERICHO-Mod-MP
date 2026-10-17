@@ -1,10 +1,11 @@
 # dediserver — a headless dedicated server for the mp mod
 
 A real multiplayer session with **no game window**. It accepts players, hands out
-ids, relays car-state and chat, answers `PING` with `PONG`, and beacons on UDP so
-the in-game LAN browser lists it. Use it to leave a host up for a while, or to give
-a client something to join on a machine that has no game build at all — the server
-is pure Python and never loads the game.
+ids, relays car-state and chat, **broadcasts the roster** (so every client sees who
+else is in the match, on the cadence a real host uses), answers `PING` with `PONG`,
+and beacons on UDP so the in-game LAN browser lists it. Use it to leave a host up for
+a while, or to give a client something to join on a machine that has no game build at
+all — the server is pure Python and never loads the game.
 
     JERICHO\MODS\mp\tools\mp_dedi.bat                 # from a checkout, the quick way
     python JERICHO/MODS/mp/tools/servers/dediserver/dediserver.py

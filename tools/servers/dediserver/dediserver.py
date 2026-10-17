@@ -67,6 +67,11 @@ DEFAULTS = {
     "master_timeout_s": 5.0,
 }
 
+# How often the roster is re-broadcast. mp_session.c sends it every 120 frames,
+# which is ~2s at 60 fps -- the same cadence a real host uses, so a client sees
+# peers appear and leave on the timing it was written against.
+ROSTER_REFRESH_S = 2.0
+
 CONFIG_NAME = "dediserver.json"
 
 
@@ -155,6 +160,67 @@ class Dedicated:
         hdr = m.CARSTATE.pack(frame & 0xFFFFFFFF, len(rows), 0, 0, 0)
         return hdr + b"".join(e for _, e in rows)
 
+    def roster_bytes(self):
+        """MP_ROSTER for the clients connected right now -- who is in the match.
+
+        A client learns its PEERS ONLY from this. mp_session.c's MpHandleRoster
+        adopts any player it does not already know and, when
+        MP_ROSTER_FLAG_CAR_READY is set, builds that player's car; without a roster
+        every client knows just the server's phantom player 0 and itself, which is
+        the symptom this server had: "you can see yourself and the host, but not the
+        other players".
+
+        The server gets no row of its own. The clients invent their player 0 without
+        being told, and naming it here would start changing what that phantom is.
+
+        A player's car comes from the carstate rows the server already keeps (the
+        same model/modelCity the peers are driving); 0xFF while we have not seen one
+        yet, which is "on foot" -- so a client still loading is listed, named, and
+        simply given no car until its first carstate lands.
+        """
+        with self.lock:
+            rows = []
+            for info in self.clients.values():
+                car = self.cars.get(info["id"])
+                model, model_city, palette, ready = 0xFF, 0xFF, 0, 0
+                if car is not None and len(car) == m.CARSTATE_ENTRY.size:
+                    # the first five fields of the row: pid, flags, palette, model, modelCity
+                    _pid, _fl, palette, model, model_city = m.CARSTATE_ENTRY.unpack_from(car, 0)[:5]
+                    ready = m.ROSTER_FLAG_CAR_READY
+                rows.append((info["id"], info["name"], model, model_city, palette, ready))
+        rows.sort(key=lambda r: r[0])
+
+        out = bytearray(m.ROSTER.pack(len(rows), 0, 0, 0))
+        for pid, name, model, model_city, palette, ready in rows:
+            out += m.ROSTER_ENTRY.pack(
+                pid & 0xFF, 0, model & 0xFF, model_city & 0xFF, ready,
+                0,                                    # ping: no per-client RTT is measured here yet
+                palette & 0xFFFF,
+                name.encode("latin1", "replace")[: m.ROSTER_NAME_MAX - 1])
+        return bytes(out)
+
+    def _send_roster_if_due(self, conn, last, pid):
+        """(socket still alive, new timestamp) -- the roster when its cadence elapses.
+
+        Called from BOTH ways round the receive loop on purpose. Putting it only in
+        the timeout branch looked right and was wrong: a client that is DRIVING sends
+        a carstate every frame, so its socket never times out and it would never be
+        told a peer had joined. Only the joiner saw anyone, which is exactly the
+        asymmetry that showed up here -- "added 2 remote player car(s)" on the second
+        client and 1 on the first.
+        """
+        now = time.time()
+        if now - last < ROSTER_REFRESH_S:
+            return True, last
+        try:
+            m.send_frame(conn, m.TAG["roster"], self.roster_bytes())
+        except OSError:
+            return False, now
+        except Exception as e:
+            # a roster we cannot build must not cost the player their connection
+            self.log.debug("roster refresh failed for player %d: %s" % (pid, e))
+        return True, now
+
     def broadcast(self, payload, tag, skip=None):
         with self.lock:
             conns = [c for c in self.clients if c is not skip]
@@ -213,6 +279,17 @@ class Dedicated:
                       % (pid, name, who, modc, build))
 
         seed = int(time.time()) & 0xFFFFFFFF
+
+        # The roster goes BEFORE the welcome. mp_test.py records the order as
+        # load-bearing: a live joiner has to know who else is in the match before it
+        # spawns cars, because the spawn walks the player list.
+        try:
+            m.send_frame(conn, m.TAG["roster"], self.roster_bytes())
+        except Exception as e:
+            # A roster we cannot build must NOT cost the player their connection --
+            # they simply arrive without a peer list, which is what this server did
+            # before it had one at all.
+            self.log.warning("could not send the roster to %s: %s" % (who, e))
         sess = m.SESSION.pack(0, self.city, 1, 0, seed,
                               max(2, self.player_count() + 1), 1, 0)
         try:
@@ -227,6 +304,7 @@ class Dedicated:
         silent = 0
         idle_drop = float(self.cfg["idle_drop_s"])
         info = None
+        last_roster = 0.0
 
         # The whole loop is wrapped so the cleanup below ALWAYS runs: a malformed
         # frame (a bad CARSTATE header) must not unwind the thread and strand the
@@ -249,12 +327,25 @@ class Dedicated:
                                      struct.pack("<I", int(time.time() * 1000) & 0xFFFFFFFF))
                     except OSError:
                         break
+                    # The roster, on the host's own cadence (mp_session.c refreshes
+                    # it every 120 frames = ~2s). This is how a client learns a peer
+                    # joined or left, and how a peer's car appears once its first
+                    # carstate has landed.
+                    alive, last_roster = self._send_roster_if_due(conn, last_roster, pid)
+                    if not alive:
+                        break
                     continue
                 except Exception:
                     break
                 if tag is None:
                     break
                 silent = 0
+
+                # the running client's half of the cadence (see the helper): it is
+                # never idle, so the timeout branch alone would never reach it
+                alive, last_roster = self._send_roster_if_due(conn, last_roster, pid)
+                if not alive:
+                    break
 
                 if tag == m.TAG["carstate"]:
                     try:
