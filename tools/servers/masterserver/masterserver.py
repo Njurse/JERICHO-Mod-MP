@@ -27,6 +27,8 @@ import html
 import json
 import os
 import secrets
+import select
+import socket
 import sys
 import threading
 import time
@@ -63,6 +65,9 @@ class Entry:
         "name", "host", "port", "city", "gamemode", "rules", "players", "maxPlayers",
         "inProgress", "modsEnforced", "modHash", "protoVersion", "sdkVersion",
         "gameBuild", "token", "last_seen",
+        # reachability: the master can see what a client cannot without trying --
+        # an entry that heartbeats while nothing listens on its session port
+        "reachable", "probeMs", "probeAt",
     )
 
     def __init__(self, **kw):
@@ -72,6 +77,12 @@ class Entry:
         # entry reloaded from disk would look freshly heartbeated and never expire.
         saved = kw.get("last_seen")
         self.last_seen = float(saved) if saved else time.time()
+
+        # None = not probed yet, which is not the same as "down"
+        if self.probeAt is None:
+            self.probeAt = 0.0
+        if self.probeMs is None:
+            self.probeMs = 0
 
     def age(self, now=None):
         return (time.time() if now is None else now) - self.last_seen
@@ -94,11 +105,17 @@ class Entry:
             "sdkVersion": self.sdkVersion,
             "gameBuild": self.gameBuild,
             "ageSeconds": round(self.age(now), 1),
+            # Whether anything answers on the session port. None until the first
+            # probe; a client can use it to avoid offering a dead row.
+            "reachable": self.reachable,
+            "probeMs": self.probeMs or 0,
         }
 
     def persist(self):
-        d = {k: getattr(self, k) for k in self.__slots__}
-        return d
+        # reachability is a LIVE measurement: persisting "down" would greet a
+        # restart with a lie until the prober caught up
+        return {k: getattr(self, k) for k in self.__slots__
+                if k not in ("reachable", "probeMs", "probeAt")}
 
 
 class Registry:
@@ -252,6 +269,40 @@ class Registry:
     def listing(self, now):
         with self.lock:
             return [e.public(now) for e in self.by_key.values()]
+
+    def needs_probe(self, stale_s):
+        """[(key, host, port)] for entries whose reachability is old or unknown."""
+        now = time.time()
+        out = []
+
+        with self.lock:
+            for key, e in self.by_key.items():
+                if not e.probeAt or now - e.probeAt >= stale_s:
+                    out.append((key, e.host, e.port))
+
+        return out
+
+    def set_probe(self, key, ok, ms):
+        """Record a probe. Returns a transition worth logging, or None."""
+        now = time.time()
+
+        with self.lock:
+            e = self.by_key.get(key)
+
+            if e is None:                 # it expired or was dropped mid-probe
+                return None
+
+            was = e.reachable
+            e.reachable = bool(ok)
+            # at least 1 when it answered: a loopback connect is well under a
+            # millisecond, and 0 here already means "not measured"
+            e.probeMs = max(1, int(ms)) if ok else 0
+            e.probeAt = now
+
+            if was == e.reachable:
+                return None
+
+            return (e.name, e.host, e.port, e.reachable)
 
     def count(self):
         with self.lock:
@@ -504,6 +555,7 @@ DEFAULTS = {
     "log_level": "info",
     "log_file": "",
     "public_url": "",
+    "probe_s": 5,           # how often to check that a listed server ANSWERS
 }
 
 
@@ -535,17 +587,20 @@ def console_commands(registry, stop, log):
 
                 if e is not None:
                     rows.append((e.name, e.host, e.port, e.players, e.maxPlayers,
-                                 e.age(), token[:8]))
+                                 e.age(), e.reachable, token[:8]))
 
         if not rows:
             return "no servers listed"
 
         rows.sort()
-        out = ["%-24s %-21s %5s  %8s  %s" % ("NAME", "ADDRESS", "PLRS", "AGE", "TOKEN")]
-        for name, host, port, players, max_players, age, token in rows:
-            out.append("%-24s %-21s %2d/%-2d  %8s  %s"
+        out = ["%-24s %-21s %5s  %8s  %-4s  %s"
+               % ("NAME", "ADDRESS", "PLRS", "AGE", "REACH", "TOKEN")]
+        for name, host, port, players, max_players, age, reachable, token in rows:
+            # None = not probed yet, which is not "down"
+            reach = "?" if reachable is None else ("up" if reachable else "DOWN")
+            out.append("%-24s %-21s %2d/%-2d  %8s  %-4s  %s"
                        % (name[:24], "%s:%d" % (host, port), players, max_players,
-                          duration(age), token))
+                          duration(age), reach, token))
         return "\n".join(out)
 
     def cmd_drop(rest):
@@ -592,6 +647,95 @@ def sweeper(registry, stop, log):
                      % (host, port, registry.ttl))
 
 
+def prober(registry, stop, log):
+    """Mark each entry reachable or not, one non-blocking connect at a time.
+
+    This is the one thing only the master can see. An entry heartbeats happily
+    while nothing listens on its session port -- a firewall, a container whose port
+    is not published, a server that moved -- and from every other vantage point the
+    listing looks fine. Saying so in the listing, and once in the log when it
+    changes, turns "my server is listed but nobody can join it" into one line on
+    the VPS instead of a session of guessing at someone else's client.
+
+    Non-blocking, one connect at a time, so a dead address costs a two-second
+    timeout in this thread and nothing anywhere else.
+    """
+    stale_s = max(2.0, float(registry.cfg.get("probe_s", 5)))
+    timeout_s = 2.0
+    pending = []
+    sock = None
+    key = None
+    started = 0.0
+
+    while not stop.is_set():
+        if sock is None:
+            if not pending:
+                pending = registry.needs_probe(stale_s)
+
+                if not pending:
+                    stop.wait(1.0)
+                    continue
+
+            key, host, port = pending.pop(0)
+
+            try:
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.setblocking(False)
+                sock.connect_ex((host, int(port)))
+                started = time.time()
+            except OSError as e:
+                if sock is not None:
+                    sock.close()
+                sock = None
+                _note(registry, log, key, False, 0, "cannot even try: %s" % e)
+
+            continue
+
+        # one connect in flight: wait for it, briefly
+        try:
+            _r, w, _x = select.select([], [sock], [], 0.05)
+        except OSError:
+            w = []
+
+        if w:
+            try:
+                err = sock.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
+            except OSError:
+                err = 1
+
+            sock.close()
+            sock = None
+
+            if err == 0:
+                _note(registry, log, key, True, (time.time() - started) * 1000.0, None)
+            else:
+                _note(registry, log, key, False, 0, "connect failed (errno %d)" % err)
+
+            continue
+
+        if time.time() - started > timeout_s:
+            sock.close()
+            sock = None
+            _note(registry, log, key, False, 0, "no answer in %.0fs" % timeout_s)
+
+
+def _note(registry, log, key, ok, ms, why):
+    """Record a probe and say so when the answer CHANGED (never every sweep)."""
+    change = registry.set_probe(key, ok, ms)
+
+    if change is None:
+        return
+
+    name, host, port, reachable = change
+
+    if reachable:
+        log.info("reachable again: %r at %s:%d (%d ms)"
+                 % (name, host, port, max(1, int(ms))))
+    else:
+        log.warning("UNREACHABLE: %r at %s:%d -- listed, but nothing answers%s"
+                    % (name, host, port, (": " + why) if why else ""))
+
+
 def serve(cfg, log):
     registry = Registry(cfg, log)
     Handler.registry = registry
@@ -613,6 +757,7 @@ def serve(cfg, log):
                      daemon=True).start()
 
     threading.Thread(target=sweeper, args=(registry, stop, log), daemon=True).start()
+    threading.Thread(target=prober, args=(registry, stop, log), daemon=True).start()
 
     holder, commands = console_commands(registry, stop, log)
     console = Console(log, commands)
@@ -642,6 +787,8 @@ def main(argv=None):
     ap.add_argument("--log-level", default=None, choices=sorted(LEVELS))
     ap.add_argument("--log-file", default=None)
     ap.add_argument("--public-url", default=None)
+    ap.add_argument("--probe", type=float, default=None,
+                    help="seconds between reachability probes of a listing (0 disables)")
     args = ap.parse_args(argv)
 
     try:
@@ -654,6 +801,7 @@ def main(argv=None):
         ("bind", "bind"), ("port", "port"), ("ttl", "ttl_s"), ("sweep", "sweep_s"),
         ("max_entries", "max_entries"), ("persist", "persist_path"),
         ("log_level", "log_level"), ("log_file", "log_file"), ("public_url", "public_url"),
+        ("probe", "probe_s"),
     ))
 
     log = Log(cfg.get("log_level", "info"), cfg.get("log_file", ""))

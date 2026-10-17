@@ -8,5 +8,6 @@
   "persist_path": "",
   "log_level": "info",
   "log_file": "",
+  "probe_s": 5,
   "public_url": ""
 }

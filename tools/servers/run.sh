@@ -41,7 +41,7 @@ checks)
 	# the same set the CI job runs, in the same order, stopping at the first
 	# failure -- a green run here is what "the servers are fine" means
 	fail=0
-	for t in proto_check.py check_images.py console_selftest.py masterserver/test_masterserver.py masterserver/test_console.py dediserver/test_console.py test_console_stdin.py rigs/test_e2e.py; do
+	for t in proto_check.py check_images.py console_selftest.py masterserver/test_masterserver.py masterserver/test_console.py masterserver/test_probe.py dediserver/test_console.py test_console_stdin.py rigs/test_e2e.py; do
 		echo
 		echo "== $t"
 		"$PY" "$HERE/$t" || fail=1
