@@ -62,6 +62,13 @@ built-in defaults are used.
 }
 ```
 
+## Docker
+
+On a server or VPS, [`../docker-compose.yml`](../docker-compose.yml) runs this and
+the master together (`docker compose up -d --build`), with `--port`, `--name`,
+`--master` and `--advertise-host` set from the environment. See
+[`../README.md`](../README.md#running-it-on-a-server-docker).
+
 ## Ports
 
 | Port | Protocol | Direction | Needed for |

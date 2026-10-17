@@ -29,6 +29,10 @@ will eventually need.
 
 ## Run it
 
+On a server or VPS, the compose file next door runs this and the dedi together
+with host networking: see [`../docker-compose.yml`](../docker-compose.yml) and
+[`../README.md`](../README.md#running-it-on-a-server-docker). Otherise:
+
 ```sh
 python masterserver.py                          # bind 0.0.0.0:8100
 python masterserver.py --port 8080 --ttl 90

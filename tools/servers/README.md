@@ -27,12 +27,32 @@ not game data (`src_rebuild/premake5.lua`, "The TOOLS are deliberately NOT
 mirrored"). So nothing here can ride along in a mod download by accident — which
 is exactly why the discovery server is placed here rather than in `JERICHO/`.
 
+## Running it on a server (Docker)
+
+A test server or a VPS runs both services from here:
+
+```bash
+cd JERICHO/MODS/mp/tools/servers
+docker compose up -d --build      # then: docker compose logs -f / ps / down
+```
+
+[`docker-compose.yml`](docker-compose.yml) builds the two images
+([`masterserver/Dockerfile`](masterserver/Dockerfile),
+[`dediserver/Dockerfile`](dediserver/Dockerfile)) and starts them with **host
+networking** — the dedi's LAN beacon is a UDP broadcast that a bridge network
+would keep to itself, and host networking is simply the tested configuration. So
+the ports are the host's: **open TCP 8100** (the master), **TCP 1400** (the
+session) and **UDP 1318** only if you want LAN browser discovery. `MASTER_PORT`,
+`DEDI_PORT`, `DEDI_NAME`, `DEDI_CITY`, `DEDI_RULES`, `DEDI_MAX_PLAYERS`,
+`ADVERTISE_HOST` and `LOG_LEVEL` are read from the environment (inline or a
+`.env`), and the two JSON configs stay on the host, mounted read-only.
+
 ## Start here
 
 * Running a 24/7 host → [`dediserver/README.md`](dediserver/README.md).
 * Operating the public listing service → [`masterserver/README.md`](masterserver/README.md).
+* **Putting both on a server** → [`docker-compose.yml`](docker-compose.yml).
 * **Running and testing the whole stack on one PC** →
   [`TESTING.md`](TESTING.md) (the `local_stack.py` rig, and what it has found).
-* The game-side work still needed for internet play (registering a host and
-  listing remote servers from inside the game) →
-  [`docs/MASTER_SERVER.md`](../../docs/MASTER_SERVER.md).
+* The game-side work still needed for internet play (a listen host registering
+  itself and being listed) → [`docs/MASTER_SERVER.md`](../../docs/MASTER_SERVER.md).

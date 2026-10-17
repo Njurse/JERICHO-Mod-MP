@@ -1,0 +1,118 @@
+# The two mp services, for a test server or a VPS.
+#
+#   cd JERICHO/MODS/mp/tools/servers
+#   docker compose up -d --build
+#   docker compose logs -f
+#   docker compose ps
+#   docker compose down
+#
+# Override anything an env var covers without editing this file, either inline
+# (`ADVERTISE_HOST=play.example.net docker compose up -d`) or from a .env beside it.
+#
+#   MASTER_PORT      8100      the master's HTTP port (players point master_url here)
+#   DEDI_PORT        1400      the session port clients connect to (TCP, forwarded)
+#   DEDI_NAME        Dedicated name shown in the browser / listed by the master
+#   DEDI_CITY        0         0 CHICAGO, 1 HAVANA, 2 LAS VEGAS, 3 RIO
+#   DEDI_RULES       0         1 = cops -> the browser names the mode COPS N ROBBERS
+#   DEDI_MAX_PLAYERS 8
+#   ADVERTISE_HOST   (empty)   your PUBLIC address, when the master would otherwise
+#                              see a NAT'd private one (see the READMEs)
+#   LOG_LEVEL        info
+#
+# NETWORKING: host mode for both, deliberately.
+#   * The dedi's LAN beacon is a UDP broadcast to 255.255.255.255, which a bridge
+#     network keeps entirely to itself -- no machine outside the container could
+#     ever hear it.
+#   * The tested configuration is the two processes talking over the host's own
+#     interfaces; host mode is that same configuration, and it is what makes the
+#     dedi's `http://127.0.0.1:${MASTER_PORT}` registration correct.
+#   * Consequence on a Linux VPS: these are the HOST's ports now, so open
+#     TCP $MASTER_PORT, TCP $DEDI_PORT and (only if you want LAN discovery)
+#     UDP 1318 in the firewall. Nothing is published by compose.
+#   * Docker Desktop on Windows/macOS does not do host networking the same way;
+#     run it on Linux, or see the README for the bridge alternative.
+#
+# The two JSON configs stay on the host and are mounted READ-ONLY: they are the
+# single source of truth, editable without a rebuild. Flags below win over them.
+name: jericho-mp
+
+services:
+  master:
+    build:
+      context: ../..
+      dockerfile: tools/servers/masterserver/Dockerfile
+    image: jericho-mp-master
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - ./masterserver/masterserver.json:/mp/tools/servers/masterserver/masterserver.json:ro
+      # the registry survives a restart: a re-deploy does not blank the listing
+      - master-data:/data
+    command:
+      - python
+      - -u
+      - masterserver.py
+      - --config
+      - masterserver.json
+      - --port
+      - "${MASTER_PORT:-8100}"
+      - --persist
+      - /data/servers.json
+      - --log-level
+      - "${LOG_LEVEL:-info}"
+    healthcheck:
+      # the master's own liveness endpoint, so `depends_on` below means something
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:${MASTER_PORT:-8100}/v1/health >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+  dedi:
+    build:
+      context: ../..
+      dockerfile: tools/servers/dediserver/Dockerfile
+    image: jericho-mp-dedi
+    restart: unless-stopped
+    network_mode: host
+    depends_on:
+      master:
+        condition: service_healthy
+    volumes:
+      - ./dediserver/dediserver.json:/mp/tools/servers/dediserver/dediserver.json:ro
+      # the log, so a dropped client overnight is still legible (appended, never truncated)
+      - dedi-data:/data
+    command:
+      - python
+      - -u
+      - dediserver.py
+      - --config
+      - dediserver.json
+      - --port
+      - "${DEDI_PORT:-1400}"
+      - --name
+      - "${DEDI_NAME:-Dedicated}"
+      - --city
+      - "${DEDI_CITY:-0}"
+      - --rules
+      - "${DEDI_RULES:-0}"
+      - --max-players
+      - "${DEDI_MAX_PLAYERS:-8}"
+      # a listen host on this machine would use the same address; the master is
+      # on the host's loopback because both containers share its network
+      - --master
+      - "http://127.0.0.1:${MASTER_PORT:-8100}"
+      # empty = let the master record the address it sees us from (right when the
+      # server has a public address; wrong behind NAT, where you set this)
+      - --advertise-host
+      - "${ADVERTISE_HOST:-}"
+      - --beacon
+      - --log-file
+      - /data/dedi.log
+      - --log-level
+      - "${LOG_LEVEL:-info}"
+    stop_grace_period: 15s    # room for the unregister-on-stop round trip
+
+volumes:
+  master-data:
+  dedi-data:

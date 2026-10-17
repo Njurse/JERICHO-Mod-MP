@@ -356,27 +356,35 @@ and read every layer's log.
 
 ## The VPS footnote
 
-Everything above is one PC. The intended deployment is a Linux VPS, likely Docker. What
-is already true, and what will need re-checking there:
+Everything above is one PC. The intended deployment is a Linux VPS, and that is now a
+`docker compose` away — [`docker-compose.yml`](docker-compose.yml) plus a Dockerfile
+beside each server. What is already true, and what still needs re-checking there:
 
-* **Ports to publish** — the dedi's TCP session port (`1318`) and the master's HTTP port
-  (`8100`). UDP `1318` is only for LAN browser discovery and is pointless on an
-  internet-facing server. Both servers already take a configurable bind address.
-* **Two containers, no build step.** Each is one stdlib-only Python file with a JSON
-  config beside it and no game assets: a base image, the file, a mounted config, a
-  `CMD`. The only state is the master's `--persist` file and the logs.
-* **Signals.** Unregister-on-stop is verified here under Ctrl-Break and SIGTERM; under
-  Docker, re-check that `docker stop`'s SIGTERM actually reaches the process (it must be
-  PID 1, or run under something that forwards it). Otherwise a stopped dedi leaves a
-  stale entry until the TTL expires.
-* **The public address — a known gap.** The master derives an entry's address from the
-  **TCP peer**, which is right when the master sees the real client. It also accepts an
-  explicit `advertiseHost` (`masterserver.py:180`, `:409`) — but **the dedi never sends
-  one** (`grep advertiseHost dediserver/dediserver.py` → nothing). So a dedi behind
-  NAT/reverse-proxy on the VPS will register whatever address the master saw, which is
-  the wrong one if the master is on the same host. Either give the containers host
-  networking, or have the dedi send `advertiseHost` — a small change, deliberately not
-  made here.
+* **Run it.** `cd tools/servers && docker compose up -d --build`. Verified so far
+  without Docker: every composed command starts the servers natively and the dedi
+  registers with the master (`LISTED: name='Compose Test' port=1465 city=2 rules=1`),
+  and each image's `COPY` set resolves `proto_check` — but the images themselves have
+  not been built here, so expect to shake out the obvious on first `up`.
+* **Host networking, and why.** The dedi's LAN beacon is a UDP broadcast to
+  `255.255.255.255`, which a bridge network keeps entirely to itself, and host
+  networking is the configuration that was actually tested (two processes on the
+  host's interfaces). Consequence: the ports are the HOST's, nothing is published.
+* **Ports to open** — the dedi's TCP session port (`--port`, `1400` in the compose),
+  the master's HTTP port (`8100`), and UDP `1318` only if you want LAN browser
+  discovery. Both servers already take a configurable bind address.
+* **Signals — answered by construction.** Each image's `CMD` is the *exec* form
+  (`["python", "-u", ...]`), so the Python process is PID 1 and `docker stop`'s
+  SIGTERM reaches dediserver's handler, which unregisters. There is no shell in
+  between to eat the signal, which was the risk. The dedi service also sets
+  `stop_grace_period: 15s` for the unregister round trip.
+* **The public address — the gap is closed.** The dedi now sends `advertiseHost`
+  (`--advertise-host`), so a NAT'd or reverse-proxied server registers the address
+  players actually reach it on instead of the one the master saw. Measured against a
+  live master: `--advertise-host game.example.com` lists `host=game.example.com`; with
+  no flag the peer address is used, as before. LAN is unaffected — a beacon's address
+  comes from the packet.
+* **What the compose does not do** — forward the ports, or open the firewall. It runs
+  the two processes; the host's NAT rules are still yours.
 * **What cannot be tested there.** The game half. F1 and F2 are client-side consequences
   of what the server sends, so they reproduce identically on a VPS, and the 1.6 GB of
   game data does not belong on one — the VPS proves the servers, this PC proves the
