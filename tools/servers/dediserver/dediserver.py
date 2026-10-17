@@ -330,6 +330,35 @@ class Dedicated:
             except OSError:
                 pass
 
+    def _chat(self, conn, payload, pid, name):
+        """Print one chat line to the operator console, then relay it.
+
+        The id inside the frame is the SENDER'S CLAIM, and a claim is all it is:
+        the connection is who is talking. It is stamped here BEFORE the relay, so
+        the other seats see the real speaker too -- the same rule the C host
+        applies on its own chat path.
+
+        Control characters are stripped, because this line goes to a terminal: a
+        peer that puts an escape sequence or a newline in a message could
+        otherwise forge console rows (or paint the operator's terminal).
+        """
+        try:
+            _claimed, _r0, _r1, _r2, text = m.CHAT.unpack_from(payload, 0)
+        except struct.error:
+            self.log.debug("player %d '%s': ignoring a malformed chat frame" % (pid, name))
+            return
+
+        line = text.split(b"\0")[0].decode("latin1", "replace")
+        line = "".join(ch if ch.isprintable() else " " for ch in line).strip()
+
+        if not line:
+            return
+
+        self.log.info("[chat] %s: %s" % (name, line))
+
+        out = m.CHAT.pack(pid, 0, 0, 0, line.encode("latin1", "replace")[:95])
+        self.broadcast(out, m.TAG["chat"], skip=conn)
+
     # -- one client
     def serve(self, conn, addr):
         who = "%s:%d" % (addr[0], addr[1])
@@ -513,7 +542,7 @@ class Dedicated:
                     self.broadcast(self.carstate_union(int(time.time() * 30)),
                                    m.TAG["carstate"], skip=conn)
                 elif tag == m.TAG["chat"]:
-                    self.broadcast(payload, m.TAG["chat"], skip=conn)
+                    self._chat(conn, payload, pid, name)
                 elif tag == m.TAG["ping"]:
                     # Liveness. Echo the tick; with no PONG the client's last-receive
                     # clock stops advancing and it drops itself at its idle timeout.
