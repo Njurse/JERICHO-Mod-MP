@@ -311,6 +311,12 @@ class Handler(BaseHTTPRequestHandler):
                 "servers": self.registry.count(),
             })
         if u.path == "/v1/servers":
+            # The one log line that answers "is anything discovering me?" -- a
+            # registration missing from the log is a server problem, but a client
+            # that never appears HERE is a network one, and the two look identical
+            # from the game.
+            self.log.info("listing -> %d entr(ies) to %s"
+                          % (self.registry.count(), self.client_address[0]))
             return self._servers(q)
         if u.path in ("/", "/index.html"):
             return self._index()

@@ -31,6 +31,7 @@ import socket
 import struct
 import sys
 import threading
+from urllib.parse import urlsplit
 import time
 import urllib.error
 import urllib.request
@@ -59,7 +60,7 @@ DEFAULTS = {
     "log_level": "info",
     "log_file": "",
     # master discovery (optional). master = "" disables registration.
-    "master": "",
+    "master": "http://jerichomp.animetiddi.es:8100",   # "" disables registration
     "master_name": "",
     "advertise_host": "",     # public address players reach us on ("" = the address we register from); set this behind NAT
     "advertise_port": 0,      # public port players dial (0 = our session port); set this when the router REMAPS it
@@ -73,6 +74,31 @@ DEFAULTS = {
 ROSTER_REFRESH_S = 2.0
 
 CONFIG_NAME = "dediserver.json"
+
+
+def master_base(url):
+    """The master's base URL, with the defaults filled in.
+
+    A bare host used to become `http://host` and then connect to port 80, where
+    nothing is listening -- so a config that looked right registered nowhere, and
+    the failure was a connect error in a log nobody was reading. The scheme and the
+    port are the master's defaults now; a URL that names either keeps it.
+    """
+    url = (url or "").strip().rstrip("/")
+
+    if not url:
+        return ""
+
+    if "://" not in url:
+        url = "http://" + url
+
+    parts = urlsplit(url)
+    host = parts.hostname or ""
+
+    if not host:
+        return ""
+
+    return "%s://%s:%d" % (parts.scheme or "http", host, parts.port or 8100)
 
 
 def load_config(path):
@@ -421,10 +447,7 @@ class Dedicated:
 
     # -- master discovery registration
     def master_loop(self):
-        url = self.cfg["master"].rstrip("/")
-        if url and "://" not in url:
-            url = "http://" + url
-        base = url
+        base = master_base(self.cfg["master"])
         token = None
         interval = float(self.cfg["master_interval_s"])
         timeout = float(self.cfg["master_timeout_s"])

@@ -2868,7 +2868,9 @@ void MpOnlineSetMaster(const char* url)
 	char host[128];
 	const char* p;
 	char* colon;
-	int port = 80;
+	/* the master's port, not the http default: a bare host used to dial 80, where
+	 * nothing is listening, and the screen just said "contacting" until it gave up */
+	int port = 8100;
 
 	MpOnlineClose();
 	gOnlineError[0] = '\0';
@@ -3331,6 +3333,7 @@ static void MpAdvertReply(int status, const char* body)
 	if (status < 200 || status > 299)
 	{
 		gAdvertWhy = "the master refused it";
+		jer_console_log("master: %s refused the listing", gOnlineHostHdr);
 		gAdvertNextMs = MpNowMs() + MPI_ADVERT_RETRY_MS;
 
 		if (gMpCtx != NULL)
@@ -3365,6 +3368,12 @@ static void MpAdvertReply(int status, const char* body)
 		if (gMpCtx != NULL)
 			gMpCtx->jer_log(gMpCtx, "[mp] advertised on %s as %s:%d (%s)\n",
 				gOnlineHostHdr, gAdvertName, gAdvertPort, MpModeName(gAdvertRules));
+
+		/* ...and say so on SCREEN, in the left-hand console rows (the same place the
+		 * version toast goes): the menu label that would carry this is capped at 32
+		 * characters, which is why "contacting the discovery server..." arrives cut in
+		 * half. The console has room for the whole sentence and keeps it for a moment. */
+		jer_console_log("master: listed as %s", gAdvertName);
 	}
 	else if (gOnlineKind == MPI_REQ_HEARTBEAT)
 	{

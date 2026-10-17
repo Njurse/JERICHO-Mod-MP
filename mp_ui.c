@@ -1035,6 +1035,39 @@ static int OnlineApplyConfig(void)
 	return 1;
 }
 
+/* The discovery status, said where it FITS. The menu row that carries it is capped
+ * at 32 characters, which is why "contacting the discovery server..." arrives cut in
+ * half; the console rows (the same place the version toast lands) have room for the
+ * whole sentence, and the player is told when the list arrives -- or that the server
+ * cannot be reached at all, which is the case worth knowing about. */
+static int gOnlineAnnounced = -1;
+
+static void OnlineAnnounce(void)
+{
+	int st = MpOnlineState();
+
+	if (st == gOnlineAnnounced)
+		return;
+
+	gOnlineAnnounced = st;
+
+	switch (st)
+	{
+	case MP_ONLINE_CONNECTING:
+		jer_console_log("discovery: contacting %s", gMp.config.masterUrl);
+		break;
+	case MP_ONLINE_READY:
+		jer_console_log("discovery: %d server(s) from %s",
+			MpOnlineCount(), gMp.config.masterUrl);
+		break;
+	case MP_ONLINE_FAILED:
+		jer_console_log("discovery: cannot reach %s", gMp.config.masterUrl);
+		break;
+	default:
+		break;
+	}
+}
+
 /* Why the list is empty. A player staring at an empty table should not have to
  * guess whether the fetch is still running or it failed. There is deliberately no
  * text for MP_ONLINE_OFF: an unset address draws the browser with no entries (see
@@ -1364,6 +1397,8 @@ static void WireDynamic(void)
  * engine keeps the cursor across a live refresh, so scrolling does not jump. */
 void MpUiTick(void)
 {
+	OnlineAnnounce();
+
 	/* One line when the frontend first shows: how many menus the registry holds,
 	 * and where mp's own landed. The two numbers differing from mp's enum order is
 	 * exactly the "a submenu row pushes a breadcrumb and opens the wrong screen"

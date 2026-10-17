@@ -63,6 +63,12 @@ only a friend who was told the address can reach. A future pass adds showing,
 hiding and password-protecting a lobby, which is why the fields a listing carries
 (name, city, mode, rules, players) are already the ones a filter would need.
 
+**The discovery status says itself in the console.** The screen's own status row is
+capped at 32 characters, so `contacting the discovery server...` arrives cut in
+half; the left-hand console rows (where the version toast lands) carry the whole
+sentence: which server it is contacting, how many it found, or that it cannot be
+reached. A host is told there too when its session is listed.
+
 **`Manual address`** is the way in for a host that is not listed. The row is a door,
 not a readout -- it does not print the address, because the address you are about to
 replace is noise (the typing screen shows what is set). The field takes a `host`, a

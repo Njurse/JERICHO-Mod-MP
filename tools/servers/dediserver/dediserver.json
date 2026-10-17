@@ -11,7 +11,7 @@
   "rules": 0,
   "log_level": "info",
   "log_file": "",
-  "master": "",
+  "master": "http://jerichomp.animetiddi.es:8100",
   "master_name": "",
   "advertise_host": "",
   "advertise_port": 0,
