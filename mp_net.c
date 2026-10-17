@@ -2546,6 +2546,9 @@ static char gOnlineBuf[MP_ONLINE_BUF_SIZE];
 static int  gOnlineLen;
 static MP_ONLINE_SERVER gOnline[MP_ONLINE_MAX];
 static int  gOnlineCount;
+static int  gOnlineRetries;		/* early failures already retried */
+static unsigned long gOnlineRetryAtMs;	/* when the next try is due */
+static int  gOnlineEverReady;		/* one fetch has completed: stop excusing */
 static unsigned gOnlineRev;
 static char gOnlineError[96];
 static char gOnlineUrl[160];		/* what the config said, for the log */
@@ -2759,10 +2762,25 @@ static int MpOnlineParse(const char* body)
 
 	gOnlineCount = count;
 
+	/* one fetch has now worked, so an early-race excuse no longer applies */
+	gOnlineEverReady = 1;
+	gOnlineRetries = 0;
+	gOnlineRetryAtMs = 0;
+
 	return 1;
 }
 
 /* --- the fetch ------------------------------------------------------ */
+
+/* Until one fetch has COMPLETED, a failure is not a verdict: the first attempt
+ * happens at module activation, where Winsock is not up yet and the socket call
+ * itself fails ("could not open a socket"), and a cold resolver fails its first
+ * lookup too. Both looked identical from the player's side -- "cannot be reached",
+ * then a list, with no click in between -- so an early failure retries a few times
+ * before it is believed. A server that really is unreachable still ends in the
+ * same toast, three retries and nine seconds later. */
+#define MP_ONLINE_RETRIES		3
+#define MP_ONLINE_RETRY_MS		3000
 
 static void MpOnlineClose(void)
 {
@@ -2773,7 +2791,6 @@ static void MpOnlineClose(void)
 static void MpOnlineFail(const char* why)
 {
 	MpOnlineClose();
-	gOnlineState = MP_ONLINE_FAILED;
 
 	/* whatever we were sending did not arrive; the advertisement retries later and
 	 * the session carries on either way */
@@ -2783,6 +2800,21 @@ static void MpOnlineFail(const char* why)
 		gAdvertNextMs = MpNowMs() + MPI_ADVERT_RETRY_MS;
 
 	snprintf(gOnlineError, sizeof(gOnlineError), "%s", why);
+
+	if (!gOnlineEverReady && gOnlineRetries < MP_ONLINE_RETRIES)
+	{
+		gOnlineRetries++;
+		gOnlineState = MP_ONLINE_CONNECTING;	/* still trying: no alarm yet */
+		gOnlineRetryAtMs = MpNowMs() + MP_ONLINE_RETRY_MS;
+
+		if (gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx, "[mp] discovery server %s: %s -- retrying (%d/%d)\n",
+				gOnlineHostHdr, why, gOnlineRetries, MP_ONLINE_RETRIES);
+
+		return;
+	}
+
+	gOnlineState = MP_ONLINE_FAILED;
 
 	if (gMpCtx != NULL)
 		gMpCtx->jer_log(gMpCtx, "[mp] discovery server %s: %s\n", gOnlineHostHdr, why);
@@ -2796,6 +2828,9 @@ void MpOnlineReset(void)
 	gOnlineError[0] = '\0';
 	gOnlineUrl[0] = '\0';
 	gOnlineHostHdr[0] = '\0';
+	gOnlineRetries = 0;
+	gOnlineRetryAtMs = 0;
+	gOnlineEverReady = 0;
 
 	if (gOnlineCount > 0)
 	{
@@ -2852,6 +2887,9 @@ static void MpHttpKick(const char* req, int kind)
 void MpOnlineRefresh(void)
 {
 	char req[320];
+
+	gOnlineRetries = 0;		/* an explicit refresh restarts the count */
+	gOnlineRetryAtMs = 0;
 
 	if (gOnlineHostHdr[0] == '\0')
 		return;			/* nothing configured */
@@ -3089,6 +3127,25 @@ static void MpOnlinePingPoll(void)
 	gOnlinePingNext = -1;			/* the queue is drained */
 }
 
+/* The retry, driven by the poll. A failed attempt leaves no socket and no state
+ * machine to make progress with, so without this the retry would never fire. */
+static void MpOnlineRetryPoll(void)
+{
+	char url[sizeof(gOnlineUrl)];
+
+	if (gOnlineState != MP_ONLINE_CONNECTING || gOnlineRetryAtMs == 0)
+		return;
+
+	if (MpNowMs() < gOnlineRetryAtMs)
+		return;
+
+	gOnlineRetryAtMs = 0;
+
+	/* SetMaster writes into gOnlineUrl, so it cannot be handed its own buffer */
+	snprintf(url, sizeof(url), "%s", gOnlineUrl);
+	MpOnlineSetMaster(url);
+}
+
 void MpOnlinePoll(void)
 {
 	fd_set wfds, efds;
@@ -3100,6 +3157,8 @@ void MpOnlinePoll(void)
 #else
 	socklen_t elen = sizeof(err);
 #endif
+
+	MpOnlineRetryPoll();
 
 	/* The ping queue advances whenever the list is real, whether or not a menu is
 	 * looking at it: the numbers are only worth having if they are already there
