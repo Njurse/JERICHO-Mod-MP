@@ -491,10 +491,13 @@ typedef struct MP_CARSTATE_ENTRY
  * there.
  *
  * A police car needs no separate message: it is the level's own police MODEL
- * (model 0, the car CarHasSiren keys off), carried here like any other, and the
- * siren follows from the model at the receiver. Its TARGET, though, is a player
- * id and does NOT ride this generic row. */
+ * (model 0, the car CarHasSiren keys off), carried here like any other, and
+ * whether its siren and lightbar are ON rides the flags byte -- because the
+ * receiver builds it as a posed mirror, not as an AI pursuer, so the engine's
+ * PURSUER_AI test cannot answer it there. Its TARGET, though, is a player id
+ * and does NOT ride this generic row. */
 #define MP_TRAFFIC_REMOVE	0x01	/* this row says "the car in carSlot is gone" */
+#define MP_TRAFFIC_SIREN	0x02	/* this police car is on duty: siren + lightbar up */
 
 #pragma pack(push, 1)
 typedef struct MP_TRAFFIC_ENTRY

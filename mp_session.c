@@ -18,6 +18,9 @@
 #include "cars.h"
 #include "convert.h"	/* _RotMatrixY: a car's box is built from its matrix */
 #include "cosmetic.h"	/* car_cosmetics[slot]: the box a rebuilt car needs */
+#include "gamesnd.h"	/* CarHasSiren: whether a model has a siren, and its bank/sample */
+#include "sound.h"		/* Start3DSoundVolPitch: the engine's own 3D sound call */
+#include "jer_sound.h"	/* jer_sound_ensure: a voice a module may keep (never starving SFX) */
 #include "system.h"	/* CITY_COUNT and LevelNames: the city registry MpCarCityName reads */
 #include "denting.h"	/* CreateDentableCar: the only writer of the drawn vertex dump */
 #include "civ_ai.h"	/* reservedSlots: the array PingInCivCar's free-slot scan reads */
@@ -56,6 +59,8 @@ static unsigned char gMpOurCars[MAX_CARS];
  * teardown removes exactly what we built and nothing of the engine's. */
 static unsigned char gMpPeerTraffic[MAX_CARS];	/* 1 = we built a peer's car here */
 static unsigned gMpPeerTrafficSeen[MAX_CARS];	/* frame we last heard about a mirror */
+static unsigned gMpPeerTrafficSiren[MAX_CARS];	/* frame we last heard it was on duty (MP_TRAFFIC_SIREN) */
+static int gMpMirrorSirenChannel = -1;		/* our locked voice for a peer's siren loop */
 static unsigned char gMpTrafficSent[MAX_CARS];	/* slots WE published last frame */
 static unsigned gMpTrafficSelfContact[MAX_CARS];/* frame OUR engine resolved a contact with our traffic car */
 static unsigned gMpTrafficHitFrame[MAX_CARS];	/* rate limit for reporting a contact with a peer's traffic */
@@ -2501,6 +2506,7 @@ static void MpSendOwnPedState(void);
 static void MpSendTrafficState(void);
 static void MpTrafficMirrorsClear(void);
 static void MpTrafficMirrorAgeTick(void);
+static void MpMirrorSirenTick(void);
 static int  MpSlotInOurBand(int slot);
 static int  MpTrafficSlotOwnerRank(int slot);
 static void MpTrafficContactPush(MP_PLAYER* me, int slot);
@@ -3752,6 +3758,10 @@ void MpLockstepFrame(void)
 
 	/* ...and collect any mirror its owner has stopped speaking about. */
 	MpTrafficMirrorAgeTick();
+
+	/* ...and keep a peer's on-duty police car lit and sounding, which its own
+	 * engine cannot do for a car it does not own. */
+	MpMirrorSirenTick();
 
 	/* the test levers are read from the environment ONCE, not every frame (see
 	 * MpResolveTestLevers); the ticks below then only consult the cache */
@@ -5496,6 +5506,16 @@ static void MpSendTrafficState(void)
 		e.model = (uint8_t)residentCarModels[slot];
 		e.modelCity = (uint8_t)((src >= 0) ? src : MP_CAR_CITY_SESSION);
 		e.palette = (uint8_t)cp->ap.palette;
+
+		/* ON DUTY: the siren and lightbar state, decided HERE because this is the
+		 * only machine that can decide it -- the car is ours, driven by our AI, and
+		 * `controlType == PURSUER_AI` is exactly what the engine checks before it
+		 * lights a cop car. The receiver builds a posed mirror, not an AI pursuer,
+		 * so its own test answers "no" for every peer car whatever the cop is doing;
+		 * it has to be told. The condition is the engine's own (cars.c). */
+		if (cp->controlType == CONTROL_TYPE_PURSUER_AI &&
+		    cp->ai.p.dying < 75 && CarHasSiren(cp->ap.model) != 0)
+			e.flags |= MP_TRAFFIC_SIREN;
 
 		/* ...and its DAMAGE, so a bent car reads the same on both screens. */
 		{
@@ -7702,6 +7722,74 @@ static void MpTrafficMirrorAgeTick(void)
 	}
 }
 
+/* LIGHT AND SOUND A MIRRORED POLICE CAR.
+ *
+ * A cop car belongs to ONE machine's traffic band; everywhere else it is a pose
+ * rewritten from the wire, built as CONTROL_TYPE_PLAYER so no AI touches it. That
+ * is why the siren never worked for a cop chasing somebody else: the engine turns
+ * a cop's lightbar and siren on in cars.c and gamesnd.c only for
+ * CONTROL_TYPE_PURSUER_AI, and a mirror never is one. The owner now says so in
+ * the row (MP_TRAFFIC_SIREN), and this is what acts on it -- with the ENGINE's own
+ * two calls, so a mirrored cop looks and sounds exactly like a local one instead
+ * of like a module's approximation:
+ *
+ *   AddCopCarLight  -- the same flashing bar the engine adds to a pursuing cop;
+ *   Start3DSoundVolPitch -- the siren sample CarHasSiren names for that model,
+ *                      played on a voice jer_sound_ensure gives us (which refuses
+ *                      rather than starving the engine's own SFX).
+ *
+ * The sound is re-issued every frame, which is how the engine starts a player's
+ * siren (StartPlayerCarSounds): the sample itself loops in the SPU.
+ *
+ * Nothing here touches controlType. Handing a mirror to the traffic AI is the
+ * access-violation class this file already documents (see MpReleaseRemoteCar). */
+static void MpMirrorSirenTick(void)
+{
+	int i, playing = 0;
+
+	for (i = 0; i < MAX_CARS; i++)
+	{
+		CAR_DATA* cp;
+		int siren;
+
+		if (!gMpPeerTraffic[i] || gMpPeerTrafficSiren[i] == 0)
+			continue;
+
+		if ((unsigned)(gMp.frame - gMpPeerTrafficSiren[i]) > MP_TRAFFIC_STALE_FRAMES)
+			continue;	/* the owner stopped saying it: off, like the pose */
+
+		cp = &car_data[i];
+
+		if (cp->controlType == CONTROL_TYPE_NONE)
+			continue;
+
+		AddCopCarLight(cp);
+
+		siren = CarHasSiren(cp->ap.model);
+
+		if (siren == 0)
+			continue;
+
+		/* ONE loop at a time: a second siren for the same cop would double the
+		 * sample on top of itself. The first mirror found wins, and the engine's
+		 * own limit for cop sirens is two anyway. */
+		if (playing)
+			continue;
+
+		playing = 1;
+
+		/* Say it once a second or so: "did the flag ever arrive, and was it acted
+		 * on" is the one question a run of this could not otherwise answer. */
+		if (MpDebugOn() && gMpCtx != NULL && (gMp.frame % 30) == 0)
+			gMpCtx->jer_log(gMpCtx,
+				"[mp] siren: mirrored police slot %d is on duty here too (lightbar + siren)\n", i);
+
+		Start3DSoundVolPitch(jer_sound_ensure(&gMpMirrorSirenChannel),
+			(siren & 0xff00) >> 8, siren & 0xff,
+			cp->hd.where.t[0], cp->hd.where.t[1], cp->hd.where.t[2], -10000, 129);
+	}
+}
+
 static void MpHandleTraffic(int connIndex, const unsigned char* p, int len)
 {
 	const MP_TRAFFIC* h;
@@ -7749,6 +7837,11 @@ static void MpHandleTraffic(int connIndex, const unsigned char* p, int len)
 		MpApplyTrafficPose(&car_data[slot], &e[i]);
 		MpApplyTrafficDamage(&car_data[slot], &e[i]);
 		gMpPeerTrafficSeen[slot] = gMp.frame;	/* seen now: do not age it out */
+
+		/* Its owner says the siren and lightbar are up. Stamped with the frame so a
+		 * cop that stops pursuing (or whose owner stops speaking) goes quiet on its
+		 * own, exactly like the pose does. */
+		gMpPeerTrafficSiren[slot] = (e[i].flags & MP_TRAFFIC_SIREN) ? gMp.frame : 0;
 	}
 
 	/* The host is the hub: relay a client's traffic to the other clients, exactly
