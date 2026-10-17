@@ -5186,14 +5186,14 @@ static void MpSendColors(int whole)
 static void MpHandleColor(int connIndex, const unsigned char* p, int len)
 {
 	MP_COLOR h;
-	int i, n;
-
-	(void)connIndex;
+	int i, n, from;
 
 	if (len < (int)sizeof(MP_COLOR))
 		return;
 
 	memcpy(&h, p, sizeof(h));
+
+	from = MpConnPlayerId(connIndex);
 
 	n = h.count;
 
@@ -5209,6 +5209,11 @@ static void MpHandleColor(int connIndex, const unsigned char* p, int len)
 		MP_PLAYER* pl;
 
 		memcpy(&e, p + sizeof(MP_COLOR) + i * sizeof(e), sizeof(e));
+
+		/* A colour is a player's own, so the same binding as their input row:
+		 * without it any peer could repaint somebody else on every screen. */
+		if (!MpRowOwnerOk(from, (int)e.playerId))
+			continue;
 
 		pl = MpGetPlayer(e.playerId);
 
