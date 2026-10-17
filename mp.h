@@ -334,6 +334,8 @@ void MpSelfClearFelony(void);		/* pause menu: clear the local player's wanted le
 
 /* Addon network bridge (mp_bridge.c / jer_net.h). */
 void MpBridgeDeliver(const char* channel, int peer, const void* data, int len);
+int  MpBridgeAccept(const char* channel, int len);	/* 1 = registered name and a
+							 * payload a sender could have sent */
 
 /* ------------------------------------------------------------------ */
 /* UDP LAN discovery (mp_net.c)                                        */

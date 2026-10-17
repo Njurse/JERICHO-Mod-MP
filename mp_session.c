@@ -2257,8 +2257,26 @@ static void MpHandleChannel(int connIndex, const unsigned char* p, int len)
 	if (peer < 0)
 		peer = 0;
 
+	/* A peer picks BOTH the channel name and the payload, so the bridge vets them
+	 * before anything is relayed or delivered: a name this machine never
+	 * registered has no handler waiting for it, and a payload bigger than
+	 * jer_net_send's own ceiling is not something a sender could have produced.
+	 * Dropped here rather than in the module, because a module can only defend
+	 * itself against names it expected to hear. */
+	if (!MpBridgeAccept(h.name, (int)h.len))
+	{
+		if (gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx,
+				"[mp] channel: dropped '%s' (%d bytes) from player %d\n",
+				h.name, (int)h.len, peer);
+
+		return;
+	}
+
 	if (MpIsHost())
-		MpHostBroadcast(MP_TAG_CHANNEL, h.reliable ? MP_FLAG_RELIABLE : 0, p, len);
+		/* relay exactly the message -- not whatever the sender appended after it */
+		MpHostBroadcast(MP_TAG_CHANNEL, h.reliable ? MP_FLAG_RELIABLE : 0, p,
+			(int)(sizeof(MP_CHANNEL) + (size_t)h.len));
 
 	MpBridgeDeliver(h.name, peer, p + sizeof(MP_CHANNEL), (int)h.len);
 }

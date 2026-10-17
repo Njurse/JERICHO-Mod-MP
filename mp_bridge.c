@@ -125,6 +125,41 @@ int jer_net_player_present(int id)
 	return (p != NULL && p->active && p->connected) ? 1 : 0;
 }
 
+/* Should an inbound MP_CHANNEL be accepted at all?
+ *
+ * Two gates, both of them about what a PEER controls:
+ *
+ *  - the channel NAME. A name nobody here registered has no handler waiting for
+ *    it, so delivering it can only mean firing JER_EVENT_NET_RECV with a name
+ *    this process never asked for. Registration is the module's own declaration
+ *    of "I speak this", so it is also the right allow-list. (The host relays a
+ *    client's payload to the other clients without knowing what they registered,
+ *    which is correct: each machine applies its own set on receipt.)
+ *
+ *  - the LENGTH. jer_net_send caps a payload at MP_CHANNEL_MAX_PAYLOAD and that
+ *    ceiling is what a receiving handler is entitled to assume. The frame
+ *    itself can be much larger, so without this a peer could hand a handler
+ *    more than the bridge ever sends.
+ */
+int MpBridgeAccept(const char* channel, int len)
+{
+	int i;
+
+	if (channel == NULL || channel[0] == '\0')
+		return 0;
+
+	if (len < 0 || len > MP_CHANNEL_MAX_PAYLOAD)
+		return 0;
+
+	for (i = 0; i < MP_CHANNEL_SLOTS; i++)
+	{
+		if (gChannels[i].used && strcmp(gChannels[i].name, channel) == 0)
+			return 1;
+	}
+
+	return 0;
+}
+
 /* Called by mp_session.c for each inbound MP_CHANNEL. */
 void MpBridgeDeliver(const char* channel, int peer, const void* data, int len)
 {
