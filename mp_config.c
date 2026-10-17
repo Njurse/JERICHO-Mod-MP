@@ -121,9 +121,10 @@ void MpConfigLoad(void)
 	else
 		snprintf(gMp.config.hostName, sizeof(gMp.config.hostName), "%s's game", gMp.config.playerName);
 
-	/* Empty by default: the Online browser is opt-in -- it needs a server to
-	 * point at, and there is no address worth guessing. */
-	s = jer_config_get_str("mp", "master_url", "");
+	/* The discovery server a stock JERICHO talks to. It is what makes the Online
+	 * browser show anything, and what a hosted game lists itself on. Set it EMPTY
+	 * to run LAN-only: no listing, no advertisement, the beacon still works. */
+	s = jer_config_get_str("mp", "master_url", MP_DEFAULT_MASTER_URL);
 	snprintf(gMp.config.masterUrl, sizeof(gMp.config.masterUrl), "%s", (s != NULL) ? s : "");
 }
 

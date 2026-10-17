@@ -1011,6 +1011,13 @@ static int MpOnFrame(void* userdata, void* args)
 	MpCarChangeWaitTick();
 
 	MpNetPoll(0);
+
+	/* The advertisement is driven from here, not from the frontend's own tick: a
+	 * match runs with no frontend on screen, and that is exactly when a listing has
+	 * to keep saying the right number of players. */
+	MpMasterAdvertiseCounts(gMp.playerCount, gMp.running);
+	MpMasterAdvertisePoll();
+
 	MpUiTick();
 
 	/* The host's session rules, every frame -- the level sets these for itself
@@ -3072,6 +3079,16 @@ JER_MODULE_ENTRY(jer_module_mp_entry)(JERICHO_CONTEXT* ctx)
 
 	MpConfigLoad();
 	MpResetPlayers();
+
+	/* Resolve the discovery server ONCE, at activation. MpOnlineSetMaster runs
+	 * getaddrinfo, which blocks -- and this is the one moment where that is
+	 * affordable (module activation, behind a loading screen, once). The browser
+	 * re-resolves on entry when the address has changed, but a HOST never opens
+	 * the browser, and without this a host had no master to advertise on at all:
+	 * every session was LAN-only however the config was set. */
+	if (gMp.config.masterUrl[0] != 0)
+		MpOnlineSetMaster(gMp.config.masterUrl);
+
 	MpUiInit();		/* register the native frontend menus */
 
 	ctx->jer_register_hook(ctx, JER_EVENT_BOOT, MpOnBoot, NULL, 0);

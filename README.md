@@ -50,6 +50,19 @@ Take-a-Ride screen itself.
 `Manual address` and `Back` under them. Picking a row joins it through the same
 `MpBeginJoinAsync` the LAN list uses, so a listed host lands in the normal lobby.
 
+**A hosted game lists ITSELF.** Pressing Host Game registers the session on the
+discovery server: one register when the level is up, a small heartbeat every 20 s
+carrying the live player count, and an unregister when the session ends (otherwise
+the entry lapses on the master's TTL). Nothing about it blocks: a master that is
+down or unreachable costs a retry and a log line, and the LAN beacon -- which needs
+no server at all -- is what keeps local play working. Set `master_url` empty to keep
+a session off the board entirely.
+
+Being listed is the whole difference between a host a stranger can find and one
+only a friend who was told the address can reach. A future pass adds showing,
+hiding and password-protecting a lobby, which is why the fields a listing carries
+(name, city, mode, rules, players) are already the ones a filter would need.
+
 **`Manual address`** is the way in for a host that is not listed. The row is a door,
 not a readout -- it does not print the address, because the address you are about to
 replace is noise (the typing screen shows what is set). The field takes a `host`, a
@@ -189,7 +202,7 @@ no wanted level, and the session carries on.
 | `beacon_ms` | `1000` | discovery beacon interval |
 | `mod_check` | `0` | host lobby mod policy: 0 off, 1 by id, 2 by id+version |
 | `strict_version` | `0` | host lobby setting: 1 also requires an identical build hash (off by default, because that hash tracks `git describe`) |
-| `master_url` | *(empty)* | the discovery server the `Online` screen lists: `host`, `host:port` or `http://host:port`. Empty = the screen says "no discovery server set". Read when the screen opens, so an edit takes effect on the next open |
+| `master_url` | `http://jerichomp.animetiddi.es:8100` | the discovery server: `host`, `host:port` or `http://host:port`. It is BOTH what the `Online` screen lists and where a hosted game lists itself (see below). Empty = LAN-only: no listing, no advertisement, the beacon still works. Resolved at startup, so an edit takes effect on the next launch |
 
 **The ini's port is the base; the command line can move it -- but not under the shipped
 launchers.** `mp.ini` is read at module activation, *before* the arguments are parsed, so it
@@ -281,7 +294,7 @@ Three things to know before relying on it:
   told an address. Set the server once in `mp.ini` (`master_url`) and the screen
   fills in. **The host has to register with it too** -- that is `dediserver.py
   --master`, or the module's own hosting once the in-game half lands (see
-  `docs/MASTER_SERVER.md`). With no `master_url` configured the screen says so
+  `docs/MASTER_SERVER.md`). With no `master_url` configured the browser still opens,
   rather than pretending the internet is empty.
 - **LAN-tuned feel.** There is no client-side prediction, so at 100-200 ms ping the
   other cars move in visible steps. Fine for a drive, not for a race.

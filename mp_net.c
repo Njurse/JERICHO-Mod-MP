@@ -2523,9 +2523,19 @@ int MpDiscoveryRevision(void)
 
 static SOCKET gOnlineSock = INVALID_SOCKET;
 static struct sockaddr_in gOnlineAddr;
+/* ONE socket and one state machine carry every master request -- the browser's
+ * fetch and the advertisement's register/heartbeat/unregister -- so they are
+ * serialised rather than racing over two connections. What the socket is being
+ * used for decides how a finished reply is handled. */
+#define MPI_REQ_FETCH		0
+#define MPI_REQ_REGISTER	1
+#define MPI_REQ_HEARTBEAT	2
+#define MPI_REQ_UNREGISTER	3
+
+static int  gOnlineKind;
 static int  gOnlineState = MP_ONLINE_OFF;
 static unsigned long gOnlineSinceMs;
-static char gOnlineReq[320];
+static char gOnlineReq[512];		/* a GET fits in 320; a register POST does not */
 static int  gOnlineReqLen, gOnlineReqSent;
 static char gOnlineBuf[MP_ONLINE_BUF_SIZE];
 static int  gOnlineLen;
@@ -2539,6 +2549,18 @@ static char gOnlineHostHdr[160];	/* host:port, for the request's Host: */
 /* Defined with the ping probe below, and used by the parse (a new list invalidates
  * every measurement) and by MpOnlineReset. */
 static void MpOnlinePingReset(void);
+
+/* --- the advertisement (this host, on that master) ------------------- */
+static int  gAdvertOn;			/* a session is live and we mean to list it */
+static int  gAdvertRegistered;		/* we hold a token */
+static int  gAdvertBusy;			/* a request of ours is in flight */
+static char gAdvertToken[40];		/* the master's handle for our entry */
+static char gAdvertName[32];
+static int  gAdvertPort, gAdvertCity, gAdvertGamemode, gAdvertRules;
+static int  gAdvertPlayers, gAdvertMaxPlayers = 8, gAdvertInProgress;
+static unsigned long gAdvertNextMs;	/* when the next beat (or retry) is due */
+static void MpAdvertReply(int status, const char* body);
+static const char* gAdvertWhy = "";	/* the last thing that went wrong, for the log */
 
 /* --- a fixed-subset JSON reader ------------------------------------ */
 
@@ -2748,6 +2770,13 @@ static void MpOnlineFail(const char* why)
 	MpOnlineClose();
 	gOnlineState = MP_ONLINE_FAILED;
 
+	/* whatever we were sending did not arrive; the advertisement retries later and
+	 * the session carries on either way */
+	gAdvertBusy = 0;
+
+	if (gAdvertOn)
+		gAdvertNextMs = MpNowMs() + MPI_ADVERT_RETRY_MS;
+
 	snprintf(gOnlineError, sizeof(gOnlineError), "%s", why);
 
 	if (gMpCtx != NULL)
@@ -2771,14 +2800,14 @@ void MpOnlineReset(void)
 	}
 }
 
-/* Kick off (or retry) the fetch. The address is already resolved. */
-void MpOnlineRefresh(void)
+/* Take the shared socket and send `req`. EVERY master request goes through here --
+ * the browser's fetch and the advertisement's register/heartbeat/unregister -- so
+ * there is one connect path, one timeout and one state machine to reason about.
+ * Non-blocking: the connect itself completes in the poll. */
+static void MpHttpKick(const char* req, int kind)
 {
 	SOCKET s;
 	int rc;
-
-	if (gOnlineHostHdr[0] == '\0')
-		return;			/* nothing configured */
 
 	MpOnlineClose();
 	gOnlineError[0] = '\0';
@@ -2804,7 +2833,25 @@ void MpOnlineRefresh(void)
 
 	gOnlineSock = s;
 
-	snprintf(gOnlineReq, sizeof(gOnlineReq),
+	snprintf(gOnlineReq, sizeof(gOnlineReq), "%s", req);
+
+	gOnlineReqLen = (int)strlen(gOnlineReq);
+	gOnlineReqSent = 0;
+	gOnlineLen = 0;
+	gOnlineSinceMs = MpNowMs();
+	gOnlineKind = kind;
+	gOnlineState = MP_ONLINE_CONNECTING;
+}
+
+/* Kick off (or retry) the fetch. The address is already resolved. */
+void MpOnlineRefresh(void)
+{
+	char req[320];
+
+	if (gOnlineHostHdr[0] == '\0')
+		return;			/* nothing configured */
+
+	snprintf(req, sizeof(req),
 		"GET /v1/servers?limit=%d HTTP/1.1\r\n"
 		"Host: %s\r\n"
 		"User-Agent: jericho-mp\r\n"
@@ -2813,11 +2860,7 @@ void MpOnlineRefresh(void)
 		"\r\n",
 		MP_ONLINE_MAX, gOnlineHostHdr);
 
-	gOnlineReqLen = (int)strlen(gOnlineReq);
-	gOnlineReqSent = 0;
-	gOnlineLen = 0;
-	gOnlineSinceMs = MpNowMs();
-	gOnlineState = MP_ONLINE_CONNECTING;
+	MpHttpKick(req, MPI_REQ_FETCH);
 }
 
 void MpOnlineSetMaster(const char* url)
@@ -3114,6 +3157,21 @@ void MpOnlinePoll(void)
 				return;
 			}
 
+			/* the advertisement's replies are not lists: hand them over and stop --
+			 * a 201 from register is a success, not a malformed fetch */
+			if (gOnlineKind != MPI_REQ_FETCH)
+			{
+				int status = 0;
+				const char* sp = strchr(gOnlineBuf, ' ');
+
+				if (sp != NULL)
+					status = atoi(sp + 1);
+
+				MpAdvertReply(status, body + 4);
+				MpOnlineClose();
+				return;
+			}
+
 			/* a 200 is the only answer that carries a list; anything else
 			 * (a 404 from a master behind a path rewrite, a 502 from a proxy)
 			 * says so rather than being parsed as empty */
@@ -3167,3 +3225,240 @@ const MP_ONLINE_SERVER* MpOnlineGet(int index)
 
 	return &gOnline[index];
 }
+/* --- advertising this host on the master -----------------------------
+ * The mirror of the fetch above: same socket, same state machine, same rules --
+ * non-blocking, driven from the frame poll, never in the way of a session.
+ *
+ * Registered when a session starts HOSTING and unregistered when it ends. In
+ * between a small heartbeat carries the live player count, because that is the
+ * number a player picks a server by and a listing that says 1/8 while four are
+ * playing is worse than none. A master we cannot reach costs one retry: the LAN
+ * beacon needs no server at all, so nothing about hosting depends on this.
+ */
+
+/* A host name is free text and goes into JSON: the quote, the backslash and
+ * control characters have to survive it, or the master answers 400 to a perfectly
+ * good name like Bob's "good" game. */
+static void MpJsonEscape(char* dst, size_t cap, const char* src)
+{
+	size_t o = 0;
+
+	for (; src != NULL && *src != '\0' && o + 7 < cap; src++)
+	{
+		unsigned char c = (unsigned char)*src;
+
+		if (c == '"' || c == '\\')
+		{
+			dst[o++] = '\\';
+			dst[o++] = (char)c;
+		}
+		else if (c < 0x20)
+		{
+			o += (size_t)snprintf(dst + o, cap - o, "\\u%04x", c);
+		}
+		else
+		{
+			dst[o++] = (char)c;
+		}
+	}
+
+	dst[(o < cap) ? o : (cap > 0 ? cap - 1 : 0)] = '\0';
+}
+
+static void MpAdvertPost(const char* path, const char* body, int kind)
+{
+	char req[512];
+
+	snprintf(req, sizeof(req),
+		"POST %s HTTP/1.1\r\n"
+		"Host: %s\r\n"
+		"User-Agent: jericho-mp\r\n"
+		"Content-Type: application/json\r\n"
+		"Content-Length: %d\r\n"
+		"Connection: close\r\n"
+		"\r\n"
+		"%s",
+		path, gOnlineHostHdr, (int)strlen(body), body);
+
+	gAdvertBusy = 1;
+	MpHttpKick(req, kind);
+}
+
+static void MpAdvertRegister(void)
+{
+	char name[128], body[320];
+
+	MpJsonEscape(name, sizeof(name), gAdvertName);
+
+	/* the same fields the beacon carries, so a browser can name this game from
+	 * either source, plus the two counters only the master can show */
+	snprintf(body, sizeof(body),
+		"{\"name\":\"%s\",\"port\":%d,\"city\":%d,\"gamemode\":%d,\"rules\":%d,"
+		"\"players\":%d,\"maxPlayers\":%d,\"inProgress\":%d,"
+		"\"modsEnforced\":%d,\"modHash\":%u,\"protoVersion\":%d,\"sdkVersion\":%d}",
+		name, gAdvertPort, gAdvertCity, gAdvertGamemode, gAdvertRules,
+		gAdvertPlayers, gAdvertMaxPlayers, gAdvertInProgress,
+		(int)gMp.config.modCheck, (unsigned)MpModHash(),
+		MP_PROTO_VERSION, JERICHO_SDK_VERSION);
+
+	MpAdvertPost("/v1/register", body, MPI_REQ_REGISTER);
+}
+
+static void MpAdvertHeartbeat(void)
+{
+	char body[160];
+
+	snprintf(body, sizeof(body),
+		"{\"token\":\"%s\",\"players\":%d,\"inProgress\":%d}",
+		gAdvertToken, gAdvertPlayers, gAdvertInProgress);
+
+	MpAdvertPost("/v1/heartbeat", body, MPI_REQ_HEARTBEAT);
+}
+
+static void MpAdvertUnregister(void)
+{
+	char body[96];
+
+	snprintf(body, sizeof(body), "{\"token\":\"%s\"}", gAdvertToken);
+
+	MpAdvertPost("/v1/unregister", body, MPI_REQ_UNREGISTER);
+}
+
+static void MpAdvertReply(int status, const char* body)
+{
+	gAdvertBusy = 0;
+
+	if (status < 200 || status > 299)
+	{
+		gAdvertWhy = "the master refused it";
+		gAdvertNextMs = MpNowMs() + MPI_ADVERT_RETRY_MS;
+
+		if (gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx, "[mp] advertising: %s (HTTP %d)\n", gAdvertWhy, status);
+
+		return;
+	}
+
+	if (gOnlineKind == MPI_REQ_REGISTER)
+	{
+		const char* t = strstr(body, "\"token\"");
+
+		gAdvertNextMs = MpNowMs() + MPI_ADVERT_BEAT_MS;
+
+		if (t != NULL)
+		{
+			const char* q = strchr(t + 7, '"');
+
+			if (q != NULL)
+			{
+				const char* e = strchr(q + 1, '"');
+
+				if (e != NULL && (size_t)(e - q - 1) < sizeof(gAdvertToken))
+				{
+					memcpy(gAdvertToken, q + 1, (size_t)(e - q - 1));
+					gAdvertToken[e - q - 1] = '\0';
+					gAdvertRegistered = 1;
+				}
+			}
+		}
+
+		if (gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx, "[mp] advertised on %s as %s:%d (%s)\n",
+				gOnlineHostHdr, gAdvertName, gAdvertPort, MpModeName(gAdvertRules));
+	}
+	else if (gOnlineKind == MPI_REQ_HEARTBEAT)
+	{
+		gAdvertNextMs = MpNowMs() + MPI_ADVERT_BEAT_MS;
+	}
+	else if (gOnlineKind == MPI_REQ_UNREGISTER)
+	{
+		gAdvertRegistered = 0;
+		gAdvertToken[0] = '\0';
+
+		if (gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx, "[mp] withdrawn from %s\n", gOnlineHostHdr);
+	}
+}
+
+void MpMasterAdvertiseStart(const char* name, int port, int city, int gamemode, int rules)
+{
+	gAdvertOn = 1;
+	gAdvertRegistered = 0;
+	gAdvertBusy = 0;
+	gAdvertToken[0] = '\0';
+	gAdvertWhy = "";
+	snprintf(gAdvertName, sizeof(gAdvertName), "%s",
+		(name != NULL && name[0] != '\0') ? name : "A game");
+	gAdvertPort = port;
+	gAdvertCity = city;
+	gAdvertGamemode = gamemode;
+	gAdvertRules = rules;
+	gAdvertPlayers = 1;
+	gAdvertMaxPlayers = MP_MAX_PLAYERS;
+	gAdvertInProgress = gMp.running ? 1 : 0;
+	gAdvertNextMs = 0;			/* due on the next poll */
+}
+
+void MpMasterAdvertiseCounts(int players, int inProgress)
+{
+	if (players > 0)
+		gAdvertPlayers = players;
+
+	gAdvertInProgress = inProgress ? 1 : 0;
+}
+
+void MpMasterAdvertiseStop(void)
+{
+	if (!gAdvertOn)
+		return;
+
+	gAdvertOn = 0;
+
+	if (!gAdvertRegistered)
+		return;
+
+	/* Best effort. If the socket is busy, or the master is gone, the entry lapses on
+	 * its own ttl -- nothing here is worth delaying a session teardown for. */
+	if (gOnlineHostHdr[0] != '\0' && !gAdvertBusy
+		&& gOnlineState != MP_ONLINE_CONNECTING && gOnlineState != MP_ONLINE_READING)
+	{
+		MpAdvertUnregister();
+		return;
+	}
+
+	gAdvertRegistered = 0;
+	gAdvertToken[0] = '\0';
+}
+
+void MpMasterAdvertisePoll(void)
+{
+	unsigned long now;
+
+	/* nothing to do and nothing in flight */
+	if (!gAdvertOn && !gAdvertBusy && !gAdvertRegistered)
+		return;
+
+	/* ONE request at a time on the socket shared with the browser's fetch */
+	if (gOnlineState == MP_ONLINE_CONNECTING || gOnlineState == MP_ONLINE_READING)
+		return;
+
+	if (gAdvertBusy)
+		gAdvertBusy = 0;			/* it finished; MpAdvertReply saw the answer */
+
+	if (!gAdvertOn)
+		return;
+
+	if (gOnlineHostHdr[0] == '\0')
+		return;					/* no master configured: LAN beacon only */
+
+	now = MpNowMs();
+
+	if (gAdvertNextMs != 0 && (long)(now - gAdvertNextMs) < 0)
+		return;					/* not due yet */
+
+	if (gAdvertRegistered)
+		MpAdvertHeartbeat();
+	else
+		MpAdvertRegister();
+}
+

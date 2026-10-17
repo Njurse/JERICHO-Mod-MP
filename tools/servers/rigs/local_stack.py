@@ -126,6 +126,104 @@ def tail(text, patterns, limit=6):
     return hits[-limit:]
 
 
+def run_advertise(args, run_root, master_url):
+    """Does a HOST list ITSELF on the master? The half no screenshot can show.
+
+    run_browser proves the other direction -- a client reading what the master
+    holds. This one starts the master, HOSTS one real game with master_url pointed
+    at it, and reads the master's own listing back. Then it brings a joiner in and
+    reads again, because the player count is the heartbeat's job and a listing that
+    never updates is worse than no listing at all.
+    """
+    if not master_url:
+        log("FAIL: --advertise needs the master (do not pass --no-master)")
+        return 1
+
+    name = "Rig Host"
+    run_dir = os.path.join(run_root, "host")
+    lp.safe_remove(run_dir)
+    lp.build_run_dir(args.game_dir, run_dir, "HostSeat", args.dedi_port)
+
+    # the REAL config path for the master address (there is no lever for it)
+    with open(os.path.join(run_dir, "JERICHO", "CONFIG", "mp.ini"), "a", encoding="utf-8") as f:
+        f.write(f"master_url = {master_url}\n")
+        f.write(f"host_name = {name}\n")
+
+    env = {} if args.no_debug else {"MP_DEBUG": "1"}
+    env["JERICHO_LOG_FLUSH"] = "1"
+    env["MP_AUTOSTART"] = "host"          # a hosted game is what registers
+    env["MP_HEARTBEAT"] = "1"
+
+    host_log = os.path.join(run_dir, "JERICHO.log")
+    host = lp.launch(run_dir, args.exe,
+                     ["-nointro", "-nofmv", "-mp", "1", "-host", str(args.dedi_port)], env)
+    log(f"hosting seat pid {host.pid} on {args.dedi_port}, master {master_url}")
+
+    # the registration is one POST after the level is up; give the load its time
+    row = None
+    deadline = time.time() + args.advertise_wait
+    while time.time() < deadline:
+        listing = master_listing(args.master_port)
+        for s in (listing or {}).get("servers", []):
+            if s.get("name") == name:
+                row = s
+                break
+        if row:
+            break
+        time.sleep(2.0)
+
+    if not row:
+        log("FAIL: the host never appeared in the master's listing")
+        log(f"  seat log: {(lp.read_log(run_dir) or '')[-400:]}")
+        return 1
+
+    log("listed: name=%r host=%s port=%s players=%s/%s city=%s rules=%s"
+        % (row["name"], row["host"], row["port"], row["players"], row["maxPlayers"],
+           row["city"], row.get("rules")))
+
+    # the two fields the rig itself decides: the port it bound and the city it asked
+    # for. The rules byte is whatever the host's session settings are, so it is
+    # reported rather than asserted.
+    ok = (row["port"] == args.dedi_port and row["city"] == args.city)
+
+    if not args.advertise_join:
+        log("PASS: the host listed itself (pass --advertise-join to also watch the"
+            " player count follow a joiner)")
+        return 0 if ok else 1
+
+    # ...and the count follows the session: one joiner, then read it again
+    join_dir = os.path.join(run_root, "join")
+    lp.safe_remove(join_dir)
+    lp.build_run_dir(args.game_dir, join_dir, "JoinSeat", args.dedi_port)
+    jenv = {} if args.no_debug else {"MP_DEBUG": "1"}
+    jenv["JERICHO_LOG_FLUSH"] = "1"
+    lp.launch(join_dir, args.exe,
+              ["-nointro", "-nofmv", "-mp", "1", "-join", f"127.0.0.1:{args.dedi_port}"], jenv)
+
+    grew = False
+    deadline = time.time() + args.advertise_wait
+    while time.time() < deadline:
+        listing = master_listing(args.master_port)
+        for s in (listing or {}).get("servers", []):
+            if s.get("name") == name and s.get("players", 0) > row.get("players", 0):
+                log("the listing followed the session: players now %s" % s["players"])
+                grew = True
+                break
+        if grew:
+            break
+        time.sleep(2.0)
+
+    if not grew:
+        log("FAIL: the listing never showed the joiner (the heartbeat is not updating)")
+
+    if ok and grew:
+        log("PASS: a host lists itself, and the listing tracks the players")
+        return 0
+
+    log("FAIL: listed=%s grew=%s" % (ok, grew))
+    return 1
+
+
 def run_browser(args, run_root, master_url):
     """Open the Online browser (mp.online) in a real client and photograph it.
 
@@ -242,6 +340,13 @@ def parse_args(argv):
     ap.add_argument("--no-debug", action="store_true", help="run WITHOUT MP_DEBUG, like a player does")
     ap.add_argument("--keep", action="store_true", help="leave the run dirs and logs behind")
     ap.add_argument("--shots", default=None, metavar="DIR", help="photograph the seats with mpshots.py")
+    ap.add_argument("--advertise-wait", type=float, default=45.0, metavar="S",
+                    help="how long to wait for the listing to appear (default 45)")
+    ap.add_argument("--advertise-join", action="store_true",
+                    help="also bring a joiner in and watch the player count follow "
+                         "(adds a heartbeat interval, ~30s)")
+    ap.add_argument("--advertise", action="store_true",
+                    help="host ONE game and prove it lists ITSELF on the master, then that the listing follows a joiner")
     ap.add_argument("--browser", action="store_true",
                     help="open the Online browser (mp.online) in a frontend client pointed "
                          "at the local master and photograph it, instead of joining")
@@ -335,6 +440,12 @@ def main(argv=None):
         # screenshot is the verification (the pixels are judged by eye).
         if args.browser:
             return run_browser(args, run_root, master_url)
+
+        # -- a HOST listing itself ---------------------------------------
+        # The mirror of the browser run: the master is the witness, and the host
+        # is a real game rather than a tool.
+        if args.advertise:
+            return run_advertise(args, run_root, master_url)
 
         # -- clients ------------------------------------------------------
         env = {} if args.no_debug else {"MP_DEBUG": "1"}

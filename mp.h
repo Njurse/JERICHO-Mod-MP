@@ -394,6 +394,29 @@ void MpOnlineSetMaster(const char* url);	/* "" disables. Resolves -- off the fra
 void MpOnlineRefresh(void);
 void MpOnlineReset(void);
 void MpOnlinePoll(void);			/* non-blocking; safe every frame */
+
+/* --- advertising a session on that same master -------------------------
+ * A hosted game lists ITSELF by default: registering is what turns a host into
+ * something the Online browser can find, and an unlisted host is only reachable by
+ * an address somebody was told out of band. It costs one POST when the session
+ * starts, a small heartbeat every MPI_ADVERT_BEAT_MS and an unregister when it
+ * ends; none of it blocks, and a master that is down or unreachable changes
+ * nothing about hosting (a missing listing is not a broken session).
+ *
+ * Stopping it for one session is what an EMPTY master_url does: no master, no
+ * advertisement, LAN beacon only. */
+/* The master a stock build points at. A player should not have to find an address
+ * before they can see a server list, and a host should not have to configure one
+ * before it can be found. */
+#define MP_DEFAULT_MASTER_URL		"http://jerichomp.animetiddi.es:8100"
+
+#define MPI_ADVERT_BEAT_MS		20000	/* keep well under the master's default ttl (60 s) */
+#define MPI_ADVERT_RETRY_MS		15000	/* after a master we could not reach */
+
+void MpMasterAdvertiseStart(const char* name, int port, int city, int gamemode, int rules);
+void MpMasterAdvertiseCounts(int players, int inProgress);	/* live, every frame */
+void MpMasterAdvertiseStop(void);				/* unregister (best effort) */
+void MpMasterAdvertisePoll(void);				/* the state machine + the beat */
 int  MpOnlineState(void);
 const char* MpOnlineError(void);
 int  MpOnlineCount(void);

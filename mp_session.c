@@ -116,6 +116,12 @@ void MpNoteLocalPad(int pad)
 
 void MpSessionReset(void)
 {
+	/* a session that is over must not stay on the board: the unregister is what
+	 * takes it off, and MpMasterAdvertiseStop sends it when the socket is free
+	 * (otherwise the entry lapses on the master's ttl). Idempotent, so the several
+	 * "this session is over" paths can all call it. */
+	MpMasterAdvertiseStop();
+
 	/* THE OLD SESSION'S LISTENER GOES WITH IT, and this is where, because this is the one
 	 * primitive EVERY "the session is over" path goes through - MpReturnToFrontend and both
 	 * Begin* calls (which reset before they establish anything new).
@@ -1493,6 +1499,13 @@ int MpStartMatch(void)
 	/* now that the match is actually live, start advertising it: the LAN
 	 * browser lists live games (and they accept spawn-ins). */
 	MpDiscoveryStart(1);
+
+	/* ...and list it on the master too, when one is configured. This is the whole
+	 * difference between a host a stranger can find and one only a friend who was
+	 * told the address can reach. It costs a POST and a small heartbeat, never
+	 * blocks, and a master that is down changes nothing here. */
+	MpMasterAdvertiseStart(gMp.config.hostName, gMp.config.port,
+		gMp.city, gMp.gamemode, (int)MpRulesForPeer());
 	gMp.seed = 0x5eed1318u;		/* shared run seed */
 
 	memset(&st, 0, sizeof(st));
