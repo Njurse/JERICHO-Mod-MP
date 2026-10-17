@@ -139,27 +139,31 @@ def run_browser(args, run_root, master_url):
     A second host is registered too, so the table shows two rows with DIFFERENT
     modes and cities rather than one row twice.
     """
+    second = None
     if not master_url:
-        log("FAIL: --browser needs the master (do not pass --no-master)")
-        return 1
+        # --no-master + --browser is not a mistake: it asks for the one screen the
+        # normal run cannot reach, the EMPTY browser -- what a player sees before a
+        # master_url is set anywhere. No second host, because there would be nothing
+        # for it to register with.
+        log("no master: photographing the EMPTY browser (nothing to list, by design)")
+    else:
+        second_port = args.dedi_port + 1
+        second_log = os.path.join(run_root, "dedi2.log")
+        second, _ = spawn(
+            [sys.executable, DEDI_PY, "--port", str(second_port),
+             "--name", "Second Game", "--city", str((args.city + 2) % 4),
+             "--rules", "1",                    # COPS N ROBBERS
+             "--no-beacon",
+             "--master", master_url, "--master-interval", str(args.master_interval),
+             "--log-level", "info"], second_log)
+        if not wait_log(second_log, "listening on TCP/%d" % second_port):
+            log("FAIL: the second dedi never reported itself listening")
+            stop_server(second, "dedi2")
+            return 1
 
-    second_port = args.dedi_port + 1
-    second_log = os.path.join(run_root, "dedi2.log")
-    second, _ = spawn(
-        [sys.executable, DEDI_PY, "--port", str(second_port),
-         "--name", "Second Game", "--city", str((args.city + 2) % 4),
-         "--rules", "1",                    # COPS N ROBBERS
-         "--no-beacon",
-         "--master", master_url, "--master-interval", str(args.master_interval),
-         "--log-level", "info"], second_log)
-    if not wait_log(second_log, "listening on TCP/%d" % second_port):
-        log("FAIL: the second dedi never reported itself listening")
-        stop_server(second, "dedi2")
-        return 1
-
-    time.sleep(2.0)                        # let both registrations land
-    listing = master_listing(args.master_port)
-    log(f"master lists {listing['count'] if listing else '?'} server(s)")
+        time.sleep(2.0)                        # let both registrations land
+        listing = master_listing(args.master_port)
+        log(f"master lists {listing['count'] if listing else '?'} server(s)")
 
     run_dir = os.path.join(run_root, "browser")
     lp.safe_remove(run_dir)
@@ -176,12 +180,28 @@ def run_browser(args, run_root, master_url):
     proc = lp.launch(run_dir, args.exe, ["-nointro", "-nofmv"], env)
     log(f"browser seat pid {proc.pid}: frontend, MP_TEST_OPENMENU={args.browser_menu}")
 
-    time.sleep(args.seconds)               # let the fetch land and the table draw
+    # Wait for the SCREEN, not for the clock. How long the game takes to reach the
+    # frontend and open the menu varies by ten seconds run to run, so a fixed sleep
+    # is why the grab used to come back with "no window of pid ... matched" -- the
+    # window did not exist yet. The lever logs when the open takes; that line is the
+    # signal, and a short settle afterwards is for the fetch and the first paint.
+    seat_log = os.path.join(run_dir, "JERICHO.log")
+    if wait_log(seat_log, "(MP_TEST_OPENMENU)", timeout=90.0):
+        time.sleep(min(args.seconds, 12))
+    else:
+        log("FAIL: the screen never opened (no MP_TEST_OPENMENU line in the seat log)")
 
     png = args.browser_shot or os.path.join(args.shots or run_root, "online.png")
     os.makedirs(os.path.dirname(os.path.abspath(png)), exist_ok=True)
-    rc = subprocess.call([sys.executable, os.path.join(TOOLS, "mpshots.py"), "grab",
-                          "--pid", str(proc.pid), "--out", png])
+
+    # ...and retry the grab: the OS window can lag the drawn screen by a moment.
+    rc = 1
+    for attempt in range(6):
+        rc = subprocess.call([sys.executable, os.path.join(TOOLS, "mpshots.py"), "grab",
+                              "--pid", str(proc.pid), "--out", png])
+        if rc == 0:
+            break
+        time.sleep(2.0)
     log(f"screenshot: {png}" if rc == 0 else f"FAIL: mpshots.py grab exited {rc}")
 
     text = lp.read_log(run_dir) or ""

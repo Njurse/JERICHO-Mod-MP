@@ -995,8 +995,16 @@ static void ManualOnEnter(void* ud)
 #define TABLE_COL_PING		528
 #define TABLE_NAME_CHARS	15	/* what the NAME column holds before it is cut */
 #define TABLE_ROW_W		560	/* the menu's row width; the columns above fit it */
-#define TABLE_ROW_STEP		26	/* the pitch BETWEEN servers (dense on purpose) */
-#define TABLE_HEAD_GAP		34	/* headings -> first server (bigger on purpose) */
+#define TABLE_ROW_TOP		210	/* where the ROSTER starts. The stock 190 sits barely 24
+					 * units under the screen title, which left nowhere for
+					 * a heading line: it landed ON the title */
+#define TABLE_ROW_STEP		24	/* the pitch BETWEEN servers: the tight one */
+#define TABLE_HEAD_GAP		34	/* headings -> first server. Deliberately LARGER than
+					 * the pitch above, so the column headings read as
+					 * headings and not as another server row */
+#define TABLE_ROW_BOTTOM	474	/* where the pinned controls sit: the stock 462 leaves a
+					 * wider margin than a full-screen browser wants, and
+					 * these read as the bottom of the SCREEN */
 
 static JER_FE_ITEM gOnlineItems[JER_FE_MAX_ITEMS];
 /* The heading is the screen's name, as the design calls for: it is the one piece
@@ -1028,12 +1036,13 @@ static int OnlineApplyConfig(void)
 }
 
 /* Why the list is empty. A player staring at an empty table should not have to
- * guess whether the address is unset, the fetch is still running, or it failed. */
+ * guess whether the fetch is still running or it failed. There is deliberately no
+ * text for MP_ONLINE_OFF: an unset address draws the browser with no entries (see
+ * OnlineOnEnter), so that case never asks. */
 static const char* OnlineStateText(void)
 {
 	switch (MpOnlineState())
 	{
-	case MP_ONLINE_OFF:			return "(no discovery server set)";
 	case MP_ONLINE_CONNECTING:
 	case MP_ONLINE_READING:			return "(contacting the discovery server...)";
 	case MP_ONLINE_FAILED:			return "(the discovery server is unavailable)";
@@ -1097,12 +1106,24 @@ static void OnlineOnEnter(void* ud)
 
 	gOnlineRows = k;		/* how many rows above are servers */
 
-	if (count == 0)
+	/* An unset discovery server is not a state to print a sentence about -- there is
+	 * simply nothing to list, and the browser's columns above say so better than a
+	 * message row can. The other states still speak up: contacting and unavailable
+	 * are things going WRONG, which the player cannot see from an empty table. */
+	if (count == 0 && MpOnlineState() != MP_ONLINE_OFF)
 	{
 		OnlineRowClear(k);
 		gOnlineItems[k].label = OnlineStateText();
 		k++;
 	}
+
+	/* Host Game: the same row the LAN screen has, so a player looking at the world's
+	 * servers can also put one up without walking back through the menus. It sits
+	 * with the controls, not with the servers, because it is not one of them. */
+	OnlineRowClear(k);
+	gOnlineItems[k].label = "Host Game";
+	gOnlineItems[k].on_activate = ActHostGame;
+	k++;
 
 	/* Manual address: the way in for a host that is not listed (yet), or one
 	 * behind a name the player already knows. The row does NOT print the address:
@@ -1184,7 +1205,7 @@ static int TableRowSource(int online, int index, TABLE_ROW* out)
  * screen), and only while the menu that shows it is on screen. */
 static void TableDraw(int online)
 {
-	int count, rows, item_rows, i, x, y, w, h;
+	int count, rows, item_rows, i, x, y, w, h, headY = 0;
 
 	if (!gInFrontend || gMpCtx == NULL)
 		return;
@@ -1202,12 +1223,32 @@ static void TableDraw(int online)
 	if (item_rows < rows)
 		rows = item_rows;
 
-	if (rows <= 0 || count <= 0)
+	/* Where the heading line goes: above the LIST AREA, not above row 0 -- with an
+	 * empty list, row 0 IS the first pinned control. jer_frontend_list_top is the
+	 * one thing that can say where the list starts when it has no rows at all. */
+	if (jer_frontend_row_rect(0, &x, &y, &w, &h))
+	{
+		headY = jer_frontend_list_top();
+
+		if (headY <= 0)
+			headY = y;		/* no list area to ask (older engine): row 0 */
+
+		headY -= TABLE_HEAD_GAP;
+	}
+
+	/* NO early return on an empty list: the browser still has to LOOK like a browser.
+	 * The heading line and the columns are drawn whether or not there are rows, so an
+	 * unset discovery server is an empty table rather than a sentence sitting where a
+	 * table should be. The row loop below simply does not run. */
+	if (count <= 0)
 		return;
 
-	/* One line the first time a table is painted with rows: it is the only thing
-	 * an automated run can check about a screen whose whole point is what it LOOKS
-	 * like (the pixels are checked by hand). */
+	/* One line the first time a table is painted: the only thing an automated run can
+	 * check about a screen whose whole point is what it LOOKS like (the pixels are
+	 * checked by hand). It carries the GEOMETRY -- pitch, gaps, the heading's y and
+	 * the roster's -- because those are what get tuned, and the background art makes
+	 * them unmeasurable from a screenshot. An empty browser reports them too; its row
+	 * count is then 0, which is itself the answer. */
 	if (MpDebugOn() && gMpCtx != NULL)
 	{
 		static int loggedOnline = 0;
@@ -1219,21 +1260,23 @@ static void TableDraw(int online)
 			*logged = 1;
 			gMpCtx->jer_log(gMpCtx,
 				"[mp] %s table drawn: %d row(s) of %d, columns at x=%d,%d,%d,%d,%d "
-				"(scale %d, pitch %d, head gap %d)\n",
+				"(scale %d, pitch %d, head gap %d, heading y %d, roster y %d)\n",
 				online ? "online" : "LAN", rows, count,
 				TABLE_COL_NAME, TABLE_COL_PLAYERS, TABLE_COL_MODE,
 				TABLE_COL_CITY, TABLE_COL_PING, TABLE_SCALE,
-				TABLE_ROW_STEP, TABLE_HEAD_GAP);
+				TABLE_ROW_STEP, TABLE_HEAD_GAP, headY, TABLE_ROW_TOP);
 		}
 	}
 
-	/* The headings sit ABOVE the first row by more than the pitch: they are a
-	 * header, not another row. Orange, like the engine's own menu headings, and
-	 * passed at full brightness because the ink is halved on the way to the font
-	 * (a "mid grey" 190 renders as 95 and reads as smudge next to the rows). */
-	if (jer_frontend_row_rect(0, &x, &y, &w, &h))
+	/* The headings sit ABOVE the first LIST row by more than the pitch: they are a
+	 * header, not another row. headY was measured from the LIST AREA up above, so an
+	 * empty list cannot drag it down to the first pinned control. Orange, like the
+	 * engine's own menu headings, and passed at full brightness because the ink is
+	 * halved on the way to the font (a "mid grey" 190 renders as 95 and reads as
+	 * smudge next to the rows). */
+	if (headY > 0)
 	{
-		int hy = y - TABLE_HEAD_GAP;
+		int hy = headY;
 
 		jer_text_draw_at(JER_TEXT_FE, TABLE_SCALE, x + TABLE_COL_NAME,    hy, "SERVER NAME", 255, 190, 90);
 		jer_text_draw_at(JER_TEXT_FE, TABLE_SCALE, x + TABLE_COL_PLAYERS, hy, "PLAYERS",     255, 190, 90);
@@ -1278,12 +1321,16 @@ static void WireDynamic(void)
 	 * move every time the list is rebuilt. Both browsers show the same table, so
 	 * both ask for the same thing. */
 	gJoinMenu.row_w = TABLE_ROW_W;
+	gJoinMenu.row_top = TABLE_ROW_TOP;
 	gJoinMenu.row_step = TABLE_ROW_STEP;
 	gJoinMenu.bottom_items = 2;
+	gJoinMenu.row_bottom = TABLE_ROW_BOTTOM;
 
 	gOnlineMenu.row_w = TABLE_ROW_W;
+	gOnlineMenu.row_top = TABLE_ROW_TOP;
 	gOnlineMenu.row_step = TABLE_ROW_STEP;
-	gOnlineMenu.bottom_items = 2;
+	gOnlineMenu.bottom_items = 3;
+	gOnlineMenu.row_bottom = TABLE_ROW_BOTTOM;
 
 	gJoinMenu.on_enter = JoinOnEnter;
 	gLobbyMenu.on_enter = LobbyOnEnter;
@@ -1438,6 +1485,9 @@ void MpUiTick(void)
 
 			if (idx >= 0 && jer_frontend_current_menu() == idx)
 			{
+				if (gMpCtx != NULL)
+					gMpCtx->jer_log(gMpCtx, "[mp] test: opened '%s' (MP_TEST_OPENMENU)\n", want);
+
 				menuTries = 0;		/* it took */
 			}
 			else if (idx >= 0)
