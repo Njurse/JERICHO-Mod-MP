@@ -119,7 +119,6 @@ static int  gNameInit;
 #define MP_MANUAL_MAX	100		/* what the row can show without spilling */
 static char gManualIp[128] = "127.0.0.1";
 static char gManualUndo[128];		/* what Escape restores */
-static int  gManualPort;
 static int  gManualEdit;		/* the field owns the keyboard right now */
 static int  gManualSeed;		/* seeded from a discovered host yet? */
 
@@ -140,7 +139,6 @@ static unsigned long gJoinScanStart;	/* when the browse began (0 = not browsing)
 static void LblEnforce(void* ud, char* o, int n) { (void)ud; snprintf(o, n, "Enforce Mods: < %s >", kModCheckNames[gMp.config.modCheck % 3]); }
 static void LblStrict(void* ud, char* o, int n)  { (void)ud; snprintf(o, n, "Strict Version: < %s >", gMp.config.strictVersion ? "On" : "Off"); }
 static void LblPort(void* ud, char* o, int n)    { (void)ud; snprintf(o, n, "Port: %d", gMp.config.port); }
-static void LblManualIp(void* ud, char* o, int n) { (void)ud; snprintf(o, n, "Manual address: %s ...", gManualIp); }
 static void LblManualGo(void* ud, char* o, int n) { (void)ud; snprintf(o, n, "Connect to %s", gManualIp); }
 
 /* The field itself. It says it is taking keystrokes and shows a caret, so "why does
@@ -354,23 +352,54 @@ static int ActJoinServer(void* ud)
 
 /* "host" or "host:port" -> the two parts. Returns 1 on success, 0 if the text after
  * the colon is not a usable port -- so a typo is REFUSED rather than silently dialled
- * on the configured port. No colon at all leaves `*port` alone. */
+ * on the configured port. No colon at all leaves `*port` alone, which is what makes
+ * "no port" mean "the normal port".
+ *
+ * A pasted LINK is taken too: "http://host:1318/" and "host/whatever" both reduce to
+ * the address, because a scheme and a path are things a browser bar hands you and
+ * neither is part of a game address. */
 static int MpManualParse(const char* text, char* host, size_t hostLen, int* port)
 {
-	const char* colon = strrchr(text, ':');
+	char buf[160];
+	const char* start = text;
+	const char* end;
+	const char* colon;
 	size_t n;
 	int p, d;
 
+	{
+		const char* scheme = strstr(text, "://");
+
+		if (scheme != NULL)
+			start = scheme + 3;
+	}
+
+	end = start + strlen(start);
+
+	{
+		const char* slash = strchr(start, '/');
+
+		if (slash != NULL)
+			end = slash;
+	}
+
+	n = (size_t)(end - start);
+
+	if (n == 0 || n >= sizeof(buf) || n >= hostLen)
+		return 0;
+
+	memcpy(buf, start, n);
+	buf[n] = '\0';
+
+	colon = strrchr(buf, ':');
+
 	if (colon == NULL)
 	{
-		if (text[0] == '\0')
-			return 0;
-
-		snprintf(host, hostLen, "%s", text);
+		snprintf(host, hostLen, "%s", buf);
 		return 1;
 	}
 
-	n = (size_t)(colon - text);
+	n = (size_t)(colon - buf);
 
 	if (n == 0 || n >= hostLen)
 		return 0;
@@ -389,7 +418,7 @@ static int MpManualParse(const char* text, char* host, size_t hostLen, int* port
 	if (p < 1 || p > 65535)
 		return 0;
 
-	memcpy(host, text, n);
+	memcpy(host, buf, n);
 	host[n] = '\0';
 	*port = p;
 
@@ -414,7 +443,11 @@ static void MpManualSeed(void)
 static int ActManualConnect(void* ud)
 {
 	char host[128];
-	int port = gManualPort > 0 ? gManualPort : gMp.config.port;
+
+	/* The base is the CONFIGURED port, never the last thing that was typed: no port
+	 * in the text must mean "the normal port", or a one-off :1400 would quietly
+	 * follow the player around. */
+	int port = gMp.config.port;
 
 	(void)ud;
 
@@ -426,8 +459,6 @@ static int ActManualConnect(void* ud)
 		jer_error("Use an address or host:port, not %s", gManualIp);
 		return 1;
 	}
-
-	gManualPort = port;
 
 	if (gMpCtx != NULL)
 		gMpCtx->jer_log(gMpCtx, "[mp] joining manual %s:%d\n", host, port);
@@ -724,7 +755,7 @@ static void JoinOnEnter(void* ud)
 	/* manual address -- its own submenu: there is somewhere to TYPE here, and a
 	 * DNS name would never fit on a single row with one adjust axis */
 	gJoinItems[k].label = NULL;
-	gJoinItems[k].get_label = LblManualIp;
+	gJoinItems[k].label = "Manual address ...";
 	gJoinItems[k].userdata = NULL;
 	gJoinItems[k].on_activate = NULL;
 	gJoinItems[k].on_adjust = NULL;
@@ -1074,9 +1105,12 @@ static void OnlineOnEnter(void* ud)
 	}
 
 	/* Manual address: the way in for a host that is not listed (yet), or one
-	 * behind a name the player already knows. */
+	 * behind a name the player already knows. The row does NOT print the address:
+	 * it is a door to the typing screen, and an address the player is about to
+	 * replace is noise -- it also read as though the field already held their
+	 * target. The field screen shows what is actually set. */
 	OnlineRowClear(k);
-	gOnlineItems[k].get_label = LblManualIp;
+	gOnlineItems[k].label = "Manual address ...";
 	gOnlineItems[k].submenu = gMenuIdx[M_MANUAL];
 	k++;
 

@@ -50,6 +50,15 @@ Take-a-Ride screen itself.
 `Manual address` and `Back` under them. Picking a row joins it through the same
 `MpBeginJoinAsync` the LAN list uses, so a listed host lands in the normal lobby.
 
+**`Manual address`** is the way in for a host that is not listed. The row is a door,
+not a readout -- it does not print the address, because the address you are about to
+replace is noise (the typing screen shows what is set). The field takes a `host`, a
+`host:port`, or a link pasted out of a browser bar (`http://host:1400/` reduces to
+the same address): a port in the text is the port that is dialled, and leaving it
+off means the configured `port` above -- never the last port that happened to be
+typed. A `:port` that is not a number is refused rather than quietly dialled on the
+default.
+
 **The LAN `Join Game` screen is the same table**, over the beacons this machine
 can hear instead of the master's list (a LAN row also says `LIVE` when the host
 has started). The two lists stay separate on purpose: one is what arrived on the

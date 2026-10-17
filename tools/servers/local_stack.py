@@ -215,6 +215,8 @@ def parse_args(argv):
                     help="let the dedi beacon on UDP (off by default: keeps a run deterministic)")
     ap.add_argument("--join-manual", action="store_true",
                     help="join via the MANUAL ADDRESS field (MP_TEST_MANUALADDR) instead of -join")
+    ap.add_argument("--manual-addr", default=None, metavar="TEXT",
+                    help="exactly what to type into the manual address field (default 127.0.0.1:<dedi port>); a %%s in it is replaced with the dedi port")
     ap.add_argument("--game-dir", default=GAME_DIR_DEFAULT)
     ap.add_argument("--exe", default="JERICHO_dev.exe")
     ap.add_argument("--no-debug", action="store_true", help="run WITHOUT MP_DEBUG, like a player does")
@@ -324,15 +326,20 @@ def main(argv=None):
         for i, key in enumerate(sorted(seats)):
             run_dir = seats[key]
             lp.safe_remove(run_dir)
-            # the mp.ini port WINS over a -join port, so it must be the dedi's
-            lp.build_run_dir(args.game_dir, run_dir, names[i], args.dedi_port)
+            # the mp.ini port WINS over a -join port, so it must be the dedi's --
+            # except in the manual case, where it is deliberately the WRONG port:
+            # that is what proves the ":port" in the typed address is understood
+            # (a client that fell back to the configured port would go nowhere).
+            lp.build_run_dir(args.game_dir, run_dir, names[i],
+                             args.dedi_port + 7 if args.join_manual else args.dedi_port)
             argv = ["-nointro", "-nofmv"]
             if args.join_manual:
                 # Exercise the MANUAL ADDRESS field the way a player types it: the
                 # module's own lever fills the field and presses Connect through the
                 # same ActManualConnect the row uses. No -join, so the game comes up
                 # in the frontend and this is the path that gets there.
-                env["MP_TEST_MANUALADDR"] = "127.0.0.1:%d" % args.dedi_port
+                addr = args.manual_addr if args.manual_addr else "127.0.0.1:%d" % args.dedi_port
+                env["MP_TEST_MANUALADDR"] = addr.replace("%s", str(args.dedi_port))
             else:
                 argv += ["-join", f"127.0.0.1:{args.dedi_port}"]
             procs[key] = lp.launch(run_dir, args.exe, argv, env)
