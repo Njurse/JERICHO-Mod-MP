@@ -128,13 +128,27 @@ rem The ROOT config.ini holds the player's own window size and fullscreen, and t
 rem release carries a default one (from data\). /XF names that one file; CONFIG\
 rem is already kept whole above, so nothing else called config.ini is affected.
 set "KEEPINISRC=%TMP%\x\config.ini"
+rem The DEDICATED SERVER's config is the OPERATOR's -- port, name, city, player cap,
+rem whether it beacons -- so it is the third thing an update must not overwrite.
+rem Excluded from the copy like config.ini, and installed just below ONLY when this
+rem machine has none: the release's copy is a default, not a replacement.
+set "KEEPDEDI=%TMP%\x\JERICHO\MODS\mp\tools\servers\dediserver\dediserver.json"
 
-echo [5/5] copying over this install, leaving CONFIG\, config.ini, DRIVER\ and DRIVER2\ alone ...
-robocopy "%TMP%\x" "%CD%" /E /XD "%KEEPCONFIG%" "%KEEPDRIVER%" "%KEEPDRIVER2%" /XF "%KEEPINISRC%" /NP /NFL /NDL /NJH /NJS /R:1 /W:1
+echo [5/5] copying over this install, leaving CONFIG\, config.ini, dediserver.json, DRIVER\ and DRIVER2\ alone ...
+robocopy "%TMP%\x" "%CD%" /E /XD "%KEEPCONFIG%" "%KEEPDRIVER%" "%KEEPDRIVER2%" /XF "%KEEPINISRC%" "%KEEPDEDI%" /NP /NFL /NDL /NJH /NJS /R:1 /W:1
 rem robocopy reports 0..7 for success and 8+ for a real failure.
 if errorlevel 8 (
 	echo   FAILED: robocopy could not finish. Some files were NOT updated.
 	goto :fail
+)
+
+rem The dedicated server's default config, installed ONCE: an operator who has one
+rem keeps it exactly as it is, and a fresh install still gets a file to edit.
+if not exist "%CD%\JERICHO\MODS\mp\tools\servers\dediserver\dediserver.json" (
+	if exist "%KEEPDEDI%" (
+		if not exist "%CD%\JERICHO\MODS\mp\tools\servers\dediserver" mkdir "%CD%\JERICHO\MODS\mp\tools\servers\dediserver"
+		copy /y "%KEEPDEDI%" "%CD%\JERICHO\MODS\mp\tools\servers\dediserver\dediserver.json" >nul
+	)
 )
 
 rem config.ini was not copied, so you keep every value you set. But the release may carry a
@@ -151,6 +165,7 @@ echo update_jericho: done.
 echo   updated:  the game, JERICHO\ and its released modules
 echo   kept:     CONFIG\  (your toggles and settings)
 echo             config.ini  your window size and fullscreen (new keys added, yours kept)
+echo             dediserver.json  your dedicated server's own settings
 echo             DRIVER\  (your baked Driver 1 car data)
 echo             any module you added under MODS\
 echo.

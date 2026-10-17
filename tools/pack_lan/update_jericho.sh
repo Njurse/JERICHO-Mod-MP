@@ -117,9 +117,23 @@ echo "[5/5] copying over this install, leaving CONFIG/, config.ini, DRIVER/ and 
 # whole above, so nothing else called config.ini is affected.
 # DRIVER/ and DRIVER2/ are absent from a release already, but the belt keeps
 # them safe if one ever ships data there again.
-copied=$( cd "$TMP/x" && find . -type f ! -path './JERICHO/CONFIG/*' ! -path './DRIVER/*' ! -path './DRIVER2/*' ! -path './config.ini' | wc -l )
-( cd "$TMP/x" && find . -type f ! -path './JERICHO/CONFIG/*' ! -path './DRIVER/*' ! -path './DRIVER2/*' ! -path './config.ini' -exec cp -f {} "$HERE/{}" \; ) \
+#
+# The DEDICATED SERVER's config is the OPERATOR's -- port, name, city, player
+# cap, whether it beacons -- so an update must not replace one that is there.
+# It is excluded from the copy and INSTALLED ONLY when this machine has none,
+# just below: the release's copy is a default, not a replacement.
+DEDI_CFG_REL='./JERICHO/MODS/mp/tools/servers/dediserver/dediserver.json'
+copied=$( cd "$TMP/x" && find . -type f ! -path './JERICHO/CONFIG/*' ! -path './DRIVER/*' ! -path './DRIVER2/*' ! -path './config.ini' ! -path "$DEDI_CFG_REL" | wc -l )
+( cd "$TMP/x" && find . -type f ! -path './JERICHO/CONFIG/*' ! -path './DRIVER/*' ! -path './DRIVER2/*' ! -path './config.ini' ! -path "$DEDI_CFG_REL" -exec cp -f {} "$HERE/{}" \; ) \
 	|| say_fail "could not copy the release over this install."
+
+# The dedicated server's default config, installed ONCE: an operator who has one
+# keeps it exactly as it is, and a fresh install still gets a file to edit.
+DEDI_CFG="$HERE/JERICHO/MODS/mp/tools/servers/dediserver/dediserver.json"
+if [ ! -f "$DEDI_CFG" ] && [ -f "$TMP/x/$DEDI_CFG_REL" ]; then
+	mkdir -p "$(dirname "$DEDI_CFG")"
+	cp "$TMP/x/$DEDI_CFG_REL" "$DEDI_CFG"
+fi
 
 # config.ini is never REPLACED - it holds your window size, fullscreen, binds and options -
 # but a release may carry a key yours has never seen, so add just those and leave everything
@@ -175,6 +189,7 @@ echo "update_jericho: done. $copied file(s) written."
 echo "  updated:  the game, JERICHO/ and its released modules"
 echo "  kept:     CONFIG/   your toggles and settings"
 echo "            config.ini  your window size and fullscreen (new keys added, yours kept)"
+echo "            dediserver.json  your dedicated server's own settings"
 echo "            DRIVER/   your baked Driver 1 car data"
 echo "            DRIVER2/  your own game data (levels, models, cutscenes)"
 echo "            any module you added under MODS/"
