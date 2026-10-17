@@ -2512,6 +2512,7 @@ static int  MpTrafficSlotOwnerRank(int slot);
 static void MpTrafficContactPush(MP_PLAYER* me, int slot);
 static long long MpDistSq64(int dx, int dz);
 static void MpTestTrafficHitTick(void);
+static void MpTestFelonyTick(void);
 static void MpDriveRemotePed(MP_PLAYER* p);
 static void MpKeepOurCarsFromTrafficAi(void);
 static void MpSendColors(int whole);
@@ -3424,6 +3425,40 @@ static void MpTrafficContactPush(MP_PLAYER* me, int slot)
 			slot, (long)h.impulse[0], (long)h.impulse[1], (long)h.impulse[2], owner);
 }
 
+/* MP_TEST_FELONY=<level> -- keep a WANTED LEVEL up, so the ENGINE spawns police
+ * cars and they pursue (inert unless set).
+ *
+ * Why this exists: the siren path only runs for a cop that is actually chasing
+ * somebody, and a cop car turns up in a pair run "after a while" if it turns up
+ * at all -- which makes the one behaviour worth checking unreproducible. Raising
+ * the felony is the engine's OWN trigger, so the cars that appear are the ones a
+ * player would get (PURSUER_AI, on duty), not a module-spawned stand-in that
+ * could pass while the real path stays broken. It is re-asserted every 30 frames
+ * because the engine decays it once nobody is being chased. */
+static void MpTestFelonyTick(void)
+{
+	static int level = -2;
+	static unsigned nextFrame = 0;
+	MP_PLAYER* me = MpLocalPlayer();
+
+	if (level == -2)
+	{
+		const char* e = getenv("MP_TEST_FELONY");
+		level = (e != NULL) ? atoi(e) : -1;
+	}
+
+	if (level < 0 || !gMp.running || me == NULL || me->carId < 0 || me->carId >= MAX_CARS)
+		return;
+
+	if (nextFrame != 0 && gMp.frame < nextFrame)
+		return;
+
+	nextFrame = gMp.frame + 30;
+
+	car_data[me->carId].felonyRating = (u_char)(level > 4 ? 4 : level);
+	pedestrianFelony = car_data[me->carId].felonyRating;
+}
+
 /* MP_TEST_TRAFFIC_HIT=<secs> -- every N seconds, send ONE synthetic traffic-contact
  * push for the nearest PEER mirror, so the traffic-hit wire path can be exercised
  * without a physical collision (the bots avoid traffic, so a pair run never makes
@@ -3778,6 +3813,10 @@ void MpLockstepFrame(void)
 	/* test lever: a synthetic traffic contact, to exercise the traffic-hit wire path
 	 * without a physical collision (inert unless MP_TEST_TRAFFIC_HIT). */
 	MpTestTrafficHitTick();
+
+	/* test lever: keep a wanted level up so the ENGINE spawns police cars and they
+	 * pursue (inert unless MP_TEST_FELONY). See MpTestFelonyTick. */
+	MpTestFelonyTick();
 
 	/* test lever: drop our car off the map, to exercise the game-over refusal
 	 * (inert unless MP_TEST_FALLOFF). */
