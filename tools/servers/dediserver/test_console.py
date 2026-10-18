@@ -27,7 +27,7 @@ def build():
     cfg = dict(d.DEFAULTS)
     cfg.update({
         "name": "Console Test", "port": 1400, "city": 2, "max_players": 8,
-        "rules": 0, "beacon": True, "master": "",       # no master: 'master' says so
+        "cops": True, "cop_difficulty": 2, "beacon": True, "master": "",       # no master: 'master' says so
     })
     server = d.Dedicated(cfg, d.Log("warning"))
     console = Console(d.Log("warning"), server.console_commands())
@@ -54,6 +54,13 @@ def main():
     # -- status reports the configured session
     st = server.cmd_status("")
     check("status names the server", "Console Test" in st)
+    check("status shows readable rules", "cops on, difficulty 2" in st, st)
+    check("rules packed as MP_RULES_PACK", server.cfg["rules"] == (0x1 | (2 << 2)))
+    legacy = {"rules": 0}
+    check("a legacy 'rules' int is honoured", d.resolve_rules(legacy, {"rules"}) and legacy["rules"] == 0)
+    fresh = dict(d.DEFAULTS)
+    d.resolve_rules(fresh, set())
+    check("defaults: cops on, difficulty 1", fresh["rules"] == 0x5, str(fresh["rules"]))
     check("status shows the session port", "TCP/1400" in st)
     check("status shows the city", "city:      2" in st)
     check("status shows the player count", "players:   0/8" in st)

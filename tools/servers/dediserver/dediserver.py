@@ -66,7 +66,12 @@ DEFAULTS = {
     "beacon_ms": 1000,
     "idle_drop_s": 30.0,       # real silence before a client is dropped (0 = never)
     "live": True,              # advertise as a live match (the level is always up)
-    "rules": 0,                # MP_RULES_PACK'd session rules (1 = cops); names the mode
+    # Session rules, readable (packed for the wire with MP_RULES_PACK's layout,
+    # mp_proto.h). Defaults match an in-game host (mp_config.c): cops on, difficulty 1.
+    "cops": True,              # police cars spawn at all
+    "cop_difficulty": 1,       # 0..2 (MP_COP_DIFF_MAX)
+    "cop_immunity": False,     # cops exist but never come after anyone
+    "invulnerable": False,     # cars take no damage
     "log_level": "info",
     "log_file": "",
     # master discovery (optional). master = "" disables registration.
@@ -258,6 +263,8 @@ def master_base(url):
 class Dedicated:
     def __init__(self, cfg, log):
         self.cfg = cfg
+        if "rules" not in cfg:
+            resolve_rules(cfg, set(cfg))     # built from readable keys (tests, embedders)
         self.log = log
         self.lock = threading.Lock()
         self.clients = {}        # conn -> {"id", "name", "addr"}
@@ -826,7 +833,8 @@ class Dedicated:
             "name:      %s" % self.cfg["name"],
             "session:   TCP/%d%s" % (self.port, adv),
             "city:      %d" % self.city,
-            "gamemode:  %d (rules 0x%02x)" % (int(self.cfg["gamemode"]), int(self.cfg["rules"])),
+            "gamemode:  %d" % int(self.cfg["gamemode"]),
+            "rules:     %s" % rules_text(int(self.cfg["rules"])),
             "players:   %d/%d" % (self.player_count(), self.max_players),
             "uptime:    %s" % duration(time.time() - self.started),
             "beacon:    %s" % (("every %dms to UDP/%d"
@@ -982,7 +990,15 @@ def parse_args(argv):
     ap.add_argument("--no-beacon", dest="beacon", action="store_false")
     ap.add_argument("--beacon-ms", type=int)
     ap.add_argument("--idle-drop", type=float, dest="idle_drop_s", help="seconds of silence that drop a client (0 = never)")
-    ap.add_argument("--rules", type=int, help="MP_RULES_PACK'd session rules (1 = cops); names the mode")
+    ap.add_argument("--cops", dest="cops", action="store_true", default=None,
+                    help="police cars spawn (default)")
+    ap.add_argument("--no-cops", dest="cops", action="store_false")
+    ap.add_argument("--cop-difficulty", type=int, choices=(0, 1, 2), metavar="N",
+                    help="cop difficulty 0..2 (default 1)")
+    ap.add_argument("--cop-immunity", action="store_true", default=None,
+                    help="cops exist but never come after anyone")
+    ap.add_argument("--invulnerable", action="store_true", default=None,
+                    help="cars take no damage")
     ap.add_argument("--log-level", choices=sorted(LEVELS))
     ap.add_argument("--log-file")
     ap.add_argument("--master", help="master discovery URL, e.g. http://host:8100 ('' disables)")
@@ -998,6 +1014,40 @@ def parse_args(argv):
     return ap.parse_args(argv)
 
 
+RULE_KEYS = ("cops", "cop_difficulty", "cop_immunity", "invulnerable")
+
+
+def pack_rules(cops, invuln, diff, immune):
+    """mp_proto.h MP_RULES_PACK: cops 0x1, invuln 0x2, difficulty << 2 (mask 0x3), immune 0x10."""
+    return ((0x1 if cops else 0) | (0x2 if invuln else 0)
+            | ((int(diff) & 0x3) << 2) | (0x10 if immune else 0))
+
+
+def rules_text(packed):
+    return "cops %s, difficulty %d, immunity %s, invulnerable %s" % (
+        "on" if packed & 0x1 else "off", (packed >> 2) & 0x3,
+        "on" if packed & 0x10 else "off", "on" if packed & 0x2 else "off")
+
+
+def resolve_rules(cfg, file_keys):
+    """Set cfg["rules"] (the packed int the wire uses) from the readable keys.
+
+    An old config that carries "rules" and none of the readable keys is honoured
+    as-is; returns True then, so the caller can log a deprecation line."""
+    legacy = ("rules" in file_keys and not any(k in file_keys for k in RULE_KEYS)
+              and True)
+    if legacy:
+        cfg["rules"] = int(cfg["rules"]) & 0x1F
+        return True
+    diff = int(cfg.get("cop_difficulty", 1))
+    if diff < 0 or diff > 2:
+        diff = 1
+    cfg["cop_difficulty"] = diff
+    cfg["rules"] = pack_rules(cfg.get("cops", True), cfg.get("invulnerable", False),
+                              diff, cfg.get("cop_immunity", False))
+    return False
+
+
 def build_config(argv):
     args = parse_args(argv)
     path = args.config
@@ -1008,12 +1058,21 @@ def build_config(argv):
     apply_overrides(cfg, args, (
         ("port", "port"), ("name", "name"), ("city", "city"), ("gamemode", "gamemode"),
         ("max_players", "max_players"), ("beacon", "beacon"), ("beacon_ms", "beacon_ms"),
-        ("idle_drop_s", "idle_drop_s"), ("rules", "rules"),
+        ("idle_drop_s", "idle_drop_s"), ("cops", "cops"),
+        ("cop_difficulty", "cop_difficulty"), ("cop_immunity", "cop_immunity"),
+        ("invulnerable", "invulnerable"),
         ("log_level", "log_level"), ("log_file", "log_file"),
         ("master", "master"), ("master_name", "master_name"),
         ("advertise_host", "advertise_host"), ("advertise_port", "advertise_port"),
         ("master_interval_s", "master_interval_s"),
     ))
+    file_keys = set()
+    if path:
+        with open(path, "r", encoding="utf-8") as f:
+            file_keys = set(json.load(f))
+    if any(getattr(args, k, None) is not None for k in RULE_KEYS):
+        file_keys |= {"cops"}      # a rules flag on the command line wins over a legacy int
+    cfg["_rules_legacy"] = resolve_rules(cfg, file_keys)
     return cfg, path
 
 
@@ -1023,6 +1082,10 @@ def main(argv=None):
     if path:
         log.debug("config: %s" % path)
     proto_check.assert_ok()
+    if cfg.pop("_rules_legacy", False):
+        log.warning("config: \"rules\": %d is deprecated -- use \"cops\", \"cop_difficulty\", "
+                    "\"cop_immunity\", \"invulnerable\" (%s)" % (cfg["rules"], rules_text(cfg["rules"])))
+    log.info("rules: %s" % rules_text(int(cfg["rules"])))
 
     # -- the values that would otherwise fail quietly
     cleaned = normalise_host(cfg["advertise_host"])

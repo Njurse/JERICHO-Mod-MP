@@ -24,7 +24,7 @@ supervisor (or a test) can pipe commands in.
 
 | command | what it does |
 | --- | --- |
-| `status` | name, session port, city, gamemode/rules, players, uptime, beacon, master |
+| `status` | name, session port, city, gamemode, rules (readable), players, uptime, beacon, master |
 | `list` | connected players: id, name, address, how long connected |
 | `say <text>` | one line into every player's console, prefixed `SERVER:` |
 | `kick <id>` | drop a player — the protocol's own kick message, so they are told why |
@@ -44,6 +44,10 @@ supervisor (or a test) can pipe commands in.
 --beacon / --no-beacon
 --beacon-ms N        beacon cadence (default 1000)
 --idle-drop S        seconds of real silence that drop a client (0 = never)
+--cops / --no-cops   police cars spawn (default: on)
+--cop-difficulty N   0..2 (default 1)
+--cop-immunity       cops exist but never come after anyone
+--invulnerable       cars take no damage
 --log-level debug|info|warning|error
 --log-file FILE      also append logs to FILE
 --master URL         register with a master discovery service; http://host:8100, or a
@@ -56,6 +60,13 @@ supervisor (or a test) can pipe commands in.
 --advertise-port N   the public port players dial, when the router REMAPS ours
                      (0 = --port). Only needed when the forward is not 1:1
 ```
+
+The session rules are readable keys in `dediserver.json`: `"cops": true`,
+`"cop_difficulty": 1`, `"cop_immunity": false`, `"invulnerable": false` (the same
+defaults as an in-game host). They are packed for the wire exactly like the game's
+`MP_RULES_PACK`. An older config with only the packed `"rules"` int still works (the
+server logs a deprecation line); note `"rules": 0` means cops OFF, so replace it with
+the readable keys to get cops.
 
 CLI flags override the config file. The config file is optional — with none, the
 built-in defaults are used.
