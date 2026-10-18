@@ -120,10 +120,64 @@ def main():
     pairs[4][1].settimeout(1.0)
     tag, payload = m.recv_frame(pairs[4][1])
     check("player 4 got the traffic frame verbatim", tag == m.TAG["traffic"] and payload == traffic)
+    def got(pid, wait=0.2):
+        cli = pairs[pid][1]
+        cli.settimeout(wait)
+        try:
+            return m.recv_frame(cli)
+        except (socket.timeout, OSError):
+            return None
+
+    from dedi import relay
+    for p in (4, 5, 6):          # drain the traffic frame above (5 and 6 got it too)
+        while got(p) is not None:
+            pass
+    # -- HIT: only the car that takes it; a traffic hit goes to the slot's owner
+    hit = m.HIT.pack(6, 0, 10, 0, -10)
+    check("a bump is routed to its target", relay.hit(server, pairs[4][0], 4, hit) == 6)
+    r6 = got(6, 1.0)
+    check("the target got the bump verbatim", r6 == (m.TAG["hit"], hit), repr(r6))
+    check("nobody else got it", got(5) is None and got(4) is None)
+    check("a bump aimed at yourself is dropped", relay.hit(server, pairs[4][0], 4, m.HIT.pack(4, 0, 1, 1, 1)) is None)
+    check("a short bump is dropped", relay.hit(server, pairs[4][0], 4, hit[:8]) is None)
+    check("a bump on an absent player is dropped", relay.hit(server, pairs[4][0], 4, m.HIT.pack(9, 0, 1, 1, 1)) is None)
+    # 3 clients (ids 4..6) -> clients count 7 machines (ids + 1): 12 // 7 = 1 slot each,
+    # rank 5 owns slot 25 (mp_session.c MpTrafficBandFor)
+    check("band maths matches the game", relay.traffic_band(5, 7) == (25, 25) and relay.traffic_band(6, 7) == (26, 31))
+    thit = m.HIT.pack(25, m.HIT_F_TRAFFIC, 1, 2, 3)
+    check("a traffic bump goes to the slot's owner", relay.hit(server, pairs[4][0], 4, thit) == 5)
+    check("the owner got it", got(5, 1.0) == (m.TAG["hit"], thit))
+
+    # -- COLOR: own rows only, whole table to everyone, dropped on leave
+    mine = m.COLOR.pack(2) + m.COLOR_ENTRY.pack(4, 1, 255, 0, 0) + m.COLOR_ENTRY.pack(5, 1, 0, 0, 255)
+    check("only the sender's own colour row is kept", relay.color(server, pairs[4][0], 4, mine) == 1)
+    table = m.COLOR.pack(1) + m.COLOR_ENTRY.pack(4, 1, 255, 0, 0)
+    check("everyone got the table, sender included",
+          all(got(p, 1.0) == (m.TAG["color"], table) for p in (4, 5, 6)))
+    relay.color(server, pairs[6][0], 6, m.COLOR.pack(1) + m.COLOR_ENTRY.pack(6, 0, 1, 2, 3))
+    both = m.COLOR.pack(2) + m.COLOR_ENTRY.pack(4, 1, 255, 0, 0) + m.COLOR_ENTRY.pack(6, 0, 1, 2, 3)
+    check("the table holds every player, in id order", relay.color_table(server) == both)
+    for p in (4, 5, 6):
+        got(p, 1.0)
+    alive, _ = server._send_roster_if_due(pairs[5][0], 0, 5)
+    first, second = got(5, 1.0), got(5, 1.0)
+    check("the roster cadence also sends the colour table (late joiners)",
+          alive and first[0] == m.TAG["roster"] and second == (m.TAG["color"], both))
+    check("a short colour frame is dropped", relay.color(server, pairs[4][0], 4, m.COLOR.pack(3)) == 0)
+
+    # -- CHANNEL: header + declared payload, to everyone (the sender too)
+    ch = m.CHANNEL.pack(b"jerai", 3, 7, 1, 4, 0, 0) + b"abc"
+    check("a channel frame is relayed", relay.channel(server, pairs[4][0], 4, ch + b"junk"))
+    check("all three got it, trailing bytes cut",
+          all(got(p, 1.0) == (m.TAG["channel"], ch) for p in (4, 5, 6)))
+    check("a channel frame shorter than its len is dropped",
+          not relay.channel(server, pairs[4][0], 4, ch[:-1]))
+
     for pid, (srv, cli) in pairs.items():
         server.clients.pop(srv, None)
         srv.close()
         cli.close()
+    server.colors.clear()
 
     # -- KICK over a real socket pair: the frame, then the connection closing
     a, b = socket.socketpair()

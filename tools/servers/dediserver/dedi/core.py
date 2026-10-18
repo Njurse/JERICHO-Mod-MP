@@ -26,6 +26,7 @@ SERVERS = os.path.dirname(HERE)                      # .../mp/tools/servers
 sys.path.insert(0, TOOLS)
 sys.path.insert(0, SERVERS)
 import mp_test as m            # noqa: E402  the single Python source of truth
+from dedi import relay   # noqa: E402  hit / colour / channel routing
 from dedi.plugins import CONSOLE, Player, PluginManager, tick_loop   # noqa: E402
 import proto_check            # noqa: E402  the wire-mirror guard
 
@@ -265,6 +266,7 @@ class Dedicated:
         self.lock = threading.Lock()
         self.clients = {}        # conn -> {"id", "name", "addr"}
         self.cars = {}           # playerId -> one MP_CARSTATE_ENTRY
+        self.colors = {}         # playerId -> its MP_COLOR_ENTRY (8 bytes), the owner's word
         self.stop = threading.Event()
         self.started = time.time()
 
@@ -444,6 +446,11 @@ class Dedicated:
             return True, last
         try:
             m.send_frame(conn, m.TAG["roster"], self.roster_bytes())
+            # ...and the colour table on the same cadence, as the host's
+            # MpSendColors(1) every 120 frames: how a late joiner learns everyone
+            table = relay.color_table(self)
+            if table:
+                m.send_frame(conn, m.TAG["color"], table)
         except OSError:
             return False, now
         except Exception as e:
@@ -741,6 +748,12 @@ class Dedicated:
                                    m.TAG["carstate"], skip=conn)
                 elif tag in (m.TAG["ped"], m.TAG["traffic"]):
                     self.relay_peer_state(conn, tag, payload, pid)
+                elif tag == m.TAG["hit"]:
+                    relay.hit(self, conn, pid, payload)
+                elif tag == m.TAG["color"]:
+                    relay.color(self, conn, pid, payload)
+                elif tag == m.TAG["channel"]:
+                    relay.channel(self, conn, pid, payload)
                 elif tag == m.TAG["chat"]:
                     self._chat(conn, payload, pid, name)
                 elif tag == m.TAG["ping"]:
@@ -757,6 +770,7 @@ class Dedicated:
                 info = self.clients.pop(conn, None)
                 if info:
                     self.cars.pop(info["id"], None)
+                    self.colors.pop(info["id"], None)
             if info:
                 self.plugins.call("on_player_leave", Player(conn, info))
                 self.log.info("player %d '%s' left (%d/%d)"

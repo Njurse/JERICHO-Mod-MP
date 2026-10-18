@@ -65,7 +65,7 @@ TAG = {
     "carstate": b"JPCS", "ping": b"JPPN", "pong": b"JPPO",
     "channel": b"JPCH", "leave": b"JPLV", "kick": b"JPKK", "chat": b"JPCX",
     "roster": b"JPRS", "car": b"JPCC",
-    "ped": b"JPPD", "traffic": b"JPTF",
+    "ped": b"JPPD", "traffic": b"JPTF", "hit": b"JPHI", "color": b"JPCL",
 }
 # NOTE: no "session" entry. 'JPSS' was retired from mp_proto.h -- it was reserved for
 # a standalone session/lobby broadcast that nothing ever sent or handled. Keep this
@@ -74,6 +74,16 @@ TAG = {
 # (playerId, flags, spare, x, y, z, heading, speed): an on-foot player's pose.
 PEDSTATE = struct.Struct("<B3x")
 PEDSTATE_ENTRY = struct.Struct("<BBHiiiii")
+# MP_HIT: targetId, flags (MP_HIT_F_TRAFFIC = targetId is a car_data slot), 2 reserved,
+# int32 impulse[3]. MP_COLOR: count + 3 reserved, then 8-byte rows
+# (playerId, on, r, g, b, 3 spare). (MP_CHANNEL is CHANNEL, below.)
+HIT = struct.Struct("<BB2xiii")
+HIT_F_TRAFFIC = 0x01
+COLOR = struct.Struct("<B3x")
+COLOR_ENTRY = struct.Struct("<BBBBB3x")
+TRAFFIC_SLOT_FIRST = 20          # dr2limits.h JER_SLOT_TRAFFIC_FIRST (MAX_CARS 32 - 12)
+TRAFFIC_SLOT_COUNT = 12
+MAX_CARS = 32
 UDP_MAGIC = 0x31504D4A
 DISCOVERY_PORT = 1318          # mp_proto.h MP_DISCOVERY_PORT -- FIXED and shared. A
                                # beacon goes HERE; the session port travels INSIDE
