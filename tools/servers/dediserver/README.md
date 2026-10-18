@@ -113,23 +113,36 @@ the other players; the reply comes back privately. `!help` lists what *you* can 
 
 | command | who | what it does |
 | --- | --- | --- |
-| `!help` | everyone | the commands you can use |
+| `!help [command]` | everyone | the commands you can use, or one command's details |
 | `!whoami` | everyone | your slot, name and **player id** |
-| `!who` | everyone | who is connected (admins also see addresses) |
+| `!who` | everyone | who is connected (admins also see player ids and addresses) |
 | `!login <password>` / `!logout` | everyone | admin for this session, if `admin_password` is set |
 | `!kick <slot\|name>` | admin | remove a player |
 | `!cops on\|off`, `!difficulty 0-2` | admin | session rules: apply from the next level load; the discovery listing updates at once |
-| `!motd [text]` | admin | show or set the join greeting (not saved to the file) |
+| `!time dawn\|day\|dusk\|night`, `!weather clear\|rain\|wet` | admin | time of day / weather, from the next level load |
+| `!admin add\|remove <slot\|name\|uuid>`, `!admin list` | admin | manage the admins list; **saved to dediserver.json** |
+| `!motd [text\|save]` | admin | show or set the join greeting; `!motd save` writes it to the file |
 | `!say <text>` | admin | a line from the server to everyone |
 
-`cops`, `difficulty` and `motd` also work at the server console.
+`cops`, `difficulty`, `time`, `weather`, `motd` and `admin` also work at the server
+console. Every admin command is logged with who ran it. Joins and leaves are
+announced in chat (`"announce_joins": false` turns that off). Saving rewrites
+`dediserver.json` atomically and keeps your other keys, but not comments or layout.
+
+Session settings in `dediserver.json`: `"time_of_day"` (`dawn`, `day`, `dusk`,
+`night`) and `"weather"` (`clear`, `rain`, `wet`), or `--time-of-day` / `--weather`.
+Players read them (and the cops rules) as they load a level, so a change reaches a
+player the next time they join or load.
 
 ### Making yourself an admin
 
-1. Join your server and type `!whoami`. It prints your player id (32 hex digits;
-   your game generates it once and keeps it as `[mp] player_id` in its mp config).
-2. Put it in `dediserver.json`: `"admins": ["0123456789abcdef0123456789abcdef"]`.
-3. Restart the server. When you join it says *You are an admin on this server*.
+1. Join your server and type `!whoami`. It prints your player id, a UUID such as
+   `0f8e2a4c-1d3b-4a5e-9c7d-112233445566` (your game creates it at first launch and
+   keeps it as `[mp] player_id`; the game log prints it too).
+2. Put it in `dediserver.json`: `"admins": ["0f8e2a4c-1d3b-4a5e-9c7d-112233445566"]`
+   (dashed or plain hex, any case). Restart the server.
+3. When you join it says *You are an admin on this server*. From then on you can
+   add others in game with `!admin add <name>`.
 
 Or set `"admin_password"` and use `!login <password>` (3 wrong tries in 60 s lock
 `!login` for 5 minutes).
