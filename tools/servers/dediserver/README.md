@@ -106,6 +106,87 @@ built-in defaults are used.
 }
 ```
 
+## Chat commands and admins
+
+Players type commands in chat, starting with `!` (or `/`). A command is not shown to
+the other players; the reply comes back privately. `!help` lists what *you* can run.
+
+| command | who | what it does |
+| --- | --- | --- |
+| `!help` | everyone | the commands you can use |
+| `!whoami` | everyone | your slot, name and **player id** |
+| `!who` | everyone | who is connected (admins also see addresses) |
+| `!login <password>` / `!logout` | everyone | admin for this session, if `admin_password` is set |
+| `!kick <slot\|name>` | admin | remove a player |
+| `!cops on\|off`, `!difficulty 0-2` | admin | session rules: apply from the next level load; the discovery listing updates at once |
+| `!motd [text]` | admin | show or set the join greeting (not saved to the file) |
+| `!say <text>` | admin | a line from the server to everyone |
+
+`cops`, `difficulty` and `motd` also work at the server console.
+
+### Making yourself an admin
+
+1. Join your server and type `!whoami`. It prints your player id (32 hex digits;
+   your game generates it once and keeps it as `[mp] player_id` in its mp config).
+2. Put it in `dediserver.json`: `"admins": ["0123456789abcdef0123456789abcdef"]`.
+3. Restart the server. When you join it says *You are an admin on this server*.
+
+Or set `"admin_password"` and use `!login <password>` (3 wrong tries in 60 s lock
+`!login` for 5 minutes).
+
+**Security:** there is no account server. The player id is a *bearer secret*:
+anyone who copies your mp config is "you" to this server. Game traffic is not
+encrypted, so the id and a `!login` password can be read by anyone on the network
+path. Fine for a hobby server; don't reuse the password anywhere else.
+
+## Plugins
+
+The server is a small core (`dedi/core.py`) plus plugins. Built-ins live in
+`dedi/builtin/` (`commands`, `admin`); your own go in `plugins/` beside
+`dediserver.py` (or the folder named by `"plugins_dir"`). Updates add files but do
+not delete yours (keep your own names; `example_hello.py` is overwritten).
+
+```json
+"plugins": null,                 // null = every plugin found, built-ins first
+"plugins_disabled": ["example"], // ... minus these
+"plugins_dir": "plugins"
+```
+
+`"plugins": ["commands", "admin", "mine"]` loads exactly those, in that order. A
+plugin that fails to import or raises is logged and disabled; the server keeps
+running. The console's `plugins` command shows what loaded and what was disabled.
+
+### Writing one
+
+A plugin is a `.py` file; every hook is optional. `plugins/example_hello.py`
+(disabled by default) is a working starting point:
+
+```python
+ENABLED_BY_DEFAULT = False      # only load when listed in "plugins"
+_server = None
+
+def on_load(server):            # server: dedi.plugins.ServerAPI
+    global _server
+    _server = server
+    server.register_command("hello", lambda caller, args: "hello, %s!" % caller.name)
+
+def on_player_join(player):     # player.id .name .addr .player_id .admin .state
+    _server.send_private(player, "Welcome, %s!" % player.name)
+
+def on_chat(player, text):      # return True to swallow the line
+    return False
+```
+
+Hooks: `on_load(server)`, `on_unload()`, `on_player_join(player)`,
+`on_player_leave(player)`, `on_chat(player, text)`, `on_tick()` (about once a
+second). `server` offers `players()`, `find_player(slot|name)`,
+`send_private(player, text, color)`, `broadcast(text, color)`, `kick(player, reason)`,
+`config_get/config_set`, `set_rules(cops=, cop_difficulty=, cop_immunity=,
+invulnerable=)`, `set_cops`, `set_difficulty`, `readvertise()`, `log`, and
+`register_command(name, handler, admin=False, help="", console=False)` where
+`handler(caller, args)` returns the reply text. Hooks run on the server's threads:
+keep them quick and don't block.
+
 ## Mod lists
 
 The client sends its **mod manifest** in the handshake, and this server applies the
