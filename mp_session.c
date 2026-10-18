@@ -38,6 +38,7 @@ extern int gWantNight;		/* glaunch.c: 1 = the night take-a-ride level variant */
 #include "jer_map.h"	/* jer_map_*: the region maths behind "is the ground there?" */
 #include "pedest.h"	/* pUsedPeds: our player's own pedestrian, when on foot */
 #include "jer_npc.h"	/* jer_npc_*: the pedestrian we stand in for a REMOTE one */
+#include "camera.h"	/* InitCamera: snap the camera with a placed late joiner */
 #include "jer_ped_palette.h"	/* jer_ped_palette_reset: scope the suit-colour cache to a session */
 
 #include <string.h>
@@ -115,8 +116,14 @@ static int gMpLaunched;
 /* A LIVE join: the engine builds OUR car on the level's own start point, which is
  * where the host (and everyone before us) came in. MpPlaceSelfTick moves it to a
  * random road spot away from the other players once the level is up. */
-#define MP_PLACE_SELF_SETTLE	15	/* frames after our car exists, so the map is resident */
+/* Placement is tried from the FIRST frame our car exists, and retried every frame
+ * (the road data around the probe may still be streaming in) for up to this many
+ * frames before giving up on the level start. It used to wait a fixed 15 frames
+ * and then try once, which is the visible "sits on the host, then pops away". */
+#define MP_PLACE_SELF_SETTLE	1
+#define MP_PLACE_SELF_TRIES	90
 static int gMpPlaceSelfFrames;
+static int gMpPlaceSelfTry;	/* frames spent trying to place (MpPlaceSelfTick) */
 static int gMpLocalAppliedPad = -1;	/* the pad that drove OUR car, -1 = none seen yet */
 
 /* The road search (defined with the warp/respawn helpers, used by the join spawn
@@ -2645,6 +2652,7 @@ static void MpHandleWelcome(const unsigned char* p, int len)
 		if (gMpCtx)
 			gMpCtx->jer_log(gMpCtx, "[mp] joined a LIVE match - pick a car\n");
 
+		gMpPlaceSelfTry = 0;
 		gMpPlaceSelfFrames = MP_PLACE_SELF_SETTLE;	/* our car starts on the level start = on the host: move it */
 
 		if (gMp.autoSession)
@@ -7646,8 +7654,14 @@ void MpPlaceSelfTick(void)
 	if (me == NULL || me->carId < 0 || me->carId >= MAX_CARS || PlayerStartInfo[0] == NULL)
 		return;
 
-	if (--gMpPlaceSelfFrames > 0)
+	/* gMpPlaceSelfFrames: >1 = settle countdown, then 1..-TRIES = try each frame */
+	if (gMpPlaceSelfFrames > 1)
+	{
+		gMpPlaceSelfFrames--;
 		return;
+	}
+
+	gMpPlaceSelfTry++;
 
 	cp = &car_data[me->carId];
 	rnd = gMp.seed ^ (unsigned int)((me->id + 7) * 2654435761u) ^ (unsigned int)MpNowMs();
@@ -7693,13 +7707,25 @@ void MpPlaceSelfTick(void)
 			InitCarPhysics(cp, &start, (dir >= 0) ? dir : PlayerStartInfo[0]->rotation);
 			cp->hd.speed = 0;
 			player[0].cameraAngle = cp->hd.direction + 1536;
+
+			/* snap the camera with the car instead of letting it swing across */
+			player[0].pos[0] = x;
+			player[0].pos[2] = z;
+			InitCamera(&player[0]);
 		}
 
 		if (gMpCtx != NULL)
-			gMpCtx->jer_log(gMpCtx, "[mp] live join: placed our car at %d,%d dir %d (try %d)\n", x, z, dir, k);
+			gMpCtx->jer_log(gMpCtx, "[mp] live join: placed our car at %d,%d dir %d (try %d, frame %d)\n",
+				x, z, dir, k, gMpPlaceSelfTry);
 
+		gMpPlaceSelfFrames = 0;
 		return;
 	}
+
+	if (gMpPlaceSelfTry < MP_PLACE_SELF_TRIES)
+		return;		/* road data may still be streaming: try again next frame */
+
+	gMpPlaceSelfFrames = 0;
 
 	if (gMpCtx != NULL)
 		gMpCtx->jer_log(gMpCtx, "[mp] live join: no clear road spot found - kept the level start\n");
