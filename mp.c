@@ -2302,6 +2302,10 @@ static const JER_PAUSE_MENU_ITEM mpChangeCarItems[] =
 	/* Repair belongs with the car, not under Player options: it is a car action and
 	 * "Respawn as this car" next to it is the one that also MOVES you. */
 	{ "Repair car", NULL, MpOptRepair, NULL, NULL, 0 },
+	/* ...and so does clearing the wanted level: the pursuit follows the CAR, and
+	 * this is the row a player looks for while a cop is on their bumper. It used to
+	 * sit on the Multiplayer page, a submenu away from the car it is about. */
+	{ "Clear felony", NULL, MpOptClearFelony, NULL, NULL, 0 },
 };
 
 /* A JER_PAUSE_MENU's item_count, taken FROM the array.
@@ -3021,7 +3025,6 @@ static const JER_PAUSE_MENU_ITEM mpPauseItems[] =
 	/* ...then the rest, so the reordering costs nothing that was already here. */
 	{ "My colour", NULL, NULL, NULL, &mpColorMenu, 0 },
 	{ "Kick player", NULL, NULL, NULL, &mpKickMenu, 0 },
-	{ "Clear felony", NULL, MpOptClearFelony, NULL, NULL, 0 },
 	{ "Write diagnostics now", NULL, MpMenuWriteDiag, NULL, NULL, 0 },
 };
 

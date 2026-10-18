@@ -368,6 +368,21 @@ applies — see `MpHitFrame` / `MpHandleHit` in `mp_session.c`.)
 
 ## 8. The pause menu, and why a session is never paused
 
+**The car actions live behind Vehicle Options**, because they follow the CAR: Change
+car, Respawn as this car, Repair car, and Clear felony (which is where a player looks
+for it while a cop is on their bumper - it used to sit on the Multiplayer page, a
+submenu away from the car it is about).
+
+**Clear felony clears the PURSUIT, not just the number.** Zeroing the rating stops new
+cars being sent; the ones already chasing are `CONTROL_TYPE_PURSUER_AI` and would keep
+ramming a crime nobody remembers. A vanilla cop (a model with a siren) is handed back
+to traffic through the engine's own `InitCivState`, which flips `controlType` AND
+initialises the CIV_STATE fields `CivControl` reads - a bare `controlType` write is not
+enough, because the AI state is a union and civ AI would then read a cop's state.
+Anything without a siren (roadblock, armoured van, a mission car) and any car a player
+is driving are deliberately left alone.
+
+
 **A match's pause menu keeps the addons.** The engine picks the in-game pause layout
 with `if (NumPlayers == 1 && gMultiplayerLevels == 0)` (pause.c:1176) — and
 `gMultiplayerLevels` is set from `MissionHeader->region`, so a match on the `-mp`

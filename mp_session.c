@@ -2119,14 +2119,51 @@ void MpSelfRepairCar(void)
 void MpSelfClearFelony(void)
 {
 	MP_PLAYER* me = MpLocalPlayer();
+	int i, released = 0;
 
 	if (me != NULL && me->carId >= 0 && me->carId < MAX_CARS)
 		car_data[me->carId].felonyRating = 0;
 
 	pedestrianFelony = 0;
 
+	/* AND THE PURSUIT ITSELF. Zeroing the rating stops NEW cars being sent, but the
+	 * ones already on our bumper are CONTROL_TYPE_PURSUER_AI and would keep chasing
+	 * a crime nobody remembers - "clear felony" that leaves three cop cars ramming
+	 * you is not a clear.
+	 *
+	 * A VANILLA cop goes back to being TRAFFIC, which is what the engine does when
+	 * a pursuit ends. InitCivState is the engine's own "this car is a civilian now":
+	 * it flips controlType AND initialises the CIV_STATE fields CivControl reads. A
+	 * bare controlType write is not enough - the AI state is a union, so a car
+	 * switched that way runs civ AI on a cop's state.
+	 *
+	 * Left alone deliberately: anything without a siren (roadblocks, armoured vans,
+	 * a mission car - not "just a vanilla cop"), and any car a PLAYER is driving,
+	 * because that is somebody's car and not ours to convert. */
+	for (i = 0; i < MAX_CARS; i++)
+	{
+		CAR_DATA* cp = &car_data[i];
+
+		if (cp->controlType != CONTROL_TYPE_PURSUER_AI)
+			continue;
+
+		if (!CarHasSiren(cp->ap.model))
+			continue;
+
+		if (MpGetPlayerByCar(i) != NULL)
+			continue;
+
+		InitCivState(cp, NULL);
+		released++;
+	}
+
 	if (gMpCtx != NULL)
-		gMpCtx->jer_log(gMpCtx, "[mp] player option: wanted level cleared\n");
+		gMpCtx->jer_log(gMpCtx,
+			"[mp] player option: wanted level cleared%s\n",
+			(released > 0) ? " and the pursuit released back to traffic" : "");
+
+	if (released > 0 && gMpCtx != NULL)
+		gMpCtx->jer_log(gMpCtx, "[mp] clear felony: %d cop car(s) back to civilian AI\n", released);
 
 	MpNotify("Wanted level cleared");
 }
