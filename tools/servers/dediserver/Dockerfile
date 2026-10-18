@@ -13,6 +13,7 @@ COPY tools/servers/proto_check.py                 /mp/tools/servers/proto_check.
 COPY tools/servers/serverkit.py                   /mp/tools/servers/serverkit.py
 COPY tools/servers/dediserver/dediserver.py       /mp/tools/servers/dediserver/dediserver.py
 COPY tools/servers/dediserver/dedi                /mp/tools/servers/dediserver/dedi
+COPY tools/servers/dediserver/plugins             /mp/tools/servers/dediserver/plugins
 COPY tools/servers/dediserver/dediserver.json     /mp/tools/servers/dediserver/dediserver.json
 
 WORKDIR /mp/tools/servers/dediserver

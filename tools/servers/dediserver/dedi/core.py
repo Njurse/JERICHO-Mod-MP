@@ -26,6 +26,7 @@ SERVERS = os.path.dirname(HERE)                      # .../mp/tools/servers
 sys.path.insert(0, TOOLS)
 sys.path.insert(0, SERVERS)
 import mp_test as m            # noqa: E402  the single Python source of truth
+from dedi.plugins import CONSOLE, Player, PluginManager, tick_loop   # noqa: E402
 import proto_check            # noqa: E402  the wire-mirror guard
 
 
@@ -52,6 +53,16 @@ DEFAULTS = {
     "cop_difficulty": 1,       # 0..2 (MP_COP_DIFF_MAX)
     "cop_immunity": False,     # cops exist but never come after anyone
     "invulnerable": False,     # cars take no damage
+    # Plugins (dedi/plugins.py; README "Plugins"). null = every plugin found, minus
+    # plugins_disabled and any marked ENABLED_BY_DEFAULT = False; a list = exactly
+    # those, in order. plugins_dir is relative to this server's folder.
+    "plugins": None,
+    "plugins_disabled": [],
+    "plugins_dir": "plugins",
+    # admin plugin: player ids (from !whoami) that are admins on join, and an
+    # optional shared password for !login ("" = no password logins).
+    "admins": [],
+    "admin_password": "",
     "log_level": "info",
     "log_file": "",
     # master discovery (optional). master = "" disables registration.
@@ -261,6 +272,13 @@ class Dedicated:
         # small dict so the loop's local `token` stays local.
         self.master_state = {"base": "", "registered": False, "last": ""}
 
+        # Plugins. `home` is where plugins_dir is resolved from; readvertise_evt asks
+        # the master loop to re-register now (rules changed) instead of next beat.
+        self.home = HERE
+        self.readvertise_evt = threading.Event()
+        self.plugins = PluginManager(self)
+        self.plugins.load()
+
         self.console = None
         self.started = time.time()
 
@@ -276,6 +294,44 @@ class Dedicated:
     @property
     def city(self):
         return int(self.cfg["city"])
+
+    # -- the plugin-facing surface (dedi/plugins.py ServerAPI calls these)
+    def player_views(self):
+        with self.lock:
+            rows = list(self.clients.items())
+        return sorted((Player(c, i) for c, i in rows), key=lambda p: p.id)
+
+    def send_to(self, conn, tag, payload):
+        m.send_frame(conn, tag, payload)
+
+    def send_server_chat(self, text, color=None, conn=None):
+        """Chat line(s) in the server's own voice (player id 0xFF), to one
+        connection or everyone. A colour rides in the frame's reserved bytes, as
+        the motd's does."""
+        ink = _ink_bytes(color) if color else (0, 0, 0)
+        for line in str(text).split("\n"):
+            for piece in _chat_chunks(line) or [b" "]:
+                frame = m.CHAT.pack(0xFF, ink[0], ink[1], ink[2], piece)
+                if conn is None:
+                    self.broadcast(frame, m.TAG["chat"])
+                else:
+                    try:
+                        self.send_to(conn, m.TAG["chat"], frame)
+                    except OSError:
+                        pass
+
+    def set_rules(self, **rules):
+        for k, v in rules.items():
+            if k not in RULE_KEYS:
+                raise KeyError("unknown rule %r" % k)
+            self.cfg[k] = v
+        resolve_rules(self.cfg, set(RULE_KEYS))
+        self.log.info("rules now: %s (from the next level load)" % rules_text(int(self.cfg["rules"])))
+        self.readvertise()
+        return rules_text(int(self.cfg["rules"]))
+
+    def readvertise(self):
+        self.readvertise_evt.set()
 
     def player_count(self):
         with self.lock:
@@ -387,6 +443,13 @@ class Dedicated:
         if not line:
             return
 
+        # Plugins first: a command ("!help") is consumed and never relayed.
+        with self.lock:
+            info = self.clients.get(conn)
+        if info is not None and self.plugins.chat(Player(conn, info), line):
+            self.log.info("[cmd] %s: %s" % (name, line.split(None, 1)[0]))
+            return
+
         self.log.info("[chat] %s: %s" % (name, line))
 
         out = m.CHAT.pack(pid, 0, 0, 0, line.encode("latin1", "replace")[:95])
@@ -468,7 +531,8 @@ class Dedicated:
                 # would deadlock this thread with the lock held forever.
                 refused_full = True
             else:
-                self.clients[conn] = {"id": pid, "name": name, "addr": who}
+                self.clients[conn] = {"id": pid, "name": name, "addr": who,
+                                      "player_id": m.parse_player_id(payload)}
 
         if refused_full:
             # The real host answers a full server with a REJECT alone -- a WELCOME
@@ -527,6 +591,11 @@ class Dedicated:
             except OSError:
                 pass
             self.log.debug("sent the motd to %s" % who)
+
+        with self.lock:
+            joined = self.clients.get(conn)
+        if joined is not None:
+            self.plugins.call("on_player_join", Player(conn, joined))
 
         # Poll fast so we can keep the link fresh from OUR side too: a dedicated
         # server should not depend on the client to prove the link is alive.
@@ -614,6 +683,7 @@ class Dedicated:
                 if info:
                     self.cars.pop(info["id"], None)
             if info:
+                self.plugins.call("on_player_leave", Player(conn, info))
                 self.log.info("player %d '%s' left (%d/%d)"
                               % (info["id"], info["name"], self.player_count(), self.max_players))
             try:
@@ -763,7 +833,11 @@ class Dedicated:
                             token = None
                             continue
                         raise
-                self.stop.wait(interval)
+                # sleep a beat -- or less, when the rules changed and the listing
+                # must say so now (readvertise): re-registering replaces our entry
+                if self.readvertise_evt.wait(interval) and not self.stop.is_set():
+                    self.readvertise_evt.clear()
+                    token = None
             except (OSError, ValueError, KeyError) as e:
                 self.master_state.update(base=base, registered=False,
                                          last="unreachable: %s" % e)
@@ -799,7 +873,15 @@ class Dedicated:
             ("master", "discovery-server registration state", self.cmd_master),
             ("stop", "close the server (unregisters from the master)", self.cmd_stop),
             ("help", "list these commands", self.cmd_help),
-        ]
+            ("plugins", "loaded and disabled plugins", self.cmd_plugins),
+        ] + self.plugins.console_entries({"status", "list", "say", "kick", "beacon",
+                                          "master", "stop", "help", "plugins"})
+
+    def cmd_plugins(self, _rest):
+        rows = ["loaded:   %s" % (", ".join(n for n, _ in self.plugins.plugins) or "none")]
+        for n, why in sorted(self.plugins.disabled.items()):
+            rows.append("disabled: %s (%s)" % (n, why))
+        return "\n".join(rows)
 
     def cmd_help(self, _rest):
         return self.console.help_text() if self.console is not None else ""
@@ -854,8 +936,9 @@ class Dedicated:
         if not rest.isdigit():
             return "kick who?  (kick <id>; 'list' shows the ids)"
 
-        pid = int(rest)
+        return self.kick_player(int(rest))
 
+    def kick_player(self, pid, reason=""):
         with self.lock:
             target = [(conn, c) for conn, c in self.clients.items() if c["id"] == pid]
 
@@ -868,11 +951,12 @@ class Dedicated:
         # ("You were kicked by the host" then out to the frontend) -- so send that
         # rather than just dropping the socket and leaving them guessing.
         try:
-            m.send_frame(conn, m.TAG["kick"], m.KICK.pack(pid, 0, 0, 0))
+            self.send_to(conn, m.TAG["kick"], m.KICK.pack(pid, 0, 0, 0))
         except OSError:
             pass
 
-        self.log.info("console: kicked player %d '%s' (%s)" % (pid, c["name"], c["addr"]))
+        self.log.info("kicked player %d '%s' (%s)%s" % (pid, c["name"], c["addr"],
+                                                        (": " + reason) if reason else ""))
 
         try:
             conn.shutdown(socket.SHUT_RDWR)      # wake their blocked recv; cleanup runs
@@ -914,6 +998,7 @@ class Dedicated:
     def cmd_stop(self, _rest):
         self.log.info("console: stop requested")
         self.stop.set()
+        self.readvertise_evt.set()       # wake the master loop so it unregisters now
         return "stopping (unregisters from the master, closes players)..."
 
     def run(self):
@@ -934,6 +1019,8 @@ class Dedicated:
             threads.append(threading.Thread(target=self.beacon_loop, daemon=True))
         if self.cfg["master"]:
             threads.append(threading.Thread(target=self.master_loop, daemon=True))
+        threads.append(threading.Thread(target=tick_loop, args=(self.plugins, self.stop),
+                                        daemon=True))
         for t in threads:
             t.start()
 
@@ -948,7 +1035,9 @@ class Dedicated:
                 threading.Thread(target=self.serve, args=(conn, addr), daemon=True).start()
         finally:
             self.stop.set()
+            self.readvertise_evt.set()
             srv.close()
+            self.plugins.unload()
             self.log.info("shutting down (uptime %.0fs, %d player(s))"
                           % (time.time() - self.started, self.player_count()))
         for t in threads:
