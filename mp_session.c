@@ -2033,6 +2033,9 @@ static void MpHandleChat(int connIndex, const unsigned char* p, int len)
 		if (ink != NULL && gMpCtx != NULL)
 			gMpCtx->jer_log(gMpCtx, "[mp] server voice: '%s' in #%02X%02X%02X\n",
 				c.text, ink[0], ink[1], ink[2]);
+		else if (gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx, "[mp] chat from %s: '%s'\n",
+				pl != NULL ? pl->name : "SERVER", c.text);
 
 		if (pl != NULL)
 			MpConsoleChat(pl->name, pl->colorOn, pl->colorR, pl->colorG, pl->colorB, c.text, ink);

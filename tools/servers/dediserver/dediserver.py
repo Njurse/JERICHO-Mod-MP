@@ -403,7 +403,12 @@ class Dedicated:
         self.log.info("[chat] %s: %s" % (name, line))
 
         out = m.CHAT.pack(pid, 0, 0, 0, line.encode("latin1", "replace")[:95])
-        self.broadcast(out, m.TAG["chat"], skip=conn)
+        # To EVERYONE, the sender included. The client never prints its own line:
+        # MpSendChat (mp_session.c) sends it to the host and waits for the host's
+        # echo, exactly as a game host republishes "to everyone (including the
+        # sender)". Skipping the sender here meant a player on a dedicated server
+        # never saw anything they typed -- alone on the server, chat looked dead.
+        self.broadcast(out, m.TAG["chat"])
 
     # -- one client
     def serve(self, conn, addr):
