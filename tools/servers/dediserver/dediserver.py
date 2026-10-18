@@ -55,7 +55,10 @@ DEFAULTS = {
     "name": "Dedicated",
     "city": 0,                 # GameLevel the clients should load (0..3)
     "gamemode": 0,
-    "max_players": 8,          # a client takes a slot 1..max_players-1 (0 is the server)
+    "max_players": 16,         # a client takes a slot 1..max_players-1 (0 is the server);
+                               # 16 is the protocol's cap (MP_MAX_PLAYERS)
+    "motd": "",                # said to each joiner as a SERVER chat line ("" = nothing).
+                               # One line: the wire field holds 95 characters.
     "beacon": True,            # advertise on UDP so the LAN browser lists us
     "beacon_ms": 1000,
     "idle_drop_s": 30.0,       # real silence before a client is dropped (0 = never)
@@ -471,6 +474,20 @@ class Dedicated:
             m.send_frame(conn, m.TAG["start"], sess)
         except OSError:
             pass
+
+        # THE MOTD, and only to THIS connection: it is a greeting, not an
+        # announcement. It goes down the chat channel because that is already the
+        # client's own "SERVER:" voice (see cmd_say): player id 0xFF matches no
+        # player, so the client prints the text with no name attached to it.
+        motd = (self.cfg.get("motd") or "").strip()
+
+        if motd:
+            try:
+                m.send_frame(conn, m.TAG["chat"],
+                             m.CHAT.pack(0xFF, 0, 0, 0, ("SERVER: " + motd).encode()[:95]))
+            except OSError:
+                pass
+            self.log.debug("sent the motd to %s" % who)
 
         # Poll fast so we can keep the link fresh from OUR side too: a dedicated
         # server should not depend on the client to prove the link is alive.

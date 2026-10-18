@@ -68,7 +68,10 @@ built-in defaults are used.
   "name": "Dedicated",
   "city": 0,
   "gamemode": 0,
-  "max_players": 8,
+  "max_players": 16,        // 16 is the protocol cap (MP_MAX_PLAYERS); slot 0 is the server
+  "motd": "Welcome to JERICHO - drive safe, mind the traffic.",
+                            // said to each joiner as a SERVER chat line. One line only:
+                            // the chat field holds 95 characters. "" sends nothing.
   "beacon": true,
   "beacon_ms": 1000,
   "idle_drop_s": 30.0,      // 0 = never drop a silent client
