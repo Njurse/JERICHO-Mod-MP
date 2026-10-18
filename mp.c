@@ -1674,6 +1674,7 @@ static void MpDrawPlayerList(void)
 		char net[72];
 		int lossPct = -1;
 		int veh = -1;
+		int vehCity = -1;
 		int y;
 
 		if (p == NULL)
@@ -1685,13 +1686,27 @@ static void MpDrawPlayerList(void)
 		{
 			cp = &car_data[p->carId];
 
-			if (cp->controlType != CONTROL_TYPE_NONE)
-				veh = cp->ap.model;
+			/* WHICH car, the way car selection names it: the city whose car list
+			 * it comes from and its model number in that city (MP_CAR's model +
+			 * modelCity). ap.model is only the RESIDENT SLOT the level loaded it
+			 * into, which says nothing about the car itself. */
+			if (cp->controlType != CONTROL_TYPE_NONE &&
+			    cp->ap.model >= 0 && cp->ap.model < MAX_CAR_RESIDENT_MODELS)
+			{
+				veh = residentCarModels[cp->ap.model];
+				vehCity = GetCarModelSourceCity(cp->ap.model);
+
+				if (vehCity < 0)
+					vehCity = GameLevel;
+			}
 		}
 
 		MpFormatPanelName(name, sizeof(name), p);
 
-		snprintf(car, sizeof(car), veh >= 0 ? "car %d" : "on foot", veh);
+		if (veh >= 0)
+			snprintf(car, sizeof(car), "%d:%d", vehCity, veh);
+		else
+			snprintf(car, sizeof(car), "on foot");
 
 		{
 			MP_PEER_STATS st;
