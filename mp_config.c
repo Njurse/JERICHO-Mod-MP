@@ -5,6 +5,7 @@
 #if defined(_WIN32)
 #define _CRT_RAND_S	/* rand_s: the OS CSPRNG, for the player id */
 #endif
+#include "jer_console.h"	/* jer_console_set_chat_hold */
 #include "jericho.h"
 #include "jer_config.h"
 
@@ -387,6 +388,12 @@ void MpConfigLoad(void)
 	if (gMp.config.idleDropMs < 0 || gMp.config.idleDropMs > 600000)
 		gMp.config.idleDropMs = MP_CONN_TIMEOUT_MS;
 
+	/* Seconds a chat line stays at full brightness before it fades (2..120). */
+	gMp.config.chatHoldSec = jer_config_get_int("mp", "chat_hold_seconds", 12);
+	if (gMp.config.chatHoldSec < 2 || gMp.config.chatHoldSec > 120)
+		gMp.config.chatHoldSec = 12;
+	jer_console_set_chat_hold(gMp.config.chatHoldSec);
+
 	gMp.config.car = jer_config_get_int("mp", "car", -1);
 	if (gMp.config.car < -1 || gMp.config.car > 255)
 		gMp.config.car = -1;
@@ -467,6 +474,7 @@ void MpConfigSave(void)
 	jer_config_set_int("mp", "beacon_ms", gMp.config.beaconMs);
 	jer_config_set_int("mp", "keepalive_ms", gMp.config.keepaliveMs);
 	jer_config_set_int("mp", "idle_drop_ms", gMp.config.idleDropMs);
+	jer_config_set_int("mp", "chat_hold_seconds", gMp.config.chatHoldSec);
 	jer_config_set_int("mp", "mod_check", gMp.config.modCheck);
 	jer_config_set_int("mp", "car", gMp.config.car);
 	jer_config_set_int("mp", "car_city", gMp.config.carCity);

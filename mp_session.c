@@ -111,11 +111,18 @@ extern int MapHeight(VECTOR* pos);	/* the engine's ground height at an x/z */
  * the match appears to restart the moment the joiner arrives. Cleared by
  * MpSessionReset, so a new session can launch again. */
 static int gMpLaunched;
+
+/* A LIVE join: the engine builds OUR car on the level's own start point, which is
+ * where the host (and everyone before us) came in. MpPlaceSelfTick moves it to a
+ * random road spot away from the other players once the level is up. */
+#define MP_PLACE_SELF_SETTLE	15	/* frames after our car exists, so the map is resident */
+static int gMpPlaceSelfFrames;
 static int gMpLocalAppliedPad = -1;	/* the pad that drove OUR car, -1 = none seen yet */
 
 /* The road search (defined with the warp/respawn helpers, used by the join spawn
  * far above them). Its gates are the warp's: JerRoadAt, then a resident and clear
  * cell, and the caller streams the winner once. */
+static int MpRoadHeadingNear(int x, int z, int want);
 static int MpFindRoadSpotNear(int cx, int cy, int cz, int seed,
 	int* outX, int* outZ, int* outDir, int* outRing);
 
@@ -2287,6 +2294,14 @@ static void MpRejoinArm(void)
 		gMpRejoin.carCity = (me->carCity < 0) ? gMp.city : me->carCity;
 		gMpRejoin.carModel = me->car;
 	}
+	else if (me != NULL && me->carIsSlot && me->carId >= 0 && me->carId < MAX_CARS)
+	{
+		/* A car-select SLOT (the usual pick) is per city, so it would name a
+		 * different car in the new one: remember the model on the road instead.
+		 * A slot is always the session city's own car. */
+		gMpRejoin.carCity = gMp.city;
+		gMpRejoin.carModel = car_data[me->carId].ap.model;
+	}
 
 	gMpRejoin.prevAuto = gMp.autoSession;
 	gMpRejoin.nextMs = MpNowMs() + MP_REJOIN_FIRST_MS;
@@ -2629,6 +2644,8 @@ static void MpHandleWelcome(const unsigned char* p, int len)
 
 		if (gMpCtx)
 			gMpCtx->jer_log(gMpCtx, "[mp] joined a LIVE match - pick a car\n");
+
+		gMpPlaceSelfFrames = MP_PLACE_SELF_SETTLE;	/* our car starts on the level start = on the host: move it */
 
 		if (gMp.autoSession)
 		{
@@ -5468,7 +5485,7 @@ static void MpSendOwnPedState(void)
 static void MpHandlePedState(int connIndex, const unsigned char* p, int len)
 {
 	MP_PEDSTATE h;
-	int i, n;
+	int i, n, forged = 0;
 
 	if (len < (int)sizeof(MP_PEDSTATE))
 		return;
@@ -5495,6 +5512,14 @@ static void MpHandlePedState(int connIndex, const unsigned char* p, int len)
 		if (pl == NULL || pl->isLocal)
 			continue;
 
+		/* A pose may only describe its SENDER (the dedi enforces the same rule):
+		 * otherwise one client could walk another player's Tanner around. */
+		if (MpIsHost() && connIndex >= 0 && e.playerId != MpConnPlayerId(connIndex))
+		{
+			forged = 1;
+			continue;
+		}
+
 		pl->pedX = e.x;
 		pl->pedY = e.y;
 		pl->pedZ = e.z;
@@ -5508,7 +5533,7 @@ static void MpHandlePedState(int connIndex, const unsigned char* p, int len)
 	 * host ever sees an on-foot CLIENT -- every other client sees a gap where a
 	 * person should be, which reads as "I can see the host on foot but not each
 	 * other". The carstate relay (MpHandleCarState) is the same rule. */
-	if (MpIsHost() && connIndex >= 0)
+	if (MpIsHost() && connIndex >= 0 && !forged)
 		MpHostRelay(connIndex, MP_TAG_PED, 0, p, len);
 }
 
@@ -7120,7 +7145,41 @@ int MpRespawnAfterDeath(void)
 
 	me = MpLocalPlayer();
 
-	if (me == NULL || me->carId < 0 || me->carId >= MAX_CARS)
+	if (me == NULL)
+		return 0;
+
+	/* ON FOOT: busted by a cop (the "You've been caught" route), drowned or hit by
+	 * a train. The engine's game over there tore the session down -- the menu
+	 * opened over a world the camera no longer had a target in, and the player
+	 * had to rejoin. Refuse it the same way: not dying, not wanted, and off the
+	 * water if that is what was killing us. */
+	if (me->carId < 0 && player[0].playerType == PLAYER_TYPE_PEDESTRIAN)
+	{
+		PEDESTRIAN* ped = player[0].pPed;
+
+		tannerDeathTimer = 0;
+		player[0].dying = 0;
+		pedestrianFelony = 0;
+
+		if (ped != NULL)
+		{
+			int surf = GetSurfaceIndex((VECTOR*)&ped->position);
+
+			if ((surf == -26 || surf == -23) && PlayerStartInfo[0] != NULL)
+			{
+				ped->position.vx = PlayerStartInfo[0]->position.vx;
+				ped->position.vz = PlayerStartInfo[0]->position.vz;
+				ped->position.vy = -62 - MapHeight((VECTOR*)&ped->position);	/* standing height, as pedest.c places him */
+			}
+		}
+
+		if (gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx, "[mp] death on foot in a session - game over refused\n");
+
+		return 1;
+	}
+
+	if (me->carId < 0 || me->carId >= MAX_CARS)
 		return 0;
 
 	cp = &car_data[me->carId];
@@ -7156,6 +7215,10 @@ int MpRespawnAfterDeath(void)
 	start[1] = 0;				/* the engine resolves the ground under the car */
 	start[2] = z;
 	start[3] = 0;
+
+	/* Face ALONG THE ROAD: a wreck usually ends at an angle (or upside down
+	 * across the lanes), and respawning it that way left the driver to sort it out. */
+	dir = MpRoadHeadingNear(x, z, dir & 0xfff);
 
 	InitCarPhysics(cp, &start, dir);
 
@@ -7490,6 +7553,102 @@ static int MpFindRoadSpotNear(int cx, int cy, int cz, int seed,
 	}
 
 	return 0;
+}
+
+/* The road's heading at (x, z), turned to whichever of its two directions is
+ * closer to `want` (a car already pointing down the road keeps its way). */
+static int MpRoadHeadingNear(int x, int z, int want)
+{
+	int dir;
+
+	if (!MpRoadHeadingAt(x, 0, z, &dir))
+		return want;
+
+	if (((dir - want + 4096 + 1024) & 0xfff) >= 2048)
+		dir = (dir + 2048) & 0xfff;
+
+	return dir;
+}
+
+void MpPlaceSelfTick(void)
+{
+	MP_PLAYER* me;
+	CAR_DATA* cp;
+	unsigned int rnd;
+	int k, i;
+
+	if (gMpPlaceSelfFrames <= 0)
+		return;
+
+	if (!gMp.running || gMp.role != MP_ROLE_CLIENT)
+	{
+		if (!gMp.running && gMp.role == MP_ROLE_NONE)
+			gMpPlaceSelfFrames = 0;
+		return;
+	}
+
+	me = MpLocalPlayer();
+
+	if (me == NULL || me->carId < 0 || me->carId >= MAX_CARS || PlayerStartInfo[0] == NULL)
+		return;
+
+	if (--gMpPlaceSelfFrames > 0)
+		return;
+
+	cp = &car_data[me->carId];
+	rnd = gMp.seed ^ (unsigned int)((me->id + 7) * 2654435761u) ^ (unsigned int)MpNowMs();
+
+	for (k = 0; k < 8; k++)
+	{
+		int ang, r, cx, cz, x, z, dir = -1, clear = 1;
+
+		rnd = rnd * 1103515245u + 12345u;
+		ang = (int)((rnd >> 8) & 0xfff);
+		r = 1500 + (int)((rnd >> 20) % 3000u);
+		cx = PlayerStartInfo[0]->position.vx + (int)(((long)rsin(ang) * r) >> 12);
+		cz = PlayerStartInfo[0]->position.vz + (int)(((long)rcos(ang) * r) >> 12);
+
+		if (!MpFindRoadSpotNear(cx, 0, cz, me->id + k * 64, &x, &z, &dir, NULL) || !MpWarpSpotOk(x, z))
+			continue;
+
+		for (i = 0; i < MP_MAX_PLAYERS && clear; i++)
+		{
+			MP_PLAYER* o = MpGetPlayer(i);
+
+			if (o != NULL && o->active && o != me && o->carId >= 0 && o->carId < MAX_CARS)
+			{
+				int dx = car_data[o->carId].hd.where.t[0] - x;
+				int dz = car_data[o->carId].hd.where.t[2] - z;
+
+				if (dx > -2000 && dx < 2000 && dz > -2000 && dz < 2000)
+					clear = 0;
+			}
+		}
+
+		if (!clear)
+			continue;
+
+		{
+			LONGVECTOR4 start;
+
+			start[0] = x;
+			start[1] = 0;		/* the engine resolves the ground under the car */
+			start[2] = z;
+			start[3] = 0;
+
+			InitCarPhysics(cp, &start, (dir >= 0) ? dir : PlayerStartInfo[0]->rotation);
+			cp->hd.speed = 0;
+			player[0].cameraAngle = cp->hd.direction + 1536;
+		}
+
+		if (gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx, "[mp] live join: placed our car at %d,%d dir %d (try %d)\n", x, z, dir, k);
+
+		return;
+	}
+
+	if (gMpCtx != NULL)
+		gMpCtx->jer_log(gMpCtx, "[mp] live join: no clear road spot found - kept the level start\n");
 }
 
 /* Where to put the car, in the target's own axes: `along` is measured along

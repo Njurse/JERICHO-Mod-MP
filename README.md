@@ -219,6 +219,7 @@ no wanted level, and the session carries on.
 | `player_name` | OS username | your name on the network |
 | `host_name` | `<name>'s game` | the advertised server name |
 | `beacon_ms` | `1000` | discovery beacon interval |
+| `chat_hold_seconds` | `12` | seconds a chat line stays at full brightness before fading (2..120; was a fixed 20) |
 | `mod_check` | `0` | host lobby mod policy: 0 off, 1 by id, 2 by id+version |
 | `strict_version` | `0` | host lobby setting: 1 also requires an identical build hash (off by default, because that hash tracks `git describe`) |
 | `master_url` | `http://jerichomp.animetiddi.es:8100` | the discovery server: `host`, `host:port` or `http://host:port`. It is BOTH what the `Online` screen lists and where a hosted game lists itself (see below). Empty = LAN-only: no listing, no advertisement, the beacon still works. Resolved on the first frame that needs it -- never at startup -- so an edit takes effect on the next launch and a launch that never opens the `Online` screen never speaks to the master at all |

@@ -1126,6 +1126,7 @@ static int MpOnFrame(void* userdata, void* args)
 	MpChatGrabKeyboard((gMp.chatOpen || MpUiManualEditing()) ? 1 : 0);
 	jer_input_block(gMp.chatOpen);	/* typing never drives the car, horn, camera or pause */
 	MpRejoinTick();		/* a server city change: rejoin, then restore our car */
+	MpPlaceSelfTick();	/* a live join: off the level start, onto a road away from others */
 
 	/* Test lever: MP_TEST_CITYCONFIRM=<secs>[,<gameType>[,<role>]] fires the
 	 * take-a-ride CITY CONFIRM the way the frontend does (CutSceneCitySelectScreen
