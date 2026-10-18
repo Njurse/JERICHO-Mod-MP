@@ -6156,6 +6156,59 @@ static void MpReleaseRemoteCar(MP_PLAYER* p)
 	}
 }
 
+/* Some OTHER player (or us) is now in this slot: it belongs to them. */
+static int MpCarSlotTakenByOther(const MP_PLAYER* leaver, int slot)
+{
+	int i;
+
+	for (i = 0; i < MP_MAX_PLAYERS; i++)
+	{
+		const MP_PLAYER* o = &gMp.players[i];
+
+		if (o != leaver && o->active && o->carId == slot)
+			return 1;
+	}
+
+	return 0;
+}
+
+/* A player is leaving (LEAVE, timeout, or dropped from the roster): take their
+ * stand-in Tanner away, and the car they abandoned on foot, unless another
+ * player has commandeered it since -- then it is that player's car and stays.
+ * Their CURRENT car is handled by MpRemovePlayer (same ownership check). */
+void MpCleanupLeaverWorld(MP_PLAYER* p)
+{
+	int slot;
+
+	if (p == NULL || p->isLocal)
+		return;
+
+	if (p->ped != NULL)
+	{
+		jer_npc_despawn((JerNpc*)p->ped);
+		p->ped = NULL;
+
+		if (gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx, "[mp] ped: player %d left; stand-in removed\n", p->id);
+	}
+
+	slot = p->leftCarSlot1 - 1;
+
+	if (slot >= 0 && slot < MAX_CARS && slot != p->carId &&
+		car_data[slot].controlType != CONTROL_TYPE_NONE &&
+		car_data[slot].ap.model == p->leftCarModel &&
+		!MpCarSlotTakenByOther(p, slot))
+	{
+		MpReleaseOurCarSlot(slot);
+		car_data[slot].controlType = CONTROL_TYPE_NONE;
+
+		if (gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx, "[mp] removed player %d's abandoned car (slot %d)\n", p->id, slot);
+	}
+
+	p->leftCarSlot1 = 0;
+}
+
 /* A city's name, for logs and menu labels. `city` is a 0..3 index or -1 for the
  * session's own city (the value the wire uses for "the level's own car data"). */
 const char* MpCarCityName(int city)
@@ -7984,6 +8037,13 @@ static void MpHandleCarState(int connIndex, const unsigned char* p, int len)
 		if (e.model == MP_CARSTATE_NO_CAR)
 		{
 			MpReleaseRemoteCar(pl);
+
+			/* remember what they walked away from: if they leave, it goes too */
+			if (pl->carId >= 0 && pl->carId < MAX_CARS)
+			{
+				pl->leftCarSlot1 = pl->carId + 1;
+				pl->leftCarModel = car_data[pl->carId].ap.model;
+			}
 
 			/* ...AND mark the PLAYER as on foot.
 			 *

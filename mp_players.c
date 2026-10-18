@@ -120,6 +120,7 @@ MP_PLAYER* MpAddPlayer(int id, const char* name, int isLocal)
 void MpRemovePlayer(int id)
 {
 	MP_PLAYER* p = MpGetPlayer(id);
+	int i, taken = 0;
 
 	if (p == NULL)
 		return;
@@ -134,7 +135,16 @@ void MpRemovePlayer(int id)
 	 * Release the sticky "ours" mark FIRST: MpKeepOurCarsFromTrafficAi takes any
 	 * marked slot straight back off CONTROL_TYPE_NONE, so freeing the car while the
 	 * mark stood made it flicker out and re-appear on the next frame. */
-	if (!p->isLocal && p->carId >= 0 && p->carId < MAX_CARS)
+	MpCleanupLeaverWorld(p);	/* stand-in Tanner + the car they left on foot */
+
+	/* ...but never a car another player has taken over: it is theirs now */
+	for (i = 0; i < MP_MAX_PLAYERS; i++)
+	{
+		if (&gMp.players[i] != p && gMp.players[i].active && gMp.players[i].carId == p->carId)
+			taken = 1;
+	}
+
+	if (!p->isLocal && !taken && p->carId >= 0 && p->carId < MAX_CARS)
 	{
 		MpReleaseOurCarSlot(p->carId);
 		car_data[p->carId].controlType = CONTROL_TYPE_NONE;

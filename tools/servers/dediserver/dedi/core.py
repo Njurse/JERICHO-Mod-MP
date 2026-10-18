@@ -893,6 +893,13 @@ class Dedicated:
                 self.plugins.call("on_player_leave", Player(conn, info))
                 self.log.info("player %d '%s' left (%d/%d)"
                               % (info["id"], info["name"], self.player_count(), self.max_players))
+                # Tell the others NOW: a client takes the leaver's Tanner and car
+                # out of the world when the roster stops naming them, and waiting
+                # for the next cadence left both standing for seconds.
+                try:
+                    self.broadcast(self.roster_bytes(), m.TAG["roster"])
+                except Exception as e:
+                    self.log.debug("leave roster broadcast failed: %s" % e)
             try:
                 conn.close()
             except OSError:

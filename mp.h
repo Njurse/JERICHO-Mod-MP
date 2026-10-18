@@ -130,6 +130,12 @@ typedef struct MP_PLAYER
 	 * into a car again is reported as a choice (MP_CARQ_CHOSEN) - and only then. */
 	int   onFoot;
 
+	/* The car this player last got OUT of (slot + 1, 0 = none) and its model, so a
+	 * leaver's abandoned car can go with them -- unless someone else has since
+	 * taken it (see MpCleanupLeaverWorld). */
+	int   leftCarSlot1;
+	int   leftCarModel;
+
 	/* That player's chosen colour, as THEIR machine reported it. Off means their
 	 * character keeps the colours the game gave it. */
 	int   colorOn;
@@ -228,6 +234,7 @@ MP_PLAYER* MpGetPlayerByCar(int carId);	/* NULL when carId is not a player */
 int MpLocalCarChosen(void);
 MP_PLAYER* MpAddPlayer(int id, const char* name, int isLocal);
 void       MpRemovePlayer(int id);
+void       MpCleanupLeaverWorld(MP_PLAYER* p);	/* a leaver's stand-in ped + abandoned car */
 void       MpReleaseOurCarSlot(int slot);	/* drop the sticky "ours" mark (a leaver's car) */
 void       MpResetPlayers(void);
 
