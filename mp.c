@@ -1021,7 +1021,10 @@ static int MpOnFrame(void* userdata, void* args)
 
 		static int lockAnnounced;
 
-		FastForwardLocked = gMp.running ? 1 : 0;
+		/* The WHOLE session, not just a live match: between level load and the
+		 * moment gMp.running goes up (spawn hand-off, countdown) a BACKSPACE or a
+		 * map open would otherwise still step 7x before lockstep starts. */
+		FastForwardLocked = (gMp.running || MpIsActive()) ? 1 : 0;
 
 		if (FastForwardLocked != 0 && !lockAnnounced)
 		{
@@ -1033,8 +1036,8 @@ static int MpOnFrame(void* userdata, void* args)
 					"run the sim fast, which would desync it)\n");
 		}
 
-		if (gMp.running && FastForward != 0)
-			FastForward = 0;	/* a press from before the match started */
+		if (FastForwardLocked && FastForward != 0)
+			FastForward = 0;	/* a press from before the session started */
 	}
 
 	/* A Change car that asked for a car this machine does not hold yet and was told to
