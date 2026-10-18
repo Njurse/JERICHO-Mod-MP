@@ -512,6 +512,7 @@ const char* MpCarCityName(int city);
 
 /* The mode a server plays, named from its gamemode id (MP_GAMEMODE_*); session
  * rules such as cops never rename it. Paired with the tools' mode_name() in mp_test.py. */
+void MpFormatPlayerId(const unsigned char* id, char* out);	/* dashed UUID, out >= 37 chars */
 const char* MpModeName(int gamemode);	/* MP_GAMEMODE_* -> display name */
 
 /* The city name for a row of SOMEONE ELSE'S server: the engine's name, or "-"

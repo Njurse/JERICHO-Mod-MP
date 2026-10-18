@@ -152,15 +152,30 @@ def build_hello(name, mods=(), build=0, player_id=None):
 
 
 def parse_player_id(payload):
-    """The JPID block after a HELLO's modCount manifest rows, as 32 lowercase hex
-    digits, or None when the client sent none (an older build)."""
+    """The JPID block after a HELLO's modCount manifest rows, as a dashed UUID
+    string, or None when the client sent none (an older build)."""
     if len(payload) < HELLO.size:
         return None
     modc = HELLO.unpack_from(payload, 0)[5]
     at = HELLO.size + modc * MODI.size
     if len(payload) < at + 4 + PLAYER_ID_LEN or payload[at:at + 4] != HELLO_ID_TAG:
         return None
-    return payload[at + 4:at + 4 + PLAYER_ID_LEN].hex()
+    return format_player_id(payload[at + 4:at + 4 + PLAYER_ID_LEN])
+
+
+def format_player_id(raw):
+    """16 bytes -> the dashed UUID form (8-4-4-4-12, lowercase) every tool shows."""
+    h = bytes(raw).hex()
+    return "%s-%s-%s-%s-%s" % (h[:8], h[8:12], h[12:16], h[16:20], h[20:])
+
+
+def normalize_player_id(text):
+    """A player id typed by a person -- dashed or plain hex, any case, braces ok --
+    as the canonical dashed lowercase form, or None if it is not 16 bytes of hex."""
+    h = str(text or "").strip().strip("{}").replace("-", "").lower()
+    if len(h) != PLAYER_ID_LEN * 2 or any(c not in "0123456789abcdef" for c in h):
+        return None
+    return format_player_id(bytes.fromhex(h))
 
 
 # ---------------------------------------------------------------- modes

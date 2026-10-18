@@ -61,40 +61,83 @@ static int MpHexNibble(char c)
 	return -1;
 }
 
+/* The id as a standard dashed UUID (8-4-4-4-12), the form every tool shows. */
+void MpFormatPlayerId(const unsigned char* id, char* out /* >= 37 */)
+{
+	static const int dash[] = { 4, 6, 8, 10 };
+	int i, k = 0, d = 0;
+
+	for (i = 0; i < MP_PLAYER_ID_LEN; i++)
+	{
+		if (d < 4 && i == dash[d])
+		{
+			out[k++] = '-';
+			d++;
+		}
+
+		snprintf(out + k, 3, "%02x", id[i]);
+		k += 2;
+	}
+
+	out[k] = '\0';
+}
+
+/* Loaded (or created) at module activation, i.e. at game launch, so the id exists
+ * before any multiplayer use. Stored as a dashed UUID; plain hex is accepted too.
+ * It is a random (version 4) UUID: the version/variant bits are stamped on. */
 static void MpLoadPlayerId(void)
 {
 	const char* s = jer_config_get_str("mp", "player_id", "");
-	char hex[MP_PLAYER_ID_LEN * 2 + 1];
-	int i, ok = (s != NULL && strlen(s) == MP_PLAYER_ID_LEN * 2);
+	char text[40];
+	int i, n = 0, ok = (s != NULL);
+	unsigned char before[MP_PLAYER_ID_LEN];
 
-	for (i = 0; ok && i < MP_PLAYER_ID_LEN; i++)
+	for (i = 0; ok && s[i] != '\0'; i++)
 	{
-		int hi = MpHexNibble(s[i * 2]), lo = MpHexNibble(s[i * 2 + 1]);
+		int v;
 
-		if (hi < 0 || lo < 0)
+		if (s[i] == '-')
+			continue;
+
+		v = MpHexNibble(s[i]);
+
+		if (v < 0 || n >= MP_PLAYER_ID_LEN * 2)
+		{
 			ok = 0;
+			break;
+		}
+
+		if ((n & 1) == 0)
+			gMp.config.playerId[n / 2] = (unsigned char)(v << 4);
 		else
-			gMp.config.playerId[i] = (unsigned char)((hi << 4) | lo);
+			gMp.config.playerId[n / 2] |= (unsigned char)v;
+		n++;
 	}
 
-	if (ok)
-		return;
+	ok = ok && (n == MP_PLAYER_ID_LEN * 2);
 
-	if (!MpOsRandom(gMp.config.playerId, MP_PLAYER_ID_LEN))
+	if (!ok)
 	{
-		/* no OS generator: still unique enough to tell installs apart */
-		srand((unsigned int)(size_t)&hex ^ (unsigned int)(size_t)&gMp ^ (unsigned int)MpNowMs());
-		for (i = 0; i < MP_PLAYER_ID_LEN; i++)
-			gMp.config.playerId[i] = (unsigned char)(rand() >> 3);
+		if (!MpOsRandom(gMp.config.playerId, MP_PLAYER_ID_LEN))
+		{
+			/* no OS generator: still unique enough to tell installs apart */
+			srand((unsigned int)(size_t)&text ^ (unsigned int)(size_t)&gMp ^ (unsigned int)MpNowMs());
+			for (i = 0; i < MP_PLAYER_ID_LEN; i++)
+				gMp.config.playerId[i] = (unsigned char)(rand() >> 3);
+		}
 	}
 
-	for (i = 0; i < MP_PLAYER_ID_LEN; i++)
-		snprintf(hex + i * 2, 3, "%02x", gMp.config.playerId[i]);
+	memcpy(before, gMp.config.playerId, sizeof(before));
+	gMp.config.playerId[6] = (unsigned char)((gMp.config.playerId[6] & 0x0F) | 0x40);	/* version 4 */
+	gMp.config.playerId[8] = (unsigned char)((gMp.config.playerId[8] & 0x3F) | 0x80);	/* RFC 4122 variant */
 
-	jer_config_set_str("mp", "player_id", hex);
+	MpFormatPlayerId(gMp.config.playerId, text);
+
+	if (!ok || memcmp(before, gMp.config.playerId, sizeof(before)) != 0 || strchr(s, '-') == NULL)
+		jer_config_set_str("mp", "player_id", text);
 
 	if (gMpCtx != NULL)
-		gMpCtx->jer_log(gMpCtx, "[mp] generated this install's player id\n");
+		gMpCtx->jer_log(gMpCtx, "[mp] player id %s%s\n", text, ok ? "" : " (new for this install)");
 }
 
 const char* MpDefaultPlayerName(void)
