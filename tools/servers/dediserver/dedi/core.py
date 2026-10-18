@@ -463,7 +463,8 @@ class Dedicated:
             rows = []
             for info in self.clients.values():
                 car = self.cars.get(info["id"])
-                model, model_city, palette, ready = 0xFF, 0xFF, 0, 0
+                model, model_city, ready = 0xFF, 0xFF, 0
+                palette = info.get("palette", 0)       # HELLO / JPCC until their carstate
                 pick = info.get("car")
                 if pick is not None and pick[0] != 0xFF:
                     # the car they PICKED (JPCC), before any carstate: the host lists
@@ -552,6 +553,8 @@ class Dedicated:
             if info is None:
                 return False
             info["car"] = (model, city if city < 4 else 0xFF)
+            if len(payload) >= 4 and payload[3] == 1:
+                info["palette"] = payload[2]           # MP_CAR reserved[0], flagged by [1]
         return True
 
     def note_pong(self, conn, payload):
@@ -717,7 +720,8 @@ class Dedicated:
                 refused_full = True
             else:
                 self.clients[conn] = {"id": pid, "name": name, "addr": who,
-                                      "player_id": m.parse_player_id(payload)}
+                                      "player_id": m.parse_player_id(payload),
+                                      "palette": _b}       # HELLO reserved[1]: their car palette
 
         if refused_full:
             # The real host answers a full server with a REJECT alone -- a WELCOME

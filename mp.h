@@ -56,6 +56,7 @@ typedef struct MP_CONFIG
 				 * same axis as `cops`: this leaves them on the map and
 				 * takes away their reason to bother you. */
 	int  invuln;			/* 1 = no car can be damaged (gInvincibleCar) */
+	int  palette;			/* palette: our car's colour variant 0..5 (defaultPlayerPalette) */
 	int  chatHoldSec;		/* chat_hold_seconds: full-brightness time of a chat line */
 	int  car;			/* this machine's vehicle for the match, -1 = level default */
 	int  carIsSlot;			/* 1 = `car` is a 1..10 frontend slot, resolved per city */

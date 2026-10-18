@@ -394,6 +394,17 @@ void MpConfigLoad(void)
 		gMp.config.chatHoldSec = 12;
 	jer_console_set_chat_hold(gMp.config.chatHoldSec);
 
+	/* Our car's colour variant (0..5): the Change car menu's Palette row and the
+	 * frontend car select's SQUARE set it; the spawn reads defaultPlayerPalette. */
+	{
+		extern u_char defaultPlayerPalette;
+
+		gMp.config.palette = jer_config_get_int("mp", "palette", 0);
+		if (gMp.config.palette < 0 || gMp.config.palette > 5)
+			gMp.config.palette = 0;
+		defaultPlayerPalette = (u_char)gMp.config.palette;
+	}
+
 	gMp.config.car = jer_config_get_int("mp", "car", -1);
 	if (gMp.config.car < -1 || gMp.config.car > 255)
 		gMp.config.car = -1;
@@ -475,6 +486,12 @@ void MpConfigSave(void)
 	jer_config_set_int("mp", "keepalive_ms", gMp.config.keepaliveMs);
 	jer_config_set_int("mp", "idle_drop_ms", gMp.config.idleDropMs);
 	jer_config_set_int("mp", "chat_hold_seconds", gMp.config.chatHoldSec);
+	{
+		extern u_char defaultPlayerPalette;	/* the frontend can change it too */
+
+		gMp.config.palette = (int)defaultPlayerPalette % 6;
+		jer_config_set_int("mp", "palette", gMp.config.palette);
+	}
 	jer_config_set_int("mp", "mod_check", gMp.config.modCheck);
 	jer_config_set_int("mp", "car", gMp.config.car);
 	jer_config_set_int("mp", "car_city", gMp.config.carCity);
