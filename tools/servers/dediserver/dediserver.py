@@ -138,6 +138,27 @@ def mods_match(declared, required, versions, level):
     return True
 
 
+def _chat_chunks(text, limit=95):
+    """Split a server line into MP_CHAT-sized pieces (95 bytes + NUL), at spaces
+    where possible and never inside a UTF-8 sequence. A line longer than one frame
+    used to be cut at byte 95; now it goes out as several chat lines, which the
+    client stacks and wraps -- same frame, same protocol."""
+    data = text.encode()
+    out = []
+    while data:
+        if len(data) <= limit:
+            out.append(data)
+            break
+        cut = data.rfind(b" ", limit // 2, limit + 1)
+        if cut <= 0:
+            cut = limit
+            while cut > 0 and (data[cut] & 0xC0) == 0x80:   # not mid-character
+                cut -= 1
+        out.append(data[:cut].rstrip())
+        data = data[cut:].lstrip(b" ")
+    return out
+
+
 def _ink_bytes(value):
     """A config colour ("#RRGGBB", or "RRGGBB") as the three bytes the chat frame carries.
 
@@ -508,8 +529,9 @@ class Dedicated:
         if motd:
             ink = _ink_bytes(self.cfg.get("motd_color"))
             try:
-                m.send_frame(conn, m.TAG["chat"],
-                             m.CHAT.pack(0xFF, ink[0], ink[1], ink[2], motd.encode()[:95]))
+                for piece in _chat_chunks(motd):
+                    m.send_frame(conn, m.TAG["chat"],
+                                 m.CHAT.pack(0xFF, ink[0], ink[1], ink[2], piece))
             except OSError:
                 pass
             self.log.debug("sent the motd to %s" % who)
@@ -828,8 +850,8 @@ class Dedicated:
         # prefix is there because the text would otherwise read as a player's.
         # No "SERVER:" prefix: the client labels a speaker with no player row as
         # SERVER itself (0xFF matches no player), so a prefix would double it.
-        chat = m.CHAT.pack(0xFF, 0, 0, 0, rest.encode()[:95])
-        self.broadcast(chat, m.TAG["chat"])
+        for piece in _chat_chunks(rest):
+            self.broadcast(m.CHAT.pack(0xFF, 0, 0, 0, piece), m.TAG["chat"])
         self.log.info("console: said %r" % rest)
         return "said to %d player(s)" % self.player_count()
 

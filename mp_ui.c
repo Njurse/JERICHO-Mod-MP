@@ -2123,7 +2123,7 @@ int MpUiDrawOverlay(void* userdata, void* args)
 			continue;
 
 		SetTextColour(255, 235, 140);
-		PrintString(gMp.notifyText[idx], 8, 178 + row * 10);
+		PrintString(gMp.notifyText[idx], 8, 172 + row * 10);	/* 6 px up with the chat block */
 		row++;
 	}
 
