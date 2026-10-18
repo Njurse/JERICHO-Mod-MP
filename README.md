@@ -182,6 +182,7 @@ join handshake then admits or refuses clients by their enabled-mod manifest.
 | `mp_proto.h` | the wire protocol (framed, little-endian) |
 | `tools/` | launchers + harnesses, documented in `tools/README.md` |
 | `docs/ARCHITECTURE.md` | how it all works: the model, protocol, lifecycle, traps, roadmap |
+| `docs/CAPACITY.md` | **how many players, and where a car lives** — the 32-slot map (players / JERICHO-managed / traffic), why the traffic pool is fixed, and what each limit costs to raise |
 
 ## In game
 
