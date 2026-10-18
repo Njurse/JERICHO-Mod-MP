@@ -1005,6 +1005,30 @@ static int MpOnFrame(void* userdata, void* args)
 	 * cleared the frame after the session ends). */
 	gJerPauseRestartAsRespawn = gMp.running ? 1 : 0;
 
+	/* NO BACKSPACE FAST-FORWARD IN A SESSION. The engine's key handler sets
+	 * `FastForward = 1` on BACKSPACE (a debug/cutscene convenience,
+	 * redriver2_psxpc.cpp), and a fast-forwarded sim is a sim running at a
+	 * different rate from everyone else's -- the definition of desync. Hold it
+	 * down here instead of removing the key: single player keeps the feature, and
+	 * a session is the only place it is wrong. */
+	{
+		extern int FastForward;
+
+		if (gMp.running && FastForward != 0)
+		{
+			static int announced;
+
+			FastForward = 0;
+
+			if (!announced && gMpCtx != NULL)
+			{
+				announced = 1;
+				gMpCtx->jer_log(gMpCtx,
+					"[mp] backspace fast-forward disabled in a session (it would desync the sim)\n");
+			}
+		}
+	}
+
 	/* A Change car that asked for a car this machine does not hold yet and was told to
 	 * wait (a spare slot busy for a frame or two): retry it here, once a frame, in the
 	 * sim, which is where a level's resident slots mean anything. */

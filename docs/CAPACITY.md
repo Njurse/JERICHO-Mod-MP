@@ -46,13 +46,13 @@ anything else.
 | `hd.mayBeColliding` | `int` | `unsigned int` | it is a 32-bit car-index bitfield, so the highest pair is bit 31 — a signed int must not shift into its sign bit |
 | the "always precise" marker | `1 << 31` written into that bitfield | `cp->hndType != 0` read directly | at 32 cars bit 31 is a REAL car, so the sentinel became a phantom collision pair |
 | `carsOnBoat` | `int` | `unsigned long long` | its bits are car slots plus `TANNER_COLLIDER_CARID` above them; that no longer fits in 32 bits (`1 << 32` is UB — MSVC C4293) |
-| `MAX_CAR_RESIDENT_MODELS` | 12 | 16 | a model that is not resident cannot be built, so 16 players could not each have their own car |
-| `SPECIAL_CAR_SLOT` | `MAX_CAR_RESIDENT_MODELS-1` | pinned `11` | it is a MODEL number compared against `cp->ap.model` (Vegas ambulance, mission 33's limo) and named the last slot of the old 12-long array |
+| `MAX_CAR_RESIDENT_MODELS` | 12 | **12 (raise to 16 deferred)** | 16 players sharing a 12-model pool means some drive duplicates. The raise was tried and pulled back: it landed in the same breath as this capacity work and cross-city imports started showing palette/texture faults, so it needs its own VRAM measurement first |
+| `SPECIAL_CAR_SLOT` | `MAX_CAR_RESIDENT_MODELS-1` | pinned `11` | it is a MODEL number compared against `cp->ap.model` (Vegas ambulance, mission 33's limo). Pinning it is what makes a future resident-pool raise safe — otherwise the pool growing silently re-points those mission checks |
 | `MP_MAX_PLAYERS` | 8 | 16 | the lobby cap itself; also the engine's `MAX_PLAYERS` on PC |
 | `MP_PROTO_VERSION` | 11 | 12 | `MP_ROSTER` is sized by the player count and memcpy'd whole, so an 8-player build would overrun its buffer on a 16-player roster |
 
-Spare resident model slots (12..15) stay `-1` = "no model" — a module claims one
-and gets the same deal stock levels get: nothing loaded, nothing to undo.
+Spare resident model slots stay `-1` = "no model" — a module claims one and gets the
+same deal stock levels get: nothing loaded, nothing to undo.
 
 ## What breaks at 16, and what was done about it
 
@@ -71,6 +71,10 @@ and gets the same deal stock levels get: nothing loaded, nothing to undo.
   and the pinned ones (status / Start Match / Leave) take three, so the old loop
   stopped at the ninth player and 10..16 were invisible. A `More players (n/m)`
   row turns the page.
+- **A session cannot fast-forward.** BACKSPACE sets the engine's debug `FastForward`,
+  and a fast-forwarded sim runs at a different rate from every other machine's — a
+  desync by definition. mp clears the flag every frame while a match is running, so
+  the key stays useful in single player and is inert online.
 - **A 17th player is told why.** `MpAllocPlayerId` has no id left, so the HELLO
   handler answers `MP_REJECT_FULL` / "server is full" and shuts the connection
   down. (This path already existed at 8; it now covers 16.)
@@ -86,6 +90,10 @@ and gets the same deal stock levels get: nothing loaded, nothing to undo.
 - **`MAX_PLAYERS`.** 16 on PC is the engine's own table (`ReplayStreams` /
   `player[]`), and mp ids map onto it 1:1. Going past 16 is an engine rework, not
   a constant.
+- **The resident model pool (12).** See the table above: sixteen players can want
+  more distinct cars than the pool holds, and the answer for now is duplicates.
+  Raising it is a car page + CLUT budget question (`MP/docs/CAPACITY.md` is not the
+  place for that measurement; carhacks' `docs/VRAM.md` and `PALETTES.md` are).
 - **The traffic pool size.** Deliberately unchanged (see above). A bigger pool
   would be a density change for every existing session.
 

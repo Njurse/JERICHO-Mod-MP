@@ -982,3 +982,11 @@ table is full and 14–20 are accepted.**
 | 12 | Replicated traffic | | | `JPTF` mirrored + `traffic mirror slot 8/9 re-dented` (2026-10-07) |
 | 13 | Pause / chat | | | |
 | 14–20 | Accepted limitations — reviewed | n/a | n/a | |
+
+## A session must not fast-forward
+
+BACKSPACE sets the engine's debug `FastForward` (`redriver2_psxpc.cpp`), which
+runs the sim at a different rate -- the definition of desync. `MpOnFrame` clears
+the flag every frame while a match is running, and logs once when it does, so the
+key still works in single player and is inert in a session. Keep it that way: a
+module that wants to speed something up must not do it through `FastForward`.
