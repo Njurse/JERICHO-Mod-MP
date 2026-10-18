@@ -238,6 +238,18 @@ ignores it and behaves exactly as before.
 
 ### The spawn contract: the level's own start, and never a y
 
+**Where a joiner lands: a random road point near the level start, facing along the
+road.** The lane-per-id shape below was replaced because sixteen players in one
+lay-by is not a spawn, it is a queue: the record now takes a RANDOM road point from
+the same ring search the warp and the respawn already trust
+(`MpFindRoadSpotNear`, seeded per PLAYER id so every machine agrees and two players
+never share a spot), and its `rotation` is the road's heading - the segment's own
+`angle`, or, when `RoadInCell` cannot answer (measured: it says "no road" where
+`JerRoadAt` says there is), the axis along which the road has ground AHEAD and
+BEHIND. No tangent guess: that was 90 degrees wrong whenever the road ran away from
+the point. The 4-wide grid stays as the fallback when no road is in reach, so a
+join never fails to place.
+
 The engine places a player car from a per-slot start record, built at level init:
 slot 0 from the mission (or `levelstartpos`), slot 1 beside it at +600 in x
 (`main.c:3401-3405`) -- and **only x/z are set**. `position.vy` stays 0 and

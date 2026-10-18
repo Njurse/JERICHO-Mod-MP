@@ -112,6 +112,12 @@ extern int MapHeight(VECTOR* pos);	/* the engine's ground height at an x/z */
 static int gMpLaunched;
 static int gMpLocalAppliedPad = -1;	/* the pad that drove OUR car, -1 = none seen yet */
 
+/* The road search (defined with the warp/respawn helpers, used by the join spawn
+ * far above them). Its gates are the warp's: JerRoadAt, then a resident and clear
+ * cell, and the caller streams the winner once. */
+static int MpFindRoadSpotNear(int cx, int cy, int cz, int seed,
+	int* outX, int* outZ, int* outDir, int* outRing);
+
 /* mp.c calls this from the NET_INPUT hook for our own car, so we replicate the
  * pad the engine is actually driving us with. */
 void MpNoteLocalPad(int pad)
@@ -1100,16 +1106,45 @@ void MpSpawnLateJoiners(void)
 		PlayerStartInfo[slot]->flags = 0;
 
 		{
-			/* A 4-wide GRID around the level start, not a line. The engine's own
-			 * step for player 2 is 600 units in +x (main.c), and following it for
-			 * every id put player 15 at +9000 -- past the edge of a multiplayer
-			 * ARENA, where the placement resolves the ground to nothing and the car
-			 * drops into the void. The same 600 spacing in x AND z keeps cars
-			 * apart just as well, and sixteen players fit in a 4x4 block about
-			 * 2.4k units across. id 0 keeps the level's own start untouched. */
+			/* A RANDOM ROAD POINT near the level start, facing along the road.
+			 *
+			 * The engine's own step for player 2 is 600 units in +x (main.c), and
+			 * following it for every id put player 15 at +9000 -- past the edge of a
+			 * multiplayer ARENA, where placement resolves the ground to nothing and
+			 * the car drops into the void. A grid fixed the void; it did not stop
+			 * sixteen players appearing in one tidy lay-by. So use the same ring
+			 * search the warp and the respawn already trust (MpFindRoadSpotNear),
+			 * asking for a RANDOM road point on the nearest ring that has road, and
+			 * face the car along the road it landed on: a car dropped in at an
+			 * arbitrary angle is one the driver has to sort out before driving.
+			 *
+			 * The grid stays as the FALLBACK -- a join must never fail to place just
+			 * because no road was in reach (an arena's start can be a car park). id 0
+			 * is never here: the engine built its own record for the local player. */
 			int col = 0, row = 0, dx = 0, dz = 0;
+			int rx = 0, rz = 0, rdir = -1;
+			int onRoad = 0;
 
 			if (id > 0)
+			{
+				/* No spooling here on purpose: MpWarpSpotOk already refuses a spot
+				 * whose ground is not resident, and moving the streamer while a join
+				 * is being placed is how players end up in the void. Near the level
+				 * start the region is resident by definition. */
+				onRoad = MpFindRoadSpotNear(PlayerStartInfo[0]->position.vx, 0,
+					PlayerStartInfo[0]->position.vz, p->id, &rx, &rz, &rdir, NULL);
+			}
+
+			if (onRoad)
+			{
+				PlayerStartInfo[slot]->position.vx = rx;
+				PlayerStartInfo[slot]->position.vz = rz;
+				/* vy stays 0 -- the engine's convention, not an oversight: placement
+				 * resolves the ground under the car. */
+				PlayerStartInfo[slot]->rotation = (u_short)
+					((rdir >= 0) ? rdir : PlayerStartInfo[0]->rotation);
+			}
+			else
 			{
 				int cell = id - 1;
 
@@ -1118,19 +1153,26 @@ void MpSpawnLateJoiners(void)
 
 				dx = col * 600 - 900;	/* across: -900, -300, +300, +900 */
 				dz = (row + 1) * 600;	/* back:   +600, +1200, +1800, +2400 */
+
+				PlayerStartInfo[slot]->position.vx = PlayerStartInfo[0]->position.vx + dx;
+				PlayerStartInfo[slot]->position.vz = PlayerStartInfo[0]->position.vz + dz;
+				PlayerStartInfo[slot]->rotation = PlayerStartInfo[0]->rotation;
 			}
 
-			PlayerStartInfo[slot]->position.vx = PlayerStartInfo[0]->position.vx + dx;
-			PlayerStartInfo[slot]->position.vz = PlayerStartInfo[0]->position.vz + dz;
-			/* vy stays 0 -- the engine's convention, not an oversight: placement
-			 * resolves the ground under the car. */
-			PlayerStartInfo[slot]->rotation = PlayerStartInfo[0]->rotation;
-
 			if (gMpCtx != NULL)
-				gMpCtx->jer_log(gMpCtx,
-					"[mp] spawn: player %d -> slot %d at the level's own start %d,%d (+%d,%d grid %d,%d), no y\n",
-					id, slot, PlayerStartInfo[slot]->position.vx,
-					PlayerStartInfo[slot]->position.vz, dx, dz, col, row);
+			{
+				if (onRoad)
+					gMpCtx->jer_log(gMpCtx,
+						"[mp] spawn: player %d -> slot %d on a road at %d,%d facing %d (%s)\n",
+						id, slot, PlayerStartInfo[slot]->position.vx,
+						PlayerStartInfo[slot]->position.vz, PlayerStartInfo[slot]->rotation,
+						(rdir >= 0) ? "along the road" : "level heading, no road angle");
+				else
+					gMpCtx->jer_log(gMpCtx,
+						"[mp] spawn: player %d -> slot %d at the level's own start %d,%d (+%d,%d grid %d,%d), no road in reach, no y\n",
+						id, slot, PlayerStartInfo[slot]->position.vx,
+						PlayerStartInfo[slot]->position.vz, dx, dz, col, row);
+			}
 		}
 
 		/* Same pool-checked per-player vehicle as the level-init spawn, via the
@@ -6893,12 +6935,186 @@ static int MpWarpStreamTo(int x, int z)
 	return MpWarpSpotOk(x, z);	/* synchronous on PC, so readable now */
 }
 
+/* ------------------------------------------------------------------ */
+/* FINDING A ROAD SPOT NEAR A POINT                                    */
+/*                                                                     */
+/* One search, three users: the warp (beside a player), the respawn     */
+/* (nearest road to a wedged car) and the join spawn (a RANDOM road     */
+/* point near the level start, so sixteen players do not all appear in  */
+/* the same lay-by). It rings outward and stops at the first ring with  */
+/* a road point on it, so "near" is the nearest ring that has road at   */
+/* all rather than whichever candidate happened to pass a test first.   */
+/*                                                                     */
+/* The gates are the warp's, unchanged: JerRoadAt says there is road,   */
+/* MpWarpSpotOk says the ground is resident and clear, and the CALLER   */
+/* streams the winner once (MpWarpStreamTo) -- forcing region after     */
+/* region evicts the ones just loaded, and there are only four barrels. */
+#define MP_ROAD_RING_STEP	600	/* units between rings */
+#define MP_ROAD_RINGS		12	/* 12 rings = 7200 units out */
+#define MP_ROAD_PROBES		12	/* points probed around each ring */
+#define MP_ROAD_AXIS_PROBE	500	/* how far along a road the heading test looks */
+
+/* The heading a car should face to be pointing ALONG the road at (x,z).
+ *
+ * Two answers, best first:
+ *   1. the SEGMENT's own angle (a straight carries one in the same 0..4095 space
+ *      hd.direction uses; a curve has only its end tangents, so it gets `start`);
+ *   2. failing that, ask the ROAD ITSELF which way it runs: a direction with road
+ *      AHEAD and road BEHIND is the axis of the road through the point.
+ *
+ * (2) exists because (1) frequently cannot answer: measured on CHICAGO, RoadInCell
+ * says "no road" at a spawn point where JerRoadAt says there is road, so every
+ * joiner fell through. The first fallback was "the search probe came in radially,
+ * so face tangentially" -- which is right only when the road runs past the point,
+ * and 90 degrees wrong when it runs away from it (reported as "some spawn at a
+ * right angle to the intended direction"). Probing the road is not a guess. */
+static int MpRoadHeadingAt(int x, int y, int z, int* outDir)
+{
+	VECTOR p;
+	DRIVER2_ROAD_INFO info;
+	int surf, i;
+
+	p.vx = x;
+	p.vy = y;
+	p.vz = z;
+	p.pad = 0;
+
+	/* THE PLANE IS PICKED AT THIS HEIGHT, so ask the ground rather than trusting a
+	 * caller that only knows x/z (the join spawn passes 0). */
+	p.vy = MapHeight(&p);
+
+	surf = RoadInCell(&p);
+
+	if (surf >= 0 && IS_ROAD_SURFACE(surf))
+	{
+		memset(&info, 0, sizeof(info));
+
+		if (GetSurfaceRoadInfo(&info, surf))
+		{
+			if (IS_STRAIGHT_SURFACE(surf) && info.straight != NULL)
+			{
+				*outDir = info.straight->angle & 0xfff;
+				return 1;
+			}
+
+			if (IS_CURVED_SURFACE(surf) && info.curve != NULL)
+			{
+				*outDir = info.curve->start & 0xfff;
+				return 1;
+			}
+		}
+	}
+
+	/* Which way does the road run? Road on both sides = that is the axis. */
+	{
+		int probe = MP_ROAD_AXIS_PROBE;
+
+		for (i = 0; i < 8; i++)
+		{
+			int ang = (i * 4096) / 8;
+			int fx = (int)(((long)rsin(ang) * probe) >> 12);
+			int fz = (int)(((long)rcos(ang) * probe) >> 12);
+
+			if (JerRoadAt(x + fx, y, z + fz) && JerRoadAt(x - fx, y, z - fz))
+			{
+				*outDir = ang;
+				return 1;
+			}
+		}
+	}
+
+	return 0;
+}
+
+/* A landable road point near (cx, cz). `pickRandom` chooses among the road points
+ * on the FIRST ring that has any; otherwise the first usable one wins (the warp's
+ * and respawn's "nearest"). Returns 1 and fills the outputs on success. The caller
+ * still has to stream the winner - see MpWarpStreamTo. */
+static int MpFindRoadSpotNear(int cx, int cy, int cz, int seed,
+	int* outX, int* outZ, int* outDir, int* outRing)
+{
+	int ring, i;
+	unsigned int rnd = 0;
+
+	if (seed >= 0)
+	{
+		/* The seed is the JOINING PLAYER'S id, not the local one: seeded with the
+		 * local id the host picked the same spot for every peer it placed (measured:
+		 * players 1 and 2 both landed on 87358,-456175, i.e. one lay-by, which is the
+		 * thing this exists to avoid). Per-player and deterministic, so every machine
+		 * agrees on where a given player comes in and a replay lands the same way. */
+		rnd = gMp.seed ^ (unsigned int)((seed + 1) * 2654435761u);
+	}
+
+	for (ring = 1; ring <= MP_ROAD_RINGS; ring++)
+	{
+		int r = ring * MP_ROAD_RING_STEP;
+		int cand[MP_ROAD_PROBES];
+		int n = 0;
+
+		for (i = 0; i < MP_ROAD_PROBES; i++)
+		{
+			/* a full turn is 4096, so the probes are evenly spaced by construction */
+			int ang = (i * 4096) / MP_ROAD_PROBES;
+			int px = cx + (int)(((long)rsin(ang) * r) >> 12);
+			int pz = cz + (int)(((long)rcos(ang) * r) >> 12);
+
+			if (!JerRoadAt(px, cy, pz))
+				continue;
+
+			if (!MpWarpSpotOk(px, pz))
+				continue;
+
+			cand[n++] = i;
+
+			if (seed < 0)
+				break;		/* nearest: first usable on this ring */
+		}
+
+		if (n == 0)
+			continue;
+
+		i = cand[0];
+
+		if (seed >= 0 && n > 1)
+		{
+			rnd = rnd * 1103515245u + 12345u;
+			i = cand[(rnd >> 16) % (unsigned int)n];
+		}
+
+		{
+			int ang = (i * 4096) / MP_ROAD_PROBES;
+
+			*outX = cx + (int)(((long)rsin(ang) * r) >> 12);
+			*outZ = cz + (int)(((long)rcos(ang) * r) >> 12);
+
+			if (outDir != NULL && !MpRoadHeadingAt(*outX, cy, *outZ, outDir))
+			{
+				/* Neither the segment's angle nor the road's own axis: leave it to
+				 * the caller's heading (the level start's) and say so in the log,
+				 * rather than inventing a direction. The old "face tangentially to
+				 * the probe" guess was 90 degrees wrong whenever the road ran away
+				 * from the point instead of past it. */
+				*outDir = -1;
+			}
+		}
+
+		if (outRing != NULL)
+			*outRing = ring;
+
+		return 1;
+	}
+
+	return 0;
+}
+
 /* Where to put the car, in the target's own axes: `along` is measured along
  * their FORWARD axis and every value is <= 0, which is the definition of "not in
  * their trajectory". Beside first (least in the way), then behind, then further
  * out. */
 static const int kWarpAlong[]  = { -MP_WARP_NEAR, -MP_WARP_NEAR, -900, -900, -1600, -MP_WARP_FAR, 0, 0 };
 static const int kWarpAcross[] = { 600, -600, 900, -900, 0, 0, 900, -900 };
+
 
 int MpWarpToPlayer(int playerId)
 {
@@ -7062,15 +7278,14 @@ int MpWarpToPlayer(int playerId)
 /* And it REFUSES when there is nothing to land on, leaving the car put */
 /* -- a respawn that drops the player into the void is worse than no    */
 /* respawn, which is exactly how the warp earned these helpers.         */
-#define MP_RESPAWN_RING_STEP	600	/* units between rings */
-#define MP_RESPAWN_RINGS	12	/* 12 rings = 7200 units out */
-#define MP_RESPAWN_PROBES	12	/* points probed around each ring */
+/* The ring geometry lives with the shared search now:                  */
+/* MP_ROAD_RING_STEP / MP_ROAD_RINGS / MP_ROAD_PROBES.                  */
 
 int MpRespawnOnRoad(void)
 {
 	MP_PLAYER* me;
 	CAR_DATA* cp;
-	int cx, cy, cz, ring, i;
+	int cx, cy, cz;
 	int bestX = 0, bestZ = 0, found = 0, bestRing = 0;
 
 	me = MpLocalPlayer();
@@ -7087,30 +7302,7 @@ int MpRespawnOnRoad(void)
 	cy = cp->hd.where.t[1];
 	cz = cp->hd.where.t[2];
 
-	for (ring = 1; ring <= MP_RESPAWN_RINGS && !found; ring++)
-	{
-		int r = ring * MP_RESPAWN_RING_STEP;
-
-		for (i = 0; i < MP_RESPAWN_PROBES; i++)
-		{
-			/* a full turn is 4096, so the probes are evenly spaced by construction */
-			int ang = (i * 4096) / MP_RESPAWN_PROBES;
-			int px = cx + (int)(((long)rsin(ang) * r) >> 12);
-			int pz = cz + (int)(((long)rcos(ang) * r) >> 12);
-
-			if (!JerRoadAt(px, cy, pz))
-				continue;
-
-			if (!MpWarpSpotOk(px, pz))
-				continue;
-
-			bestX = px;
-			bestZ = pz;
-			found = 1;
-			bestRing = ring;
-			break;
-		}
-	}
+	found = MpFindRoadSpotNear(cx, cy, cz, -1, &bestX, &bestZ, NULL, &bestRing);
 
 	if (!found)
 	{
@@ -7120,7 +7312,7 @@ int MpRespawnOnRoad(void)
 			gMpCtx->jer_log(gMpCtx,
 				"[mp] respawn: no road within %d units of %d,%d (region %d data=%d) "
 				"- leaving the car where it is\n",
-				MP_RESPAWN_RINGS * MP_RESPAWN_RING_STEP, cx, cz,
+				MP_ROAD_RINGS * MP_ROAD_RING_STEP, cx, cz,
 				jer_map_region_of(cx, cz), jer_map_region_has_data(jer_map_region_of(cx, cz)));
 
 		return 0;
@@ -7182,7 +7374,7 @@ int MpRespawnOnRoad(void)
 				"[mp] respawn: on the nearest road at %d,%d - ring %d, about %d units from "
 				"where the car was (%d,%d) - repaired and upright\n",
 				cp->hd.where.t[0], cp->hd.where.t[2], bestRing,
-				bestRing * MP_RESPAWN_RING_STEP, cx, cz);
+				bestRing * MP_ROAD_RING_STEP, cx, cz);
 	}
 
 	return 1;
