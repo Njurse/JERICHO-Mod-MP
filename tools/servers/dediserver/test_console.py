@@ -180,6 +180,16 @@ def main():
     check("the roster carries the measured ping", pings.get(5) == rtt and pings.get(4) == 0, repr(pings))
     check("a stale or foreign PONG is ignored",
           server.note_pong(pairs[5][0], _st.pack("<I", (_core._ms32() + 100000) & 0xFFFFFFFF)) is None)
+    # -- CAR PICK (JPCC): in the roster at once, CAR_READY, before any carstate
+    check("a car pick is accepted", server.note_car_pick(pairs[6][0], m.CAR_PICK.pack(9, 1)))
+    rows = server.roster_bytes()
+    picked = {}
+    for i in range(m.ROSTER.unpack_from(rows, 0)[0]):
+        e = m.ROSTER_ENTRY.unpack_from(rows, m.ROSTER.size + i * m.ROSTER_ENTRY.size)
+        picked[e[0]] = (e[2], e[3], e[4])
+    check("the roster lists the picked car as ready",
+          picked.get(6) == (9, 1, m.ROSTER_FLAG_CAR_READY) and picked.get(4) == (0xFF, 0xFF, 0), repr(picked))
+    check("a short car pick is ignored", not server.note_car_pick(pairs[6][0], b"\x01"))
     check("a short colour frame is dropped", relay.color(server, pairs[4][0], 4, m.COLOR.pack(3)) == 0)
 
     # -- CHANNEL: header + declared payload, to everyone (the sender too)

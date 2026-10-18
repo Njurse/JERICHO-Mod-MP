@@ -420,6 +420,12 @@ class Dedicated:
             for info in self.clients.values():
                 car = self.cars.get(info["id"])
                 model, model_city, palette, ready = 0xFF, 0xFF, 0, 0
+                pick = info.get("car")
+                if pick is not None and pick[0] != 0xFF:
+                    # the car they PICKED (JPCC), before any carstate: the host lists
+                    # it with CAR_READY (MpHandleCar -> carConfirmed) so peers build it
+                    model, model_city = pick
+                    ready = m.ROSTER_FLAG_CAR_READY
                 if car is not None and len(car) == m.CARSTATE_ENTRY.size:
                     # the first five fields of the row: pid, flags, palette, model, modelCity
                     _pid, _fl, palette, model, model_city = m.CARSTATE_ENTRY.unpack_from(car, 0)[:5]
@@ -466,6 +472,21 @@ class Dedicated:
             # a roster we cannot build must not cost the player their connection
             self.log.debug("roster refresh failed for player %d: %s" % (pid, e))
         return True, now
+
+    def note_car_pick(self, conn, payload):
+        """JPCC, the car a player picked: kept for the roster, which the caller
+        then sends to everyone at once -- the host's MpHandleCar does the same
+        (record, then MpHostSendRoster), so the car shows without waiting for the
+        player's first carstate. Returns True when it was a valid pick."""
+        if len(payload) < m.CAR_PICK.size:
+            return False
+        model, city = m.CAR_PICK.unpack_from(payload, 0)
+        with self.lock:
+            info = self.clients.get(conn)
+            if info is None:
+                return False
+            info["car"] = (model, city if city < 4 else 0xFF)
+        return True
 
     def note_pong(self, conn, payload):
         """A client's PONG to our PING: the round trip in ms, kept for the roster.
@@ -786,6 +807,9 @@ class Dedicated:
                         m.send_frame(conn, m.TAG["pong"], payload or b"\x00\x00\x00\x00")
                     except OSError:
                         break
+                elif tag == m.TAG["car"]:
+                    if self.note_car_pick(conn, payload):
+                        self.broadcast(self.roster_bytes(), m.TAG["roster"])
                 elif tag == m.TAG["pong"]:
                     self.note_pong(conn, payload)
                 elif tag == m.TAG["leave"]:

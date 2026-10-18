@@ -79,6 +79,7 @@ PEDSTATE_ENTRY = struct.Struct("<BBHiiiii")
 # (playerId, on, r, g, b, 3 spare). (MP_CHANNEL is CHANNEL, below.)
 HIT = struct.Struct("<BB2xiii")
 HIT_F_TRAFFIC = 0x01
+CAR_PICK = struct.Struct("<BB2x")    # MP_CAR: model (0xFF none), city (0xFF = session)
 COLOR = struct.Struct("<B3x")
 COLOR_ENTRY = struct.Struct("<BBBBB3x")
 TRAFFIC_SLOT_FIRST = 20          # dr2limits.h JER_SLOT_TRAFFIC_FIRST (MAX_CARS 32 - 12)
