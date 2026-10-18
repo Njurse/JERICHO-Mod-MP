@@ -380,6 +380,15 @@ class Dedicated:
         self.readvertise()
         return "%s, %s" % (self.cfg["time_of_day"], self.cfg["weather"])
 
+    def set_city(self, city):
+        city = int(city)
+        if not 0 <= city <= 3:
+            raise ValueError("city is 0..3")
+        self.cfg["city"] = city
+        self.log.info("city now %d (new joiners load it)" % city)
+        self.readvertise()
+        return city
+
     def save_config_keys(self, keys):
         """Write these cfg keys back into the config file, keeping every other key
         as the operator wrote it. Atomic (temp file + replace). Returns the path."""

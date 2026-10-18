@@ -123,11 +123,27 @@ the other players; the reply comes back privately. `!help` lists what *you* can 
 | `!admin add\|remove <slot\|name\|uuid>`, `!admin list` | admin | manage the admins list; **saved to dediserver.json** |
 | `!motd [text\|save]` | admin | show or set the join greeting; `!motd save` writes it to the file |
 | `!say <text>` | admin | a line from the server to everyone |
+| `!vote <city>` / `!vote` / `!vote cancel` | everyone / admin to cancel | vote to switch city (see below) |
 
 `cops`, `difficulty`, `time`, `weather`, `motd` and `admin` also work at the server
 console. Every admin command is logged with who ran it. Joins and leaves are
 announced in chat (`"announce_joins": false` turns that off). Saving rewrites
 `dediserver.json` atomically and keeps your other keys, but not comments or layout.
+
+### Voting for a city
+
+`!vote <city>` starts a vote (or votes yes in the one running). City is `0`-`3` or
+`chicago`, `havana`, `vegas`, `rio`. One vote per player id. It passes as soon as
+**more than half** the connected players have voted yes, or fails after 30 s; the
+next vote can start 60 s after one ends. Admins can `!vote cancel`.
+
+On a pass the city is saved to `dediserver.json`, becomes the session city and the
+discovery listing updates. **Everyone is then disconnected with a "rejoin"
+message**: the game cannot change level under a running session, so players rejoin
+from the server browser and load the new city. There is no automatic reconnect.
+
+Keys: `"vote"` (`false` turns `!vote` off), `"vote_duration"` (seconds, 30),
+`"vote_threshold"` (fraction that must be exceeded, 0.5), `"vote_cooldown"` (60).
 
 Session settings in `dediserver.json`: `"time_of_day"` (`dawn`, `day`, `dusk`,
 `night`) and `"weather"` (`clear`, `rain`, `wet`), or `--time-of-day` / `--weather`.

@@ -157,6 +157,12 @@ class ServerAPI:
         next level load. Raises ValueError for an unknown name."""
         return self._s.set_session(time_of_day=time_of_day, weather=weather)
 
+    def set_city(self, city):
+        """Make `city` (0..3) the session city: new joiners load it (the welcome and
+        start carry it) and the discovery listing is refreshed. Players already in
+        a level stay in the old one until they rejoin. Returns the new city."""
+        return self._s.set_city(city)
+
     def save_config(self, *keys):
         """Write these config keys back to dediserver.json (atomic, other keys kept)."""
         return self._s.save_config_keys(list(keys))

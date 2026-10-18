@@ -221,6 +221,53 @@ def main():
         out = say(server, bob, "!kick Boss")
         check("a logged-in admin can kick", out[-1][1].startswith("kicked player 2"), out)
 
+        # -- !vote: a majority of the connected players switches the city
+        import json
+        vs = build(tmp, city=0, vote_duration=30, vote_cooldown=60)
+        vote = dict(vs.plugins.plugins)["vote"]
+        vclock = [500.0]
+        vote.now = lambda: vclock[0]
+        a = join(vs, 1, "Ann", "11111111-1111-4111-8111-111111111111")
+        b = join(vs, 2, "Ben")
+        c = join(vs, 3, "Cat")
+        adm = join(vs, 4, "Boss", ADMIN_NORM)
+        check("vote: city names and numbers", vote.city_index("rio") == 3 and vote.city_index("2") == 2
+              and vote.city_index("Las Vegas") == 2 and vote.city_index("paris") == -1)
+        out = say(vs, a, "!vote paris")
+        check("vote: an unknown city is refused", "unknown city" in out[-1][1], out)
+        out = say(vs, a, "!vote chicago")
+        check("vote: the current city is refused", "already on CHICAGO" in out[-1][1], out)
+        out = say(vs, a, "!vote havana")
+        check("vote: start is announced with the first tally",
+              any("started a vote to switch to HAVANA" in t for _, t in out) and any("1/3 yes" in t for _, t in out), out)
+        out = say(vs, a, "!vote havana")
+        check("vote: one vote per player id", "already voted" in out[-1][1], out)
+        out = say(vs, b, "!vote rio")
+        check("vote: a second city waits", "vote for HAVANA is running" in out[-1][1], out)
+        out = say(vs, adm, "!vote cancel")
+        check("vote: an admin can cancel", any("cancelled" in t for _, t in out), out)
+        out = say(vs, b, "!vote havana")
+        check("vote: cooldown after a vote ends", "next vote in" in out[-1][1], out)
+        vclock[0] += 61
+        say(vs, b, "!vote havana")
+        vclock[0] += 31
+        vs.sent.clear()
+        vs.plugins.call("on_tick")
+        check("vote: it fails when the time runs out", any("failed" in t for _, t in vs.sent), vs.sent)
+        vclock[0] += 61
+        say(vs, a, "!vote rio")
+        say(vs, b, "!vote 3")
+        out = say(vs, c, "!vote rio")
+        check("vote: a majority (3 of 4) passes and says rejoin",
+              any("Vote passed: switching to RIO" in t for _, t in out), out)
+        check("vote: the city is now the session city", vs.city == 3)
+        with open(vs.config_path) as f:
+            saved = json.load(f)
+        check("vote: the city is saved to the config (other keys kept)",
+              saved.get("city") == 3 and saved.get("custom_key") == 42, saved)
+        check("vote: everyone is told to rejoin (kick)",
+              sum(1 for conn, _ in out if conn is not None) == 4, out)
+
         # -- explicit list
         server2 = build(tmp, plugins=["commands", "off"])
         check("an explicit list loads exactly those (and disabled-by-default ones)",
