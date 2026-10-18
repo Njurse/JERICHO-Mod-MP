@@ -1254,12 +1254,12 @@ static void OnlineOnEnter(void* ud)
 	gOnlineItems[k].submenu = gMenuIdx[M_MANUAL];
 	k++;
 
-	/* Host Game: the same row the LAN screen has, so a player looking at the world's
-	 * servers can put one up without walking back through the menus. It sits with the
-	 * controls, not with the servers, because it is not one of them. */
+	/* Hosting online: NOT WIRED UP YET, and it was worse than nothing to offer the
+	 * row - pressing it went nowhere, with no way to tell a missing feature from a
+	 * broken one. It says so instead. The LAN row (M_LAN) is the real host path. */
 	OnlineRowClear(k);
-	gOnlineItems[k].label = "Host Game";
-	gOnlineItems[k].on_activate = ActHostGame;
+	gOnlineItems[k].label = "Hosting In-Game: Coming Soon ...";
+	gOnlineItems[k].on_activate = NULL;	/* a statement, not a button */
 	k++;
 
 	OnlineRowClear(k);
