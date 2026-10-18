@@ -22,25 +22,73 @@ rem              never deleted, so nothing of yours can disappear.
 rem  It only ever overwrites files the release itself carries.
 rem
 rem  USAGE
-rem    update_jericho.bat          the latest release
+rem    update_jericho.bat          the latest release, in this install's flavour
+rem                                (Release_dev if JERICHO\CONFIG\installed.json
+rem                                says so, else Release)
 rem    update_jericho.bat dev      the latest release's Release_dev build, which
 rem                                carries every module and prints more
+rem    update_jericho.bat release  the plain Release build, whatever is installed
+rem
+rem  The game's "Update JERICHO (Restart)" button runs it with these as well:
+rem    --tag vX.Y.Z      download that release (the one the game showed) instead
+rem                      of whatever "latest" is by the time this runs
+rem    --wait PID        wait (up to a minute) for the game to exit before copying
+rem    --relaunch EXE    start the game again afterwards (also after a failure:
+rem                      nothing was changed, so the old one still runs)
+rem
+rem  After a successful update it records what was installed in
+rem  JERICHO\CONFIG\installed.json (tag, asset, SHA256): the game compares that
+rem  SHA256 with the release's to notice a re-cut tag, and reads the asset name to
+rem  keep the flavour.
 rem
 rem  NEEDS: curl and tar, both of which ship with Windows 10 and later.
 rem ============================================================================
+rem Run from a COPY in %TEMP%. The release carries this script too, and cmd reads
+rem a batch file as it goes, so robocopy overwriting it mid-run would derail the
+rem rest. The copy is told where the install is (--here). If the copy cannot be
+rem made it simply runs in place, as it always did.
+if /i not "%~dp0"=="%TEMP%\" (
+	copy /y "%~f0" "%TEMP%\jericho_update_self.bat" >nul 2>nul && "%TEMP%\jericho_update_self.bat" --here "%~dp0." %*
+)
 setlocal
 cd /d "%~dp0"
 
 set "REPO=Njurse/JERICHO"
+set "FLAVOUR="
+set "TAG="
+set "WAITPID="
+set "RELAUNCH="
+:args
+if "%~1"=="" goto argsdone
+if /i "%~1"=="--here" (cd /d "%~2" & shift & shift & goto args)
+if /i "%~1"=="dev" (set "FLAVOUR=dev" & shift & goto args)
+if /i "%~1"=="release" (set "FLAVOUR=release" & shift & goto args)
+if /i "%~1"=="--tag" (set "TAG=%~2" & shift & shift & goto args)
+if /i "%~1"=="--wait" (set "WAITPID=%~2" & shift & shift & goto args)
+if /i "%~1"=="--relaunch" (set "RELAUNCH=%~2" & shift & shift & goto args)
+echo update_jericho: ignoring unknown argument %1
+shift
+goto args
+:argsdone
+
+rem No flavour asked for: keep the one this install was last updated to.
+if not defined FLAVOUR if exist "JERICHO\CONFIG\installed.json" (
+	findstr /c:"Release_dev" "JERICHO\CONFIG\installed.json" >nul 2>nul && set "FLAVOUR=dev"
+)
 set "ASSET=JERICHO_Release_win64.zip"
 set "KIND=release"
-if /i "%~1"=="dev" set "ASSET=JERICHO_Release_dev_win64.zip"
-if /i "%~1"=="dev" set "KIND=release dev"
+if /i "%FLAVOUR%"=="dev" set "ASSET=JERICHO_Release_dev_win64.zip"
+if /i "%FLAVOUR%"=="dev" set "KIND=release dev"
 
 rem releases/latest/download resolves to the newest NON-prerelease release, so
-rem alpha is excluded without asking the API and without parsing any JSON.
+rem alpha is excluded without asking the API and without parsing any JSON. With
+rem --tag (the game's button) it is that exact release.
 set "BASE=https://github.com/%REPO%/releases/latest/download"
+if defined TAG set "BASE=https://github.com/%REPO%/releases/download/%TAG%"
+if defined TAG set "KIND=%KIND% %TAG%"
 set "TMP=%TEMP%\jericho_update_%RANDOM%"
+
+if defined WAITPID call :waitgame
 
 echo update_jericho: updating this install from the latest %KIND%
 echo   folder: %CD%
@@ -128,6 +176,8 @@ rem The ROOT config.ini holds the player's own window size and fullscreen, and t
 rem release carries a default one (from data\). /XF names that one file; CONFIG\
 rem is already kept whole above, so nothing else called config.ini is affected.
 set "KEEPINISRC=%TMP%\x\config.ini"
+rem A release now ships config.default.ini instead (build.yml), which is safe to
+rem overwrite; an older release still carries config.ini, hence the /XF above.
 rem The DEDICATED SERVER's config is the OPERATOR's -- port, name, city, player cap,
 rem whether it beacons -- so it is the third thing an update must not overwrite.
 rem Excluded from the copy like config.ini, and installed just below ONLY when this
@@ -159,8 +209,20 @@ rem with the release (unpacked into %TMP%\x) and this is best-effort: a release 
 rem carry it simply skips the step. The game's ini reader takes the FIRST match for a
 rem section+key, so nothing appended here can override a value of yours.
 set "JERICHO_CFG_REL=%TMP%\x\config.ini"
+if exist "%TMP%\x\config.default.ini" set "JERICHO_CFG_REL=%TMP%\x\config.default.ini"
 set "JERICHO_CFG_USR=%CD%\config.ini"
+rem No config.ini yet: the game seeds one from config.default.ini on start.
 if exist "%TMP%\x\merge_config.ps1" powershell -NoProfile -ExecutionPolicy Bypass -File "%TMP%\x\merge_config.ps1" >nul 2>nul
+
+rem What is installed now: the game reads this for re-cut detection and flavour.
+if not exist "JERICHO\CONFIG" mkdir "JERICHO\CONFIG"
+> "JERICHO\CONFIG\installed.json" (
+	echo {
+	echo   "tag": "%TAG%",
+	echo   "asset": "%ASSET%",
+	echo   "sha256": "%GOT%"
+	echo }
+)
 
 echo.
 echo update_jericho: done.
@@ -174,8 +236,14 @@ echo.
 echo Note: files are overwritten, never deleted, so an old file this release no
 echo longer ships may still be here. That is what keeps your own mods safe.
 echo Turn crumple and Caine's Crossfire on in Options - JERICHO if you want them.
-pause
 rmdir /s /q "%TMP%" 2>nul
+if defined RELAUNCH (
+	echo Starting JERICHO again ...
+	start "" "%RELAUNCH%"
+	timeout /t 3 >nul
+	exit /b 0
+)
+pause
 exit /b 0
 
 :fail
@@ -183,4 +251,19 @@ echo.
 echo update_jericho: FAILED -- see above. Nothing was left half-applied.
 pause
 rmdir /s /q "%TMP%" 2>nul
+if defined RELAUNCH start "" "%RELAUNCH%"
 exit /b 1
+
+rem Wait for the game (the button passes its PID) to exit, so its files can be
+rem replaced. Gives up after about a minute and carries on: robocopy retries a
+rem locked file once and reports it.
+:waitgame
+set /a WAITN=0
+echo waiting for JERICHO (pid %WAITPID%) to close ...
+:waitloop
+tasklist /FI "PID eq %WAITPID%" 2>nul | find "%WAITPID%" >nul
+if errorlevel 1 exit /b 0
+set /a WAITN+=1
+if %WAITN% geq 60 exit /b 0
+timeout /t 1 /nobreak >nul
+goto waitloop

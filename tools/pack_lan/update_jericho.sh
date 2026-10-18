@@ -21,30 +21,85 @@
 #  It only ever overwrites files the release itself carries.
 #
 #  USAGE
-#    ./update_jericho.sh          the latest release
+#    ./update_jericho.sh          the latest release, in this install's flavour
+#                                 (Release_dev if JERICHO/CONFIG/installed.json
+#                                 says so, else Release)
 #    ./update_jericho.sh dev      the latest release's Release_dev build, which
 #                                 carries every module and prints more
+#    ./update_jericho.sh release  the plain Release build, whatever is installed
+#
+#  The game's "Update JERICHO (Restart)" button adds (see update_jericho.bat):
+#    --tag vX.Y.Z  that exact release   --wait PID  wait for the game to exit
+#    --relaunch EXE  start the game again afterwards (after a failure too)
+#  and records the result in JERICHO/CONFIG/installed.json (tag, asset, SHA256).
 #
 #  NEEDS: curl or wget, and tar.
 # ============================================================================
 set -eu
 
-cd "$(dirname "$0")" || exit 1
+# Run from a COPY. The release carries this script too, and sh reads a script as
+# it goes, so the copy step overwriting it mid-run ended the run with a syntax
+# error. The copy is told where the install is (--here) and removes itself.
+if [ "${1:-}" != "--here" ]; then
+	cd "$(dirname "$0")" || exit 1
+	self=$(mktemp) || exit 1
+	cp "$0" "$self" || exit 1
+	exec sh "$self" --here "$(pwd)" "$@"
+fi
+SELF=$0
+cd "$2" || exit 1
+shift 2
 HERE=$(pwd)
 
 REPO=Njurse/JERICHO
+FLAVOUR= TAG= WAITPID= RELAUNCH=
+while [ $# -gt 0 ]; do
+	case "$1" in
+		dev|release) FLAVOUR=$1 ;;
+		--tag) TAG=${2:-}; shift ;;
+		--wait) WAITPID=${2:-}; shift ;;
+		--relaunch) RELAUNCH=${2:-}; shift ;;
+		*) echo "update_jericho: ignoring unknown argument $1" ;;
+	esac
+	[ $# -gt 0 ] && shift
+done
+# No flavour asked for: keep the one this install was last updated to.
+if [ -z "$FLAVOUR" ] && grep -q Release_dev JERICHO/CONFIG/installed.json 2>/dev/null; then
+	FLAVOUR=dev
+fi
 ASSET=JERICHO_Release_linux-x64.tar.gz
 KIND=release
-if [ "${1:-}" = "dev" ]; then
+if [ "$FLAVOUR" = "dev" ]; then
 	ASSET=JERICHO_Release_dev_linux-x64.tar.gz
 	KIND="release dev"
 fi
 
 # releases/latest/download resolves to the newest NON-prerelease release, so
-# alpha is excluded without asking the API and without parsing any JSON.
+# alpha is excluded without asking the API and without parsing any JSON. With
+# --tag (the game's button) it is that exact release.
 BASE="https://github.com/$REPO/releases/latest/download"
+if [ -n "$TAG" ]; then
+	BASE="https://github.com/$REPO/releases/download/$TAG"
+	KIND="$KIND $TAG"
+fi
+
+# The button starts us while the game is still closing: wait (about a minute at
+# most) so its files can be replaced. Relaunch on ANY exit -- after a failure
+# nothing was changed, so the old build still runs.
+if [ -n "$WAITPID" ]; then
+	echo "waiting for JERICHO (pid $WAITPID) to close ..."
+	n=0
+	while kill -0 "$WAITPID" 2>/dev/null && [ $n -lt 60 ]; do sleep 1; n=$((n + 1)); done
+fi
+relaunch() {
+	if [ -n "$RELAUNCH" ] && [ -x "$RELAUNCH" ]; then
+		echo "Starting JERICHO again ..."
+		( cd "$HERE" && nohup "$RELAUNCH" >/dev/null 2>&1 & )
+	fi
+}
 TMP=$(mktemp -d) || exit 1
-trap 'rm -rf "$TMP"' EXIT INT TERM
+trap 'rm -rf "$TMP"; rm -f "$SELF"; relaunch' EXIT
+trap 'exit 1' INT TERM
 
 say_fail() {
 	echo "  FAILED: $1" >&2
@@ -142,7 +197,9 @@ fi
 # you already have alone. Your value always wins: the game's ini reader (utils/ini.c)
 # returns the FIRST match for a section+key, so a duplicate could not override one of yours.
 merge_config_keys() {
-	rel="$TMP/x/config.ini"
+	# a release ships config.default.ini (build.yml); an older one config.ini
+	rel="$TMP/x/config.default.ini"
+	[ -f "$rel" ] || rel="$TMP/x/config.ini"
 	usr="$HERE/config.ini"
 
 	[ -f "$rel" ] || return 0
@@ -185,6 +242,11 @@ merge_config_keys
 for s in BAKE_D1_CARS.sh update_jericho.sh; do
 	[ -f "$HERE/$s" ] && chmod +x "$HERE/$s"
 done
+
+# What is installed now: the game reads this for re-cut detection and flavour.
+mkdir -p "$HERE/JERICHO/CONFIG"
+printf '{\n  "tag": "%s",\n  "asset": "%s",\n  "sha256": "%s"\n}\n' "$TAG" "$ASSET" "$GOT" \
+	> "$HERE/JERICHO/CONFIG/installed.json"
 
 echo
 echo "update_jericho: done. $copied file(s) written."
