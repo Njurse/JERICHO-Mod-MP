@@ -827,6 +827,81 @@ static int MpAssignedCarCity(void)
 	return MP_CAR_CITY_SESSION;
 }
 
+/* Every player's link to us, for everyone's scoreboard (MP_TAG_STATS). Host only;
+ * the same numbers the host's own scoreboard draws from MpPeerStats. */
+static void MpHostSendStats(void)
+{
+	unsigned char buf[sizeof(MP_STATS) + MP_MAX_PLAYERS * sizeof(MP_STATS_ENTRY)];
+	MP_STATS h;
+	int id, n = 0;
+
+	if (!MpIsHost())
+		return;
+
+	for (id = 1; id < MP_MAX_PLAYERS; id++)
+	{
+		MP_PEER_STATS st;
+		MP_STATS_ENTRY e;
+
+		if (!MpPeerStats(id, &st) || st.linkMs == 0)
+			continue;
+
+		memset(&e, 0, sizeof(e));
+		e.playerId = (uint8_t)id;
+		e.lossPct = (uint8_t)(st.lossPct < 0 ? 0 : (st.lossPct > 100 ? 100 : st.lossPct));
+		e.pingMs = (uint16_t)(st.pingMs > 0xFFFF ? 0xFFFF : st.pingMs);
+		e.rxBps = (uint32_t)(st.rxBytes * 1000UL / st.linkMs);
+		e.txBps = (uint32_t)(st.txBytes * 1000UL / st.linkMs);
+		memcpy(buf + sizeof(h) + n * sizeof(e), &e, sizeof(e));
+		n++;
+	}
+
+	if (n == 0)
+		return;
+
+	memset(&h, 0, sizeof(h));
+	h.count = (uint8_t)n;
+	memcpy(buf, &h, sizeof(h));
+	MpHostBroadcast(MP_TAG_STATS, 0, buf, (int)(sizeof(h) + n * sizeof(MP_STATS_ENTRY)));
+}
+
+/* The host's report of everyone's link. A client keeps it per player for the
+ * scoreboard; the host measures its own and ignores this. */
+static void MpHandleStats(const unsigned char* p, int len)
+{
+	MP_STATS h;
+	int i, n;
+
+	if (MpIsHost() || len < (int)sizeof(MP_STATS))
+		return;
+
+	memcpy(&h, p, sizeof(h));
+	n = h.count > MP_MAX_PLAYERS ? MP_MAX_PLAYERS : h.count;
+
+	if (len < (int)(sizeof(MP_STATS) + (size_t)n * sizeof(MP_STATS_ENTRY)))
+		return;
+
+	for (i = 0; i < n; i++)
+	{
+		MP_STATS_ENTRY e;
+		MP_PLAYER* pl;
+
+		memcpy(&e, p + sizeof(MP_STATS) + i * sizeof(e), sizeof(e));
+		pl = MpGetPlayer(e.playerId);
+
+		if (pl == NULL || pl->isLocal)
+			continue;
+
+		pl->netRxBps = e.rxBps;
+		pl->netTxBps = e.txBps;
+		pl->netLoss = e.lossPct;
+		pl->netLastMs = MpNowMs();
+
+		if (e.pingMs != 0)
+			pl->pingMs = e.pingMs;
+	}
+}
+
 void MpHostSendRoster(void)
 {
 	MP_ROSTER r;
@@ -4063,7 +4138,10 @@ void MpLockstepFrame(void)
 	/* refreshed so the pause menu's names/vehicles/ping are live, and so a
 	 * player joining a match already in progress learns the roster */
 	if ((gMp.frame % 120) == 0)
+	{
 		MpHostSendRoster();
+		MpHostSendStats();
+	}
 
 	/* the same cadence, and for the same reason: a machine that joins late or
 	 * misses one still ends up with everybody's colour */
@@ -8354,6 +8432,12 @@ void MpHandleMessage(int connIndex, const char* tag, const unsigned char* payloa
 	if (memcmp(tag, MP_TAG_PED, 4) == 0)
 	{
 		MpHandlePedState(connIndex, payload, len);
+		return;
+	}
+
+	if (memcmp(tag, MP_TAG_STATS, 4) == 0)
+	{
+		MpHandleStats(payload, len);
 		return;
 	}
 

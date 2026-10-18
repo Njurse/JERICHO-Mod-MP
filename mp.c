@@ -1748,6 +1748,21 @@ static void MpDrawPlayerList(void)
 				snprintf(rx, sizeof(rx), "--");
 				snprintf(tx, sizeof(tx), "--");
 				snprintf(loss, sizeof(loss), "--");
+
+				/* A row we have no link of our own to (a client looking at another
+				 * client): the HOST's measurement of that player's link, when it
+				 * sent one lately (MP_TAG_STATS). */
+				if (!p->isLocal && p->netLastMs != 0 && MpNowMs() - p->netLastMs < 10000UL)
+				{
+					MpFormatRate(rx, sizeof(rx), p->netRxBps);
+					MpFormatRate(tx, sizeof(tx), p->netTxBps);
+
+					if (p->netLoss != MP_STATS_LOSS_UNKNOWN)
+					{
+						lossPct = p->netLoss;
+						snprintf(loss, sizeof(loss), "%d%%", p->netLoss);
+					}
+				}
 			}
 		}
 

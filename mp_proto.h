@@ -164,6 +164,9 @@ typedef struct MP_ROSTER
 } MP_ROSTER;
 #pragma pack(pop)
 #define MP_TAG_CHAT	"JPCX"	/* either side: a chat line */
+#define MP_TAG_STATS	"JPSX"	/* host -> all: each player's link to the host (rx/tx/loss).
+				 * OPTIONAL: a peer that does not know it ignores it (unknown
+				 * tags are dropped), so it needs no protocol bump. */
 
 /* Envelope flags */
 #define MP_FLAG_RELIABLE	0x01	/* sender wants an ordered/reliable channel */
@@ -611,6 +614,26 @@ typedef struct MP_KICK
  * verbatim every frame, so a push there would be discarded. */
 #define MP_HIT_F_TRAFFIC	0x01	/* targetId is a car_data slot, not a player id */
 
+/* Each player's link as the HOST measures it (MpPeerStats), so every machine can
+ * show rx / tx / loss for everyone, not only for its own connection. Sent with
+ * the roster. A client only has a link to the host, which is why this travels. */
+#define MP_STATS_LOSS_UNKNOWN	0xFF	/* this hub does not measure loss */
+
+typedef struct MP_STATS_ENTRY
+{
+	uint8_t  playerId;
+	uint8_t  lossPct;	/* 0..100, or MP_STATS_LOSS_UNKNOWN */
+	uint16_t pingMs;
+	uint32_t rxBps;		/* bytes/s the host RECEIVES from this player */
+	uint32_t txBps;		/* bytes/s the host SENDS to this player */
+} MP_STATS_ENTRY;		/* 12 bytes */
+
+typedef struct MP_STATS
+{
+	uint8_t  count;
+	uint8_t  reserved[3];
+} MP_STATS;	/* header only: the entries follow */
+
 typedef struct MP_HIT
 {
 	uint8_t  targetId;	/* the player whose car should receive the impulse */
@@ -635,6 +658,7 @@ static_assert(sizeof(MP_INPUT) == 4, "MP_INPUT layout");
 static_assert(sizeof(MP_ROSTER_ENTRY) == 29, "MP_ROSTER_ENTRY layout");
 static_assert(sizeof(MP_CARSTATE_ENTRY) == 53, "MP_CARSTATE_ENTRY layout");
 static_assert(sizeof(MP_HIT) == 16, "MP_HIT layout");
+static_assert(sizeof(MP_STATS_ENTRY) == 12, "MP_STATS_ENTRY layout");
 static_assert(sizeof(MP_CARSTATE) == 8, "MP_CARSTATE layout");
 static_assert(sizeof(MP_TRAFFIC_ENTRY) == 56, "MP_TRAFFIC_ENTRY layout");
 static_assert(sizeof(MP_TRAFFIC) == 8, "MP_TRAFFIC layout");

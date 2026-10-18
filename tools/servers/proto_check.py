@@ -53,6 +53,10 @@ MIRROR = {
     "MP_CARSTATE_ENTRY": "CARSTATE_ENTRY",
     "MP_ROSTER_ENTRY": "ROSTER_ENTRY",
     "MP_CHANNEL": "CHANNEL",
+    "MP_HIT": "HIT",
+    "MP_PEDSTATE_ENTRY": "PEDSTATE_ENTRY",
+    "MP_COLOR_ENTRY": "COLOR_ENTRY",
+    "MP_STATS_ENTRY": "STATS_ENTRY",
 }
 
 # C #define -> the Python constant that must carry the same value.

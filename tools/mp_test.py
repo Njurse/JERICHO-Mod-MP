@@ -66,6 +66,7 @@ TAG = {
     "channel": b"JPCH", "leave": b"JPLV", "kick": b"JPKK", "chat": b"JPCX",
     "roster": b"JPRS", "car": b"JPCC",
     "ped": b"JPPD", "traffic": b"JPTF", "hit": b"JPHI", "color": b"JPCL",
+    "stats": b"JPSX",
 }
 # NOTE: no "session" entry. 'JPSS' was retired from mp_proto.h -- it was reserved for
 # a standalone session/lobby broadcast that nothing ever sent or handled. Keep this
@@ -79,6 +80,11 @@ PEDSTATE_ENTRY = struct.Struct("<BBHiiiii")
 # (playerId, on, r, g, b, 3 spare). (MP_CHANNEL is CHANNEL, below.)
 HIT = struct.Struct("<BB2xiii")
 HIT_F_TRAFFIC = 0x01
+# MP_STATS (count + 3 reserved) + 12-byte MP_STATS_ENTRY rows: playerId, lossPct
+# (0xFF = unknown), pingMs, rxBps, txBps -- each player's link to the hub.
+STATS = struct.Struct("<B3x")
+STATS_ENTRY = struct.Struct("<BBHII")
+STATS_LOSS_UNKNOWN = 0xFF
 CAR_PICK = struct.Struct("<BB2x")    # MP_CAR: model (0xFF none), city (0xFF = session)
 COLOR = struct.Struct("<B3x")
 COLOR_ENTRY = struct.Struct("<BBBBB3x")

@@ -163,6 +163,9 @@ def main():
     first, second = got(5, 1.0), got(5, 1.0)
     check("the roster cadence also sends the colour table (late joiners)",
           alive and first[0] == m.TAG["roster"] and second == (m.TAG["color"], both))
+    stats = got(5, 1.0)
+    check("the roster cadence also sends link stats (MP_TAG_STATS)",
+          stats is not None and stats[0] == m.TAG["stats"], repr(stats))
     third = got(5, 1.0)
     check("the roster cadence also PINGs the client", third is not None and third[0] == m.TAG["ping"]
           and len(third[1]) == 4, repr(third))
@@ -190,6 +193,18 @@ def main():
     check("the roster lists the picked car as ready",
           picked.get(6) == (9, 1, m.ROSTER_FLAG_CAR_READY) and picked.get(4) == (0xFF, 0xFF, 0), repr(picked))
     check("a short car pick is ignored", not server.note_car_pick(pairs[6][0], b"\x01"))
+    # -- LINK STATS: one row per client, rates from the bytes each way, loss unknown
+    body = server.stats_bytes()
+    n = m.STATS.unpack_from(body, 0)[0]
+    rows = {}
+    for i in range(n):
+        e = m.STATS_ENTRY.unpack_from(body, m.STATS.size + i * m.STATS_ENTRY.size)
+        rows[e[0]] = e
+    check("stats has a row for every client that has traffic", set(rows) >= {4, 5, 6} and
+          len(body) == m.STATS.size + n * m.STATS_ENTRY.size, repr(sorted(rows)))
+    check("the stats rows say loss unknown and carry tx > 0",
+          all(r[1] == m.STATS_LOSS_UNKNOWN and r[4] > 0 for r in rows.values()), repr(rows))
+    check("the stats carry the measured ping", rows[5][2] == rtt, repr(rows[5]))
     check("a short colour frame is dropped", relay.color(server, pairs[4][0], 4, m.COLOR.pack(3)) == 0)
 
     # -- CHANNEL: header + declared payload, to everyone (the sender too)

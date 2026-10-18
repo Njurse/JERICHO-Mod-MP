@@ -257,6 +257,23 @@ def master_base(url):
 
 
 # ---------------------------------------------------------------------- the server
+# Bytes on each client's link, both ways, for the scoreboard's rx / tx (MP_TAG_STATS):
+# conn -> [rx, tx, since]. Every frame this server sends goes through _send.
+_NET = {}
+
+
+def _net(conn):
+    st = _NET.get(conn)
+    if st is None:
+        st = _NET[conn] = [0, 0, time.monotonic()]
+    return st
+
+
+def _send(conn, tag, payload=b""):
+    m.send_frame(conn, tag, payload)
+    _net(conn)[1] += m.ENV.size + len(payload)
+
+
 def _ms32():
     """A millisecond clock in the PING tick's 32 bits (the host uses its own clock)."""
     return int(time.monotonic() * 1000) & 0xFFFFFFFF
@@ -315,7 +332,7 @@ class Dedicated:
         return sorted((Player(c, i) for c, i in rows), key=lambda p: p.id)
 
     def send_to(self, conn, tag, payload):
-        m.send_frame(conn, tag, payload)
+        _send(conn, tag, payload)
 
     def send_server_chat(self, text, color=None, conn=None):
         """Chat line(s) in the server's own voice (player id 0xFF), to one
@@ -457,21 +474,43 @@ class Dedicated:
         if now - last < ROSTER_REFRESH_S:
             return True, last
         try:
-            m.send_frame(conn, m.TAG["roster"], self.roster_bytes())
+            _send(conn, m.TAG["roster"], self.roster_bytes())
             # ...and the colour table on the same cadence, as the host's
             # MpSendColors(1) every 120 frames: how a late joiner learns everyone
             table = relay.color_table(self)
             if table:
-                m.send_frame(conn, m.TAG["color"], table)
+                _send(conn, m.TAG["color"], table)
+            # ...and everyone's link stats, as the host sends MP_TAG_STATS with it
+            _send(conn, m.TAG["stats"], self.stats_bytes())
             # ...and a PING, as the host's keepalive does: the client echoes the tick
             # in a PONG, and that round trip is the roster's `ping` (MpPingForPlayer)
-            m.send_frame(conn, m.TAG["ping"], struct.pack("<I", _ms32()))
+            _send(conn, m.TAG["ping"], struct.pack("<I", _ms32()))
         except OSError:
             return False, now
         except Exception as e:
             # a roster we cannot build must not cost the player their connection
             self.log.debug("roster refresh failed for player %d: %s" % (pid, e))
         return True, now
+
+    def stats_bytes(self):
+        """MP_STATS: each client's link to this server -- rx = bytes/s we receive
+        from them, tx = bytes/s we send them, ping = our measured round trip. Loss
+        is the host's "frames with nothing from them", which a frameless server
+        cannot measure, so it says unknown (the game then shows '--')."""
+        now = time.monotonic()
+        with self.lock:
+            items = sorted((info["id"], info.get("ping", 0), _NET.get(c)) for c, info in self.clients.items())
+        out = bytearray(m.STATS.pack(0))
+        n = 0
+        for pid, ping, st in items:
+            if st is None:
+                continue
+            secs = max(now - st[2], 0.001)
+            out += m.STATS_ENTRY.pack(pid & 0xFF, m.STATS_LOSS_UNKNOWN, min(int(ping), 0xFFFF),
+                                      min(int(st[0] / secs), 0xFFFFFFFF), min(int(st[1] / secs), 0xFFFFFFFF))
+            n += 1
+        out[0] = n
+        return bytes(out)
 
     def note_car_pick(self, conn, payload):
         """JPCC, the car a player picked: kept for the roster, which the caller
@@ -507,7 +546,7 @@ class Dedicated:
             conns = [c for c in self.clients if c is not skip]
         for c in conns:
             try:
-                m.send_frame(c, tag, payload)
+                _send(c, tag, payload)
             except OSError:
                 pass
 
@@ -672,7 +711,7 @@ class Dedicated:
         # load-bearing: a live joiner has to know who else is in the match before it
         # spawns cars, because the spawn walks the player list.
         try:
-            m.send_frame(conn, m.TAG["roster"], self.roster_bytes())
+            _send(conn, m.TAG["roster"], self.roster_bytes())
         except Exception as e:
             # A roster we cannot build must NOT cost the player their connection --
             # they simply arrive without a peer list, which is what this server did
@@ -691,10 +730,10 @@ class Dedicated:
             # set -- so a joiner was never offered the CAR SELECT and went straight
             # into the session in whatever vehicle the module defaulted to. 0 is
             # right for a host still sitting in its lobby; it is never right here.
-            m.send_frame(conn, m.TAG["welcome"],
+            _send(conn, m.TAG["welcome"],
                          self._welcome(pid, running=1 if self.cfg["live"] else 0,
                                        matched=matched, seed=seed))
-            m.send_frame(conn, m.TAG["start"], sess)
+            _send(conn, m.TAG["start"], sess)
         except OSError:
             pass
 
@@ -710,7 +749,7 @@ class Dedicated:
             ink = _ink_bytes(self.cfg.get("motd_color"))
             try:
                 for piece in _chat_chunks(motd):
-                    m.send_frame(conn, m.TAG["chat"],
+                    _send(conn, m.TAG["chat"],
                                  m.CHAT.pack(0xFF, ink[0], ink[1], ink[2], piece))
             except OSError:
                 pass
@@ -736,6 +775,8 @@ class Dedicated:
             while not self.stop.is_set():
                 try:
                     tag, payload = m.recv_frame(conn)
+                    if tag is not None:
+                        _net(conn)[0] += m.ENV.size + len(payload)
                 except socket.timeout:
                     silent += 1
                     # Send our own keepalive PING and only give the client up after
@@ -746,7 +787,7 @@ class Dedicated:
                                          % (pid, name, idle_drop))
                         break
                     try:
-                        m.send_frame(conn, m.TAG["ping"],
+                        _send(conn, m.TAG["ping"],
                                      struct.pack("<I", int(time.time() * 1000) & 0xFFFFFFFF))
                     except OSError:
                         break
@@ -804,7 +845,7 @@ class Dedicated:
                     # Liveness. Echo the tick; with no PONG the client's last-receive
                     # clock stops advancing and it drops itself at its idle timeout.
                     try:
-                        m.send_frame(conn, m.TAG["pong"], payload or b"\x00\x00\x00\x00")
+                        _send(conn, m.TAG["pong"], payload or b"\x00\x00\x00\x00")
                     except OSError:
                         break
                 elif tag == m.TAG["car"]:
@@ -820,6 +861,7 @@ class Dedicated:
                 if info:
                     self.cars.pop(info["id"], None)
                     self.colors.pop(info["id"], None)
+                _NET.pop(conn, None)
             if info:
                 self.plugins.call("on_player_leave", Player(conn, info))
                 self.log.info("player %d '%s' left (%d/%d)"
@@ -838,7 +880,7 @@ class Dedicated:
         and every refusal in this file goes through it.
         """
         try:
-            m.send_frame(conn, m.TAG["reject"], m.REJECT.pack(reason, 0, 0, 0, text.encode()))
+            _send(conn, m.TAG["reject"], m.REJECT.pack(reason, 0, 0, 0, text.encode()))
         except OSError:
             pass
 

@@ -110,6 +110,12 @@ typedef struct MP_PLAYER
 	int   pedSpeed;
 	unsigned long pedLastMs;	/* when we last heard a pose for it */
 
+	/* This player's link to the HOST, as the host reports it (MP_TAG_STATS): what
+	 * the scoreboard shows for a row this machine has no connection of its own to. */
+	unsigned long netRxBps, netTxBps;
+	int   netLoss;			/* 0..100, or MP_STATS_LOSS_UNKNOWN */
+	unsigned long netLastMs;	/* when the last report arrived; 0 = never */
+
 	/* The owner's carstate says this player is ON FOOT (MP_CARSTATE_NO_CAR).
 	 * carId < 0 says the same thing, but only until the next roster arrives:
 	 * the roster names the car a player OWNS, so it cannot be used to decide
