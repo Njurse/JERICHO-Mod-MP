@@ -136,9 +136,13 @@ player the next time they join or load.
 
 ### Making yourself an admin
 
-1. Join your server and type `!whoami`. It prints your player id, a UUID such as
-   `0f8e2a4c-1d3b-4a5e-9c7d-112233445566` (your game creates it at first launch and
-   keeps it as `[mp] player_id`; the game log prints it too).
+1. Get your player id, a UUID such as `0f8e2a4c-1d3b-4a5e-9c7d-112233445566`. Your
+   game creates it at first launch and keeps it in `JERICHO/CONFIG/player.id`.
+   Any of these shows it:
+   - join any server and type `!whoami`;
+   - the game log, line `[mp] player id ...` at launch;
+   - `python JERICHO/MODS/mp/tools/player_id.py` in the game folder (or give it the
+     path of a `player.id` copied from the player's PC).
 2. Put it in `dediserver.json`: `"admins": ["0f8e2a4c-1d3b-4a5e-9c7d-112233445566"]`
    (dashed or plain hex, any case). Restart the server.
 3. When you join it says *You are an admin on this server*. From then on you can
@@ -148,9 +152,10 @@ Or set `"admin_password"` and use `!login <password>` (3 wrong tries in 60 s loc
 `!login` for 5 minutes).
 
 **Security:** there is no account server. The player id is a *bearer secret*:
-anyone who copies your mp config is "you" to this server. Game traffic is not
+anyone who copies your `CONFIG/player.id` is "you" to this server. Game traffic is not
 encrypted, so the id and a `!login` password can be read by anyone on the network
-path. Fine for a hobby server; don't reuse the password anywhere else.
+path. The file is obfuscated and checksummed so it can't be casually read or
+edited, but the key ships in the game, so that is not real protection. Fine for a hobby server; don't reuse the password anywhere else.
 
 ## Plugins
 
