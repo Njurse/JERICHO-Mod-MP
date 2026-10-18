@@ -14,7 +14,8 @@ rem       mp_dedi.bat --port 1400        ... on another one
 rem       mp_dedi.bat --name "Bob's 24/7" --no-beacon --idle-drop 0
 rem       mp_dedi.bat --master http://master.example.com:8100
 rem
-rem   Config lives in servers\dediserver\dediserver.json (CLI flags override it).
+rem   Config lives in servers\dediserver\dediserver.json (CLI flags override it);
+rem   it is created from dediserver.example.json on the first start.
 rem   Ctrl-C stops it. It logs joins and leaves, which is the quickest way to tell a
 rem   client that never connected from one that connected and was dropped.
 rem

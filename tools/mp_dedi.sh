@@ -13,7 +13,8 @@
 #       ./mp_dedi.sh --name "Bob's 24/7" --no-beacon --idle-drop 0
 #       ./mp_dedi.sh --master http://master.example.com:8100
 #
-#   Config lives in servers/dediserver/dediserver.json (CLI flags override it).
+#   Config lives in servers/dediserver/dediserver.json (CLI flags override it);
+#   it is created from dediserver.example.json on the first start.
 #   Ctrl-C stops it, and a clean stop UNREGISTERS from the master instead of
 #   leaving an entry to lapse.
 #

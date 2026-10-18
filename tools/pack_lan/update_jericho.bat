@@ -143,7 +143,9 @@ if errorlevel 8 (
 )
 
 rem The dedicated server's default config, installed ONCE: an operator who has one
-rem keeps it exactly as it is, and a fresh install still gets a file to edit.
+rem keeps it exactly as it is, and a fresh install still gets a file to edit. Newer
+rem releases ship only dediserver.example.json (the server creates dediserver.json
+rem from it on first start), so this only fires for an older package carrying one.
 if not exist "%CD%\JERICHO\MODS\mp\tools\servers\dediserver\dediserver.json" (
 	if exist "%KEEPDEDI%" (
 		if not exist "%CD%\JERICHO\MODS\mp\tools\servers\dediserver" mkdir "%CD%\JERICHO\MODS\mp\tools\servers\dediserver"

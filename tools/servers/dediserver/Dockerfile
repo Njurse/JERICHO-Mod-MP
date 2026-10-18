@@ -14,7 +14,9 @@ COPY tools/servers/serverkit.py                   /mp/tools/servers/serverkit.py
 COPY tools/servers/dediserver/dediserver.py       /mp/tools/servers/dediserver/dediserver.py
 COPY tools/servers/dediserver/dedi                /mp/tools/servers/dediserver/dedi
 COPY tools/servers/dediserver/plugins             /mp/tools/servers/dediserver/plugins
-COPY tools/servers/dediserver/dediserver.json     /mp/tools/servers/dediserver/dediserver.json
+# the template only: the compose mounts the operator's dediserver.json, and without
+# one the server creates it from this on first start
+COPY tools/servers/dediserver/dediserver.example.json /mp/tools/servers/dediserver/dediserver.example.json
 
 WORKDIR /mp/tools/servers/dediserver
 

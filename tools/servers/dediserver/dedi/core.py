@@ -89,6 +89,24 @@ DEFAULTS = {
 ROSTER_REFRESH_S = 2.0
 
 CONFIG_NAME = "dediserver.json"
+EXAMPLE_NAME = "dediserver.example.json"   # tracked; dediserver.json is the operator's, untracked
+
+
+def ensure_config(path, example):
+    """Create `path` from `example` when it does not exist yet; NEVER touches an
+    existing file (O_EXCL: a file that appears meanwhile wins too). Returns a line
+    to log, or None when nothing was done."""
+    if os.path.exists(path) or not os.path.exists(example):
+        return None
+    with open(example, "rb") as f:
+        data = f.read()
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+    except FileExistsError:
+        return None
+    with os.fdopen(fd, "wb") as f:
+        f.write(data)
+    return "created %s from %s -- edit it to configure this server" % (path, os.path.basename(example))
 
 
 def parse_manifest(payload):
@@ -1336,6 +1354,9 @@ def build_config(argv):
     path = args.config
     if path is None:
         default_path = os.path.join(HERE, CONFIG_NAME)
+        note = ensure_config(default_path, os.path.join(HERE, EXAMPLE_NAME))
+        if note:
+            print("[dedi] " + note, file=sys.stderr)
         path = default_path if os.path.exists(default_path) else ""
     cfg = load_config(path, DEFAULTS)
     apply_overrides(cfg, args, (

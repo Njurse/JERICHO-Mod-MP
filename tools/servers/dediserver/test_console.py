@@ -221,6 +221,21 @@ def main():
         cli.close()
     server.colors.clear()
 
+    # -- dediserver.json is created from the example once, and never overwritten
+    import tempfile
+    from dedi import core as _c
+    td = tempfile.mkdtemp()
+    ex, cf = os.path.join(td, "ex.json"), os.path.join(td, "cfg.json")
+    with open(ex, "w") as f:
+        f.write('{"name": "From Example"}')
+    check("a missing config is created from the example", _c.ensure_config(cf, ex) is not None
+          and open(cf).read() == '{"name": "From Example"}')
+    with open(cf, "w") as f:
+        f.write('{"name": "Mine"}')
+    check("an existing config is never overwritten", _c.ensure_config(cf, ex) is None
+          and open(cf).read() == '{"name": "Mine"}')
+    check("the repo ships the example", os.path.exists(os.path.join(HERE, _c.EXAMPLE_NAME)))
+
     # -- KICK over a real socket pair: the frame, then the connection closing
     a, b = socket.socketpair()
     server.clients[a] = {"id": 3, "name": "KickMe", "addr": "127.0.0.1:5000"}

@@ -1,0 +1,3 @@
+# The operator's own config: created from dediserver.example.json on first start,
+# never tracked, so a pull or checkout can never overwrite it.
+dediserver.json

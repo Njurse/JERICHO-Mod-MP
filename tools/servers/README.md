@@ -78,7 +78,10 @@ the ports are the host's: **open the master's TCP port** (8100) and **the dedi's
 session port** (its `port` in `dediserver.json`, 1318 as shipped), plus **UDP 1318**
 only if you want LAN browser discovery.
 
-**The dedicated server is configured by `dediserver/dediserver.json`** — mounted
+**The dedicated server is configured by `dediserver/dediserver.json`** — your own,
+untracked copy of `dediserver.example.json` (create it with `cp
+dediserver/dediserver.example.json dediserver/dediserver.json` before the first
+`docker compose up`, or docker mounts a directory in its place) — mounted
 read-only into the container, and the only things the compose passes it are
 `--config` and the container log path. Its name, city, rules, max players, session
 port, `master` URL, advertise host/port, beacon and log level all come from that

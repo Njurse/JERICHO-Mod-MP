@@ -35,7 +35,8 @@ supervisor (or a test) can pipe commands in.
 ## Options
 
 ```
---config FILE        JSON config (default: dediserver.json beside this script)
+--config FILE        JSON config (default: dediserver.json beside this script; created
+                     from dediserver.example.json on the first start if missing)
 --port N             TCP session port (default 1318)
 --name "..."         name shown in the browser / registered with the master
 --city N             GameLevel the clients should load (0..3)
@@ -72,6 +73,17 @@ CLI flags override the config file. The config file is optional — with none, t
 built-in defaults are used.
 
 ## `dediserver.json`
+
+`dediserver.json` is **yours and not tracked by git**: the repo and the release
+packages ship `dediserver.example.json`, and the server copies it to
+`dediserver.json` the first time it starts without one (it never overwrites an
+existing file). Updates and `git pull` therefore leave your settings alone.
+
+> **Upgrading a git checkout from before this change:** pulling the commit that
+> untracks the file deletes an *unmodified* tracked `dediserver.json`, and a
+> modified one blocks the checkout. Back it up first:
+> `cp dediserver.json ~/dediserver.json.bak && git checkout -- dediserver.json && git checkout GETRDUN-JERICHO && git pull && cp ~/dediserver.json.bak dediserver.json`
+> (run in this folder; afterwards `git status` does not list it -- it is ignored).
 
 ```jsonc
 {

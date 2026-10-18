@@ -128,7 +128,9 @@ copied=$( cd "$TMP/x" && find . -type f ! -path './JERICHO/CONFIG/*' ! -path './
 	|| say_fail "could not copy the release over this install."
 
 # The dedicated server's default config, installed ONCE: an operator who has one
-# keeps it exactly as it is, and a fresh install still gets a file to edit.
+# keeps it exactly as it is, and a fresh install still gets a file to edit. Newer
+# releases ship only dediserver.example.json (the server creates dediserver.json
+# from it on first start), so this only fires for an older package carrying one.
 DEDI_CFG="$HERE/JERICHO/MODS/mp/tools/servers/dediserver/dediserver.json"
 if [ ! -f "$DEDI_CFG" ] && [ -f "$TMP/x/$DEDI_CFG_REL" ]; then
 	mkdir -p "$(dirname "$DEDI_CFG")"

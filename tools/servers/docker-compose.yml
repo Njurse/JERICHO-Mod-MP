@@ -13,7 +13,9 @@
 #   LOG_LEVEL        info      the master's log level
 #
 # The DEDICATED SERVER is configured by tools/servers/dediserver/dediserver.json,
-# which this file mounts read-only: its name, city, rules, max players, session
+# which this file mounts read-only. It is YOURS and untracked: create it once with
+#   cp dediserver/dediserver.example.json dediserver/dediserver.json
+# BEFORE `docker compose up` (a missing file would be mounted as a directory). Its name, city, rules, max players, session
 # port, `master` URL, advertise host/port, beacon and log level all come from
 # there. Open the port THAT file names (1318 as shipped) in the firewall.
 #

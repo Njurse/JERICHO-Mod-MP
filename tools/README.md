@@ -140,7 +140,7 @@ open** for LAN, direct internet join, and master listing.
 | --- | --- |
 | [`run.sh`](servers/run.sh) / [`run.bat`](servers/run.bat) | the one way in: `master`, `dedi`, `stack`, `checks`, `docker` |
 | [`docker-compose.yml`](servers/docker-compose.yml) | deploy the pair on a test server / VPS (host networking) |
-| `servers/dediserver/` | the dedicated server (`mp_dedi.bat`/`mp_dedi.sh` wrap it) + `dediserver.json` + its README |
+| `servers/dediserver/` | the dedicated server (`mp_dedi.bat`/`mp_dedi.sh` wrap it) + `dediserver.example.json` (copied to your own untracked `dediserver.json` on first start) + its README |
 | `servers/masterserver/` | the **master discovery service** — a separate project, not part of the mod (see `servers/README.md`) |
 | `servers/proto_check.py` | fails if the `mp_test.py` wire mirror has drifted from `mp_proto.h` |
 | `servers/rigs/local_stack.py` | the rig: master + dedi + N real clients on this one PC |
