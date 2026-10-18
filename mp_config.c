@@ -2,6 +2,9 @@
  *
  * Split out of mp.c: that file is the module's engine-facing entry point and had
  * grown into a grab-bag of everything the module owns. */
+#if defined(_WIN32)
+#define _CRT_RAND_S	/* rand_s: the OS CSPRNG, for the player id */
+#endif
 #include "jericho.h"
 #include "jer_config.h"
 
@@ -14,6 +17,85 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
+
+/* The per-install player id: 16 random bytes, generated once and kept as 32 hex
+ * digits in [mp] player_id. A dedicated server recognises a player by it (its
+ * admins list), so it comes from the OS generator, not rand(). It is a bearer
+ * secret: whoever copies the config is that player to a server. */
+static int MpOsRandom(unsigned char* out, int n)
+{
+#if defined(_WIN32)
+	int i;
+
+	for (i = 0; i < n; i += 4)
+	{
+		unsigned int r;
+		int k;
+
+		if (rand_s(&r) != 0)
+			return 0;
+
+		for (k = 0; k < 4 && i + k < n; k++)
+			out[i + k] = (unsigned char)(r >> (k * 8));
+	}
+
+	return 1;
+#else
+	FILE* f = fopen("/dev/urandom", "rb");
+	int ok;
+
+	if (f == NULL)
+		return 0;
+
+	ok = (fread(out, 1, (size_t)n, f) == (size_t)n);
+	fclose(f);
+	return ok;
+#endif
+}
+
+static int MpHexNibble(char c)
+{
+	if (c >= '0' && c <= '9') return c - '0';
+	if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+	if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+	return -1;
+}
+
+static void MpLoadPlayerId(void)
+{
+	const char* s = jer_config_get_str("mp", "player_id", "");
+	char hex[MP_PLAYER_ID_LEN * 2 + 1];
+	int i, ok = (s != NULL && strlen(s) == MP_PLAYER_ID_LEN * 2);
+
+	for (i = 0; ok && i < MP_PLAYER_ID_LEN; i++)
+	{
+		int hi = MpHexNibble(s[i * 2]), lo = MpHexNibble(s[i * 2 + 1]);
+
+		if (hi < 0 || lo < 0)
+			ok = 0;
+		else
+			gMp.config.playerId[i] = (unsigned char)((hi << 4) | lo);
+	}
+
+	if (ok)
+		return;
+
+	if (!MpOsRandom(gMp.config.playerId, MP_PLAYER_ID_LEN))
+	{
+		/* no OS generator: still unique enough to tell installs apart */
+		srand((unsigned int)(size_t)&hex ^ (unsigned int)(size_t)&gMp ^ (unsigned int)MpNowMs());
+		for (i = 0; i < MP_PLAYER_ID_LEN; i++)
+			gMp.config.playerId[i] = (unsigned char)(rand() >> 3);
+	}
+
+	for (i = 0; i < MP_PLAYER_ID_LEN; i++)
+		snprintf(hex + i * 2, 3, "%02x", gMp.config.playerId[i]);
+
+	jer_config_set_str("mp", "player_id", hex);
+
+	if (gMpCtx != NULL)
+		gMpCtx->jer_log(gMpCtx, "[mp] generated this install's player id\n");
+}
 
 const char* MpDefaultPlayerName(void)
 {
@@ -114,6 +196,8 @@ void MpConfigLoad(void)
 		snprintf(gMp.config.playerName, sizeof(gMp.config.playerName), "%s", MpDefaultPlayerName());
 		gMp.config.firstNameSet = 0;
 	}
+
+	MpLoadPlayerId();
 
 	s = jer_config_get_str("mp", "host_name", "");
 	if (s != NULL && s[0] != '\0')

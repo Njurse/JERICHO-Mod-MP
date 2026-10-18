@@ -36,6 +36,7 @@ typedef struct MP_CONFIG
 {
 	int  port;			/* UDP+TCP port (default 1318) */
 	char playerName[MP_NAME_MAX];	/* this player's name */
+	unsigned char playerId[MP_PLAYER_ID_LEN];	/* per-install id ([mp] player_id), sent in HELLO */
 	char hostName[MP_NAME_MAX];	/* advertised server name when hosting */
 	int  beaconMs;			/* discovery beacon interval */
 	int  keepaliveMs;		/* liveness ping cadence */
@@ -91,6 +92,8 @@ typedef struct MP_PLAYER
 	int  carCity;			/* the city that car number belongs to, -1 = the session's own */
 	int  palette;			/* that player's car colour (0 = default) */
 	int  isLocal;			/* 1 = this machine's own player */
+	int  hasPlayerId;		/* the HELLO carried a JPID block (host side) */
+	unsigned char playerId[MP_PLAYER_ID_LEN];	/* that block's id */
 	int  connected;			/* peer link still alive */
 	int  isHost;			/* the host's own row (first in the list) */
 	int  pingMs;			/* round trip, measured by the host */

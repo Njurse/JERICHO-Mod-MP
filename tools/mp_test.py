@@ -135,11 +135,32 @@ def recv_frame(sock):
     return tag, payload
 
 
-def build_hello(name, mods=(), build=0):
+HELLO_ID_TAG = b"JPID"                   # mp_proto.h MP_HELLO_ID_TAG
+PLAYER_ID_LEN = 16                      # mp_proto.h MP_PLAYER_ID_LEN
+
+
+def build_hello(name, mods=(), build=0, player_id=None):
+    """MP_HELLO + its manifest, then (optionally) the JPID player-id block."""
     body = HELLO.pack(PROTO, SDK, build, 0, name.encode()[:31], len(mods), 0, 0, 0)
     for mid, ver in mods:
         body += MODI.pack(mid.encode()[:23], ver.encode()[:15], 1, 0)
+    if player_id is not None:
+        if len(player_id) != PLAYER_ID_LEN:
+            raise ValueError("player id must be %d bytes" % PLAYER_ID_LEN)
+        body += HELLO_ID_TAG + bytes(player_id)
     return body
+
+
+def parse_player_id(payload):
+    """The JPID block after a HELLO's modCount manifest rows, as 32 lowercase hex
+    digits, or None when the client sent none (an older build)."""
+    if len(payload) < HELLO.size:
+        return None
+    modc = HELLO.unpack_from(payload, 0)[5]
+    at = HELLO.size + modc * MODI.size
+    if len(payload) < at + 4 + PLAYER_ID_LEN or payload[at:at + 4] != HELLO_ID_TAG:
+        return None
+    return payload[at + 4:at + 4 + PLAYER_ID_LEN].hex()
 
 
 # ---------------------------------------------------------------- modes

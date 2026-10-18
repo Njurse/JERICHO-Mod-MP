@@ -274,7 +274,15 @@ typedef struct MP_MOD_INFO
 	uint8_t  reserved;
 } MP_MOD_INFO;
 
-/* 'JPHL' -- client -> host. Followed by modCount MP_MOD_INFO rows. */
+/* 'JPHL' -- client -> host. Followed by modCount MP_MOD_INFO rows, then
+ * optionally the PLAYER ID block: MP_HELLO_ID_TAG + MP_PLAYER_ID_LEN bytes, a
+ * random per-install id (mp_config.c, [mp] player_id) a server can recognise a
+ * player by (admins). No protocol bump: every host reads exactly modCount rows and
+ * ignores what follows (C MpHandleHello; dediserver reads whole 42-byte rows, and
+ * 20 bytes is less than one), so old hosts accept it and old clients just omit it.
+ * It is a bearer secret, not authentication: the link is unencrypted. */
+#define MP_HELLO_ID_TAG		"JPID"
+#define MP_PLAYER_ID_LEN	16
 typedef struct MP_HELLO
 {
 	uint16_t protoVersion;

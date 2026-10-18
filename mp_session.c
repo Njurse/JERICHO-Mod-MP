@@ -1630,9 +1630,9 @@ int MpStartMatch(void)
 /* ------------------------------------------------------------------ */
 void MpSendHello(void)
 {
-	unsigned char buf[sizeof(MP_HELLO) + MP_MAX_MODS * sizeof(MP_MOD_INFO)];
+	unsigned char buf[sizeof(MP_HELLO) + MP_MAX_MODS * sizeof(MP_MOD_INFO) + 4 + MP_PLAYER_ID_LEN];
 	MP_HELLO h;
-	int n;
+	int n, len;
 
 	n = MpBuildManifest((MP_MOD_INFO*)(buf + sizeof(MP_HELLO)), MP_MAX_MODS);
 
@@ -1668,8 +1668,13 @@ void MpSendHello(void)
 
 	memcpy(buf, &h, sizeof(h));
 
-	MpSendToHost(MP_TAG_HELLO, MP_FLAG_RELIABLE, buf,
-		(int)(sizeof(h) + (size_t)n * sizeof(MP_MOD_INFO)));
+	/* the player id block after the manifest (mp_proto.h, MP_HELLO_ID_TAG) */
+	len = (int)(sizeof(h) + (size_t)n * sizeof(MP_MOD_INFO));
+	memcpy(buf + len, MP_HELLO_ID_TAG, 4);
+	memcpy(buf + len + 4, gMp.config.playerId, MP_PLAYER_ID_LEN);
+	len += 4 + MP_PLAYER_ID_LEN;
+
+	MpSendToHost(MP_TAG_HELLO, MP_FLAG_RELIABLE, buf, len);
 
 	if (gMpCtx)
 		gMpCtx->jer_log(gMpCtx, "[mp] hello sent (%d mods)\n", n);
@@ -1947,6 +1952,19 @@ static void MpHandleHello(int connIndex, const unsigned char* p, int len)
 			pl->carIsSlot = h.reserved[0] ? 1 : 0;
 			pl->carCity = (h.reserved[2] < CITY_COUNT) ? (int)h.reserved[2] : -1;
 			pl->palette = (int)h.reserved[1];
+
+			/* the optional player id block after the manifest (mp_proto.h) */
+			{
+				int at = (int)(sizeof(MP_HELLO) + (size_t)n * sizeof(MP_MOD_INFO));
+
+				pl->hasPlayerId = 0;
+
+				if (len >= at + 4 + MP_PLAYER_ID_LEN && memcmp(p + at, MP_HELLO_ID_TAG, 4) == 0)
+				{
+					memcpy(pl->playerId, p + at + 4, MP_PLAYER_ID_LEN);
+					pl->hasPlayerId = 1;
+				}
+			}
 
 			if (gMpCtx)
 				gMpCtx->jer_log(gMpCtx, "[mp] hello from player %d: vehicle %d\n", id, pl->car);
