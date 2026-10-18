@@ -176,8 +176,13 @@ def main():
     for s in seats:
         cmd += ["--seat-env", "%s=MP_TEST_CARCYCLE=%d" % (s, a.interval_ms)]
 
-    if a.keep:
-        cmd.append("--keep")
+    # --keep IS NOT OPTIONAL HERE. This rig summarises the seat logs AFTER the pair has
+    # exited, and mp_localpair deletes its run dirs on the way out unless --keep is given.
+    # Without this the summary reads directories that no longer exist: every seat prints
+    # `offered ?`, 0 changes and no trouble, and the rig concludes NOTHING CYCLED however
+    # well the session actually drove the whole roster. The rig's own --keep still decides
+    # whether the logs are LEFT BEHIND afterwards (see the end of main).
+    cmd.append("--keep")
 
     print("stress: %d seat(s) on %s, a change every %d ms each (~%d ms somewhere in the session)"
           % (a.players, level, a.interval_ms, max(1, a.interval_ms // a.players)))
