@@ -5626,19 +5626,20 @@ static void MpDriveRemotePed(MP_PLAYER* p)
 			gMpCtx->jer_log(gMpCtx, "[mp] ped: player %d corrected %d units\n", p->id, err);
 	}
 
-	if (p->pedSpeed != 0)
+	/* Mirror the owner's gait directly: their heading, their speed (negative =
+	 * backing up), and the idle/walk/run clip that goes with it. The old
+	 * move_to aimed at a point 300 units along the owner's heading but measured
+	 * from the OWNER, so a lagging stand-in flipped to face the far side and the
+	 * clip/reverse flag were never set -- the "stuck walking backwards" Tanner.
+	 * A pose older than 400 ms means the owner stopped sending: stand idle
+	 * rather than walk on forever. */
 	{
-		/* move_to takes a POINT, so aim a little way along the owner's heading:
-		 * that is the same thing as "walk forward at this speed". */
-		int tx = p->pedX + (int)(((long)rsin(p->pedHeading) * 300) >> 12);
-		int tz = p->pedZ + (int)(((long)rcos(p->pedHeading) * 300) >> 12);
+		int spd = p->pedSpeed;
 
-		jer_npc_move_to(n, tx, tz, p->pedSpeed);
-	}
-	else
-	{
-		jer_npc_stop(n);
-		jer_npc_face(n, p->pedHeading);
+		if (MpNowMs() - p->pedLastMs > 400)
+			spd = 0;
+
+		jer_npc_set_gait(n, p->pedHeading, spd);
 	}
 
 	/* NOW animate + integrate it. Setting the intent is not enough: this ped is
