@@ -263,7 +263,17 @@ def main():
         vclock[0] += 61
         say(vs, a, "!vote rio")
         say(vs, b, "!vote 3")
+        frames = []
+        _st = vs.send_to
+        def _rec(conn, tag, payload):
+            frames.append((tag, payload))
+            _st(conn, tag, payload)
+        vs.send_to = _rec
         out = say(vs, c, "!vote rio")
+        vs.send_to = _st
+        kicks = [p for t, p in frames if t == m.TAG["kick"]]
+        check("vote: the kicks carry the rejoin flag (clients reconnect themselves)",
+              len(kicks) == 4 and all(p[1] == m.KICK_FLAG_REJOIN for p in kicks), kicks)
         check("vote: a majority (3 of 4) passes and says rejoin",
               any("Vote passed: switching to RIO" in t for _, t in out), out)
         check("vote: the city is now the session city", vs.city == 3)

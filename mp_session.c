@@ -188,6 +188,8 @@ void MpSessionReset(void)
 
 int MpBeginHost(void)
 {
+	MpRejoinCancel("hosting");
+
 	/* Already the host: do NOT reset.
 	 *
 	 * Re-entering the host menu, or the frontend reaching this a second time,
@@ -244,6 +246,8 @@ int MpBeginHost(void)
  * MP_AUTOSTART all use it), so a slow or dead address never stalls a frame. */
 int MpBeginJoinAsync(const char* host, int port)
 {
+	MpRejoinCancel("another join");
+
 	if (host == NULL || host[0] == '\0')
 		host = "127.0.0.1";
 
@@ -2202,6 +2206,169 @@ void MpKickPlayer(int playerId)
 	 * and never printed "kicked by the host".) */
 }
 
+/* AUTO-REJOIN after a server city change. A dedicated server's !vote switches
+ * city by kicking everyone with MP_KICK_FLAG_REJOIN set; we remember the address
+ * and our car, take the ordinary leave path, then re-join through the ordinary
+ * join (MpBeginJoinAsync, as an auto session so no menus are needed) and, once
+ * the new level is up, put our old car back through Change car. Client only. */
+static const char* MpChangeCarRefusal(int city, int model);
+
+#define MP_REJOIN_FIRST_MS	2500
+#define MP_REJOIN_EVERY_MS	4000
+#define MP_REJOIN_WINDOW_MS	20000
+
+static struct
+{
+	int active;		/* waiting to (re)try the join */
+	int settling;		/* joined: waiting for the level to put the car back */
+	int joining;		/* inside our own MpBeginJoinAsync (not a cancel) */
+	int prevAuto;		/* gMp.autoSession before we forced it */
+	char host[64];
+	int port;
+	unsigned long nextMs, deadlineMs;
+	int carCity, carModel;	/* -1 model = nothing to restore */
+} gMpRejoin;
+
+int MpRejoinActive(void)
+{
+	return gMpRejoin.active;
+}
+
+static void MpRejoinEnd(void)
+{
+	if (gMpRejoin.active || gMpRejoin.settling)
+		gMp.autoSession = gMpRejoin.prevAuto;
+
+	gMpRejoin.active = 0;
+	gMpRejoin.settling = 0;
+	gMpRejoin.carModel = -1;
+}
+
+void MpRejoinCancel(const char* why)
+{
+	if (gMpRejoin.joining || (!gMpRejoin.active && !gMpRejoin.settling))
+		return;
+
+	if (gMpCtx != NULL)
+		gMpCtx->jer_log(gMpCtx, "[mp] rejoin cancelled: %s\n", why ? why : "?");
+
+	/* Esc while a connect is in flight: drop it, as a refused join would. */
+	if (gMpRejoin.active && gMp.role == MP_ROLE_CLIENT && !gMp.running)
+	{
+		MpClientDisconnect();
+		gMp.role = MP_ROLE_NONE;
+		MpJoinStateSet(MP_JOIN_IDLE);
+	}
+
+	MpRejoinEnd();
+}
+
+static void MpRejoinArm(void)
+{
+	MP_PLAYER* me = MpLocalPlayer();
+	const char* host = MpJoinTarget();
+
+	memset(&gMpRejoin, 0, sizeof(gMpRejoin));
+	gMpRejoin.carModel = -1;
+
+	if (host == NULL || host[0] == '\0')
+	{
+		jer_error("The server is changing city - please rejoin");
+		return;
+	}
+
+	snprintf(gMpRejoin.host, sizeof(gMpRejoin.host), "%s", host);
+	gMpRejoin.port = MpJoinTargetPort();
+
+	/* Our car as Change car names it: an ABSOLUTE city (a -1 "session city"
+	 * would mean the NEW city after the switch) plus the model. */
+	if (me != NULL && me->car >= 0 && !me->carIsSlot)
+	{
+		gMpRejoin.carCity = (me->carCity < 0) ? gMp.city : me->carCity;
+		gMpRejoin.carModel = me->car;
+	}
+
+	gMpRejoin.prevAuto = gMp.autoSession;
+	gMpRejoin.nextMs = MpNowMs() + MP_REJOIN_FIRST_MS;
+	gMpRejoin.deadlineMs = gMpRejoin.nextMs + MP_REJOIN_WINDOW_MS;
+	gMpRejoin.active = 1;
+
+	if (gMpCtx != NULL)
+		gMpCtx->jer_log(gMpCtx, "[mp] server changing city: rejoining %s:%d (car city %d model %d)\n",
+			gMpRejoin.host, gMpRejoin.port, gMpRejoin.carCity, gMpRejoin.carModel);
+
+	jer_error("Server changing city - reconnecting... (Esc cancels)");
+}
+
+void MpRejoinTick(void)
+{
+	unsigned long now;
+
+	if (gMpRejoin.settling)
+	{
+		MP_PLAYER* me;
+
+		if (gMp.role != MP_ROLE_CLIENT)
+		{
+			MpRejoinEnd();	/* the session went away before the level came up */
+			return;
+		}
+
+		me = MpLocalPlayer();
+
+		if (!gMp.running || me == NULL || me->carId < 0)
+			return;
+
+		if (gMpRejoin.carModel >= 0)
+		{
+			int city = gMpRejoin.carCity, model = gMpRejoin.carModel;
+
+			if (gMpCtx != NULL)
+				gMpCtx->jer_log(gMpCtx, "[mp] rejoin: restoring car %s model %d\n",
+					MpCarCityName(city), model);
+
+			/* A refusal is logged by Change car itself and leaves the default car. */
+			if (!MpChangeCar(city, model) && gMpCtx != NULL)
+				gMpCtx->jer_log(gMpCtx, "[mp] rejoin: car not restored now (%s) - default car kept unless the retry lands\n",
+					MpChangeCarRefusal(city, model));
+		}
+
+		MpRejoinEnd();
+		return;
+	}
+
+	if (!gMpRejoin.active)
+		return;
+
+	now = MpNowMs();
+
+	if (gMp.role == MP_ROLE_CLIENT)
+	{
+		if (MpJoinState() == MP_JOIN_READY)
+		{
+			gMpRejoin.active = 0;
+			gMpRejoin.settling = 1;
+		}
+		return;	/* a connect is in flight */
+	}
+
+	if (gMp.role != MP_ROLE_NONE || (long)(now - gMpRejoin.nextMs) < 0)
+		return;
+
+	if ((long)(now - gMpRejoin.deadlineMs) >= 0)
+	{
+		jer_error("Could not reconnect to %s:%d", gMpRejoin.host, gMpRejoin.port);
+		MpRejoinEnd();
+		return;
+	}
+
+	gMpRejoin.nextMs = now + MP_REJOIN_EVERY_MS;
+	gMp.autoSession = 1;	/* no menus: launch into the new city on WELCOME */
+	gMpRejoin.joining = 1;
+	MpBeginJoinAsync(gMpRejoin.host, gMpRejoin.port);
+	gMpRejoin.joining = 0;
+}
+
 /* MP_TAG_KICK -- the host removed us. Take the SAME clean-leave path a
  * deliberate quit uses (MpLeaveSession sends our LEAVE back, which the host
  * turns into the connection drop), rather than tearing down on our own: that
@@ -2225,6 +2392,14 @@ static void MpHandleKick(int connIndex, const unsigned char* p, int len)
 
 	if (gMpCtx != NULL)
 		gMpCtx->jer_log(gMpCtx, "[mp] kicked by the host (player %d)\n", (int)k.playerId);
+
+	if (k.reserved[0] & MP_KICK_FLAG_REJOIN)
+	{
+		MpRejoinArm();
+		MpLeaveSession();
+		MpReturnToFrontend();
+		return;
+	}
 
 	if (len >= (int)sizeof(MP_KICK) + MP_KICK_TEXT_LEN)
 	{

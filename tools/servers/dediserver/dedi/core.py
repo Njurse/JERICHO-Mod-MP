@@ -1157,7 +1157,7 @@ class Dedicated:
         raw = text.encode("utf-8")[:m.KICK_TEXT_LEN - 1]
         return raw.decode("utf-8", "ignore")
 
-    def kick_player(self, pid, reason=None, by="admin", announce=True):
+    def kick_player(self, pid, reason=None, by="admin", announce=True, rejoin=False):
         with self.lock:
             target = [(conn, c) for conn, c in self.clients.items() if c["id"] == pid]
 
@@ -1172,7 +1172,9 @@ class Dedicated:
         # rather than just dropping the socket and leaving them guessing. With a
         # reason, the optional text tail replaces the stock line (old clients read
         # only the 4-byte head).
-        payload = m.KICK.pack(pid, 0, 0, 0)
+        # rejoin: KICK reserved[0] flag -- new clients reconnect on their own (and
+        # keep their car); old ones just see the kick text.
+        payload = m.KICK.pack(pid, m.KICK_FLAG_REJOIN if rejoin else 0, 0, 0)
         if reason:
             payload += self.kick_text(by, reason).encode("utf-8").ljust(m.KICK_TEXT_LEN, b"\0")
         try:

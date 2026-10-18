@@ -775,6 +775,9 @@ static void MpOnDebugKey(int nKey, char down)
 	if (!down)
 		return;
 
+	if (nKey == MP_KEY_CHAT_CANCEL && MpRejoinActive())
+		MpRejoinCancel("Esc");
+
 	/* The manual address field is in the FRONTEND, so this sits BEFORE the in-game
 	 * gate below: while it is editing it owns Enter and Escape. */
 	if (MpUiManualEditing())
@@ -1122,6 +1125,7 @@ static int MpOnFrame(void* userdata, void* args)
 	 * Re-asserted every frame so a missed release self-heals. */
 	MpChatGrabKeyboard((gMp.chatOpen || MpUiManualEditing()) ? 1 : 0);
 	jer_input_block(gMp.chatOpen);	/* typing never drives the car, horn, camera or pause */
+	MpRejoinTick();		/* a server city change: rejoin, then restore our car */
 
 	/* Test lever: MP_TEST_CITYCONFIRM=<secs>[,<gameType>[,<role>]] fires the
 	 * take-a-ride CITY CONFIRM the way the frontend does (CutSceneCitySelectScreen

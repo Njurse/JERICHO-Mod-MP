@@ -277,6 +277,14 @@ def main():
           and text == "Kicked by admin: spamming the chat", repr(payload))
     a.close()
     b.close()
+    check("a plain kick has no rejoin flag", payload[1] == 0, repr(payload[:4]))
+    a, b = socket.socketpair()
+    server.clients[a] = {"id": 6, "name": "Mover", "addr": "127.0.0.1:5002"}
+    server.kick_player(6, "city change", by="vote", rejoin=True)
+    tag, payload = m.recv_frame(b)
+    check("kick(rejoin=True) sets KICK_FLAG_REJOIN", payload[1] == m.KICK_FLAG_REJOIN, repr(payload[:4]))
+    a.close()
+    b.close()
     long = server.kick_text("admin", "\u00e9" * 80)
     check("a long reason is cut to 63 bytes without splitting UTF-8",
           len(long.encode()) <= m.KICK_TEXT_LEN - 1 and long.startswith("Kicked by admin: "), repr(long))

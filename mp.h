@@ -513,6 +513,12 @@ void MpConsoleChat(const char* name, int colorOn, int r, int g, int b, const cha
  * machine can hold. Returns 1 if the car on the road changed. */
 int MpChangeCar(int city, int model);
 
+/* Auto-rejoin after a server city change (MP_KICK_FLAG_REJOIN): mp_session.c.
+ * Tick runs every frame (frontend too); Cancel is Esc or any other join/host. */
+void MpRejoinTick(void);
+int  MpRejoinActive(void);
+void MpRejoinCancel(const char* why);
+
 /* A city's display name (a 0..3 index, or -1 for the session's own city). */
 const char* MpCarCityName(int city);
 

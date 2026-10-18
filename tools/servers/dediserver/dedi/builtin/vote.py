@@ -13,8 +13,9 @@ dediserver.json switches the command off.
 
 On a pass the city is saved to dediserver.json and becomes the session city (the
 welcome and start messages carry it, and the listing is refreshed), and every
-player is kicked with a "rejoin" message: the game has no way to change level
-under a live session, so they rejoin from the server browser into the new city.
+player is kicked with the KICK rejoin flag: the game has no way to change level
+under a live session, so current clients reconnect by themselves (keeping their
+car) and older ones rejoin from the server browser into the new city.
 """
 import time
 
@@ -138,7 +139,7 @@ def _check():
 
 def _pass(city):
     name = CITIES[city].upper()
-    _server.broadcast("Vote passed: switching to %s -- rejoin from the server browser" % name, COLOR)
+    _server.broadcast("Vote passed: switching to %s -- reconnecting everyone" % name, COLOR)
     _server.log.info("vote passed: city -> %d (%s)" % (city, name))
     _server.set_city(city)
     try:
@@ -146,7 +147,8 @@ def _pass(city):
     except OSError as e:
         _server.log.warning("could not save the city: %s" % e)
     for p in _server.players():
-        _server.kick(p, "server switched to %s - rejoin" % name, by="vote", announce=False)
+        _server.kick(p, "server switched to %s - rejoin" % name, by="vote", announce=False,
+                         rejoin=True)
 
 
 def on_tick():

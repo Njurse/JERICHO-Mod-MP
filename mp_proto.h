@@ -609,6 +609,9 @@ typedef struct MP_KICK
  * clients read only the 4-byte head, so no protocol bump. */
 #define MP_KICK_TEXT_LEN	64
 
+/* MP_KICK.reserved[0] flags. Old clients ignore them (a plain kick). */
+#define MP_KICK_FLAG_REJOIN	0x01	/* the server is changing city: rejoin it shortly */
+
 /* A contact report. Cars are owner-authoritative, so a machine can only move
  * the ONE car it owns: when MY car touches YOURS I push MINE, and I send you
  * this so you push YOURS. Both cars move, and each stays the owner's truth.

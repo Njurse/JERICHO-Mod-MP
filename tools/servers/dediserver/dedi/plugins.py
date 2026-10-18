@@ -120,10 +120,11 @@ class ServerAPI:
     def broadcast(self, text, color=None):
         self._s.send_server_chat(text, color)
 
-    def kick(self, player, reason=None, by="admin", announce=True):
+    def kick(self, player, reason=None, by="admin", announce=True, rejoin=False):
         """Drop a player. With a reason they see "Kicked by <by>: <reason>" (cut to
-        the protocol's 63 bytes) and chat is told; without one, the stock kick."""
-        return self._s.kick_player(player.id, reason, by=by, announce=announce)
+        the protocol's 63 bytes) and chat is told; without one, the stock kick.
+        rejoin=True tells current clients to reconnect by themselves (a city change)."""
+        return self._s.kick_player(player.id, reason, by=by, announce=announce, rejoin=rejoin)
 
     # -- config / rules
     def config_get(self, key, default=None):

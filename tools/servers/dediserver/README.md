@@ -150,9 +150,14 @@ announced in chat (`"announce_joins": false` turns that off). Saving rewrites
 next vote can start 60 s after one ends. Admins can `!vote cancel`.
 
 On a pass the city is saved to `dediserver.json`, becomes the session city and the
-discovery listing updates. **Everyone is then disconnected with a "rejoin"
-message**: the game cannot change level under a running session, so players rejoin
-from the server browser and load the new city. There is no automatic reconnect.
+discovery listing updates. **Everyone is then disconnected with the KICK's rejoin
+flag** (the game cannot change level under a running session). Current clients show
+"Server changing city - reconnecting...", rejoin the same server by themselves after
+~2.5 s (retrying for ~20 s; Esc or joining/hosting anything else cancels), load the
+new city and put their previous car back through Change car (cross-city works; if
+the car can't be used there they keep the default, and the log says why). Older
+clients just see "Kicked by vote: server switched to ... - rejoin" and rejoin by hand.
+Plugins can do the same with `kick(player, reason, rejoin=True)`.
 
 Keys: `"vote"` (`false` turns `!vote` off), `"vote_duration"` (seconds, 30),
 `"vote_threshold"` (fraction that must be exceeded, 0.5), `"vote_cooldown"` (60).
