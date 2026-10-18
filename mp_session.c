@@ -24,6 +24,7 @@
 #include "system.h"	/* CITY_COUNT and LevelNames: the city registry MpCarCityName reads */
 #include "denting.h"	/* CreateDentableCar: the only writer of the drawn vertex dump */
 #include "civ_ai.h"	/* reservedSlots: the array PingInCivCar's free-slot scan reads */
+#include "cop_ai.h"	/* requestCopCar: a cop is waiting for a slot (the cop slot hold) */
 #include "felony.h"	/* felonyRating / pedestrianFelony: what a restart clears */
 extern int gBootMpLevel;	/* main.c: 1 = the small multiplayer map, 0 = the full city */
 extern int gBootMpArena;	/* main.c: which multiplayer map (0/1) */
@@ -3397,6 +3398,25 @@ static void MpHeartbeatTick(void)
 #define MP_TRAFFIC_SLOT_COUNT	JER_SLOT_TRAFFIC_COUNT			/* 12 traffic slots, fixed */
 
 static unsigned char gMpBandReserved[MAX_CARS];	/* slots WE turned on, so we clear only ours */
+/* THE COP SLOT HOLD. Civilians and cops share this machine's band, and in
+ * single player the engine never runs the pool dry (19 free slots against a
+ * civilian cap of 13), so a cop request always finds a slot. A band is at most
+ * 12 slots and the cap does not shrink with it, so traffic fills every slot and
+ * a cop has to wait for a civilian to drive out of range -- which, for players
+ * staying in one area, is a long time. While the session has cops on and fewer
+ * than maxCopCars are out, the LAST free slot of the band is held back from the
+ * civilian spawner (reservedSlots, like the band), and released on the frame a
+ * cop is requested so the cop takes it. -1 = holding nothing. */
+static int gMpCopHold = -1;
+
+static void MpCopHoldRelease(void)
+{
+	if (gMpCopHold >= 0 && !gMpBandReserved[gMpCopHold])
+		reservedSlots[gMpCopHold] = 0;
+
+	gMpCopHold = -1;
+}
+
 static int gMpBandFirst = -1;			/* this machine's band, inclusive; -1 = none */
 static int gMpBandLast = -1;
 
@@ -3467,6 +3487,8 @@ static void MpTrafficBandFor(int rank, int nMachines, int* first, int* last)
 void MpTrafficBandClear(void)
 {
 	int i;
+
+	MpCopHoldRelease();
 
 	for (i = 0; i < MAX_CARS; i++)
 	{
@@ -3743,6 +3765,32 @@ static void MpTrafficBandRefresh(void)
 	gMpBandFirst = f;
 	gMpBandLast = l;
 
+	/* The cop slot hold (see gMpCopHold): re-decided every frame, before the
+	 * spawner runs. Only with the session's cops on, so a no-cops session and
+	 * single player keep every slot for traffic. */
+	MpCopHoldRelease();
+
+	if (f >= 0 && gMp.ruleSet && gMp.ruleCops && CopsAllowed &&
+	    numCopCars < maxCopCars && !requestCopCar)
+	{
+		int freeCount = 0, lastFree = -1;
+
+		for (i = f; i <= l; i++)
+		{
+			if (car_data[i].controlType == CONTROL_TYPE_NONE && !reservedSlots[i])
+			{
+				freeCount++;
+				lastFree = i;
+			}
+		}
+
+		if (freeCount == 1)
+		{
+			reservedSlots[lastFree] = 1;
+			gMpCopHold = lastFree;
+		}
+	}
+
 	if (changed && gMpCtx != NULL)
 		gMpCtx->jer_log(gMpCtx,
 			"[mp] traffic band: machine %d of %d owns car_data slots %d..%d\n",
@@ -3886,6 +3934,12 @@ static void MpTrafficClaimPass(void)
 		int owner;
 
 		if (cp->controlType != CONTROL_TYPE_CIV_AI)
+			continue;	/* PURSUER_AI (a cop in pursuit) is never handed off */
+
+		/* Nor a patrolling cop: a cop off duty is a CIV_AI car with CONTROL_FLAG_COP
+		 * (dr2types.h). It is OUR cop, there for OUR player; the peer's copy of the
+		 * area is not chasing us, so handing it off deleted our police. */
+		if (cp->controlFlags & CONTROL_FLAG_COP)
 			continue;
 
 		census++;
