@@ -150,7 +150,20 @@ class ServerAPI:
         """handler(caller, args) -> str reply (or None). `caller` is a Player, or
         the console (admin, no conn). console=True also offers it at the server
         console, unless a console command of that name already exists."""
-        self._m.register_command(name, handler, admin, help, self.plugin, console)
+        return self._m.register_command(name, handler, admin, help, self.plugin, console)
+
+    def set_session(self, time_of_day=None, weather=None):
+        """time_of_day (dawn/day/dusk/night) / weather (clear/rain/wet), from the
+        next level load. Raises ValueError for an unknown name."""
+        return self._s.set_session(time_of_day=time_of_day, weather=weather)
+
+    def save_config(self, *keys):
+        """Write these config keys back to dediserver.json (atomic, other keys kept)."""
+        return self._s.save_config_keys(list(keys))
+
+    def describe(self, player):
+        """'name (slot N, uuid)' -- for logging who did something."""
+        return "%s (slot %s, %s)" % (player.name, player.id, player.player_id or "no id")
 
     def commands(self):
         return self._m.commands_for(None)
@@ -278,9 +291,12 @@ class PluginManager:
         name = name.lower().lstrip("!/")
         with self._lock:
             if name in self.commands and self.commands[name].plugin != plugin:
-                self.log.warning("command %s from %s replaces the one from %s"
-                                 % (name, plugin, self.commands[name].plugin))
+                # first come, first served: a later plugin cannot hijack a command
+                self.log.error("plugin %s: command !%s is already registered by %s; "
+                               "ignored" % (plugin, name, self.commands[name].plugin))
+                return False
             self.commands[name] = Command(name, handler, bool(admin), help, plugin, console)
+            return True
 
     def commands_for(self, caller):
         """The commands `caller` may run (None = all of them), sorted."""
@@ -300,6 +316,10 @@ class PluginManager:
         if cmd.admin and not caller.admin:
             self.log.info("denied !%s to %s (not an admin)" % (name, getattr(caller, "name", "?")))
             return "!%s is for admins" % name
+        if cmd.admin:
+            self.log.info("admin: !%s by %s (slot %s, %s)" % (
+                name, getattr(caller, "name", "?"), getattr(caller, "id", "?"),
+                getattr(caller, "player_id", None) or "no id"))
         try:
             return cmd.handler(caller, args)
         except (Exception, SystemExit) as e:

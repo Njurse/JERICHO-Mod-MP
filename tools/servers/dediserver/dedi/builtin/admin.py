@@ -13,7 +13,10 @@ reuse the admin password anywhere else.
 import hmac
 import time
 
-DESCRIPTION = "admins by player id / !login; !whoami !who !kick !cops !difficulty !motd !say"
+import mp_test as m          # normalize_player_id: dashed or plain hex, any case
+
+DESCRIPTION = ("admins by player id / !login; !whoami !who !admin !kick !cops !difficulty "
+               "!time !weather !motd !say")
 
 LOGIN_MAX_FAILS = 3        # wrong passwords allowed per window ...
 LOGIN_WINDOW_S = 60.0      # ... within this many seconds ...
@@ -39,16 +42,34 @@ def on_load(server):
     reg("cops", cmd_cops, admin=True, console=True, help="!cops on|off - police (next level load)")
     reg("difficulty", cmd_difficulty, admin=True, console=True,
         help="!difficulty 0-2 - cop difficulty (next level load)")
-    reg("motd", cmd_motd, admin=True, console=True, help="!motd [text] - show or set the greeting")
+    reg("motd", cmd_motd, admin=True, console=True,
+        help="!motd [text|save] - show, set, or save the greeting to dediserver.json")
+    reg("time", cmd_time, admin=True, console=True,
+        help="!time dawn|day|dusk|night - time of day (next level load)")
+    reg("weather", cmd_weather, admin=True, console=True,
+        help="!weather clear|rain|wet - weather (next level load)")
+    reg("admin", cmd_admin, admin=True, console=True,
+        help="!admin add|remove <slot|name|uuid>, !admin list - saved to dediserver.json")
     reg("say", cmd_say, admin=True, help="!say <text> - a line from the server to everyone")
 
 
 def _admin_ids():
-    return {str(x).strip().lower() for x in (_server.config_get("admins") or [])}
+    out = set()
+    for x in (_server.config_get("admins") or []):
+        n = m.normalize_player_id(x)
+        if n:
+            out.add(n)
+        else:
+            _server.log.warning("admins: %r is not a player id (a UUID); ignored" % (x,))
+    return out
+
+
+def _is_listed(player):
+    return bool(player.player_id) and m.normalize_player_id(player.player_id) in _admin_ids()
 
 
 def on_player_join(player):
-    if player.player_id and player.player_id.lower() in _admin_ids():
+    if _is_listed(player):
         player.admin = True
         _server.log.info("player %d '%s' is an admin (by player id)" % (player.id, player.name))
         _server.send_private(player, "You are an admin on this server (!help).", "#9CFF9C")
@@ -64,8 +85,8 @@ def cmd_who(caller, _args):
     rows = []
     for p in _server.players():
         row = "%2d  %s%s" % (p.id, p.name, " (admin)" if p.admin else "")
-        if caller.admin:
-            row += "  %s" % p.addr
+        if caller.admin:          # ids and addresses are for admins only
+            row += "  %s  %s" % (p.player_id or "no id", p.addr)
         rows.append(row)
     return "\n".join(rows) or "nobody is connected"
 
@@ -99,7 +120,7 @@ def cmd_login(caller, args):
 
 
 def cmd_logout(caller, _args):
-    if caller.player_id and caller.player_id.lower() in _admin_ids():
+    if _is_listed(caller):
         return "you are listed as an admin by player id; that cannot be dropped here"
     caller.admin = False
     return "admin rights dropped"
@@ -130,9 +151,63 @@ def cmd_motd(caller, args):
     text = args.strip()
     if not text:
         return "motd: %s" % (_server.config_get("motd") or "(none)")
+    if text.lower() == "save":
+        _server.save_config("motd")
+        return "motd saved to dediserver.json"
     _server.config_set("motd", text)
-    _server.log.info("motd set by %s" % caller.name)
-    return "motd set (shown to players as they join; not saved to dediserver.json)"
+    _server.log.info("motd set by %s" % _server.describe(caller))
+    return "motd set for this run (!motd save keeps it)"
+
+
+def cmd_time(caller, args):
+    try:
+        return "next level load: %s" % _server.set_session(time_of_day=args.strip() or None)
+    except ValueError as e:
+        return "usage: !time dawn|day|dusk|night (%s)" % e
+
+
+def cmd_weather(caller, args):
+    try:
+        return "next level load: %s" % _server.set_session(weather=args.strip() or None)
+    except ValueError as e:
+        return "usage: !weather clear|rain|wet (%s)" % e
+
+
+def cmd_admin(caller, args):
+    parts = args.split(None, 1)
+    verb = parts[0].lower() if parts else "list"
+    rest = parts[1].strip() if len(parts) > 1 else ""
+    ids = [m.normalize_player_id(x) for x in (_server.config_get("admins") or [])]
+    ids = [x for x in ids if x]
+    if verb == "list":
+        if not ids:
+            return "no admins listed (by player id)"
+        names = {p.player_id: p.name for p in _server.players() if p.player_id}
+        return "\n".join("%s%s" % (i, ("  (%s, online)" % names[i]) if i in names else "") for i in ids)
+    if verb not in ("add", "remove") or not rest:
+        return "usage: !admin add|remove <slot|name|uuid>, !admin list"
+    target = _server.find_player(rest)
+    pid = (target.player_id if target is not None else None) or m.normalize_player_id(rest)
+    if not pid:
+        return "%s: no such player online, and not a player id" % rest
+    pid = m.normalize_player_id(pid)
+    if verb == "add":
+        if pid in ids:
+            return "%s is already an admin" % pid
+        ids.append(pid)
+    else:
+        if pid not in ids:
+            return "%s is not listed" % pid
+        ids.remove(pid)
+    _server.config_set("admins", ids)
+    _server.save_config("admins")
+    for p in _server.players():
+        if p.player_id and m.normalize_player_id(p.player_id) == pid:
+            p.admin = (verb == "add")
+            _server.send_private(p, "You are %s an admin on this server."
+                                 % ("now" if verb == "add" else "no longer"), "#9CFF9C")
+    _server.log.info("admin %s %s by %s" % (verb, pid, _server.describe(caller)))
+    return "%s %s (saved to dediserver.json)" % ("added" if verb == "add" else "removed", pid)
 
 
 def cmd_say(caller, args):

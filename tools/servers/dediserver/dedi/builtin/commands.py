@@ -15,7 +15,7 @@ _server = None
 def on_load(server):
     global _server
     _server = server
-    server.register_command("help", cmd_help, help="list the commands you can use")
+    server.register_command("help", cmd_help, help="!help [command] - what you can use, or one command's details")
 
 
 def on_chat(player, text):
@@ -27,7 +27,13 @@ def on_chat(player, text):
     return True
 
 
-def cmd_help(caller, _args):
+def cmd_help(caller, args):
+    want = args.strip().lstrip("!/").lower()
+    if want:
+        for c in _server.commands_for(caller):
+            if c.name == want:
+                return "!%s%s - %s" % (c.name, " (admin)" if c.admin else "", c.help or "no details")
+        return "no command !%s you can use" % want
     rows = []
     for c in _server.commands_for(caller):
         rows.append("!%s%s - %s" % (c.name, " (admin)" if c.admin else "", c.help or ""))
