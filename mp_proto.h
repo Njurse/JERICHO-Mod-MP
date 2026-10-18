@@ -577,7 +577,7 @@ typedef struct MP_CAR
 {
 	uint8_t  model;		/* the chosen model; 0xFF = none */
 	uint8_t  city;		/* 0..3 = the city it belongs to, 0xFF = the session's own */
-	uint8_t  reserved[2];
+	uint8_t  reserved[2];	/* [0] palette, [1] 1 = [0] is set (optional; old peers send 0) */
 } MP_CAR;
 
 /* A chat line: a player's message, announced to every seat. */

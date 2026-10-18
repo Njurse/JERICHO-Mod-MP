@@ -2351,6 +2351,43 @@ static int MpCcApply(void* ud, int dir)
 	return JER_PAUSE_QUIT_NONE;
 }
 
+/* PALETTE: the six colour variants every car's CLUT rows offer (civ_clut[..][..][0..5];
+ * a variant a city never filled falls back to the base colours in CarClutLookup).
+ * Applied to OUR car at once -- the owner's carstate carries ap.palette, so every
+ * peer repaints it on the next packet -- and kept in defaultPlayerPalette, which the
+ * next spawn (and the frontend car select) uses, and in mp.ini [mp] palette. */
+#define MP_PALETTES	6
+
+extern u_char defaultPlayerPalette;	/* main.c: the palette the player's car spawns in */
+
+static void MpCcLabelPalette(void* ud, char* out, int max)
+{
+	(void)ud;
+	snprintf(out, max, "Palette: %d/%d", (int)defaultPlayerPalette % MP_PALETTES + 1, MP_PALETTES);
+}
+
+static int MpCcAdjustPalette(void* ud, int dir)
+{
+	MP_PLAYER* me = MpLocalPlayer();
+	int pal = ((int)defaultPlayerPalette + dir + MP_PALETTES) % MP_PALETTES;
+
+	(void)ud;
+
+	defaultPlayerPalette = (u_char)pal;
+	gMp.config.palette = pal;
+	MpConfigSave();
+
+	if (me != NULL)
+		me->palette = pal;
+
+	if (me != NULL && me->carId >= 0 && me->carId < MAX_CARS)
+		car_data[me->carId].ap.palette = (u_char)pal;
+	else if (!gMp.running && player[0].playerCarId >= 0 && player[0].playerCarId < MAX_CARS)
+		car_data[player[0].playerCarId].ap.palette = (u_char)pal;	/* single player */
+
+	return JER_PAUSE_QUIT_NONE;
+}
+
 /* Defined with the player actions further down; the Change car submenu wants it
  * up here, where the CAR options live. */
 static int MpOptRepair(void* ud, int dir);
@@ -2360,6 +2397,7 @@ static const JER_PAUSE_MENU_ITEM mpChangeCarItems[] =
 	/* label, get_label, on_activate, userdata, submenu, adjust */
 	{ NULL, MpCcLabelCity, MpCcAdjustCity, NULL, NULL, 1 },
 	{ NULL, MpCcLabelCar, MpCcAdjustCar, NULL, NULL, 1 },
+	{ NULL, MpCcLabelPalette, MpCcAdjustPalette, NULL, NULL, 1 },
 	{ "Respawn as this car", NULL, MpCcApply, NULL, NULL, 0 },
 	/* Repair belongs with the car, not under Player options: it is a car action and
 	 * "Respawn as this car" next to it is the one that also MOVES you. */

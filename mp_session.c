@@ -375,6 +375,15 @@ static void MpSendPickedCar(int model, int city)
 	c.model = (model >= 0 && model < 0xFF) ? (uint8_t)model : 0xFF;
 	c.city = (city >= 0 && city < CITY_COUNT) ? (uint8_t)city : 0xFF;
 
+	/* reserved[0] = our palette, reserved[1] = 1 "palette present" (old hosts
+	 * ignore both): so the roster names our colour before our first carstate. */
+	{
+		extern u_char defaultPlayerPalette;
+
+		c.reserved[0] = (uint8_t)defaultPlayerPalette;
+		c.reserved[1] = 1;
+	}
+
 	MpSendToHost(MP_TAG_CAR, 0, &c, sizeof(c));
 
 	if (gMpCtx != NULL)
@@ -1930,6 +1939,8 @@ static void MpHandleCar(int connIndex, const unsigned char* p, int len)
 	pl->carIsSlot = 0;
 	pl->carCity = (c.city < CITY_COUNT) ? (int)c.city : -1;
 	pl->carConfirmed = 1;
+	if (c.reserved[1] == 1)
+		pl->palette = (int)c.reserved[0];	/* the colour they will drive in */
 
 	if (gMpCtx != NULL)
 		gMpCtx->jer_log(gMpCtx, "[mp] player %d picked car model %d (city %d)\n",
@@ -8260,6 +8271,9 @@ static void MpHandleCarState(int connIndex, const unsigned char* p, int len)
 		 * modules answer whether this machine really holds this player's car. A car
 		 * that only looks like the owner's gets the palette it can actually support,
 		 * instead of colours that belong to a vehicle that is not here */
+		if (!pl->isLocal)
+			pl->palette = (int)e.palette;	/* the roster (late joiners) names the owner's colour */
+
 		if (!pl->isLocal)
 		{
 			int pal = (int)e.palette;

@@ -193,6 +193,20 @@ def main():
     check("the roster lists the picked car as ready",
           picked.get(6) == (9, 1, m.ROSTER_FLAG_CAR_READY) and picked.get(4) == (0xFF, 0xFF, 0), repr(picked))
     check("a short car pick is ignored", not server.note_car_pick(pairs[6][0], b"\x01"))
+    # -- PALETTE: a pick that carries it (reserved[0], flagged by reserved[1]) is in the roster
+    server.note_car_pick(pairs[6][0], bytes([9, 1, 4, 1]))
+    rows = server.roster_bytes()
+    pals = {}
+    for i in range(m.ROSTER.unpack_from(rows, 0)[0]):
+        e = m.ROSTER_ENTRY.unpack_from(rows, m.ROSTER.size + i * m.ROSTER_ENTRY.size)
+        pals[e[0]] = e[6]
+    check("the roster carries the picked palette", pals.get(6) == 4, repr(pals))
+    server.note_car_pick(pairs[6][0], bytes([9, 1, 2, 0]))
+    rows = server.roster_bytes()
+    e = [m.ROSTER_ENTRY.unpack_from(rows, m.ROSTER.size + i * m.ROSTER_ENTRY.size)
+         for i in range(m.ROSTER.unpack_from(rows, 0)[0])]
+    check("an unflagged palette byte is ignored (old clients)",
+          [r[6] for r in e if r[0] == 6] == [4], repr(e))
     # -- LINK STATS: one row per client, rates from the bytes each way, loss unknown
     body = server.stats_bytes()
     n = m.STATS.unpack_from(body, 0)[0]

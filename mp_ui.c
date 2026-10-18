@@ -1980,8 +1980,18 @@ static int MpProjectWorldToScreen(int wx, int wy, int wz, int* sx, int* sy, int*
 	gMpTagRawX = ox;
 	ox = jer_screen_remap_x(ox);
 
-	if (ox < 6 || ox > 308 || oy < 6 || oy > 232)
+	/* The SIDES: the remapped x spans the whole visible width (0..320 is the edge
+	 * of a 16:9 screen too), and a car whose centre has just left it still has half
+	 * its body on screen. Culling at the buffer edge dropped the tag while the car
+	 * was plainly visible, so keep it out to ~a car's half-width past the edge and
+	 * pin it to the edge instead. */
+	if (ox < -60 || ox > 380 || oy < 6 || oy > 232)
 		return 0;
+
+	if (ox < 6)
+		ox = 6;
+	else if (ox > 308)
+		ox = 308;
 
 	if (sx != NULL) *sx = ox;
 	if (sy != NULL) *sy = oy;
