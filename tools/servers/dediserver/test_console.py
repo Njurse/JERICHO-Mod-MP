@@ -163,6 +163,23 @@ def main():
     first, second = got(5, 1.0), got(5, 1.0)
     check("the roster cadence also sends the colour table (late joiners)",
           alive and first[0] == m.TAG["roster"] and second == (m.TAG["color"], both))
+    third = got(5, 1.0)
+    check("the roster cadence also PINGs the client", third is not None and third[0] == m.TAG["ping"]
+          and len(third[1]) == 4, repr(third))
+    # the client echoes the tick in a PONG; the round trip becomes its roster ping
+    import struct as _st
+    from dedi import core as _core
+    tick = (_core._ms32() - 42) & 0xFFFFFFFF
+    rtt = server.note_pong(pairs[5][0], _st.pack("<I", tick))
+    check("a PONG gives a round trip", rtt is not None and 40 <= rtt < 1000, repr(rtt))
+    rows = server.roster_bytes()
+    pings = {}
+    for i in range(m.ROSTER.unpack_from(rows, 0)[0]):
+        e = m.ROSTER_ENTRY.unpack_from(rows, m.ROSTER.size + i * m.ROSTER_ENTRY.size)
+        pings[e[0]] = e[5]
+    check("the roster carries the measured ping", pings.get(5) == rtt and pings.get(4) == 0, repr(pings))
+    check("a stale or foreign PONG is ignored",
+          server.note_pong(pairs[5][0], _st.pack("<I", (_core._ms32() + 100000) & 0xFFFFFFFF)) is None)
     check("a short colour frame is dropped", relay.color(server, pairs[4][0], 4, m.COLOR.pack(3)) == 0)
 
     # -- CHANNEL: header + declared payload, to everyone (the sender too)

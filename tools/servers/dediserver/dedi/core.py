@@ -257,6 +257,11 @@ def master_base(url):
 
 
 # ---------------------------------------------------------------------- the server
+def _ms32():
+    """A millisecond clock in the PING tick's 32 bits (the host uses its own clock)."""
+    return int(time.monotonic() * 1000) & 0xFFFFFFFF
+
+
 class Dedicated:
     def __init__(self, cfg, log):
         self.cfg = cfg
@@ -419,14 +424,15 @@ class Dedicated:
                     # the first five fields of the row: pid, flags, palette, model, modelCity
                     _pid, _fl, palette, model, model_city = m.CARSTATE_ENTRY.unpack_from(car, 0)[:5]
                     ready = m.ROSTER_FLAG_CAR_READY
-                rows.append((info["id"], info["name"], model, model_city, palette, ready))
+                rows.append((info["id"], info["name"], model, model_city, palette, ready,
+                             info.get("ping", 0)))
         rows.sort(key=lambda r: r[0])
 
         out = bytearray(m.ROSTER.pack(len(rows), 0, 0, 0))
-        for pid, name, model, model_city, palette, ready in rows:
+        for pid, name, model, model_city, palette, ready, ping in rows:
             out += m.ROSTER_ENTRY.pack(
                 pid & 0xFF, 0, model & 0xFF, model_city & 0xFF, ready,
-                0,                                    # ping: no per-client RTT is measured here yet
+                min(int(ping), 0xFFFF),               # ping: our PING -> their PONG round trip
                 palette & 0xFFFF,
                 name.encode("latin1", "replace")[: m.ROSTER_NAME_MAX - 1])
         return bytes(out)
@@ -451,12 +457,29 @@ class Dedicated:
             table = relay.color_table(self)
             if table:
                 m.send_frame(conn, m.TAG["color"], table)
+            # ...and a PING, as the host's keepalive does: the client echoes the tick
+            # in a PONG, and that round trip is the roster's `ping` (MpPingForPlayer)
+            m.send_frame(conn, m.TAG["ping"], struct.pack("<I", _ms32()))
         except OSError:
             return False, now
         except Exception as e:
             # a roster we cannot build must not cost the player their connection
             self.log.debug("roster refresh failed for player %d: %s" % (pid, e))
         return True, now
+
+    def note_pong(self, conn, payload):
+        """A client's PONG to our PING: the round trip in ms, kept for the roster.
+        Returns it, or None for a frame that is not an answer to us."""
+        if len(payload) < 4:
+            return None
+        rtt = (_ms32() - struct.unpack_from("<I", payload, 0)[0]) & 0xFFFFFFFF
+        if rtt > 60000:
+            return None
+        with self.lock:
+            info = self.clients.get(conn)
+            if info is not None:
+                info["ping"] = rtt
+        return rtt
 
     def broadcast(self, payload, tag, skip=None):
         with self.lock:
@@ -763,6 +786,8 @@ class Dedicated:
                         m.send_frame(conn, m.TAG["pong"], payload or b"\x00\x00\x00\x00")
                     except OSError:
                         break
+                elif tag == m.TAG["pong"]:
+                    self.note_pong(conn, payload)
                 elif tag == m.TAG["leave"]:
                     break
         finally:
