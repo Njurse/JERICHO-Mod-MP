@@ -5,6 +5,7 @@
   "gamemode": 0,
   "max_players": 16,
   "motd": "Welcome to JERICHO - drive safe, mind the traffic.",
+  "motd_color": "#7FE8FF",
   "beacon": true,
   "beacon_ms": 1000,
   "idle_drop_s": 30.0,

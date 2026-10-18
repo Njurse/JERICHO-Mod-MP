@@ -401,6 +401,11 @@ class Handler(BaseHTTPRequestHandler):
             "version": API_VERSION,
             "count": len(rows),
             "generatedAt": round(now, 3),
+            # The operator's greeting, carried by the listing itself so the game needs
+            # no second request. Both keys are always present (just empty) so a client
+            # can clear a motd the operator has since removed.
+            "motd": self.cfg.get("motd") or "",
+            "motdColor": self.cfg.get("motd_color") or "",
             "servers": rows,
         })
 
@@ -556,6 +561,10 @@ DEFAULTS = {
     "log_file": "",
     "public_url": "",
     "probe_s": 5,           # how often to check that a listed server ANSWERS
+    # Said in the game's online browser when the join screen opens: one line, in
+    # this colour, to every client that asks for the listing. "" = nothing.
+    "motd": "",
+    "motd_color": "#FFD24A",
 }
 
 

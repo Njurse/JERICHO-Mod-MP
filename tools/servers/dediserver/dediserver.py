@@ -59,6 +59,9 @@ DEFAULTS = {
                                # 16 is the protocol's cap (MP_MAX_PLAYERS)
     "motd": "",                # said to each joiner as a SERVER chat line ("" = nothing).
                                # One line: the wire field holds 95 characters.
+    "motd_color": "#7FE8FF",   # that line's colour, "#RRGGBB". It rides in the chat
+                               # frame's reserved bytes, so an older client just
+                               # prints the default colour instead of failing.
     "beacon": True,            # advertise on UDP so the LAN browser lists us
     "beacon_ms": 1000,
     "idle_drop_s": 30.0,       # real silence before a client is dropped (0 = never)
@@ -133,6 +136,25 @@ def mods_match(declared, required, versions, level):
                 return False
 
     return True
+
+
+def _ink_bytes(value):
+    """A config colour ("#RRGGBB", or "RRGGBB") as the three bytes the chat frame carries.
+
+    Anything unparsable becomes the near-white a chat line uses by default: a typo in
+    a config file should cost a colour, not the motd. Black is never a fallback --
+    it would be invisible against the console.
+    """
+    text = (value or "").strip().lstrip("#")
+
+    try:
+        if len(text) >= 6:
+            v = int(text[:6], 16)
+            return ((v >> 16) & 0xFF, (v >> 8) & 0xFF, v & 0xFF)
+    except ValueError:
+        pass
+
+    return (240, 240, 240)
 
 
 def normalise_host(value):
@@ -479,12 +501,15 @@ class Dedicated:
         # announcement. It goes down the chat channel because that is already the
         # client's own "SERVER:" voice (see cmd_say): player id 0xFF matches no
         # player, so the client prints the text with no name attached to it.
+        # The text is the MESSAGE ONLY: the client labels a speaker with no player row
+        # as "SERVER" itself, so a prefix here would read "SERVER: SERVER: ...".
         motd = (self.cfg.get("motd") or "").strip()
 
         if motd:
+            ink = _ink_bytes(self.cfg.get("motd_color"))
             try:
                 m.send_frame(conn, m.TAG["chat"],
-                             m.CHAT.pack(0xFF, 0, 0, 0, ("SERVER: " + motd).encode()[:95]))
+                             m.CHAT.pack(0xFF, ink[0], ink[1], ink[2], motd.encode()[:95]))
             except OSError:
                 pass
             self.log.debug("sent the motd to %s" % who)
@@ -801,7 +826,9 @@ class Dedicated:
         # 0xFF is not a player id, so the client's chat handler finds no name for it
         # and prints the text on its own -- which is what a server line wants. The
         # prefix is there because the text would otherwise read as a player's.
-        chat = m.CHAT.pack(0xFF, 0, 0, 0, ("SERVER: " + rest).encode()[:95])
+        # No "SERVER:" prefix: the client labels a speaker with no player row as
+        # SERVER itself (0xFF matches no player), so a prefix would double it.
+        chat = m.CHAT.pack(0xFF, 0, 0, 0, rest.encode()[:95])
         self.broadcast(chat, m.TAG["chat"])
         self.log.info("console: said %r" % rest)
         return "said to %d player(s)" % self.player_count()

@@ -432,6 +432,15 @@ int  MpOnlineCount(void);
 const MP_ONLINE_SERVER* MpOnlineGet(int index);
 int  MpOnlineRevision(void);			/* changes when the list does */
 
+/* The master's greeting, if it published one ("motd" + "motdColor" in the
+ * master's config). It is carried in the /v1/servers reply, so it costs no extra
+ * request, and the browser says it once per distinct text when it opens.
+ * MpOnlineMotdRev changes when the TEXT does -- a master that edits its motd mid
+ * session is a new line, not a repeat. */
+const char* MpOnlineMotd(void);
+int  MpOnlineMotdRev(void);
+void MpOnlineMotdColor(unsigned char* r, unsigned char* g, unsigned char* b);
+
 /* Short digest of the enabled-module manifest (implemented in mp.c). */
 unsigned short MpModHash(void);
 
@@ -483,7 +492,11 @@ void MpNotify(const char* text);	/* queue a line for the overlay */
 void MpConsoleLine(const char* fmt, ...);	/* printf-style status line */
 /* A chat line, "<name>: <text>", the name in the speaker's own colour (or the
  * neutral amber when they have not set one). */
-void MpConsoleChat(const char* name, int colorOn, int r, int g, int b, const char* text);
+/* ink: NULL for an ordinary chat line; otherwise r/g/b to draw BOTH the name and
+ * the text in -- the server's own voice for a dedicated server's motd, which
+ * carries its colour in the frame (see MP_CHAT.reserved). */
+void MpConsoleChat(const char* name, int colorOn, int r, int g, int b, const char* text,
+		   const unsigned char* ink);
 
 /* Replace OUR OWN vehicle with another one, mid-match (the pause menu's Change
  * car). (city, model) is the pair the wire carries; the model must be one this

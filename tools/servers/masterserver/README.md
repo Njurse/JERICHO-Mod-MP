@@ -59,7 +59,26 @@ The `host` the master reports is **always the public address the entry was
 recorded from** — the TCP peer IP, or the host's own `advertiseHost` if it sent
 one. The master never stores or returns a host's private/LAN address.
 
-### `POST /v1/register`
+### The motd (`motd`, `motdColor`)
+
+Every `GET /v1/servers` body carries the operator's greeting at the top level, so
+the game needs no second request:
+
+```jsonc
+{
+  "motd": "JERICHO multiplayer: pick a server, take a ride.",
+  "motdColor": "#7FE8FF",
+  "servers": [ /* ... */ ]
+}
+```
+
+Both keys are ALWAYS present (empty when unset), so a master that removes its
+motd also clears it in a client that is already open. The game prints it to its
+status console when the ONLINE screen opens — in that colour, labelled `MASTER:`,
+and WRAPPED onto as many rows as the text needs — once per distinct text, not once
+per refresh.
+
+
 
 A host announces itself. Re-registering the same public `(host, port)` replaces
 the previous entry and issues a fresh token.
@@ -233,6 +252,8 @@ a browser. Not an API — it links to `/v1/servers`.
 | `log_level` | `info` | `debug` / `info` / `warning` / `error` |
 | `log_file` | `""` | append logs here as well as stdout ("" = stdout only) |
 | `public_url` | `""` | shown on the `GET /` page, e.g. the DNS name clients use |
+| `motd` | `""` | said in the game's ONLINE browser when the join screen opens |
+| `motd_color` | `"#FFD24A"` | its colour, `#RRGGBB` |
 
 `--probe SECONDS` overrides `probe_s` from the command line.
 

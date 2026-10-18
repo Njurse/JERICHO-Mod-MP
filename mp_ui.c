@@ -127,6 +127,11 @@ static int  gManualSeed;		/* seeded from a discovered host yet? */
 static int  gJoinRev = -1;		/* discovery revision the browser was built from */
 static int  gJoinBrowsing;		/* we opened the discovery socket for the browser */
 static int  gJoinScanning;		/* the browser is still in its first scan window */
+
+/* The master's motd revision already said in this run (-1 = nothing said yet). It
+ * is said once per distinct TEXT, so a browser that re-fetches every few seconds
+ * does not repeat itself. */
+static int  gOnlineMotdSaid = -1;
 static unsigned long gJoinScanStart;	/* when the browse began (0 = not browsing) */
 
 /* how long "(searching LAN...)" is shown before admitting nothing was found:
@@ -1209,6 +1214,46 @@ static int ActJoinOnline(void* ud)
 	return 1;
 }
 
+/* Say the master's greeting, once per distinct text.
+ *
+ * A CHAT line, not a status line: chat lives far longer on screen (20 s full plus a
+ * 3 s fade, against 4 s + 1 s) and is drawn even while the console is toggled off,
+ * so a reply to "where is the server list?" is actually readable. The colour is the
+ * master's own ("motdColor": "#RRGGBB" in its config), and a long line WRAPS onto
+ * the next row -- jer_console wraps at measured width and tears at a space -- so an
+ * operator can write a sentence instead of a label. */
+static void OnlineMotdSay(void)
+{
+	char buf[224];
+	JER_CONSOLE_SEG seg;
+	unsigned char r, g, b;
+
+	if (MpOnlineMotd()[0] == '\0')
+		return;
+
+	if (gOnlineMotdSaid == MpOnlineMotdRev())
+		return;					/* already said */
+
+	gOnlineMotdSaid = MpOnlineMotdRev();
+
+	MpOnlineMotdColor(&r, &g, &b);
+
+	/* "MASTER:" so the line is attributable: the same corner carries chat, and a
+	 * bare sentence there would read as something a player said. */
+	snprintf(buf, sizeof(buf), "MASTER: %s", MpOnlineMotd());
+
+	seg.text = buf;
+	seg.r = r;
+	seg.g = g;
+	seg.b = b;
+	seg.ambient = 0;
+
+	jer_console_chat(&seg, 1);
+
+	if (gMpCtx != NULL)
+		gMpCtx->jer_log(gMpCtx, "[mp] master motd: %s\n", MpOnlineMotd());
+}
+
 static void OnlineOnEnter(void* ud)
 {
 	int i, k = 0, count;
@@ -1220,6 +1265,11 @@ static void OnlineOnEnter(void* ud)
 	 * the visit that just set the address, because that already fetched. */
 	if (!OnlineApplyConfig())
 		MpOnlineSetWatching(1);        /* fetch now; the tick stops it on the way out */
+
+	/* The master's greeting, in the colour its config asks for. It arrives WITH the
+	 * listing (same body), so on a cold open it is usually not here yet -- the tick
+	 * says it the moment it lands, which is why this is a call, not a one-off. */
+	OnlineMotdSay();
 
 	count = MpOnlineCount();
 
@@ -1532,7 +1582,39 @@ void MpUiTick(void)
 			MpOnlineSetWatching(0);
 	}
 
+	/* MP_TEST_ONLINE=1: open the online browser on the first frontend frame, so the
+	 * master's listing -- and the motd it carries -- can be checked headlessly. Test
+	 * only: nothing reads the variable unless it is set, and the browser is otherwise
+	 * reachable only by hand. */
+	{
+		const char* onlineProbe = getenv("MP_TEST_ONLINE");
+
+		if (onlineProbe != NULL && onlineProbe[0] != '\0' && onlineProbe[0] != '0'
+			&& gInFrontend && gMpCtx != NULL && gMenuIdx[M_ONLINE] >= 0
+			&& !MpMenuIs(M_ONLINE))
+		{
+			static unsigned long openSince;
+
+			if (openSince == 0)
+				openSince = MpNowMs() ? MpNowMs() : 1;
+			else if ((MpNowMs() - openSince) >= 1500)
+			{
+				gMpCtx->jer_log(gMpCtx,
+					"[mp] MP_TEST_ONLINE: opening the online browser (menu %d)\n",
+					gMenuIdx[M_ONLINE]);
+				jer_frontend_open(gMenuIdx[M_ONLINE]);
+				openSince = MpNowMs() ? MpNowMs() : 1;	/* retried if the engine refused */
+			}
+		}
+	}
+
 	OnlineAnnounce();
+
+	/* The greeting lands WITH the listing, i.e. after the screen is already up, so
+	 * the say lives here as well as in on_enter (which usually runs first and finds
+	 * nothing yet). */
+	if (MpMenuIs(M_ONLINE))
+		OnlineMotdSay();
 
 	/* One line when the frontend first shows: how many menus the registry holds,
 	 * and where mp's own landed. The two numbers differing from mp's enum order is
@@ -1770,7 +1852,8 @@ void MpConsoleLine(const char* fmt, ...)
 	jer_console_line(b);
 }
 
-void MpConsoleChat(const char* name, int colorOn, int r, int g, int b, const char* text)
+void MpConsoleChat(const char* name, int colorOn, int r, int g, int b, const char* text,
+		   const unsigned char* ink)
 {
 	char head[MP_NAME_MAX + 4];
 	JER_CONSOLE_SEG segs[2];
@@ -1792,7 +1875,11 @@ void MpConsoleChat(const char* name, int colorOn, int r, int g, int b, const cha
 		b = 208;	/* cream */
 	}
 
-	snprintf(head, sizeof(head), "%s: ", (name != NULL && name[0] != '\0') ? name : "?");
+	/* A line with NO speaker row is the SERVER talking -- a dedicated server's motd, or
+	 * the operator's `say` -- so it is labelled as such. It used to print as "?", which
+	 * reads as a player with a broken name. */
+	snprintf(head, sizeof(head), "%s: ",
+		(name != NULL && name[0] != '\0') ? name : "SERVER");
 
 	segs[0].text = head;
 	segs[0].r = (unsigned char)r;
@@ -1807,6 +1894,16 @@ void MpConsoleChat(const char* name, int colorOn, int r, int g, int b, const cha
 	segs[1].g = 240;
 	segs[1].b = 240;
 	segs[1].ambient = 0;
+
+	/* The SERVER's own voice carries its colour (a dedicated server's motd, said in
+	 * the ink its config asks for): both runs then read in that one colour, so the
+	 * line looks like a notice instead of like somebody talking. */
+	if (ink != NULL)
+	{
+		segs[0].r = segs[1].r = ink[0];
+		segs[0].g = segs[1].g = ink[1];
+		segs[0].b = segs[1].b = ink[2];
+	}
 
 	jer_console_chat(segs, 2);
 }

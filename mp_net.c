@@ -2566,6 +2566,13 @@ static char gOnlineName[128];
 static int  gOnlinePort;
 static int  gOnlineAddrOk;
 static unsigned gOnlineRev;
+
+/* The master's greeting. It rides in the same /v1/servers body (no second
+ * request), and `rev` moves only when the TEXT changes so a browser that refreshes
+ * every few seconds does not repeat the same line. */
+static char gOnlineMotd[192];
+static unsigned gOnlineMotdRev;
+static unsigned char gOnlineMotdR = 240, gOnlineMotdG = 240, gOnlineMotdB = 240;
 static char gOnlineError[96];
 static char gOnlineUrl[160];		/* what the config said, for the log */
 static char gOnlineHostHdr[160];	/* host:port, for the request's Host: */
@@ -2763,6 +2770,32 @@ static int MpOnlineParse(const char* body)
 			count++;
 
 		p = close + 1;
+	}
+
+	/* The master's greeting, from the SAME body (no second request). Both keys are
+	 * optional: a master that says nothing prints nothing. An unparsable colour
+	 * keeps the previous one rather than going black, which would be unreadable. */
+	{
+		char txt[sizeof(gOnlineMotd)];
+		char col[16];
+
+		MpJsonStr(body, end, "motd", txt, sizeof(txt));
+		MpJsonStr(body, end, "motdColor", col, sizeof(col));
+
+		if (strcmp(txt, gOnlineMotd) != 0)
+		{
+			snprintf(gOnlineMotd, sizeof(gOnlineMotd), "%s", txt);
+			gOnlineMotdRev++;		/* a NEW line is worth saying again */
+		}
+
+		if (col[0] == '#' && strlen(col + 1) >= 6)
+		{
+			unsigned long v = strtoul(col + 1, NULL, 16);
+
+			gOnlineMotdR = (unsigned char)((v >> 16) & 0xFF);
+			gOnlineMotdG = (unsigned char)((v >> 8) & 0xFF);
+			gOnlineMotdB = (unsigned char)(v & 0xFF);
+		}
 	}
 
 	memcpy(gOnline, tmp, (size_t)count * sizeof(tmp[0]));
@@ -3416,6 +3449,15 @@ int MpOnlineState(void)		{ return gOnlineState; }
 const char* MpOnlineError(void)	{ return gOnlineError; }
 int MpOnlineCount(void)		{ return gOnlineCount; }
 int MpOnlineRevision(void)	{ return (int)gOnlineRev; }
+const char* MpOnlineMotd(void)	{ return gOnlineMotd; }
+int MpOnlineMotdRev(void)	{ return (int)gOnlineMotdRev; }
+
+void MpOnlineMotdColor(unsigned char* r, unsigned char* g, unsigned char* b)
+{
+	if (r != NULL) *r = gOnlineMotdR;
+	if (g != NULL) *g = gOnlineMotdG;
+	if (b != NULL) *b = gOnlineMotdB;
+}
 
 const MP_ONLINE_SERVER* MpOnlineGet(int index)
 {

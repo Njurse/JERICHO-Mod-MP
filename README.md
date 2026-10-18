@@ -315,7 +315,12 @@ Three things to know before relying on it:
   retry stop on the next frame. Hosting is the exception -- a hosted game lists
   itself whether or not anyone is looking at the browser, because that is the point.
   Set the server once in `mp.ini` (`master_url`) and the screen
-  fills in. **The host has to register with it too** -- that is `dediserver.py
+  fills in. The master can also greet everyone: put a `motd` (and `motd_color`,
+  `"#RRGGBB"`) in its config and the browser prints it -- in that colour, labelled
+  `MASTER:`, wrapped over as many console rows as it needs -- once per distinct
+  text. A dedicated server does the same on join (`motd`/`motd_color` in
+  `dediserver.json`, said as a `SERVER:` chat line in that colour).
+  **The host has to register with it too** -- that is `dediserver.py
   --master`, or the module's own hosting once the in-game half lands (see
   `docs/MASTER_SERVER.md`). With no `master_url` configured the browser still opens,
   rather than pretending the internet is empty.
@@ -384,6 +389,7 @@ them):
 | `MP_TEST_CITYCHANGE=<secs>,<city>[,<slot>]` | drives the same path to a car from **another city**, through `MpChangeCar`. `city` indexes the cities the car mods know (`MpCarQueryCities`), so it is inert unless the city list offers it - and it is the lever that proves the city list is populated |
 | `MP_OPENPAUSE=<secs>` | opens the engine pause for real (nothing else can, headlessly) and HOLDS it - it re-arms while the pause is closed, so a capture cannot land on a frame it happened to be shut. **Session only**: it rides the frame hook's `gMp.running` gate |
 | `MP_TEST_RESTART=<secs>` | fires the engine's own pause-menu answer, so a pass means the multiplayer soft restart is wired end to end |
+| `MP_TEST_ONLINE=1` | opens the ONLINE browser (the master's listing) about 1.5 s into the frontend, which nothing else can reach headlessly. Starts no session: it is how the browser's fetch, the listing rows and the master's `motd` get exercised from a script -- `grep "master motd" JERICHO.log` is the check |
 
 The driving bots work from what the engine's own scenery test can see and have **no route
 planner**: a straight line at the peer, a fan of headings probed with `CellEmpty`, and a

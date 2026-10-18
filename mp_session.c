@@ -1986,7 +1986,7 @@ void MpSendChat(const char* text)
 	if (MpIsHost())
 	{
 		MpConsoleChat(gMp.config.playerName, gMp.config.colorOn,
-			gMp.config.colorR, gMp.config.colorG, gMp.config.colorB, c.text);
+			gMp.config.colorR, gMp.config.colorG, gMp.config.colorB, c.text, NULL);
 		MpHostBroadcast(MP_TAG_CHAT, MP_FLAG_RELIABLE, &c, sizeof(c));
 	}
 	else
@@ -2018,10 +2018,27 @@ static void MpHandleChat(int connIndex, const unsigned char* p, int len)
 
 	pl = MpGetPlayer(c.playerId);
 
-	if (pl != NULL)
-		MpConsoleChat(pl->name, pl->colorOn, pl->colorR, pl->colorG, pl->colorB, c.text);
-	else
-		MpConsoleChat(NULL, 0, 0, 0, 0, c.text);
+	/* A server that put a colour in the frame is speaking (a dedicated server's
+	 * motd): draw the whole line in that ink. Two gates, both cheap: all-zero means
+	 * an ordinary chat line, and the ink is honoured only for a speaker with NO
+	 * player row -- the server itself. A player's own line therefore cannot dress
+	 * itself up in a colour it did not choose through the normal colour path. */
+	{
+		const unsigned char* ink =
+			(pl == NULL && (c.reserved[0] | c.reserved[1] | c.reserved[2])) ? c.reserved : NULL;
+
+		/* One line in the log as well: "the server said something, in this ink" is
+		 * exactly what a support log has to carry when a player reports that the
+		 * greeting did not appear. */
+		if (ink != NULL && gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx, "[mp] server voice: '%s' in #%02X%02X%02X\n",
+				c.text, ink[0], ink[1], ink[2]);
+
+		if (pl != NULL)
+			MpConsoleChat(pl->name, pl->colorOn, pl->colorR, pl->colorG, pl->colorB, c.text, ink);
+		else
+			MpConsoleChat(NULL, 0, 0, 0, 0, c.text, ink);
+	}
 
 	if (MpIsHost())
 		MpHostBroadcast(MP_TAG_CHAT, MP_FLAG_RELIABLE, &c, sizeof(c));

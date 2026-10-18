@@ -574,6 +574,9 @@ typedef struct MP_CAR
 typedef struct MP_CHAT
 {
 	uint8_t playerId;
+	/* The speaker's ink when the SERVER is speaking (a dedicated server's motd):
+	 * r, g, b, all zero for an ordinary chat line. Old builds ignore it and print
+	 * in the usual colour, which is why this needs no protocol bump. */
 	uint8_t reserved[3];
 	char    text[MP_CHAT_TEXT_MAX];
 } MP_CHAT;

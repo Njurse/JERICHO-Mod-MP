@@ -9,5 +9,7 @@
   "log_level": "info",
   "log_file": "",
   "probe_s": 5,
-  "public_url": ""
+  "public_url": "",
+  "motd": "JERICHO multiplayer: pick a server, take a ride.",
+  "motd_color": "#7FE8FF"
 }
