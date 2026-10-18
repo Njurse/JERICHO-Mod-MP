@@ -220,6 +220,12 @@ def main():
         check("right password after the lockout", server.clients[bob].get("admin") is True, out)
         out = say(server, bob, "!kick Boss")
         check("a logged-in admin can kick", out[-1][1].startswith("kicked player 2"), out)
+        join(server, 5, "Big Mouth")
+        out = say(server, bob, "!kick Big Mouth too loud")
+        check("!kick takes a reason after a spaced name",
+              out[-1][1] == "kicked player 5 'Big Mouth': too loud", out)
+        check("chat is told the reason",
+              any(c is None and "Big Mouth was kicked by admin Bob: too loud" in t for c, t in out), out)
 
         # -- !vote: a majority of the connected players switches the city
         import json

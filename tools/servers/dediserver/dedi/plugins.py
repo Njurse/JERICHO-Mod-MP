@@ -120,8 +120,10 @@ class ServerAPI:
     def broadcast(self, text, color=None):
         self._s.send_server_chat(text, color)
 
-    def kick(self, player, reason=""):
-        return self._s.kick_player(player.id, reason)
+    def kick(self, player, reason=None, by="admin", announce=True):
+        """Drop a player. With a reason they see "Kicked by <by>: <reason>" (cut to
+        the protocol's 63 bytes) and chat is told; without one, the stock kick."""
+        return self._s.kick_player(player.id, reason, by=by, announce=announce)
 
     # -- config / rules
     def config_get(self, key, default=None):

@@ -1077,7 +1077,7 @@ class Dedicated:
             ("status", "name, port, city, mode, players, uptime, beacon, master", self.cmd_status),
             ("list", "connected players: id, name, address, how long", self.cmd_list),
             ("say", "broadcast a line into every player's console: say <text>", self.cmd_say),
-            ("kick", "drop a player, telling them: kick <id>  ('list' shows ids)", self.cmd_kick),
+            ("kick", "drop a player, telling them: kick <id> [reason]  ('list' shows ids)", self.cmd_kick),
             ("beacon", "LAN beacon: beacon [on|off], or its state", self.cmd_beacon),
             ("master", "discovery-server registration state", self.cmd_master),
             ("stop", "close the server (unregisters from the master)", self.cmd_stop),
@@ -1142,14 +1142,22 @@ class Dedicated:
         return "said to %d player(s)" % self.player_count()
 
     def cmd_kick(self, rest):
-        rest = (rest or "").strip()
+        parts = (rest or "").strip().split(None, 1)
 
-        if not rest.isdigit():
-            return "kick who?  (kick <id>; 'list' shows the ids)"
+        if not parts or not parts[0].isdigit():
+            return "kick who?  (kick <id> [reason]; 'list' shows the ids)"
 
-        return self.kick_player(int(rest))
+        return self.kick_player(int(parts[0]), parts[1] if len(parts) > 1 else None)
 
-    def kick_player(self, pid, reason=""):
+    @staticmethod
+    def kick_text(by, reason):
+        """The text a kicked player sees, cut to fit the KICK tail (NUL included)
+        without splitting a UTF-8 character."""
+        text = "Kicked by %s: %s" % (by, " ".join(str(reason).split()))
+        raw = text.encode("utf-8")[:m.KICK_TEXT_LEN - 1]
+        return raw.decode("utf-8", "ignore")
+
+    def kick_player(self, pid, reason=None, by="admin", announce=True):
         with self.lock:
             target = [(conn, c) for conn, c in self.clients.items() if c["id"] == pid]
 
@@ -1157,24 +1165,36 @@ class Dedicated:
             return "no player %d connected  ('list')" % pid
 
         conn, c = target[0]
+        reason = " ".join(str(reason).split()) if reason else ""
 
         # The protocol already has this message, and the client handles it properly
         # ("You were kicked by the host" then out to the frontend) -- so send that
-        # rather than just dropping the socket and leaving them guessing.
+        # rather than just dropping the socket and leaving them guessing. With a
+        # reason, the optional text tail replaces the stock line (old clients read
+        # only the 4-byte head).
+        payload = m.KICK.pack(pid, 0, 0, 0)
+        if reason:
+            payload += self.kick_text(by, reason).encode("utf-8").ljust(m.KICK_TEXT_LEN, b"\0")
         try:
-            self.send_to(conn, m.TAG["kick"], m.KICK.pack(pid, 0, 0, 0))
+            self.send_to(conn, m.TAG["kick"], payload)
         except OSError:
             pass
 
-        self.log.info("kicked player %d '%s' (%s)%s" % (pid, c["name"], c["addr"],
-                                                        (": " + reason) if reason else ""))
+        why = (" by %s: %s" % (by, reason)) if reason else ""
+        self.log.info("kicked player %d '%s' (%s)%s" % (pid, c["name"], c["addr"], why))
+
+        if reason and announce:
+            try:
+                self.send_server_chat("%s was kicked%s" % (c["name"], why))
+            except Exception:
+                pass
 
         try:
             conn.shutdown(socket.SHUT_RDWR)      # wake their blocked recv; cleanup runs
         except OSError:
             pass
 
-        return "kicked player %d '%s'" % (pid, c["name"])
+        return "kicked player %d '%s'%s" % (pid, c["name"], (": " + reason) if reason else "")
 
     def cmd_beacon(self, rest):
         arg = (rest or "").strip().lower()

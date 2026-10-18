@@ -146,7 +146,7 @@ def _pass(city):
     except OSError as e:
         _server.log.warning("could not save the city: %s" % e)
     for p in _server.players():
-        _server.kick(p, "Server switched to %s - rejoin" % name)
+        _server.kick(p, "server switched to %s - rejoin" % name, by="vote", announce=False)
 
 
 def on_tick():

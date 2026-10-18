@@ -603,6 +603,12 @@ typedef struct MP_KICK
 	uint8_t reserved[3];
 } MP_KICK;
 
+/* Optional tail: a KICK may be followed by MP_KICK_TEXT_LEN bytes of
+ * NUL-terminated text the kicked player is shown instead of the stock
+ * "You were kicked by the host" (e.g. "Kicked by admin: <reason>"). Old
+ * clients read only the 4-byte head, so no protocol bump. */
+#define MP_KICK_TEXT_LEN	64
+
 /* A contact report. Cars are owner-authoritative, so a machine can only move
  * the ONE car it owns: when MY car touches YOURS I push MINE, and I send you
  * this so you push YOURS. Both cars move, and each stays the owner's truth.

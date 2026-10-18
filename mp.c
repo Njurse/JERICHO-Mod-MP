@@ -796,6 +796,7 @@ static void MpOnDebugKey(int nKey, char down)
 	{
 		MpChatOpen();
 		MpChatGrabKeyboard(1);	/* the prompt owns the keyboard while it is up */
+		jer_input_block(1);	/* from this frame: the chat key itself must not leak */
 	}
 	else if (MpIsChatSendKey(nKey) && gMp.chatOpen)
 	{
@@ -1120,6 +1121,7 @@ static int MpOnFrame(void* userdata, void* args)
 	/* Chat owns PsyX's single text-input slot exactly while the prompt is up.
 	 * Re-asserted every frame so a missed release self-heals. */
 	MpChatGrabKeyboard((gMp.chatOpen || MpUiManualEditing()) ? 1 : 0);
+	jer_input_block(gMp.chatOpen);	/* typing never drives the car, horn, camera or pause */
 
 	/* Test lever: MP_TEST_CITYCONFIRM=<secs>[,<gameType>[,<role>]] fires the
 	 * take-a-ride CITY CONFIRM the way the frontend does (CutSceneCitySelectScreen

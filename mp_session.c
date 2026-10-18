@@ -2226,7 +2226,29 @@ static void MpHandleKick(int connIndex, const unsigned char* p, int len)
 	if (gMpCtx != NULL)
 		gMpCtx->jer_log(gMpCtx, "[mp] kicked by the host (player %d)\n", (int)k.playerId);
 
-	jer_error("You were kicked by the host");
+	if (len >= (int)sizeof(MP_KICK) + MP_KICK_TEXT_LEN)
+	{
+		char text[MP_KICK_TEXT_LEN];
+		int i;
+
+		memcpy(text, p + sizeof(MP_KICK), sizeof(text));
+		text[sizeof(text) - 1] = '\0';	/* wire string: never trust it terminated */
+
+		for (i = 0; text[i]; i++)	/* no format/control characters reach the UI */
+			if ((unsigned char)text[i] < 32 || text[i] == '%')
+				text[i] = ' ';
+
+		if (text[0])
+		{
+			if (gMpCtx != NULL)
+				gMpCtx->jer_log(gMpCtx, "[mp] kick message: %s\n", text);
+			jer_error("%s", text);
+		}
+		else
+			jer_error("You were kicked by the host");
+	}
+	else
+		jer_error("You were kicked by the host");
 
 	MpLeaveSession();
 	MpReturnToFrontend();

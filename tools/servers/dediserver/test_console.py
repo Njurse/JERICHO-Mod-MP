@@ -265,6 +265,22 @@ def main():
     a.close()
     b.close()
 
+    # -- KICK with a reason: the text tail, truncated safely, and the old head intact
+    check("kick with no reason sends the bare 4-byte head", len(payload) == m.KICK.size, str(len(payload)))
+    a, b = socket.socketpair()
+    server.clients[a] = {"id": 4, "name": "Rude", "addr": "127.0.0.1:5001"}
+    reply = server.cmd_kick("4 spamming the chat")
+    check("kick with a reason reports it", reply.endswith(": spamming the chat"), reply)
+    tag, payload = m.recv_frame(b)
+    text = payload[m.KICK.size:].split(b"\0")[0].decode()
+    check("the kick carries the reason", len(payload) == m.KICK.size + m.KICK_TEXT_LEN
+          and text == "Kicked by admin: spamming the chat", repr(payload))
+    a.close()
+    b.close()
+    long = server.kick_text("admin", "\u00e9" * 80)
+    check("a long reason is cut to 63 bytes without splitting UTF-8",
+          len(long.encode()) <= m.KICK_TEXT_LEN - 1 and long.startswith("Kicked by admin: "), repr(long))
+
     # -- config values that would otherwise fail QUIETLY
     check("a scheme is stripped from advertise_host",
           d.normalise_host("http://jerichomp.animetiddi.es") == "jerichomp.animetiddi.es")

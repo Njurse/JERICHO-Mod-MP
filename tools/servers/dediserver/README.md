@@ -27,7 +27,7 @@ supervisor (or a test) can pipe commands in.
 | `status` | name, session port, city, gamemode, rules (readable), players, uptime, beacon, master |
 | `list` | connected players: id, name, address, how long connected |
 | `say <text>` | one line into every player's console, prefixed `SERVER:` |
-| `kick <id>` | drop a player — the protocol's own kick message, so they are told why |
+| `kick <id> [reason]` | drop a player — the protocol's own kick message; with a reason they see "Kicked by admin: <reason>" (cut to 63 bytes) and chat is told |
 | `beacon [on|off]` | the LAN beacon's state, or turn it off (a LAN you do not want to appear on) |
 | `master` | discovery registration: the URL, whether registered, what last happened |
 | `stop` | close the server (unregisters from the master, closes players) |
@@ -129,7 +129,7 @@ the other players; the reply comes back privately. `!help` lists what *you* can 
 | `!whoami` | everyone | your slot, name and **player id** |
 | `!who` | everyone | who is connected (admins also see player ids and addresses) |
 | `!login <password>` / `!logout` | everyone | admin for this session, if `admin_password` is set |
-| `!kick <slot\|name>` | admin | remove a player |
+| `!kick <slot\|name> [reason]` | admin | remove a player; a reason is shown to them ("Kicked by admin <you>: <reason>"), announced in chat and logged |
 | `!cops on\|off`, `!difficulty 0-2` | admin | session rules: apply from the next level load; the discovery listing updates at once |
 | `!time dawn\|day\|dusk\|night`, `!weather clear\|rain\|wet` | admin | time of day / weather, from the next level load |
 | `!admin add\|remove <slot\|name\|uuid>`, `!admin list` | admin | manage the admins list; **saved to dediserver.json** |
@@ -226,7 +226,7 @@ def on_chat(player, text):      # return True to swallow the line
 Hooks: `on_load(server)`, `on_unload()`, `on_player_join(player)`,
 `on_player_leave(player)`, `on_chat(player, text)`, `on_tick()` (about once a
 second). `server` offers `players()`, `find_player(slot|name)`,
-`send_private(player, text, color)`, `broadcast(text, color)`, `kick(player, reason)`,
+`send_private(player, text, color)`, `broadcast(text, color)`, `kick(player, reason=None, by="admin", announce=True)` (a reason is shown to the player as "Kicked by <by>: <reason>"),
 `config_get/config_set`, `set_rules(cops=, cop_difficulty=, cop_immunity=,
 invulnerable=)`, `set_cops`, `set_difficulty`, `readvertise()`, `log`, and
 `register_command(name, handler, admin=False, help="", console=False)` where

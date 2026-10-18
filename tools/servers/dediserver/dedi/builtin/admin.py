@@ -38,7 +38,7 @@ def on_load(server):
     reg("who", cmd_who, help="the players connected")
     reg("login", cmd_login, help="!login <password> - become an admin for this session")
     reg("logout", cmd_logout, help="drop your admin rights for this session")
-    reg("kick", cmd_kick, admin=True, help="!kick <slot|name> - remove a player")
+    reg("kick", cmd_kick, admin=True, help="!kick <slot|name> [reason] - remove a player")
     reg("cops", cmd_cops, admin=True, console=True, help="!cops on|off - police (next level load)")
     reg("difficulty", cmd_difficulty, admin=True, console=True,
         help="!difficulty 0-2 - cop difficulty (next level load)")
@@ -127,10 +127,17 @@ def cmd_logout(caller, _args):
 
 
 def cmd_kick(caller, args):
-    target = _server.find_player(args) if args.strip() else None
+    words = args.split()
+    target, reason = None, None
+    # A name may contain spaces, so try the longest leading run of words first.
+    for n in range(len(words), 0, -1):
+        target = _server.find_player(" ".join(words[:n]))
+        if target is not None:
+            reason = " ".join(words[n:]) or None
+            break
     if target is None:
-        return "kick who? (!kick <slot|name>; !who lists them)"
-    return _server.kick(target, "by %s" % caller.name)
+        return "kick who? (!kick <slot|name> [reason]; !who lists them)"
+    return _server.kick(target, reason, by="admin %s" % caller.name)
 
 
 def cmd_cops(caller, args):
