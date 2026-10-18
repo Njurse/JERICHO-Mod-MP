@@ -45,6 +45,9 @@ extern MpTextInputFn g_cfg_gameOnTextInput;
 #define MP_KEY_CHAT_SEND	40	/* SDL_SCANCODE_RETURN */
 #define MP_KEY_CHAT_SEND_KP	88	/* SDL_SCANCODE_KP_ENTER */
 #define MP_KEY_CHAT_CANCEL	41	/* SDL_SCANCODE_ESCAPE */
+#define MP_KEY_CHAT_PGUP	75	/* SDL_SCANCODE_PAGEUP: older chat (prompt open only) */
+#define MP_KEY_CHAT_PGDN	78	/* SDL_SCANCODE_PAGEDOWN: newer chat */
+#define MP_CHAT_PAGE_ROWS	(JER_CONSOLE_MAX - 1)	/* one row of overlap per page */
 
 /* Either Enter sends the chat line.
  *
@@ -76,6 +79,7 @@ static int MpIsChatSendKey(int nKey)
 #include <stdlib.h>
 
 #include "mp.h"
+#include "jer_console.h"	/* jer_console_scroll: PgUp/PgDn through the chat history */
 #include "mp_bot.h"	/* the test bot; testing only, inert unless MP_BOT is set */
 
 MP_STATE gMp;
@@ -798,6 +802,16 @@ static void MpOnDebugKey(int nKey, char down)
 		/* Enter sends: the owner echoes the line and the host fans it out. */
 		MpChatSendText(gMp.chatBuf);
 		MpChatGrabKeyboard(0);
+	}
+	else if (nKey == MP_KEY_CHAT_PGUP && gMp.chatOpen)
+	{
+		/* Only while typing: the prompt already owns the keyboard then (nothing is
+		 * chained), so PgUp/PgDn cannot collide with an engine or module key. */
+		jer_console_scroll(MP_CHAT_PAGE_ROWS);
+	}
+	else if (nKey == MP_KEY_CHAT_PGDN && gMp.chatOpen)
+	{
+		jer_console_scroll(-MP_CHAT_PAGE_ROWS);
 	}
 	else if (nKey == MP_KEY_CHAT_CANCEL && gMp.chatOpen)
 	{
