@@ -7210,6 +7210,11 @@ static const int kWarpAlong[]  = { -MP_WARP_NEAR, -MP_WARP_NEAR, -900, -900, -16
 static const int kWarpAcross[] = { 600, -600, 900, -900, 0, 0, 900, -900 };
 
 
+/* How old an on-foot pose may be and still be a warp target: poses arrive every
+ * few frames while someone is on foot, so a few seconds of silence means the copy
+ * is stale (they got back in, or left). */
+#define MP_WARP_PED_FRESH_MS	5000
+
 int MpWarpToPlayer(int playerId)
 {
 	MP_PLAYER* me;
@@ -7231,20 +7236,40 @@ int MpWarpToPlayer(int playerId)
 		return 0;
 	}
 
-	if (tp == NULL || tp->id == gMp.localPlayerId ||
-	    tp->carId < 0 || tp->carId >= MAX_CARS)
+	if (tp == NULL || tp->id == gMp.localPlayerId)
 	{
-		MpNotify("Warp: that player has no car to go to");
+		MpNotify("Warp: that player is not in the match");
 		return 0;
 	}
 
 	myc = &car_data[me->carId];
-	tgt = &car_data[tp->carId];
 
-	tx = tgt->hd.where.t[0];
-	ty = tgt->hd.where.t[1];
-	tz = tgt->hd.where.t[2];
-	dir = tgt->hd.direction;
+	if (tp->carId >= 0 && tp->carId < MAX_CARS)
+	{
+		tgt = &car_data[tp->carId];
+		tx = tgt->hd.where.t[0];
+		ty = tgt->hd.where.t[1];
+		tz = tgt->hd.where.t[2];
+		dir = tgt->hd.direction;
+	}
+	else if (tp->pedLastMs != 0 && MpNowMs() - tp->pedLastMs < MP_WARP_PED_FRESH_MS)
+	{
+		/* ON FOOT: a player out of their car has no car_data slot, only the pose
+		 * their owner keeps sending (MP_TAG_PED -> MpHandlePedState). Land beside
+		 * that, facing their way (ped heading is the same 0..4095 yaw). This used
+		 * to refuse with "that player has no car to go to". */
+		tgt = NULL;
+		tx = tp->pedX;
+		ty = tp->pedY;
+		tz = tp->pedZ;
+		dir = tp->pedHeading & 0xFFF;
+	}
+	else
+	{
+		MpNotify("Warp: no position for that player yet");
+		return 0;
+	}
+	(void)tgt;
 
 	/* Aim the streamer at the TARGET first, so the region its neighbours fall in
 	 * has a chance of being present before the candidates are judged. Harmless
