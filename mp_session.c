@@ -6,6 +6,7 @@
  */
 #include "jericho.h"
 #include "jer_events.h"
+#include "jer_notify.h"	/* the join toast */
 #include "jer_pause_menu.h"	/* JER_PAUSE_QUIT_*: the pause menu's codes (mirror MENU_QUIT_*) */
 #include "mp.h"
 #include "mp_carquery.h"	/* the mp <-> carhacks live-car query contract */
@@ -1733,7 +1734,8 @@ int MpStartMatch(void)
 /* ------------------------------------------------------------------ */
 void MpSendHello(void)
 {
-	unsigned char buf[sizeof(MP_HELLO) + MP_MAX_MODS * sizeof(MP_MOD_INFO) + 4 + MP_PLAYER_ID_LEN];
+	unsigned char buf[sizeof(MP_HELLO) + MP_MAX_MODS * sizeof(MP_MOD_INFO) + 4 + MP_PLAYER_ID_LEN
+			  + 5 + MP_HELLO_VER_MAX];
 	MP_HELLO h;
 	int n, len;
 
@@ -1776,6 +1778,19 @@ void MpSendHello(void)
 	memcpy(buf + len, MP_HELLO_ID_TAG, 4);
 	memcpy(buf + len + 4, gMp.config.playerId, MP_PLAYER_ID_LEN);
 	len += 4 + MP_PLAYER_ID_LEN;
+
+	/* the build block (mp_proto.h, MP_HELLO_VER_TAG): display only */
+	{
+		char ver[MP_HELLO_VER_MAX + 1];
+		int vl;
+
+		MpVersionLabel(ver, sizeof(ver));
+		vl = (int)strlen(ver);
+		memcpy(buf + len, MP_HELLO_VER_TAG, 4);
+		buf[len + 4] = (unsigned char)vl;
+		memcpy(buf + len + 5, ver, (size_t)vl);
+		len += 5 + vl;
+	}
 
 	MpSendToHost(MP_TAG_HELLO, MP_FLAG_RELIABLE, buf, len);
 
@@ -1961,6 +1976,7 @@ static void MpHandleHello(int connIndex, const unsigned char* p, int len)
 	MP_HELLO h;
 	const MP_MOD_INFO* mods;
 	int n, id, matched = 1;
+	char joinVer[MP_HELLO_VER_MAX + 1] = "";
 
 	if (len < (int)sizeof(MP_HELLO))
 	{
@@ -1992,7 +2008,7 @@ static void MpHandleHello(int connIndex, const unsigned char* p, int len)
 	/* Protocol and SDK version are always required -- they decide whether the
 	 * two builds can speak to each other at all. The BUILD hash is not: it
 	 * compares the RELEASE SERIES of JERICHO_BUILD_VERSION, not the string
-	 * itself, because the string is `git describe --tags --always --dirty` and
+	 * itself, because the string is `git describe --tags --match 'v*' --always --dirty` and
 	 * the same release reads differently depending on who built it how
 	 * ("0.9.0", "0.9.0-dirty", "0.9.0-3-gabc1234"). Comparing the raw string
 	 * refused every pair that was not identical in provenance, which is every
@@ -2068,6 +2084,26 @@ static void MpHandleHello(int connIndex, const unsigned char* p, int len)
 				{
 					memcpy(pl->playerId, p + at + 4, MP_PLAYER_ID_LEN);
 					pl->hasPlayerId = 1;
+					at += 4 + MP_PLAYER_ID_LEN;
+				}
+
+				/* ...and the optional build block after it */
+				if (len >= at + 5 && memcmp(p + at, MP_HELLO_VER_TAG, 4) == 0)
+				{
+					int vl = p[at + 4];
+
+					if (vl > MP_HELLO_VER_MAX)
+						vl = MP_HELLO_VER_MAX;
+					if (len >= at + 5 + vl)
+					{
+						int k;
+
+						memcpy(joinVer, p + at + 5, (size_t)vl);
+						joinVer[vl] = '\0';
+						for (k = 0; k < vl; k++)	/* wire text: printable only */
+							if (joinVer[k] < 32 || joinVer[k] > 126)
+								joinVer[k] = '?';
+					}
 				}
 			}
 
@@ -2084,7 +2120,19 @@ static void MpHandleHello(int connIndex, const unsigned char* p, int len)
 
 	MpSendWelcome(connIndex, id, matched);
 
-	MpConsoleLine("%s joined", h.playerName);
+	/* The join TOAST: who, on what build, with which mods -- so "it works on my
+	 * machine" is answerable at a glance. The mods digest is computed HERE from
+	 * the manifest the client sent (MpModsDigest), so it needs nothing new on the
+	 * wire; the version needs the optional JPVR block (an older client: "?"). */
+	{
+		char toast[128];
+
+		snprintf(toast, sizeof(toast), "%s joined (%s%s, mods %06x)", h.playerName,
+			joinVer[0] && joinVer[0] >= '0' && joinVer[0] <= '9' ? "v" : "",
+			joinVer[0] ? joinVer : "?", MpModsDigest(mods, n));
+		MpConsoleLine("%s", toast);
+		jer_notify(toast, 1, 6);
+	}
 
 	if (gMpCtx)
 		gMpCtx->jer_log(gMpCtx, "[mp] player %d '%s' joined (%d/%d)%s\n",

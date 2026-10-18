@@ -55,6 +55,8 @@ class Player:
     name = property(lambda self: self._info["name"])
     addr = property(lambda self: self._info["addr"])
     player_id = property(lambda self: self._info.get("player_id"))
+    version = property(lambda self: self._info.get("version"))         # JPVR, None = older client
+    mods_digest = property(lambda self: self._info.get("mods_digest", 0))
     state = property(lambda self: self._info.setdefault("state", {}))
 
     @property

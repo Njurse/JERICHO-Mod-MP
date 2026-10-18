@@ -15,7 +15,11 @@ def on_load(server):
 
 def on_player_join(player):
     if _server.config_get("announce_joins", True):
-        _server.broadcast("%s joined" % player.name, COLOR)
+        # The same text the game's own host toasts (mp_session.c MpHandleHello).
+        ver = player.version
+        label = ("v" + ver if ver[:1].isdigit() else ver) if ver else "?"
+        _server.broadcast("%s joined (%s, mods %06x)" % (player.name, label, player.mods_digest),
+                          COLOR)
 
 
 def on_player_leave(player):

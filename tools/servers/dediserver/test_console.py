@@ -329,8 +329,11 @@ def main():
     hello = m.HELLO.pack(m.PROTO, m.SDK, 0, 0, b"X", 1, 0, 0, 0)
     check("a manifest is parsed off the hello",
           d.parse_manifest(hello + m.MODI.pack(b"mp", b"1.0", 1, 0)) == [("mp", "1.0", 1)])
+    hello2 = m.HELLO.pack(m.PROTO, m.SDK, 0, 0, b"X", 2, 0, 0, 0)
     check("two rows parse", len(d.parse_manifest(
-        hello + m.MODI.pack(b"mp", b"1.0", 1, 0) + m.MODI.pack(b"carhacks", b"2", 1, 0))) == 2)
+        hello2 + m.MODI.pack(b"mp", b"1.0", 1, 0) + m.MODI.pack(b"carhacks", b"2", 1, 0))) == 2)
+    check("only modCount rows are read (a trailer is never a mod)", len(d.parse_manifest(
+        hello + m.MODI.pack(b"mp", b"1.0", 1, 0) + m.MODI.pack(b"carhacks", b"2", 1, 0))) == 1)
     check("a hello with no manifest parses as none", d.parse_manifest(hello) == [])
 
     # -- a co-hosted dedi must not list itself under an address nobody can dial

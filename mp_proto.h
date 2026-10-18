@@ -286,6 +286,15 @@ typedef struct MP_MOD_INFO
  * It is a bearer secret, not authentication: the link is unencrypted. */
 #define MP_HELLO_ID_TAG		"JPID"
 #define MP_PLAYER_ID_LEN	16
+/* ...then optionally the BUILD block: MP_HELLO_VER_TAG + u8 length + that many
+ * bytes of the client's RELEASE SERIES ("0.10.4", plus "-dev" on a non-Release
+ * build; MpVersionLabel). Display only -- the host shows it in its join toast;
+ * admission still goes by gameBuild. Same no-bump reasoning as JPID, with one
+ * hard limit: dediservers before this read EVERY whole 42-byte row after the
+ * header as a mod (not just modCount of them), so JPID + JPVR together must stay
+ * UNDER 42 bytes -- 20 + 5 + 16 = 41. Do not raise MP_HELLO_VER_MAX. */
+#define MP_HELLO_VER_TAG	"JPVR"
+#define MP_HELLO_VER_MAX	16
 typedef struct MP_HELLO
 {
 	uint16_t protoVersion;

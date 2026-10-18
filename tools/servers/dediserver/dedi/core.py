@@ -117,8 +117,15 @@ def parse_manifest(payload):
     """
     body = m.HELLO.size
     rows = []
+    # modCount rows and no more: the optional JPID / JPVR blocks follow them, and
+    # reading every whole row in the payload (as this once did) would take a long
+    # enough trailer for a mod. Older servers still do, which is why the game keeps
+    # the trailer under one row (mp_proto.h MP_HELLO_VER_MAX).
+    count = (len(payload) - body) // m.MODI.size
+    if len(payload) >= body:
+        count = min(count, m.HELLO.unpack_from(payload, 0)[5])
 
-    for i in range(0, (len(payload) - body) // m.MODI.size):
+    for i in range(0, count):
         chunk = payload[body + i * m.MODI.size:body + (i + 1) * m.MODI.size]
 
         try:
@@ -721,6 +728,8 @@ class Dedicated:
             else:
                 self.clients[conn] = {"id": pid, "name": name, "addr": who,
                                       "player_id": m.parse_player_id(payload),
+                                      "version": m.parse_hello_version(payload),
+                                      "mods_digest": m.mods_digest(mods),
                                       "palette": _b}       # HELLO reserved[1]: their car palette
 
         if refused_full:

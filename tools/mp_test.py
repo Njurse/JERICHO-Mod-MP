@@ -161,10 +161,13 @@ def recv_frame(sock):
 
 HELLO_ID_TAG = b"JPID"                   # mp_proto.h MP_HELLO_ID_TAG
 PLAYER_ID_LEN = 16                      # mp_proto.h MP_PLAYER_ID_LEN
+HELLO_VER_TAG = b"JPVR"                  # mp_proto.h MP_HELLO_VER_TAG
+HELLO_VER_MAX = 16                      # mp_proto.h MP_HELLO_VER_MAX (JPID+JPVR < one 42-byte row)
 
 
-def build_hello(name, mods=(), build=0, player_id=None):
-    """MP_HELLO + its manifest, then (optionally) the JPID player-id block."""
+def build_hello(name, mods=(), build=0, player_id=None, version=None):
+    """MP_HELLO + its manifest, then (optionally) the JPID player-id block and
+    the JPVR build block (the game sends both; JPVR only after JPID)."""
     body = HELLO.pack(PROTO, SDK, build, 0, name.encode()[:31], len(mods), 0, 0, 0)
     for mid, ver in mods:
         body += MODI.pack(mid.encode()[:23], ver.encode()[:15], 1, 0)
@@ -172,7 +175,36 @@ def build_hello(name, mods=(), build=0, player_id=None):
         if len(player_id) != PLAYER_ID_LEN:
             raise ValueError("player id must be %d bytes" % PLAYER_ID_LEN)
         body += HELLO_ID_TAG + bytes(player_id)
+    if version is not None:
+        v = version.encode("ascii", "replace")[:HELLO_VER_MAX]
+        body += HELLO_VER_TAG + bytes([len(v)]) + v
     return body
+
+
+def parse_hello_version(payload):
+    """The JPVR build string after the manifest (and the JPID block, when there
+    is one), or None for a client too old to send it. Display only."""
+    if len(payload) < HELLO.size:
+        return None
+    modc = HELLO.unpack_from(payload, 0)[5]
+    at = HELLO.size + modc * MODI.size
+    if payload[at:at + 4] == HELLO_ID_TAG and len(payload) >= at + 4 + PLAYER_ID_LEN:
+        at += 4 + PLAYER_ID_LEN
+    if len(payload) < at + 5 or payload[at:at + 4] != HELLO_VER_TAG:
+        return None
+    n = min(payload[at + 4], HELLO_VER_MAX)
+    raw = payload[at + 5:at + 5 + n]
+    return "".join(chr(c) if 32 <= c <= 126 else "?" for c in raw)
+
+
+def mods_digest(mods):
+    """The join toast's "mods 3fa2c1": CRC-32 of "id:version;" for every ENABLED
+    manifest row (id, version, enabled), sorted by id, masked to 24 bits. The
+    same as the game's MpModsDigest (mp_config.c) -- keep the two in step."""
+    import zlib
+    rows = sorted((r for r in mods if r[2]), key=lambda r: r[0].encode("latin1", "replace"))
+    text = "".join("%s:%s;" % (r[0], r[1]) for r in rows)
+    return zlib.crc32(text.encode("latin1", "replace")) & 0xFFFFFF
 
 
 def parse_player_id(payload):

@@ -574,7 +574,7 @@ int MpBuildManifest(MP_MOD_INFO* out, int max)
 /* The RELEASE SERIES of the build string, which is what "the same build" has to
  * mean for two peers to be able to play together at all.
  *
- * JERICHO_BUILD_VERSION is `git describe --tags --always --dirty`, so one
+ * JERICHO_BUILD_VERSION is `git describe --tags --match 'v*' --always --dirty`, so one
  * release reads differently depending on who built it and how:
  *
  *   "0.9.0"             the tagged release
@@ -629,6 +629,62 @@ void MpBuildSeries(char* out, size_t outSize)
 
 	/* no version to compare: keep the whole string, so this stays exact */
 	snprintf(out, outSize, "%s", JERICHO_BUILD_VERSION);
+}
+
+/* The label the join toast shows for this build: the release series plus "-dev"
+ * on any build that is not the shipping Release (version.h GAME_BUILD_SUFFIX
+ * rule), capped at MP_HELLO_VER_MAX (see mp_proto.h for why it must stay short). */
+void MpVersionLabel(char* out, size_t outSize)
+{
+	char series[64];
+
+	MpBuildSeries(series, sizeof(series));
+	if (outSize > MP_HELLO_VER_MAX + 1)
+		outSize = MP_HELLO_VER_MAX + 1;
+#if defined(JERICHO_RELEASE_MODS) && !defined(_DEBUG)
+	snprintf(out, outSize, "%s", series);
+#else
+	snprintf(out, outSize, "%s-dev", series);
+#endif
+}
+
+/* "mods 3fa2c1" in the join toast: CRC-32 of "id:version;" for every ENABLED row,
+ * sorted by id so two machines with the same set agree whatever their modlist
+ * order, masked to 24 bits. The dedicated server computes the same thing
+ * (dedi/core.py mods_digest) -- keep the two in step. */
+static int MpModRowCmp(const void* a, const void* b)
+{
+	return strncmp(((const MP_MOD_INFO*)a)->id, ((const MP_MOD_INFO*)b)->id, MP_MOD_ID_MAX);
+}
+
+unsigned int MpModsDigest(const MP_MOD_INFO* m, int n)
+{
+	MP_MOD_INFO rows[MP_MAX_MODS];
+	unsigned int crc = 0xFFFFFFFFu;
+	int i, k, j;
+
+	if (n > MP_MAX_MODS)
+		n = MP_MAX_MODS;
+	for (i = k = 0; i < n; i++)
+		if (m[i].enabled)
+			rows[k++] = m[i];
+	qsort(rows, (size_t)k, sizeof(rows[0]), MpModRowCmp);
+
+	for (i = 0; i < k; i++)
+	{
+		char line[MP_MOD_ID_MAX + MP_MOD_VER_MAX + 4];
+		const char* c;
+
+		snprintf(line, sizeof(line), "%.*s:%.*s;", MP_MOD_ID_MAX, rows[i].id,
+			MP_MOD_VER_MAX, rows[i].version);
+		for (c = line; *c; c++)
+		{
+			crc ^= (unsigned char)*c;
+			for (j = 0; j < 8; j++)
+				crc = (crc >> 1) ^ (0xEDB88320u & (0u - (crc & 1u)));
+		}
+	}
+	return (crc ^ 0xFFFFFFFFu) & 0xFFFFFFu;
 }
 
 /* Digest of the RELEASE SERIES, so peers on the same release are admitted

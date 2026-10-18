@@ -336,6 +336,8 @@ void MpHandleMessage(int connIndex, const char* tag,
 int  MpBuildManifest(MP_MOD_INFO* out, int max);	/* enabled mods; mp_config.c */
 void MpBuildSeries(char* out, size_t outSize);		/* release series of JERICHO_BUILD_VERSION; mp_config.c */
 unsigned short MpBuildHash(void);			/* digest of that series; mp_config.c */
+void MpVersionLabel(char* out, size_t outSize);		/* "0.10.4[-dev]": the JPVR join-toast label */
+unsigned int MpModsDigest(const MP_MOD_INFO* m, int n);	/* 24-bit digest of the ENABLED rows (sorted by id) */
 
 void MpSendHello(void);			/* client -> host identity + manifest */
 int  MpBeginHost(void);			/* become host: listen + advertise + self row */

@@ -123,6 +123,16 @@ def main():
               server.plugins.commands["help"].plugin == "commands")
         check("no JPID -> None", m.parse_player_id(m.build_hello("Old", mods=[("mp", "1")])) is None)
         check("JPID is not read as a mod row", len(d.parse_manifest(hello)) == 1)
+        vh = m.build_hello("Ver", mods=[("mp", "0.12.0"), ("carhacks", "1.0")],
+                           player_id=bytes.fromhex(pid_hex), version="0.10.4-dev")
+        check("JPVR parses after JPID", m.parse_hello_version(vh) == "0.10.4-dev", m.parse_hello_version(vh))
+        check("JPVR is not read as a mod row", len(d.parse_manifest(vh)) == 2)
+        check("no JPVR -> None", m.parse_hello_version(hello) is None)
+        check("JPID+JPVR stay under one manifest row (old servers)",
+              len(m.build_hello("x", player_id=bytes(16), version="9" * 40)) - m.HELLO.size < m.MODI.size)
+        check("mods digest ignores order and disabled rows",
+              m.mods_digest([("a", "1", 1), ("b", "2", 1), ("c", "3", 0)])
+              == m.mods_digest([("b", "2", 1), ("a", "1", 1)]))
 
         # -- routing
         bob = join(server, 1, "Bob")
