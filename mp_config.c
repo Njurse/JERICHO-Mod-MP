@@ -17,6 +17,11 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
+#if defined(_WIN32)
+#include <direct.h>	/* _mkdir */
+#else
+#include <sys/stat.h>	/* mkdir */
+#endif
 
 /* The per-install player id: 16 random bytes, generated once and kept as 32 hex
  * digits in [mp] player_id. A dedicated server recognises a player by it (its
@@ -82,17 +87,178 @@ void MpFormatPlayerId(const unsigned char* id, char* out /* >= 37 */)
 	out[k] = '\0';
 }
 
-/* Loaded (or created) at module activation, i.e. at game launch, so the id exists
- * before any multiplayer use. Stored as a dashed UUID; plain hex is accepted too.
- * It is a random (version 4) UUID: the version/variant bits are stamped on. */
-static void MpLoadPlayerId(void)
-{
-	const char* s = jer_config_get_str("mp", "player_id", "");
-	char text[40];
-	int i, n = 0, ok = (s != NULL);
-	unsigned char before[MP_PLAYER_ID_LEN];
+/* ---- the identity file: <root>/CONFIG/player.id ------------------------------
+ *
+ * 32 bytes, little-endian:
+ *    0  4  magic "JRID"
+ *    4  1  version (1)
+ *    5  3  zero
+ *    8  4  nonce (random per write)
+ *   12 16  the player id, XORed with a keystream (splitmix64 seeded by
+ *          MP_ID_KEY ^ nonce, 8 bytes per step, low byte first)
+ *   28  4  check: FNV-1a 32 over MP_ID_KEY's 8 bytes, bytes 0..11, then the PLAIN id
+ *
+ * The key ships in the game, so this is obfuscation and tamper detection (a
+ * hand-edited or damaged file fails the check), not secrecy. It is deliberately
+ * NOT bound to the machine: copying the CONFIG folder or reinstalling keeps the id.
+ * tools/player_id.py reads the same format. */
+#define MP_ID_FILE	"player.id"
+#define MP_ID_FILE_SIZE	32
+#define MP_ID_KEY	0x4A45524943484F31ULL	/* "JERICHO1" */
+#ifndef JER_CONFIG_PATH
+#define JER_CONFIG_PATH	"CONFIG"
+#endif
 
-	for (i = 0; ok && s[i] != '\0'; i++)
+static unsigned long long MpSplitMix(unsigned long long* x)
+{
+	unsigned long long z = (*x += 0x9E3779B97F4A7C15ULL);
+	z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
+	z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;
+	return z ^ (z >> 31);
+}
+
+static void MpIdCrypt(unsigned char* id, unsigned int nonce)
+{
+	unsigned long long st = MP_ID_KEY ^ (unsigned long long)nonce, r = 0;
+	int i;
+
+	for (i = 0; i < MP_PLAYER_ID_LEN; i++)
+	{
+		if ((i & 7) == 0)
+			r = MpSplitMix(&st);
+		id[i] ^= (unsigned char)(r >> ((i & 7) * 8));
+	}
+}
+
+static unsigned int MpIdCheck(const unsigned char* head12, const unsigned char* plain)
+{
+	unsigned int h = 2166136261u;
+	int i;
+
+	for (i = 0; i < 8; i++)
+		h = (h ^ (unsigned char)(MP_ID_KEY >> (i * 8))) * 16777619u;
+	for (i = 0; i < 12; i++)
+		h = (h ^ head12[i]) * 16777619u;
+	for (i = 0; i < MP_PLAYER_ID_LEN; i++)
+		h = (h ^ plain[i]) * 16777619u;
+	return h;
+}
+
+static void MpIdPath(char* out, size_t n, const char* suffix)
+{
+	const char* root = jer_root_dir();
+
+	snprintf(out, n, "%s/%s/%s%s", (root != NULL && root[0]) ? root : ".", JER_CONFIG_PATH,
+		MP_ID_FILE, suffix);
+}
+
+static void MpPut32(unsigned char* p, unsigned int v)
+{
+	p[0] = (unsigned char)v; p[1] = (unsigned char)(v >> 8);
+	p[2] = (unsigned char)(v >> 16); p[3] = (unsigned char)(v >> 24);
+}
+
+static unsigned int MpGet32(const unsigned char* p)
+{
+	return (unsigned int)p[0] | ((unsigned int)p[1] << 8) | ((unsigned int)p[2] << 16) |
+		((unsigned int)p[3] << 24);
+}
+
+/* 1 = read a valid id, 0 = no file, -1 = a file that is not a valid identity */
+static int MpIdFileRead(unsigned char* id)
+{
+	char path[512];
+	unsigned char b[MP_ID_FILE_SIZE + 1];
+	FILE* f;
+	size_t n;
+
+	MpIdPath(path, sizeof(path), "");
+	f = fopen(path, "rb");
+
+	if (f == NULL)
+		return 0;
+
+	n = fread(b, 1, sizeof(b), f);
+	fclose(f);
+
+	if (n != MP_ID_FILE_SIZE || memcmp(b, "JRID", 4) != 0 || b[4] != 1)
+		return -1;
+
+	memcpy(id, b + 12, MP_PLAYER_ID_LEN);
+	MpIdCrypt(id, MpGet32(b + 8));
+
+	return (MpIdCheck(b, id) == MpGet32(b + 28)) ? 1 : -1;
+}
+
+/* Atomic: written to player.id.tmp, then renamed over. 1 = written. */
+static int MpIdFileWrite(const unsigned char* id)
+{
+	char path[512], tmp[520];
+	unsigned char b[MP_ID_FILE_SIZE];
+	unsigned int nonce = 0;
+	FILE* f;
+	int ok;
+
+	memset(b, 0, sizeof(b));
+	memcpy(b, "JRID", 4);
+	b[4] = 1;
+
+	if (!MpOsRandom((unsigned char*)&nonce, 4))
+		nonce = (unsigned int)MpNowMs() ^ 0x5A5A1234u;
+
+	MpPut32(b + 8, nonce);
+	memcpy(b + 12, id, MP_PLAYER_ID_LEN);
+	MpPut32(b + 28, MpIdCheck(b, id));
+	MpIdCrypt(b + 12, nonce);
+
+	MpIdPath(path, sizeof(path), "");
+	MpIdPath(tmp, sizeof(tmp), ".tmp");
+
+	f = fopen(tmp, "wb");
+	if (f == NULL)
+	{
+		/* CONFIG/ may not exist yet on a fresh install: make it and retry */
+		char dir[512];
+		const char* root = jer_root_dir();
+
+		snprintf(dir, sizeof(dir), "%s/%s", (root != NULL && root[0]) ? root : ".", JER_CONFIG_PATH);
+#if defined(_WIN32)
+		_mkdir(dir);
+#else
+		mkdir(dir, 0755);
+#endif
+		f = fopen(tmp, "wb");
+		if (f == NULL)
+			return 0;
+	}
+
+	ok = (fwrite(b, 1, sizeof(b), f) == sizeof(b));
+	ok = (fflush(f) == 0) && ok;
+	fclose(f);
+
+	if (!ok)
+	{
+		remove(tmp);
+		return 0;
+	}
+
+#if defined(_WIN32)
+	remove(path);	/* rename() will not replace on Windows */
+#endif
+	if (rename(tmp, path) != 0)
+	{
+		remove(tmp);
+		return 0;
+	}
+
+	return 1;
+}
+
+static int MpParseIdText(const char* s, unsigned char* out)
+{
+	int i, n = 0;
+
+	for (i = 0; s != NULL && s[i] != '\0'; i++)
 	{
 		int v;
 
@@ -102,42 +268,82 @@ static void MpLoadPlayerId(void)
 		v = MpHexNibble(s[i]);
 
 		if (v < 0 || n >= MP_PLAYER_ID_LEN * 2)
-		{
-			ok = 0;
-			break;
-		}
+			return 0;
 
 		if ((n & 1) == 0)
-			gMp.config.playerId[n / 2] = (unsigned char)(v << 4);
+			out[n / 2] = (unsigned char)(v << 4);
 		else
-			gMp.config.playerId[n / 2] |= (unsigned char)v;
+			out[n / 2] |= (unsigned char)v;
 		n++;
 	}
 
-	ok = ok && (n == MP_PLAYER_ID_LEN * 2);
+	return n == MP_PLAYER_ID_LEN * 2;
+}
 
-	if (!ok)
+/* Loaded (or created) at module activation, i.e. at game launch, so the id exists
+ * before any multiplayer use. Lives in CONFIG/player.id (above). Order:
+ *   1. a valid player.id                         -> use it
+ *   2. a player.id that fails its check          -> keep it as player.id.bad, log
+ *   3. the old [mp] player_id ini key (earlier builds) -> import it, same id
+ *   4. otherwise                                  -> a new random (v4) id
+ * then (re)write player.id if it was not valid, and blank the old ini key once the
+ * file holds the id. */
+static void MpLoadPlayerId(void)
+{
+	char text[40], path[512], bad[520];
+	const char* how = "";
+	int st = MpIdFileRead(gMp.config.playerId);
+
+	if (st < 0)
 	{
-		if (!MpOsRandom(gMp.config.playerId, MP_PLAYER_ID_LEN))
-		{
-			/* no OS generator: still unique enough to tell installs apart */
-			srand((unsigned int)(size_t)&text ^ (unsigned int)(size_t)&gMp ^ (unsigned int)MpNowMs());
-			for (i = 0; i < MP_PLAYER_ID_LEN; i++)
-				gMp.config.playerId[i] = (unsigned char)(rand() >> 3);
-		}
+		MpIdPath(path, sizeof(path), "");
+		MpIdPath(bad, sizeof(bad), ".bad");
+		remove(bad);
+		rename(path, bad);
+
+		if (gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx, "[mp] %s is damaged or not an identity file: kept as %s\n",
+				path, bad);
 	}
 
-	memcpy(before, gMp.config.playerId, sizeof(before));
-	gMp.config.playerId[6] = (unsigned char)((gMp.config.playerId[6] & 0x0F) | 0x40);	/* version 4 */
-	gMp.config.playerId[8] = (unsigned char)((gMp.config.playerId[8] & 0x3F) | 0x80);	/* RFC 4122 variant */
+	if (st != 1)
+	{
+		const char* old = jer_config_get_str("mp", "player_id", "");
+
+		if (old != NULL && old[0] != '\0' && MpParseIdText(old, gMp.config.playerId))
+			how = " (imported from [mp] player_id)";
+		else
+		{
+			int i;
+
+			if (!MpOsRandom(gMp.config.playerId, MP_PLAYER_ID_LEN))
+			{
+				/* no OS generator: still unique enough to tell installs apart */
+				srand((unsigned int)(size_t)&text ^ (unsigned int)(size_t)&gMp ^ (unsigned int)MpNowMs());
+				for (i = 0; i < MP_PLAYER_ID_LEN; i++)
+					gMp.config.playerId[i] = (unsigned char)(rand() >> 3);
+			}
+
+			how = " (new for this install)";
+		}
+
+		gMp.config.playerId[6] = (unsigned char)((gMp.config.playerId[6] & 0x0F) | 0x40);	/* version 4 */
+		gMp.config.playerId[8] = (unsigned char)((gMp.config.playerId[8] & 0x3F) | 0x80);	/* RFC 4122 variant */
+
+		if (MpIdFileWrite(gMp.config.playerId))
+		{
+			if (old != NULL && old[0] != '\0')
+				jer_config_set_str("mp", "player_id", "");	/* the file is the store now */
+		}
+		else if (gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx, "[mp] could not write %s/%s; the id is kept for this run only\n",
+				JER_CONFIG_PATH, MP_ID_FILE);
+	}
 
 	MpFormatPlayerId(gMp.config.playerId, text);
 
-	if (!ok || memcmp(before, gMp.config.playerId, sizeof(before)) != 0 || strchr(s, '-') == NULL)
-		jer_config_set_str("mp", "player_id", text);
-
 	if (gMpCtx != NULL)
-		gMpCtx->jer_log(gMpCtx, "[mp] player id %s%s\n", text, ok ? "" : " (new for this install)");
+		gMpCtx->jer_log(gMpCtx, "[mp] player id %s%s\n", text, how);
 }
 
 const char* MpDefaultPlayerName(void)
