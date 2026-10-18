@@ -1,7 +1,7 @@
 id = "mp"
 name = "Multiplayer"
-version = "0.1.0"
+version = "0.12.0"
 author = "JERICHO"
-description = "LAN multiplayer: host/join with UDP discovery, a generic JERICHO addon net bridge, owner-authoritative car sync (each machine drives its own car and broadcasts its state; peers adopt it verbatim), in-match chat, and a host-maintained roster."
+description = "Online and LAN multiplayer for up to 16 players: discovery-server browser plus LAN discovery, dedicated server support, owner-authoritative car sync (each machine drives its own car and broadcasts its state; peers adopt it verbatim), in-match chat, a host-maintained roster, and a generic JERICHO addon net bridge. Minor version tracks MP_PROTO_VERSION (12)."
 dependencies = []
 default-enabled = true
