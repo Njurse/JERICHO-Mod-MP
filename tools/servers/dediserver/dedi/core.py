@@ -56,6 +56,11 @@ DEFAULTS = {
     # Plugins (dedi/plugins.py; README "Plugins"). null = every plugin found, minus
     # plugins_disabled and any marked ENABLED_BY_DEFAULT = False; a list = exactly
     # those, in order. plugins_dir is relative to this server's folder.
+    # The session's time of day and weather, by name (the engine's own lists:
+    # FEmain.c TimeOfDayNames / WeatherNames). Read by a client as it loads.
+    "time_of_day": "day",      # dawn | day | dusk | night
+    "weather": "clear",        # clear | rain | wet
+    "announce_joins": True,    # announce plugin: "X joined/left" as server chat
     "plugins": None,
     "plugins_disabled": [],
     "plugins_dir": "plugins",
@@ -275,6 +280,7 @@ class Dedicated:
         # Plugins. `home` is where plugins_dir is resolved from; readvertise_evt asks
         # the master loop to re-register now (rules changed) instead of next beat.
         self.home = HERE
+        self.config_path = cfg.get("_config_path") or ""
         self.readvertise_evt = threading.Event()
         self.plugins = PluginManager(self)
         self.plugins.load()
@@ -332,6 +338,41 @@ class Dedicated:
 
     def readvertise(self):
         self.readvertise_evt.set()
+
+    def set_session(self, time_of_day=None, weather=None):
+        """Time of day / weather by name or number; from the next level load."""
+        if time_of_day is not None:
+            i = _named_index(time_of_day, TIMES_OF_DAY, -1)
+            if i < 0:
+                raise ValueError("time of day is one of %s" % "/".join(TIMES_OF_DAY))
+            self.cfg["time_of_day"] = TIMES_OF_DAY[i]
+        if weather is not None:
+            i = _named_index(weather, WEATHERS, -1)
+            if i < 0:
+                raise ValueError("weather is one of %s" % "/".join(WEATHERS))
+            self.cfg["weather"] = WEATHERS[i]
+        self.log.info("session now: %s, %s (from the next level load)"
+                      % (self.cfg["time_of_day"], self.cfg["weather"]))
+        self.readvertise()
+        return "%s, %s" % (self.cfg["time_of_day"], self.cfg["weather"])
+
+    def save_config_keys(self, keys):
+        """Write these cfg keys back into the config file, keeping every other key
+        as the operator wrote it. Atomic (temp file + replace). Returns the path."""
+        path = self.config_path or os.path.join(HERE, CONFIG_NAME)
+        data = {}
+        if os.path.exists(path):
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        for k in keys:
+            data[k] = self.cfg.get(k)
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+            f.write("\n")
+        os.replace(tmp, path)
+        self.log.info("saved %s to %s" % (", ".join(keys), path))
+        return path
 
     def player_count(self):
         with self.lock:
@@ -559,8 +600,13 @@ class Dedicated:
             # they simply arrive without a peer list, which is what this server did
             # before it had one at all.
             self.log.warning("could not send the roster to %s: %s" % (who, e))
-        sess = m.SESSION.pack(0, self.city, 1, 0, seed,
-                              max(2, self.player_count() + 1), 1, 0)
+        # spare carries the session rules (bits 1..: mp_proto.h, MpHandleStart reads
+        # (spare >> 1) & 0xff) -- a 0 here, and a 0 in the welcome's rules byte,
+        # meant every client adopted "no rules": cops OFF, whatever this server's
+        # config said.
+        sess = m.SESSION.pack(0, self.city, time_of_day_index(self.cfg), weather_index(self.cfg),
+                              seed, max(2, self.player_count() + 1), 1,
+                              (int(self.cfg["rules"]) & 0x7F) << 1)
         try:
             # running=1: a dedicated server IS a match in progress. It said 0, and
             # the client takes its "the host has STARTed" branch only when this is
@@ -727,7 +773,9 @@ class Dedicated:
         # hostCar, rules  (mp_proto.h MP_WELCOME, 18 bytes since v11).
         return m.WELCOME.pack(pid, self.max_players, int(self.cfg["mod_check"]),
                               1 if matched else 0, running, 0, 0, 0,
-                              int(self.cfg["gamemode"]), self.city, 1, 0, seed, 0xFF, 0)
+                              int(self.cfg["gamemode"]), self.city,
+                              time_of_day_index(self.cfg), weather_index(self.cfg),
+                              seed, 0xFF, int(self.cfg["rules"]) & 0xFF)
 
     # -- UDP beacon (LAN discovery)
     def beacon_loop(self):
@@ -897,6 +945,8 @@ class Dedicated:
             "city:      %d" % self.city,
             "gamemode:  %d" % int(self.cfg["gamemode"]),
             "rules:     %s" % rules_text(int(self.cfg["rules"])),
+            "time:      %s, %s" % (TIMES_OF_DAY[time_of_day_index(self.cfg)],
+                                   WEATHERS[weather_index(self.cfg)]),
             "players:   %d/%d" % (self.player_count(), self.max_players),
             "uptime:    %s" % duration(time.time() - self.started),
             "beacon:    %s" % (("every %dms to UDP/%d"
@@ -1068,6 +1118,8 @@ def parse_args(argv):
                     help="cops exist but never come after anyone")
     ap.add_argument("--invulnerable", action="store_true", default=None,
                     help="cars take no damage")
+    ap.add_argument("--time-of-day", choices=TIMES_OF_DAY, help="session time of day (default day)")
+    ap.add_argument("--weather", choices=WEATHERS, help="session weather (default clear)")
     ap.add_argument("--log-level", choices=sorted(LEVELS))
     ap.add_argument("--log-file")
     ap.add_argument("--master", help="master discovery URL, e.g. http://host:8100 ('' disables)")
@@ -1084,6 +1136,25 @@ def parse_args(argv):
 
 
 RULE_KEYS = ("cops", "cop_difficulty", "cop_immunity", "invulnerable")
+
+
+TIMES_OF_DAY = ("dawn", "day", "dusk", "night")      # engine order (0..3)
+WEATHERS = ("clear", "rain", "wet")                   # engine order (0..2)
+
+
+def _named_index(value, names, default):
+    v = str(value).strip().lower()
+    if v.isdigit() and int(v) < len(names):
+        return int(v)
+    return names.index(v) if v in names else default
+
+
+def time_of_day_index(cfg):
+    return _named_index(cfg.get("time_of_day", "day"), TIMES_OF_DAY, 1)
+
+
+def weather_index(cfg):
+    return _named_index(cfg.get("weather", "clear"), WEATHERS, 0)
 
 
 def pack_rules(cops, invuln, diff, immune):
@@ -1130,6 +1201,7 @@ def build_config(argv):
         ("idle_drop_s", "idle_drop_s"), ("cops", "cops"),
         ("cop_difficulty", "cop_difficulty"), ("cop_immunity", "cop_immunity"),
         ("invulnerable", "invulnerable"),
+        ("time_of_day", "time_of_day"), ("weather", "weather"),
         ("log_level", "log_level"), ("log_file", "log_file"),
         ("master", "master"), ("master_name", "master_name"),
         ("advertise_host", "advertise_host"), ("advertise_port", "advertise_port"),
@@ -1191,6 +1263,14 @@ def main(argv=None):
                     "clients will load whatever it names, if the level registry has it"
                     % int(cfg["city"]))
 
+    for key, names, idx in (("time_of_day", TIMES_OF_DAY, time_of_day_index),
+                            ("weather", WEATHERS, weather_index)):
+        if _named_index(cfg[key], names, -1) < 0:
+            log.warning("%s %r is not one of %s; using %s"
+                        % (key, cfg[key], "/".join(names), names[idx(cfg)]))
+        cfg[key] = names[idx(cfg)]
+
+    cfg["_config_path"] = path
     server = Dedicated(cfg, log)
 
     log.debug("signals: %s" % ", ".join(install_signals(server.stop, log)))
