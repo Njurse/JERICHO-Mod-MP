@@ -2395,7 +2395,7 @@ static void MpServerTouch(const char* ip, const MP_BEACON* b)
 	if (gMpCtx)
 		gMpCtx->jer_log(gMpCtx, "[mp] server found: '%s' %s:%d (%d/%d players, %s, city %d)\n",
 			gServers[freeIdx].hostName, ip, b->port,
-			b->players, b->maxPlayers, MpModeName(b->rules), b->city);
+			b->players, b->maxPlayers, MpModeName(b->gamemode), b->city);
 }
 
 static void MpBeaconRecv(void)
@@ -2764,6 +2764,7 @@ static int MpOnlineParse(const char* body)
 		s->maxPlayers = MpJsonInt(p, close, "maxPlayers", 0);
 		s->city = MpJsonInt(p, close, "city", 0);
 		s->rules = MpJsonInt(p, close, "rules", 0);
+		s->gamemode = MpJsonInt(p, close, "gamemode", MP_GAMEMODE_TAKEADRIDE);
 
 		/* a row with nowhere to connect to is not a row */
 		if (s->host[0] != '\0' && s->port > 0 && s->port <= 65535)
@@ -3606,7 +3607,7 @@ static void MpAdvertReply(int status, const char* body)
 
 		if (gMpCtx != NULL)
 			gMpCtx->jer_log(gMpCtx, "[mp] advertised on %s as %s:%d (%s)\n",
-				gOnlineHostHdr, gAdvertName, gAdvertPort, MpModeName(gAdvertRules));
+				gOnlineHostHdr, gAdvertName, gAdvertPort, MpModeName(gAdvertGamemode));
 
 		/* ...and say so on SCREEN, in the left-hand console rows (the same place the
 		 * version toast goes): the menu label that would carry this is capped at 32

@@ -1204,7 +1204,7 @@ static int ActJoinOnline(void* ud)
 		gMpCtx->jer_log(gMpCtx, "[mp] joining listed '%s' %s:%d (%d/%d, %s, city %d)\n",
 			s != NULL ? s->name : "?", s != NULL ? s->host : "?", s != NULL ? s->port : -1,
 			s != NULL ? s->players : -1, s != NULL ? s->maxPlayers : -1,
-			MpModeName(s != NULL ? s->rules : 0), s != NULL ? s->city : -1);
+			MpModeName(s != NULL ? s->gamemode : MP_GAMEMODE_TAKEADRIDE), s != NULL ? s->city : -1);
 
 	/* asynchronous, exactly like the LAN rows: the lobby shows progress while
 	 * the socket connects instead of the menu freezing */
@@ -1335,6 +1335,7 @@ typedef struct TABLE_ROW
 	char name[MP_NAME_MAX + 8];	/* room for the LIVE marker a LAN row carries */
 	int  players, maxPlayers;
 	int  rules;
+	int  gamemode;
 	int  city;
 	int  pingMs;
 } TABLE_ROW;
@@ -1352,6 +1353,7 @@ static int TableRowSource(int online, int index, TABLE_ROW* out)
 		out->players = s->players;
 		out->maxPlayers = s->maxPlayers;
 		out->rules = s->rules;
+		out->gamemode = s->gamemode;
 		out->city = s->city;
 		out->pingMs = s->pingMs;		/* measured, or 0 = not yet */
 		return 1;
@@ -1372,6 +1374,7 @@ static int TableRowSource(int online, int index, TABLE_ROW* out)
 		out->players = s->players;
 		out->maxPlayers = s->maxPlayers;
 		out->rules = s->rules;
+		out->gamemode = s->gamemode;
 		out->city = s->city;
 		out->pingMs = 0;			/* no measurement for a beacon row */
 		return 1;
@@ -1489,7 +1492,7 @@ static void TableDraw(int online)
 		snprintf(cell, sizeof(cell), "%d/%d", r.players, r.maxPlayers);
 		jer_text_draw_at(JER_TEXT_FE, TABLE_SCALE, x + TABLE_COL_PLAYERS, y, cell, 235, 235, 235);
 
-		jer_text_draw_at(JER_TEXT_FE, TABLE_SCALE, x + TABLE_COL_MODE, y, MpModeName(r.rules), 235, 235, 235);
+		jer_text_draw_at(JER_TEXT_FE, TABLE_SCALE, x + TABLE_COL_MODE, y, MpModeName(r.gamemode), 235, 235, 235);
 		jer_text_draw_at(JER_TEXT_FE, TABLE_SCALE, x + TABLE_COL_CITY, y, MpCityLabel(r.city), 235, 235, 235);
 
 		if (r.pingMs > 0)

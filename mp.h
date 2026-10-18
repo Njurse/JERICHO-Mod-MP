@@ -392,7 +392,8 @@ typedef struct MP_ONLINE_SERVER
 	int  port;
 	int  players, maxPlayers;
 	int  city;
-	int  rules;			/* MP_RULES_PACK'd, so the row can name the mode */
+	int  gamemode;			/* MP_GAMEMODE_*: names the mode (MpModeName) */
+	int  rules;			/* MP_RULES_PACK'd session settings (cops etc.) */
 	int  pingMs;			/* 0 = not measured yet */
 } MP_ONLINE_SERVER;
 
@@ -506,10 +507,9 @@ int MpChangeCar(int city, int model);
 /* A city's display name (a 0..3 index, or -1 for the session's own city). */
 const char* MpCarCityName(int city);
 
-/* The mode a server advertises, named from its packed rules byte (mp_proto.h):
- * the rules ARE the source, so it cannot disagree with the match. Paired with
- * the tools' mode_name() in mp_test.py. */
-const char* MpModeName(int rules);
+/* The mode a server plays, named from its gamemode id (MP_GAMEMODE_*); session
+ * rules such as cops never rename it. Paired with the tools' mode_name() in mp_test.py. */
+const char* MpModeName(int gamemode);	/* MP_GAMEMODE_* -> display name */
 
 /* The city name for a row of SOMEONE ELSE'S server: the engine's name, or "-"
  * when the engine has no row for that city. Not MpCarCityName, which says "the

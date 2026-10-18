@@ -240,8 +240,9 @@ typedef struct MP_BEACON
 	uint8_t  inProgress;		/* 1 once the level has launched */
 	uint16_t modHash;		/* short digest of the host manifest */
 	uint16_t rules;			/* the host's SESSION RULES, MP_RULES_PACK'd -- the SAME
-				 * packed byte MP_WELCOME.rules carries, so a browser can name
-				 * the mode (COPS N ROBBERS vs TAKE A RIDE) without joining.
+				 * packed byte MP_WELCOME.rules carries, so a browser can show
+				 * the session's settings (cops etc.) without joining. The MODE's
+				 * name comes from `gamemode`, never from these rules.
 				 * This field was `spare`; the offset and size are unchanged, so
 				 * the beacon is identical on the wire, and a peer that predates
 				 * it reads 0 (MP_RULES_PACK'd "no rules"), which is the old

@@ -5806,18 +5806,20 @@ const char* MpCarCityName(int city)
 	return LevelNames[city];
 }
 
-/* The MODE a server advertises, named from its packed rules byte (mp_proto.h).
- *
- * The rules are the source, not a separate gamemode number: MP_BEACON.rules /
- * MP_WELCOME.rules are what the host actually runs with, so this cannot disagree
- * with the match. Only cops names a mode today -- everything else is the one
- * gamemode there is. Keep it in step with the tools' mode_name() (mp_test.py).
- *
- * `rules` is a packed byte; a server that predates the beacon field reads 0,
- * which names the same mode it actually plays. */
-const char* MpModeName(int rules)
+/* The MODE a server plays, named from its GAMEMODE id (MP_GAMEMODE_*, carried by
+ * MP_BEACON / MP_WELCOME / the master listing). Session rules (cops on/off, etc.)
+ * are settings OF a mode and never rename it: Take a Ride with cops off is still
+ * Take a Ride. An id this build does not know reads "-". Keep it in step with the
+ * tools' mode_name() (mp_test.py). */
+const char* MpModeName(int gamemode)
 {
-	return (rules & MP_RULE_COPS) ? "COPS N ROBBERS" : "TAKE A RIDE";
+	switch (gamemode)
+	{
+	case MP_GAMEMODE_TAKEADRIDE:
+		return "TAKE A RIDE";
+	default:
+		return "-";
+	}
 }
 
 /* The city name for a ROW of somebody else's server: the engine's own name, or

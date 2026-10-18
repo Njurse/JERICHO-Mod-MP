@@ -45,13 +45,13 @@ MOD_VER_MAX = 16              # mp_proto.h MP_MOD_VER_MAX (MP_MOD_INFO.version)
 MP_RULE_COPS = 0x1            # 1 = police cars spawn
 
 
-def mode_name(rules):
-    """The name a browser shows for a packed rules byte.
+GAMEMODE_NAMES = {0: "TAKE A RIDE"}      # MP_GAMEMODE_* (mp_proto.h)
 
-    Only cops names a mode today; everything else is the one gamemode there is.
-    Keep this in step with the C side's table (mp_ui.c).
-    """
-    return "COPS N ROBBERS" if (rules & MP_RULE_COPS) else "TAKE A RIDE"
+
+def mode_name(gamemode):
+    """The name a browser shows for a server's gamemode id. Session rules (cops
+    on/off) never rename the mode. Keep in step with MpModeName (mp_session.c)."""
+    return GAMEMODE_NAMES.get(gamemode, "-")
 
 
 def city_name(city):
@@ -470,7 +470,7 @@ def mode_beacon(args):
             continue
         print(f"[beacon] from {addr[0]}: proto={proto} port={port} "
               f"host={cstr(host)!r} players={players}/{maxp} "
-              f"mode={gm} ({mode_name(rules)}) city={city} ({city_name(city)}) "
+              f"mode={gm} ({mode_name(gm)}) city={city} ({city_name(city)}) "
               f"enforced={enforce} inProgress={inprog} modHash={mhash:#06x} rules={rules:#04x}")
         seen += 1
     print(f"[beacon] {'PASS' if seen else 'FAIL'}: {seen} beacon(s)")

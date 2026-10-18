@@ -250,7 +250,7 @@ def run_browser(args, run_root, master_url):
         second, _ = spawn(
             [sys.executable, DEDI_PY, "--port", str(second_port),
              "--name", "Second Game", "--city", str((args.city + 2) % 4),
-             "--rules", "1",                    # COPS N ROBBERS
+             "--cops",                          # cops on (still Take a Ride)
              "--no-beacon",
              "--master", master_url, "--master-interval", str(args.master_interval),
              "--log-level", "info"], second_log)
