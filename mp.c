@@ -1005,28 +1005,36 @@ static int MpOnFrame(void* userdata, void* args)
 	 * cleared the frame after the session ends). */
 	gJerPauseRestartAsRespawn = gMp.running ? 1 : 0;
 
-	/* NO BACKSPACE FAST-FORWARD IN A SESSION. The engine's key handler sets
-	 * `FastForward = 1` on BACKSPACE (a debug/cutscene convenience,
-	 * redriver2_psxpc.cpp), and a fast-forwarded sim is a sim running at a
-	 * different rate from everyone else's -- the definition of desync. Hold it
-	 * down here instead of removing the key: single player keeps the feature, and
-	 * a session is the only place it is wrong. */
+	/* NO BACKSPACE / MAP FAST-FORWARD IN A SESSION. The engine offers it two ways:
+	 * BACKSPACE (a debug/cutscene convenience, redriver2_psxpc.cpp) and the
+	 * fullscreen map, which sets FastForward every frame it is open (overlay.c).
+	 * A fast-forwarded sim runs at a different rate from everyone else's, which is
+	 * the definition of desync.
+	 *
+	 * A LOCK, not a per-frame clear: clearing the flag every frame while the map
+	 * re-set it every frame meant the two fought and the sim toggled fast/normal
+	 * for as long as the map was up. With FastForwardLocked the engine never offers
+	 * it in the first place, so nothing oscillates. */
 	{
 		extern int FastForward;
+		extern int FastForwardLocked;
+
+		static int lockAnnounced;
+
+		FastForwardLocked = gMp.running ? 1 : 0;
+
+		if (FastForwardLocked != 0 && !lockAnnounced)
+		{
+			lockAnnounced = 1;
+
+			if (gMpCtx != NULL)
+				gMpCtx->jer_log(gMpCtx,
+					"[mp] fast-forward locked off for this session (BACKSPACE and the map screen both "
+					"run the sim fast, which would desync it)\n");
+		}
 
 		if (gMp.running && FastForward != 0)
-		{
-			static int announced;
-
-			FastForward = 0;
-
-			if (!announced && gMpCtx != NULL)
-			{
-				announced = 1;
-				gMpCtx->jer_log(gMpCtx,
-					"[mp] backspace fast-forward disabled in a session (it would desync the sim)\n");
-			}
-		}
+			FastForward = 0;	/* a press from before the match started */
 	}
 
 	/* A Change car that asked for a car this machine does not hold yet and was told to
