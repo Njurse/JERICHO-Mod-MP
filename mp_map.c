@@ -62,10 +62,24 @@ int MpOnDrawMap(void* userdata, void* args)
 		/* The arrows mark the OTHER players, the host included. Our own car is
 		 * already the engine's own blip (it draws one for its single player),
 		 * so drawing one for ourselves here would double it up. */
-		if (p->isLocal || p->id == gMp.localPlayerId)
-			continue;
-
 		cp = &car_data[p->carId];
+
+		/* Our own car keeps the engine's blip unless we picked a colour: then the
+		 * stock blip is suppressed and ours is drawn here in that colour, so every
+		 * player -- us included -- reads in the colour the others see us in. */
+		if (p->isLocal || p->id == gMp.localPlayerId)
+		{
+			if (!gMp.config.colorOn)
+				continue;
+
+			target.vx = cp->hd.where.t[0];
+			target.vy = 0;
+			target.vz = cp->hd.where.t[2];
+			m->suppressStockBlip = 1;
+			DrawPlayerDot(&target, (short)-cp->hd.direction,
+				gMp.config.colorR, gMp.config.colorG, gMp.config.colorB, m->flags);
+			continue;
+		}
 
 		target.vx = cp->hd.where.t[0];
 		target.vy = 0;
@@ -90,7 +104,13 @@ int MpOnDrawMap(void* userdata, void* args)
 			firstVz = target.vz;
 		}
 
-		DrawPlayerDot(&target, (short)-cp->hd.direction, r, g, 0, m->flags);
+		/* each player's arrow in their preferred colour (the same one their name
+		 * is drawn in, in chat); the stock red ramp only when they have none */
+		if (p->colorOn)
+			DrawPlayerDot(&target, (short)-cp->hd.direction,
+				p->colorR, p->colorG, p->colorB, m->flags);
+		else
+			DrawPlayerDot(&target, (short)-cp->hd.direction, r, g, 0, m->flags);
 
 		drawn++;
 
