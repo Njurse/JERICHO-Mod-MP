@@ -65,10 +65,15 @@ TAG = {
     "carstate": b"JPCS", "ping": b"JPPN", "pong": b"JPPO",
     "channel": b"JPCH", "leave": b"JPLV", "kick": b"JPKK", "chat": b"JPCX",
     "roster": b"JPRS", "car": b"JPCC",
+    "ped": b"JPPD", "traffic": b"JPTF",
 }
 # NOTE: no "session" entry. 'JPSS' was retired from mp_proto.h -- it was reserved for
 # a standalone session/lobby broadcast that nothing ever sent or handled. Keep this
 # table to the tags the code actually has; a retired one is dropped here too.
+# MP_PEDSTATE (count + 3 reserved) and its 24-byte MP_PEDSTATE_ENTRY rows
+# (playerId, flags, spare, x, y, z, heading, speed): an on-foot player's pose.
+PEDSTATE = struct.Struct("<B3x")
+PEDSTATE_ENTRY = struct.Struct("<BBHiiiii")
 UDP_MAGIC = 0x31504D4A
 DISCOVERY_PORT = 1318          # mp_proto.h MP_DISCOVERY_PORT -- FIXED and shared. A
                                # beacon goes HERE; the session port travels INSIDE

@@ -460,6 +460,33 @@ class Dedicated:
             except OSError:
                 pass
 
+    def relay_peer_state(self, conn, tag, payload, pid):
+        """Forward an owner -> peers state frame, verbatim, to everyone else.
+
+        On-foot poses (JPPD) and replicated traffic/police (JPTF) are sent by the
+        machine that owns them to the HOST, and the in-game host relays them as-is
+        to every other connection (mp_session.c MpHandlePedState / MpHandleTraffic
+        -> MpHostRelay). This server dropped both, so on a dedicated server nobody
+        saw a player on foot or another machine's traffic. The server keeps no copy:
+        neither has a late-join snapshot in the game either.
+
+        A pose may only describe its sender: a JPPD row naming another player id
+        is a spoof (or a confused client) and the frame is dropped. Returns True
+        when relayed."""
+        if tag == m.TAG["ped"]:
+            try:
+                count = m.PEDSTATE.unpack_from(payload, 0)[0]
+                rows = [payload[m.PEDSTATE.size + i * m.PEDSTATE_ENTRY.size]
+                        for i in range(count)]
+                if count < 1 or len(payload) < m.PEDSTATE.size + count * m.PEDSTATE_ENTRY.size \
+                        or any(r != pid for r in rows):
+                    raise ValueError
+            except (ValueError, IndexError, struct.error):
+                self.log.debug("player %d: dropping a malformed or foreign on-foot frame" % pid)
+                return False
+        self.broadcast(payload, tag, skip=conn)
+        return True
+
     def _chat(self, conn, payload, pid, name):
         """Print one chat line to the operator console, then relay it.
 
@@ -712,6 +739,8 @@ class Dedicated:
                         continue
                     self.broadcast(self.carstate_union(int(time.time() * 30)),
                                    m.TAG["carstate"], skip=conn)
+                elif tag in (m.TAG["ped"], m.TAG["traffic"]):
+                    self.relay_peer_state(conn, tag, payload, pid)
                 elif tag == m.TAG["chat"]:
                     self._chat(conn, payload, pid, name)
                 elif tag == m.TAG["ping"]:

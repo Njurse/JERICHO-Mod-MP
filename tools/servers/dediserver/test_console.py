@@ -94,6 +94,37 @@ def main():
     console.dispatch("bogus")
     check("unknown command did not raise", True)
 
+    # -- ON-FOOT and TRAFFIC relay: owner -> everyone else, verbatim, like the
+    # in-game host's MpHostRelay (the server used to drop both tags)
+    pairs = {pid: socket.socketpair() for pid in (4, 5, 6)}
+    for pid, (srv, _cli) in pairs.items():
+        server.clients[srv] = {"id": pid, "name": "P%d" % pid, "addr": "127.0.0.1:%d" % pid}
+        _cli.settimeout(1.0)
+    ped = m.PEDSTATE.pack(1) + m.PEDSTATE_ENTRY.pack(4, 1, 0, 100, -20, 300, 1024, 40)
+    check("an on-foot frame is relayed", server.relay_peer_state(pairs[4][0], m.TAG["ped"], ped, 4))
+    for pid in (5, 6):
+        tag, payload = m.recv_frame(pairs[pid][1])
+        check("player %d got the on-foot pose verbatim" % pid, tag == m.TAG["ped"] and payload == ped)
+    pairs[4][1].settimeout(0.2)
+    try:
+        echoed = m.recv_frame(pairs[4][1])
+    except (socket.timeout, OSError):
+        echoed = None
+    check("the sender does not get its own pose back", echoed is None, repr(echoed))
+    check("a pose naming another player is dropped",
+          not server.relay_peer_state(pairs[4][0], m.TAG["ped"], ped, 5))
+    check("a short on-foot frame is dropped",
+          not server.relay_peer_state(pairs[4][0], m.TAG["ped"], ped[:10], 4))
+    traffic = b"\x01\x00\x00\x00" + bytes(range(40))
+    check("a traffic frame is relayed", server.relay_peer_state(pairs[5][0], m.TAG["traffic"], traffic, 5))
+    pairs[4][1].settimeout(1.0)
+    tag, payload = m.recv_frame(pairs[4][1])
+    check("player 4 got the traffic frame verbatim", tag == m.TAG["traffic"] and payload == traffic)
+    for pid, (srv, cli) in pairs.items():
+        server.clients.pop(srv, None)
+        srv.close()
+        cli.close()
+
     # -- KICK over a real socket pair: the frame, then the connection closing
     a, b = socket.socketpair()
     server.clients[a] = {"id": 3, "name": "KickMe", "addr": "127.0.0.1:5000"}
