@@ -27,7 +27,7 @@ import sys
 import threading
 import time
 
-PROTO = 11                    # mp_proto.h MP_PROTO_VERSION (11: MP_WELCOME.rules) -- the game drops any frame whose envelope version differs
+PROTO = 12                    # mp_proto.h MP_PROTO_VERSION (12: 16 players, bigger roster) -- the game drops any frame whose envelope version differs
 SDK = 2                       # JERICHO_SDK_VERSION
 MP_VER = "0.1.0"              # JERICHO/MODS/mp/mod.toml version -- always advertised
 NUL = bytes([0])
@@ -35,7 +35,7 @@ NUL = bytes([0])
 # Shared protocol constants, mirrored from mp_proto.h so the tools never hard-code
 # them twice. servers/proto_check.py asserts these (and the struct sizes below) still
 # match the C header, because a mirror that drifts fails silently on the wire.
-MAX_PLAYERS = 8               # mp_proto.h MP_MAX_PLAYERS
+MAX_PLAYERS = 16              # mp_proto.h MP_MAX_PLAYERS
 NAME_MAX = 32                 # mp_proto.h MP_NAME_MAX (MP_BEACON.hostName / MP_HELLO.playerName)
 MOD_ID_MAX = 24               # mp_proto.h MP_MOD_ID_MAX (MP_MOD_INFO.id)
 MOD_VER_MAX = 16              # mp_proto.h MP_MOD_VER_MAX (MP_MOD_INFO.version)
