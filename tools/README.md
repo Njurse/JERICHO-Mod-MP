@@ -348,7 +348,7 @@ about who drives what (see trap 12 in `docs/ARCHITECTURE.md`).
     JERICHO\MODS\mp\tools\pack_lan\sync_lan.bat
 
 Regenerates the project files (so the build stamp is current — `premake5 vs2019`
-bakes `git describe --tags --always --dirty` in as `JERICHO_BUILD_VERSION`),
+bakes `git describe --tags --match 'v*' --always --dirty` in as `JERICHO_BUILD_VERSION`),
 builds `Release_dev`, and writes `JERICHO_mp_lan_<build>.7z` in the project
 root. Copy that ONE file to the other machine and extract it over the folder; that
 machine needs neither Visual Studio nor git.

@@ -1020,7 +1020,7 @@ attempt had cainescrossfire enabled by accident, which rewrites car handling):**
 
 ## 14. Version identity, and shipping one build to both machines
 
-`JERICHO_BUILD_VERSION` is baked in at PREMAKE time (`git describe --tags --always
+`JERICHO_BUILD_VERSION` is baked in at PREMAKE time (`git describe --tags --match 'v*' --always
 --dirty`), so the digest the game reports — `MpBuildHash()`, printed as
 `[mp] multiplayer ready (... build be0d, mods 13bd)` and on the pause-menu
 scoreboard under its `PLAYERS` panel — describes the tree the vcxproj was generated

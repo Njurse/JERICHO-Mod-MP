@@ -244,7 +244,7 @@ Every join is checked by the **host**, on its side, in this order:
 | build identity | only with `Strict Version` on — **default off** | same **release series** |
 
 The build identity compares the **series** of `JERICHO_BUILD_VERSION`, not the
-string. That string is `git describe --tags --always --dirty`, so one release
+string. That string is `git describe --tags --match 'v*' --always --dirty`, so one release
 reads differently depending on who built it and how — and comparing it raw
 refused every pair that was not identical in provenance, which is every
 cross-platform pair and every pair where one side built the game locally:

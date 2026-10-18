@@ -25,7 +25,7 @@ rem ---------------------------------------------------------------- 1) stamp
 rem The SAME value premake bakes in as JERICHO_BUILD_VERSION, so the package name,
 rem VERSION.txt and what the game reports all agree.
 set "BUILD="
-for /f "delims=" %%v in ('git -C "%ROOT%" describe --tags --always --dirty 2^>nul') do set "BUILD=%%v"
+for /f "delims=" %%v in ('git -C "%ROOT%" describe --tags --match "v*" --always --dirty 2^>nul') do set "BUILD=%%v"
 if "%BUILD%"=="" set "BUILD=unknown"
 echo [sync_lan] build stamp: %BUILD%
 
