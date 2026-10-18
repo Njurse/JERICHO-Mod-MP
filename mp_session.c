@@ -381,7 +381,11 @@ static void MpSendPickedCar(int model, int city)
 	{
 		extern u_char defaultPlayerPalette;
 
+		/* the palette this car can actually wear (the host clamps too) */
 		c.reserved[0] = (uint8_t)defaultPlayerPalette;
+		if (gMp.localPlayerId >= 0 && MpLocalPlayer() != NULL && MpLocalPlayer()->carId >= 0 &&
+		    MpLocalPlayer()->carId < MAX_CARS)
+			c.reserved[0] = (uint8_t)car_data[MpLocalPlayer()->carId].ap.palette;
 		c.reserved[1] = 1;
 	}
 
@@ -6459,6 +6463,17 @@ static int MpAdoptCar(int carSlot, int city, int model, MP_PLAYER* who)
 
 		cp->ap.model = slot;
 
+		/* only a palette the NEW model has: ours is the player's choice
+		 * (defaultPlayerPalette), a peer's the one they last named; out of range
+		 * -> the model's own colours. The carstate then sends what is drawn. */
+		{
+			extern u_char defaultPlayerPalette;
+			int want = (who == NULL || who->isLocal) ? (int)defaultPlayerPalette
+								 : who->palette;
+
+			cp->ap.palette = (u_char)CarSlotClampPalette(slot, want);
+		}
+
 		/* REBUILD THE MESH. DrawCar draws the slot's poly/UV list against
 		 * gTempCarVertDump[carId], and CreateDentableCar is the ONLY thing that fills
 		 * that dump. Writing ap.model and stopping there draws one car's polygons
@@ -8341,6 +8356,10 @@ static void MpHandleCarState(int connIndex, const unsigned char* p, int len)
 			if (draw.handled && draw.paletteOut >= 0)
 				pal = draw.paletteOut;
 
+			/* defensive: a palette this model does not have (an older peer, or one
+			 * cycled on another car) is drawn in the model's own colours */
+			pal = CarSlotClampPalette(cp->ap.model, pal);
+
 			/* Log a correction when the car's palette actually changes, and once per
 			 * reported value when it does not (the state stream is continuous, so an
 			 * unthrottled line here would repeat every packet). */
@@ -8608,7 +8627,7 @@ static int MpCreateTrafficMirror(int slot, int city, int model, int palette)
 	cp->controlType = CONTROL_TYPE_PLAYER;
 	cp->ai.padid = &gMpQuietPad;
 	cp->hndType = 0;
-	cp->ap.palette = palette;
+	cp->ap.palette = (u_char)CarSlotClampPalette(resident, palette);
 	cp->lowDetail = -1;
 
 	gMpPeerTraffic[slot] = 1;

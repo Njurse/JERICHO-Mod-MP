@@ -2360,18 +2360,47 @@ static int MpCcApply(void* ud, int dir)
 
 extern u_char defaultPlayerPalette;	/* main.c: the palette the player's car spawns in */
 
+/* The car we are driving right now, or -1 (the menu is reachable before one exists). */
+static int MpCcOwnCar(void)
+{
+	MP_PLAYER* me = MpLocalPlayer();
+
+	if (me != NULL && me->carId >= 0 && me->carId < MAX_CARS)
+		return me->carId;
+	if (!gMp.running && player[0].playerCarId >= 0 && player[0].playerCarId < MAX_CARS)
+		return player[0].playerCarId;
+	return -1;
+}
+
+/* How many palettes the car we drive has (cars.h): a Driver 1 car or a special has
+ * one, so the row reads 1/1 there instead of offering colours it would break on. */
+static int MpCcPaletteCount(void)
+{
+	int c = MpCcOwnCar();
+
+	return (c >= 0) ? CarSlotPaletteCount(car_data[c].ap.model) : MP_PALETTES;
+}
+
 static void MpCcLabelPalette(void* ud, char* out, int max)
 {
+	int c = MpCcOwnCar(), n = MpCcPaletteCount();
+	int cur = (c >= 0) ? (int)car_data[c].ap.palette : (int)defaultPlayerPalette;
+
 	(void)ud;
-	snprintf(out, max, "Palette: %d/%d", (int)defaultPlayerPalette % MP_PALETTES + 1, MP_PALETTES);
+	snprintf(out, max, "Palette: %d/%d", (cur % n) + 1, n);
 }
 
 static int MpCcAdjustPalette(void* ud, int dir)
 {
 	MP_PLAYER* me = MpLocalPlayer();
-	int pal = ((int)defaultPlayerPalette + dir + MP_PALETTES) % MP_PALETTES;
+	int c = MpCcOwnCar(), n = MpCcPaletteCount();
+	int cur = (c >= 0) ? (int)car_data[c].ap.palette : (int)defaultPlayerPalette;
+	int pal = ((cur % n) + dir + n) % n;
 
 	(void)ud;
+
+	if (n <= 1)
+		return JER_PAUSE_QUIT_NONE;	/* nothing to cycle on this car: keep the choice */
 
 	defaultPlayerPalette = (u_char)pal;
 	gMp.config.palette = pal;
