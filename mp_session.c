@@ -6136,6 +6136,21 @@ static int MpAdoptCar(int carSlot, int city, int model, MP_PLAYER* who)
 		CreateDentableCar(cp);
 		gMpAdoptModel[carSlot] = model;
 
+		/* OUR car: rebind its engine and SIREN sounds to the new model, exactly as
+		 * getting in does (players.c ChangePedPlayerToCar -> StartPlayerCarSounds).
+		 * The siren is a looping channel (player*3+2) that is only STARTED there, and
+		 * the per-frame control just unmutes it while the horn is held -- so changing
+		 * from a car with no siren into a police car left that channel never started:
+		 * light bar on, siren silent until you got out and back in. Going the other
+		 * way, stop the old siren loop so it cannot hang on. */
+		if (carSlot == player[0].playerCarId && player[0].playerType == PLAYER_TYPE_CAR)
+		{
+			if (CarHasSiren(slot) == 0)
+				StopChannel(2);
+
+			StartPlayerCarSounds(0, slot, (VECTOR*)cp->hd.where.t);
+		}
+
 		/* Say it: the car was REBUILT, not merely re-pointed. A hot-loaded car also
 		 * had its cosmetics replaced the moment they landed (JerHotLoadCarCosmetics),
 		 * and this is the call that makes the car on the road use them. */
