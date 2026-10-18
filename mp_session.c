@@ -1100,19 +1100,37 @@ void MpSpawnLateJoiners(void)
 		PlayerStartInfo[slot]->flags = 0;
 
 		{
-			int lane = 600 * id;		/* the engine's own step for player 2 */
+			/* A 4-wide GRID around the level start, not a line. The engine's own
+			 * step for player 2 is 600 units in +x (main.c), and following it for
+			 * every id put player 15 at +9000 -- past the edge of a multiplayer
+			 * ARENA, where the placement resolves the ground to nothing and the car
+			 * drops into the void. The same 600 spacing in x AND z keeps cars
+			 * apart just as well, and sixteen players fit in a 4x4 block about
+			 * 2.4k units across. id 0 keeps the level's own start untouched. */
+			int col = 0, row = 0, dx = 0, dz = 0;
 
-			PlayerStartInfo[slot]->position.vx = PlayerStartInfo[0]->position.vx + lane;
-			PlayerStartInfo[slot]->position.vz = PlayerStartInfo[0]->position.vz;
+			if (id > 0)
+			{
+				int cell = id - 1;
+
+				col = cell % 4;
+				row = cell / 4;
+
+				dx = col * 600 - 900;	/* across: -900, -300, +300, +900 */
+				dz = (row + 1) * 600;	/* back:   +600, +1200, +1800, +2400 */
+			}
+
+			PlayerStartInfo[slot]->position.vx = PlayerStartInfo[0]->position.vx + dx;
+			PlayerStartInfo[slot]->position.vz = PlayerStartInfo[0]->position.vz + dz;
 			/* vy stays 0 -- the engine's convention, not an oversight: placement
 			 * resolves the ground under the car. */
 			PlayerStartInfo[slot]->rotation = PlayerStartInfo[0]->rotation;
 
 			if (gMpCtx != NULL)
 				gMpCtx->jer_log(gMpCtx,
-					"[mp] spawn: player %d -> slot %d at the level's own start %d,%d (+%d lane), no y\n",
+					"[mp] spawn: player %d -> slot %d at the level's own start %d,%d (+%d,%d grid %d,%d), no y\n",
 					id, slot, PlayerStartInfo[slot]->position.vx,
-					PlayerStartInfo[slot]->position.vz, lane);
+					PlayerStartInfo[slot]->position.vz, dx, dz, col, row);
 		}
 
 		/* Same pool-checked per-player vehicle as the level-init spawn, via the
@@ -3244,17 +3262,22 @@ static void MpHeartbeatTick(void)
  * its own civ spawner cannot reach it. The peer then mirrors a car straight into
  * the slot its owner named.
  *
- * car_data[0..MP_MAX_PLAYERS-1] stays with the players (player id == car slot;
- * see MpOnNetSpawn), so the bands live above them. Bands are sized by how many
+ * car_data[0..JER_SLOT_MANAGED_FIRST) stays with the players and the
+ * JERICHO-managed slots above them (player id == car slot; see MpOnNetSpawn), so
+ * the bands live entirely inside the pool the engine reserves for traffic
+ * (JER_SLOT_TRAFFIC_FIRST..MAX_CARS, dr2limits.h). Bands are sized by how many
  * machines share the match: two split the pool in half, four in quarters, and the
  * last machine takes the remainder so no slot is orphaned.
+ *
+ * The POOL is a fixed size, so the number of machines never changes how much
+ * traffic the map holds - only which machine spawns it.
  *
  * RE-ASSERTED EVERY FRAME, not set once: a level load ClearMem()s the engine's
  * reservedSlots (mission.c:301) out from under us, and the engine's own cutscene
  * recorder reserves from the low end -- so we manage ONLY the traffic band, and
  * only the bits WE set, never the engine's. */
-#define MP_TRAFFIC_SLOT_FIRST	MP_MAX_PLAYERS				/* 8: below this is the players' */
-#define MP_TRAFFIC_SLOT_COUNT	(MAX_CARS - MP_TRAFFIC_SLOT_FIRST)	/* 12 traffic slots */
+#define MP_TRAFFIC_SLOT_FIRST	JER_SLOT_TRAFFIC_FIRST			/* 20: above the player and managed pools */
+#define MP_TRAFFIC_SLOT_COUNT	JER_SLOT_TRAFFIC_COUNT			/* 12 traffic slots, fixed */
 
 static unsigned char gMpBandReserved[MAX_CARS];	/* slots WE turned on, so we clear only ours */
 static int gMpBandFirst = -1;			/* this machine's band, inclusive; -1 = none */
@@ -3280,11 +3303,25 @@ static int MpTrafficMachineCount(void)
 }
 
 /* The inclusive band for machine `rank` of `nMachines`. The last machine takes
- * the remainder so the whole pool is covered even when it does not divide. */
+ * the remainder so the whole pool is covered even when it does not divide.
+ *
+ * More machines than slots means there is no private slot to hand out: the machine
+ * gets an EMPTY band (first = last = -1) and spawns no traffic of its own, living
+ * off its peers' mirrors instead. The old code clamped every extra machine onto
+ * the pool's LAST slot, so two machines spawned into one slot and then mirrored
+ * each other's car into it. */
 static void MpTrafficBandFor(int rank, int nMachines, int* first, int* last)
 {
-	int per = MP_TRAFFIC_SLOT_COUNT / nMachines;
-	int f, l;
+	int per, f, l;
+
+	if (rank < 0 || rank >= MP_TRAFFIC_SLOT_COUNT || nMachines > MP_TRAFFIC_SLOT_COUNT)
+	{
+		*first = -1;
+		*last = -1;
+		return;
+	}
+
+	per = MP_TRAFFIC_SLOT_COUNT / nMachines;
 
 	if (per < 1)
 		per = 1;
@@ -3556,10 +3593,11 @@ static void MpTrafficBandRefresh(void)
 
 	changed = (f != gMpBandFirst || l != gMpBandLast);
 
-	/* Everything OUTSIDE our band is kept off our spawner: the player reserve
-	 * [0..7) because a civilian there would squat on a slot a player (or a late
-	 * joiner) needs, and every other machine's band because its cars get mirrored
-	 * into those slots and OUR spawner must never race the peer for one.
+	/* Everything OUTSIDE our band is kept off our spawner: the player and
+	 * JERICHO-managed reserve [0..JER_SLOT_TRAFFIC_FIRST) because a civilian there
+	 * would squat on a slot a player (or a managed vehicle, or a late joiner)
+	 * needs, and every other machine's band because its cars get mirrored into
+	 * those slots and OUR spawner must never race the peer for one.
 	 *
 	 * reservedSlots is the array PingInCivCar's free-slot scan consults
 	 * (civ_ai.c:2058; the two collider indices are already outside that scan's

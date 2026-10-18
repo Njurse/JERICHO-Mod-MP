@@ -568,6 +568,21 @@ static int ActLobbyStart(void* ud)
 	return 1;
 }
 
+/* The lobby's player rows are PAGED. The frontend menu holds JER_FE_MAX_ITEMS
+ * rows and the pinned ones (status / Start Match / Leave) take three, so a
+ * sixteen-player lobby cannot fit on one page: the old loop stopped at the ninth
+ * player and the rest were simply invisible. This row is the page turner. */
+static int gLobbyPage;			/* which page of the player list is shown */
+
+static int ActLobbyNextPage(void* ud)
+{
+	(void)ud;
+
+	gLobbyPage++;
+	jer_frontend_refresh();	/* re-runs LobbyOnEnter, which rebuilds the rows */
+	return 1;
+}
+
 /* name editor: one adjustable slot per character */
 static int ActNameDone(void* ud)
 {
@@ -682,6 +697,7 @@ static int  gJoinRows;			/* how many of gJoinMenu's items are SERVER rows:
 static JER_FE_ITEM gLobbyItems[JER_FE_MAX_ITEMS];
 static JER_FE_MENU gLobbyMenu = { "mp.lobby", gLobbyItems, 0, NULL, NULL };
 static int gLobbyBuiltCount = -1;	/* player count the lobby was last built with */
+static char gLobbyMoreLabel[40];
 static int gLobbyJoinState = -1;	/* join state the lobby was last built with */
 static char gLobbyLabel[MP_MAX_PLAYERS][40];
 static char gLobbyStatus[64];		/* "Connecting to <addr>..." / "(could not connect)" */
@@ -817,22 +833,75 @@ static void LobbyOnEnter(void* ud)
 		k++;
 	}
 
-	for (i = 0; i < MP_MAX_PLAYERS && k < JER_FE_MAX_ITEMS - 3; i++)
+	/* Player rows, PAGED: with the pool at 16 players a single page cannot hold
+	 * them, and a truncated list is how players 10..16 become invisible. perPage
+	 * loses one row to the page turner while there is more than one page. */
 	{
-		if (!gMp.players[i].active)
-			continue;
+		int rows = JER_FE_MAX_ITEMS - 3;	/* status / Start Match / Leave */
+		int active = 0, perPage, pages, first, seen = 0;
 
-		snprintf(gLobbyLabel[k], sizeof(gLobbyLabel[k]), "%s %s",
-			gMp.players[i].isLocal ? ">" : " ", gMp.players[i].name);
+		for (i = 0; i < MP_MAX_PLAYERS; i++)
+		{
+			if (gMp.players[i].active)
+				active++;
+		}
 
-		gLobbyItems[k].label = gLobbyLabel[k];
-		gLobbyItems[k].get_label = NULL;
-		gLobbyItems[k].userdata = NULL;
-		gLobbyItems[k].on_activate = NULL;
-		gLobbyItems[k].on_adjust = NULL;
-		gLobbyItems[k].submenu = -1;
-		gLobbyItems[k].is_back = 0;
-		k++;
+		perPage = (rows > 1) ? rows - 1 : 1;	/* one row is the page turner */
+
+		if (active <= rows)
+			perPage = rows;			/* everything fits: no turner needed */
+
+		pages = (perPage > 0) ? (active + perPage - 1) / perPage : 1;
+
+		if (pages < 1)
+			pages = 1;
+
+		if (gLobbyPage >= pages)
+			gLobbyPage = 0;
+
+		if (gLobbyPage < 0)
+			gLobbyPage = 0;
+
+		first = gLobbyPage * perPage;
+
+		for (i = 0; i < MP_MAX_PLAYERS && k < JER_FE_MAX_ITEMS - 3; i++)
+		{
+			if (!gMp.players[i].active)
+				continue;
+
+			if (seen++ < first)
+				continue;
+
+			if (seen > first + perPage)
+				break;
+
+			snprintf(gLobbyLabel[k], sizeof(gLobbyLabel[k]), "%s %s",
+				gMp.players[i].isLocal ? ">" : " ", gMp.players[i].name);
+
+			gLobbyItems[k].label = gLobbyLabel[k];
+			gLobbyItems[k].get_label = NULL;
+			gLobbyItems[k].userdata = NULL;
+			gLobbyItems[k].on_activate = NULL;
+			gLobbyItems[k].on_adjust = NULL;
+			gLobbyItems[k].submenu = -1;
+			gLobbyItems[k].is_back = 0;
+			k++;
+		}
+
+		if (pages > 1 && k < JER_FE_MAX_ITEMS - 2)
+		{
+			snprintf(gLobbyMoreLabel, sizeof(gLobbyMoreLabel),
+				"More players (%d/%d)", gLobbyPage + 1, pages);
+
+			gLobbyItems[k].label = gLobbyMoreLabel;
+			gLobbyItems[k].get_label = NULL;
+			gLobbyItems[k].userdata = NULL;
+			gLobbyItems[k].on_activate = ActLobbyNextPage;
+			gLobbyItems[k].on_adjust = NULL;
+			gLobbyItems[k].submenu = -1;
+			gLobbyItems[k].is_back = 0;
+			k++;
+		}
 	}
 
 	if (MpIsHost())

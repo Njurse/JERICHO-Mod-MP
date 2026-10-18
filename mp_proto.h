@@ -38,8 +38,11 @@
 extern "C" {
 #endif
 
-#define MP_PROTO_VERSION	11	/* 11: MP_WELCOME.rules -- the host's session rules
-					 * (10: MP_TAG_KICK) */
+#define MP_PROTO_VERSION	12	/* 12: MP_MAX_PLAYERS is 16, so MP_ROSTER and every
+					 * per-player wire row grew by sizeof -- an 8-player
+					 * build must REFUSE a 16-player session rather than
+					 * copy a bigger roster into its smaller buffer.
+					 * (11: MP_WELCOME.rules, 10: MP_TAG_KICK) */
 
 /* Default UDP+TCP port. 1318 is IANA-unassigned (the neighbour 1319 is
  * amx-icsp), so it is a safe, non-reserved choice for a game. Configurable
@@ -52,9 +55,15 @@ extern "C" {
  * discoverable. */
 #define MP_DISCOVERY_PORT	1318
 
-/* Capacity. The engine renders at most 2 local player views, but a LAN
- * session can carry more remote players as world cars. */
-#define MP_MAX_PLAYERS		8
+/* Capacity. The engine renders at most 2 local player views, but a session
+ * carries more remote players as world cars, one engine player slot each
+ * (MAX_PLAYERS is 16 on PC, so 16 is "host + 15 clients" with no room to spare).
+ *
+ * This is ALSO a car_data capacity: every player is one slot out of the
+ * JERICHO-managed pool reserved in dr2limits.h (JER_SLOT_PLAYERS_FIRST..),
+ * which is deliberately separate from the traffic pool so a full lobby does not
+ * eat the map's civilians. */
+#define MP_MAX_PLAYERS		16
 
 /* A car's model number alone is ambiguous: every city ships CARMODEL_0..12 and
  * the same number is a DIFFERENT vehicle in each. A row that names a car
