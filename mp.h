@@ -346,8 +346,6 @@ void MpLeaveSession(void);		/* tear the session down, keep the module */
 void MpKickPlayer(int playerId);	/* HOST: remove a player (sends MP_TAG_KICK) */
 void MpCarChangeWaitForget(void);	/* drop a pending "waiting for a spare slot" change */
 void MpCarChangeWaitTick(void);		/* retry it, once a frame, from the frame hook */
-void MpLaunchPickForget(void);		/* drop a pending cross-city/D1 -mpcar launch pick */
-void MpLaunchPickTick(void);		/* apply it once the level is up, from the frame hook */
 extern const char* gMpStage;		/* the last stage the frame reached (MP_WATCH) */
 void MpSelfRepairCar(void);		/* pause menu: repair the local player's car */
 int  MpWarpToPlayer(int playerId);	/* pause menu: put our car down near another player's */
