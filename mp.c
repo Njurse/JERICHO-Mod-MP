@@ -3249,6 +3249,24 @@ static int MpOptClearFelony(void* ud, int dir)
 	return JER_PAUSE_QUIT_NONE;
 }
 
+/* Reload every car: carhacks' own per-slot rebuild (the one its verifier uses),
+ * over every slot; a slot that is not an import returns 0 and is left as it is. */
+int chkImportHotLoad(int slot);	/* carhacks/carimport.h */
+
+static int MpMenuReloadCars(void* ud, int dir)
+{
+	int slot, n = 0;
+
+	(void)ud; (void)dir;
+
+	for (slot = 0; slot < 11; slot++)	/* CHK_IMPORT_MAX_SLOTS */
+		if (chkImportHotLoad(slot) > 0)
+			n++;
+
+	printInfo("[mp] Reload all cars: %d slot(s) rebuilt\n", n);
+	return 0;
+}
+
 static const JER_PAUSE_MENU_ITEM mpPauseItems[] =
 {
 	/* label, get_label, on_activate, userdata, submenu, adjust */
@@ -3264,6 +3282,7 @@ static const JER_PAUSE_MENU_ITEM mpPauseItems[] =
 	{ NULL, MpOptLabelInvincible, MpOptToggleInvincible, NULL, NULL, 0 },
 	{ NULL, MpOptLabelImmune, MpOptToggleImmune, NULL, NULL, 0 },
 	{ "Kick player", NULL, NULL, NULL, &mpKickMenu, 0 },
+	{ "Reload all cars", NULL, MpMenuReloadCars, NULL, NULL, 0 },
 	{ "Write diagnostics now", NULL, MpMenuWriteDiag, NULL, NULL, 0 },
 };
 
