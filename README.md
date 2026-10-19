@@ -204,6 +204,7 @@ page to it with eight rows:
 | `Invincibility` | on/off: you take no damage |
 | `Immunity` | on/off: the police leave you alone |
 | `Kick player` | (host) remove a peer from the session |
+| `Reload all cars` | rebuilds every imported car slot via the carhacks reload (`chkImportHotLoad`); stock cars are untouched. For when an imported car looks wonky |
 | `Write diagnostics now` | writes `mp_diag.txt` next to the game |
 
 `Restart` is handled specially in a match: instead of rebuilding the level under
