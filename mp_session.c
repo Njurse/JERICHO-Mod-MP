@@ -2237,7 +2237,10 @@ static void MpHandleChat(int connIndex, const unsigned char* p, int len)
 	from = MpConnPlayerId(connIndex);
 
 	if (MpIsHost() && from >= 0)
+	{
 		c.playerId = (uint8_t)from;
+		memset(c.reserved, 0, sizeof(c.reserved));	/* a peer cannot mark itself [Admin] */
+	}
 
 	/* A peer's "!login ..." reached a game host, which runs no commands: drop it
 	 * unseen. Printing or relaying it would show a password to every player. */
@@ -2270,7 +2273,15 @@ static void MpHandleChat(int connIndex, const unsigned char* p, int len)
 				pl != NULL ? pl->name : "SERVER", c.text);
 
 		if (pl != NULL)
-			MpConsoleChat(pl->name, pl->colorOn, pl->colorR, pl->colorG, pl->colorB, c.text, ink);
+		{
+			char tagged[MP_NAME_MAX + 8];
+			int admin = (c.reserved[0] == MP_CHAT_MARK_ADMIN && c.reserved[1] == 0 && c.reserved[2] == 0);
+
+			if (admin)
+				snprintf(tagged, sizeof(tagged), "[Admin] %s", pl->name);
+
+			MpConsoleChat(admin ? tagged : pl->name, pl->colorOn, pl->colorR, pl->colorG, pl->colorB, c.text, ink);
+		}
 		else
 			MpConsoleChat(NULL, 0, 0, 0, 0, c.text, ink);
 	}

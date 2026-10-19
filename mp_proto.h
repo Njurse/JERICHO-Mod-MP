@@ -602,6 +602,12 @@ typedef struct MP_CHAT
 	char    text[MP_CHAT_TEXT_MAX];
 } MP_CHAT;
 
+/* MP_CHAT.reserved = { MP_CHAT_MARK_ADMIN, 0, 0 } on a PLAYER's line: a dedicated
+ * server saying the speaker is one of its admins; the client then shows "[Admin] name".
+ * Old builds ignore it (ink is honoured only for a speaker with no player row). A game
+ * host clears it on what it relays, so a peer cannot mark itself. */
+#define MP_CHAT_MARK_ADMIN	0x01
+
 /* The host removing a player. `playerId` names the row being removed (the
  * connection it travels on is the same thing, but the id is self-documenting
  * and lets the client assert the two agree). Reliable: a lost kick must not

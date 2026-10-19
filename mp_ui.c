@@ -1858,7 +1858,7 @@ void MpConsoleLine(const char* fmt, ...)
 void MpConsoleChat(const char* name, int colorOn, int r, int g, int b, const char* text,
 		   const unsigned char* ink)
 {
-	char head[MP_NAME_MAX + 4];
+	char head[MP_NAME_MAX + 12];	/* room for an "[Admin] " tag */
 	JER_CONSOLE_SEG segs[2];
 
 	if (text == NULL || text[0] == '\0')

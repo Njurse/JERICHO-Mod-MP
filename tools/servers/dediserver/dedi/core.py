@@ -663,9 +663,12 @@ class Dedicated:
                 self.send_server_chat("commands are not available on this server", conn=conn)
             return
 
-        self.log.info("[chat] %s: %s" % (name, line))
+        # An admin's line carries MP_CHAT_MARK_ADMIN (mp_proto.h) in the ink bytes:
+        # the client draws "[Admin] name" from it (older clients ignore it).
+        admin = info is not None and bool(info.get("admin"))
+        self.log.info("[chat] %s%s: %s" % ("[Admin] " if admin else "", name, line))
 
-        out = m.CHAT.pack(pid, 0, 0, 0, line.encode("latin1", "replace")[:95])
+        out = m.CHAT.pack(pid, 1 if admin else 0, 0, 0, line.encode("latin1", "replace")[:95])
         # To EVERYONE, the sender included. The client never prints its own line:
         # MpSendChat (mp_session.c) sends it to the host and waits for the host's
         # echo, exactly as a game host republishes "to everyone (including the
