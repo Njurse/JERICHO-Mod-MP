@@ -3335,7 +3335,7 @@ JER_MODULE_ENTRY(jer_module_mp_entry)(JERICHO_CONTEXT* ctx)
 	 * to be unattended needs a human to click OK. Same dump, no dialog. */
 	MpSuppressCrashDialogs();
 
-	ctx->jer_register_module(ctx, "mp", "Multiplayer", "0.1.0", "JERICHO",
+	ctx->jer_register_module(ctx, "mp", "Multiplayer", "0.12.0", "JERICHO",
 		"LAN multiplayer: host/join, UDP discovery, JERICHO addon net bridge, "
 		"owner-authoritative car sync (each machine drives its own car and "
 		"broadcasts its state; peers adopt it verbatim), and in-match chat.",
