@@ -326,6 +326,29 @@ def main():
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
+    # -- a car pick: recorded under the PICKER's id only; no row for slot 0 (the
+    #    clients' invented "Host") and the other player's row untouched
+    tmp = tempfile.mkdtemp()
+    try:
+        server = build(tmp)
+        a_conn = join(server, 1, "Alice")
+        b_conn = join(server, 2, "Bob")
+        before = server.roster_bytes()
+        ok = server.note_car_pick(b_conn, bytes([7, 1, 3, 1]))
+        rows = {}
+        raw = server.roster_bytes()
+        n = m.ROSTER.unpack_from(raw, 0)[0]
+        for i in range(n):
+            e = m.ROSTER_ENTRY.unpack_from(raw, m.ROSTER.size + i * m.ROSTER_ENTRY.size)
+            rows[e[0]] = e
+        check("car pick: recorded under the picker's id",
+              ok and rows[2][2] == 7 and rows[2][3] == 1 and rows[2][6] == 3, rows.get(2))
+        check("car pick: the other player's row is untouched",
+              rows[1] == m.ROSTER_ENTRY.unpack_from(before, m.ROSTER.size), (rows[1],))
+        check("car pick: no row for id 0 (the server has no player)", 0 not in rows, sorted(rows))
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
     # -- config upgrade: missing keys are added, existing ones never changed
     tmp = tempfile.mkdtemp()
     try:

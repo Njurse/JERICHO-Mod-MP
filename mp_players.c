@@ -7,6 +7,7 @@
 
 #include "driver2.h"
 #include "cars.h"
+#include "players.h"	/* player[0].playerCarId: our own car */
 
 #include <string.h>
 #include <stdio.h>
@@ -142,6 +143,17 @@ void MpRemovePlayer(int id)
 	{
 		if (&gMp.players[i] != p && gMp.players[i].active && gMp.players[i].carId == p->carId)
 			taken = 1;
+	}
+
+	if (!p->isLocal && p->carId >= 0 && p->carId < MAX_CARS &&
+		(p->carId == player[0].playerCarId))
+	{
+		/* a remote row that claims the car WE drive (the dedi's invented "Host" row
+		 * can end up here): forget the claim, never take our car out of the world */
+		if (gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx, "[mp] ignored remote removal targeting local car (player %d, slot %d)\n",
+				p->id, p->carId);
+		taken = 1;
 	}
 
 	if (!p->isLocal && !taken && p->carId >= 0 && p->carId < MAX_CARS)

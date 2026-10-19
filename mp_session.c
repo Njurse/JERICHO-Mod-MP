@@ -135,6 +135,28 @@ static int MpFindRoadSpotNear(int cx, int cy, int cz, int seed,
 	int* outX, int* outZ, int* outDir, int* outRing);
 static int MpFindRespawnSpot(int cx, int cz, int* outX, int* outZ, int* outDir);
 
+/* The last message received and from which connection: logged with every respawn,
+ * re-place and refused write to our own car, so a log says what set it off. */
+static char gMpLastRxTag[5] = "none";
+static int gMpLastRxConn = -1;
+static unsigned long gMpLastRxFrame;
+
+/* Is car slot `slot` OUR car (the one the local player drives on this machine)? A
+ * received message about ANOTHER player may never rebuild, re-place, adopt or remove
+ * this car. Logs the refusal with the message that asked, so a future log is conclusive. */
+static int MpRemoteTargetsLocalCar(int slot, const char* what, int otherId)
+{
+	MP_PLAYER* me = MpLocalPlayer();
+	int mine = (slot >= 0 && slot < MAX_CARS) &&
+		(slot == player[0].playerCarId || (me != NULL && slot == me->carId));
+
+	if (mine && gMpCtx != NULL)
+		gMpCtx->jer_log(gMpCtx,
+			"[mp] ignored remote %s targeting local car (slot %d, other player %d, our player %d, last rx %s conn %d frame %lu)\n",
+			what, slot, otherId, me != NULL ? me->id : -1, gMpLastRxTag, gMpLastRxConn, gMpLastRxFrame);
+	return mine;
+}
+
 /* mp.c calls this from the NET_INPUT hook for our own car, so we replicate the
  * pad the engine is actually driving us with. */
 void MpNoteLocalPad(int pad)
@@ -1307,6 +1329,9 @@ void MpSpawnLateJoiners(void)
 		 * override from the local car: a y from one x/z applied at another is what put
 		 * late joiners above the host and then dropped them in. */
 		rot = PlayerStartInfo[slot]->rotation;
+
+		if (MpRemoteTargetsLocalCar(slot, "spawn (InitPlayer)", id))
+			continue;
 
 		padid = (char)-slot;
 
@@ -6476,6 +6501,9 @@ static int MpAdoptCar(int carSlot, int city, int model, MP_PLAYER* who)
 		gMpAdoptModelInit = 1;
 	}
 
+	if (who != NULL && !who->isLocal && MpRemoteTargetsLocalCar(carSlot, "car adopt/rebuild", who->id))
+		return 0;
+
 	cp = &car_data[carSlot];
 
 	/* The resident slot on THIS machine that holds the vehicle the owner named.
@@ -7352,6 +7380,13 @@ int MpRespawnAfterDeath(void)
 
 	cp = &car_data[me->carId];
 
+	if (gMpCtx != NULL)
+		gMpCtx->jer_log(gMpCtx,
+			"[mp] respawn reason: engine game over (car) - slot %d at %d,%d,%d damage %d/%d dying %d upsideDown %d felony %d; last rx %s conn %d frame %lu (now %lu)\n",
+			me->carId, cp->hd.where.t[0], cp->hd.where.t[1], cp->hd.where.t[2],
+			cp->totalDamage, MaxPlayerDamage[0], (int)player[0].dying, (int)player[0].upsideDown,
+			(int)cp->felonyRating, gMpLastRxTag, gMpLastRxConn, gMpLastRxFrame, gMp.frame);
+
 	/* Placed on EVERY ask, because "the engine wants a game over" IS the dying signal - the
 	 * car's own y is not: the engine can already have clamped where.t[1] back to the ground
 	 * while the fade and the mission's game-over delay are still counting. What keeps this
@@ -7890,6 +7925,10 @@ void MpPlaceSelfTick(void)
 
 	gMpPlaceSelfTry++;
 
+	if (gMpPlaceSelfTry == 1 && gMpCtx != NULL)
+		gMpCtx->jer_log(gMpCtx, "[mp] place-self reason: live join welcome (armed once); last rx %s conn %d frame %lu\n",
+			gMpLastRxTag, gMpLastRxConn, gMpLastRxFrame);
+
 	cp = &car_data[me->carId];
 	rnd = gMp.seed ^ (unsigned int)((me->id + 7) * 2654435761u) ^ (unsigned int)MpNowMs();
 
@@ -8173,6 +8212,11 @@ int MpRespawnOnRoad(void)
 
 	cp = &car_data[me->carId];
 
+	if (gMpCtx != NULL)
+		gMpCtx->jer_log(gMpCtx,
+			"[mp] respawn reason: Respawn (pause menu / Restart row / test) - slot %d damage %d felony %d; last rx %s conn %d frame %lu (now %lu)\n",
+			me->carId, cp->totalDamage, (int)cp->felonyRating, gMpLastRxTag, gMpLastRxConn, gMpLastRxFrame, gMp.frame);
+
 	cx = cp->hd.where.t[0];
 	cy = cp->hd.where.t[1];
 	cz = cp->hd.where.t[2];
@@ -8349,6 +8393,12 @@ static void MpHandleCarState(int connIndex, const unsigned char* p, int len)
 						"no car for them - re-seating them\n", pl->id);
 			}
 
+			continue;
+		}
+
+		if (MpRemoteTargetsLocalCar(pl->carId, "carstate", pl->id))
+		{
+			pl->carId = -1;	/* that row's car is not ours to drive from the wire */
 			continue;
 		}
 
@@ -9017,6 +9067,9 @@ static void MpHandleTraffic(int connIndex, const unsigned char* p, int len)
 		if (slot < 0 || slot >= MAX_CARS)
 			continue;
 
+		if (MpRemoteTargetsLocalCar(slot, "traffic", -1))
+			continue;
+
 		if (e[i].flags & MP_TRAFFIC_REMOVE)
 		{
 			MpRemoveTrafficMirror(slot);
@@ -9049,6 +9102,11 @@ static void MpHandleTraffic(int connIndex, const unsigned char* p, int len)
 
 void MpHandleMessage(int connIndex, const char* tag, const unsigned char* payload, int len)
 {
+	memcpy(gMpLastRxTag, tag, 4);
+	gMpLastRxTag[4] = '\0';
+	gMpLastRxConn = connIndex;
+	gMpLastRxFrame = gMp.frame;
+
 	if (MpDebugOn() && gMpCtx != NULL)
 		gMpCtx->jer_log(gMpCtx, "[mp] recv %.4s len=%d conn=%d\n", tag, len, connIndex);
 
