@@ -3253,11 +3253,12 @@ static const JER_PAUSE_MENU_ITEM mpPauseItems[] =
 {
 	/* label, get_label, on_activate, userdata, submenu, adjust */
 
-	/* Most used first: Respawn is the row a player reaches for, then the car,
-	 * going to somebody and their own colour; the two switches after those, and
-	 * the admin/debug rows (kick, diagnostics) last. */
-	{ "Respawn", NULL, MpRespawn, NULL, NULL, 0 },
+	/* Most used first: the car, then Respawn (second, so a stray press on the
+	 * top row does not respawn you), going to somebody and their own colour;
+	 * the two switches after those, and the admin/debug rows (kick,
+	 * diagnostics) last. */
 	{ "Vehicle Options", NULL, NULL, NULL, &mpChangeCarMenu, 0 },
+	{ "Respawn", NULL, MpRespawn, NULL, NULL, 0 },
 	{ "Warp To Player", NULL, NULL, NULL, &mpWarpMenu, 0 },
 	{ "Player Color", NULL, NULL, NULL, &mpColorMenu, 0 },
 	{ NULL, MpOptLabelInvincible, MpOptToggleInvincible, NULL, NULL, 0 },
