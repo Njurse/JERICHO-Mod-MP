@@ -133,6 +133,7 @@ static int gMpLocalAppliedPad = -1;	/* the pad that drove OUR car, -1 = none see
 static int MpRoadHeadingNear(int x, int z, int want);
 static int MpFindRoadSpotNear(int cx, int cy, int cz, int seed,
 	int* outX, int* outZ, int* outDir, int* outRing);
+static int MpFindRespawnSpot(int cx, int cz, int* outX, int* outZ, int* outDir);
 
 /* mp.c calls this from the NET_INPUT hook for our own car, so we replicate the
  * pad the engine is actually driving us with. */
@@ -1168,14 +1169,20 @@ void MpSpawnLateJoiners(void)
 		 * a player LEAVES, its slot is free but the count still points at a slot
 		 * that is taken. Slot 0 is the local player's, and the same scan skips it
 		 * because the local row drives it. */
+		/* A free PLAYER slot: no player row owns it, and it is not a car someone is
+		 * driving on this machine. Slot 0 and our own driven car are never handed out:
+		 * InitPlayer on them rebuilt OUR car as a fresh one on a road near the level
+		 * start (repaired, felony 0) the moment a peer joined -- when our own row did
+		 * not (yet, or any more) name the car we sit in. */
 		slot = -1;
-		for (k = 0; k < MAX_CARS; k++)
+		for (k = 1; k < MAX_CARS && k < MAX_PLAYERS; k++)
 		{
-			if (MpGetPlayerByCar(k) == NULL)
-			{
-				slot = k;
-				break;
-			}
+			if (MpGetPlayerByCar(k) != NULL)
+				continue;
+			if (k == player[0].playerCarId || car_data[k].controlType == CONTROL_TYPE_PLAYER)
+				continue;
+			slot = k;
+			break;
 		}
 
 		if (slot < 1 || slot >= MAX_CARS || slot >= MAX_PLAYERS)
@@ -7379,6 +7386,19 @@ int MpRespawnAfterDeath(void)
 
 	/* Face ALONG THE ROAD: a wreck usually ends at an angle (or upside down
 	 * across the lanes), and respawning it that way left the driver to sort it out. */
+	{
+		int fx, fz, fdir = -1;
+
+		if (MpFindRespawnSpot(x, z, &fx, &fz, &fdir))
+		{
+			start[0] = fx;
+			start[2] = fz;
+			x = fx;
+			z = fz;
+			if (fdir >= 0)
+				dir = fdir;
+		}
+	}
 	dir = MpRoadHeadingNear(x, z, dir & 0xfff);
 
 	InitCarPhysics(cp, &start, dir);
@@ -7718,6 +7738,98 @@ static int MpFindRoadSpotNear(int cx, int cy, int cz, int seed,
 
 /* The road's heading at (x, z), turned to whichever of its two directions is
  * closer to `want` (a car already pointing down the road keeps its way). */
+/* A RESPAWN goes somewhere else, not back onto the road you just crashed on: a road
+ * point in a ring around the car, roughly 60-150 m out (12000-30000 world units; a car
+ * is about 1000 units long), clear of every other player's car, facing along the road.
+ * Already-resident regions are tried first so a respawn rarely has to stream; then
+ * regions that need spooling. 0 when nothing qualified -- the callers then fall back
+ * to the nearest road, as before. */
+#define MP_RESPAWN_MIN		12000
+#define MP_RESPAWN_MAX		30000
+#define MP_RESPAWN_CLEAR	3000	/* no other player's car this close to the spot */
+#define MP_RESPAWN_TRIES	12	/* per pass */
+
+static int MpFindRespawnSpot(int cx, int cz, int* outX, int* outZ, int* outDir)
+{
+	unsigned int rnd;
+	int pass, t, i;
+	MP_PLAYER* me = MpLocalPlayer();
+
+	if (!jer_map_ready())
+		return 0;
+
+	rnd = gMp.seed ^ (unsigned int)MpNowMs() ^ (unsigned int)((me != NULL ? me->id + 3 : 3) * 2654435761u);
+
+	for (pass = 0; pass < 2; pass++)
+	{
+		for (t = 0; t < MP_RESPAWN_TRIES; t++)
+		{
+			int ang, r, px, pz, x, z, dir = -1, region, clear = 1;
+			long long dx, dz;
+
+			rnd = rnd * 1103515245u + 12345u;
+			ang = (int)((rnd >> 8) & 0xfff);
+			r = MP_RESPAWN_MIN + (int)((rnd >> 16) % (unsigned int)(MP_RESPAWN_MAX - MP_RESPAWN_MIN));
+			px = cx + (int)(((long)rsin(ang) * r) >> 12);
+			pz = cz + (int)(((long)rcos(ang) * r) >> 12);
+
+			region = jer_map_region_of(px, pz);
+			if (!jer_map_region_has_data(region))
+				continue;
+			if (!jer_map_region_resident(region))
+			{
+				if (pass == 0)
+					continue;
+				if (!jer_map_spool_to(px, pz))
+					continue;
+			}
+
+			if (!MpFindRoadSpotNear(px, 0, pz, -1, &x, &z, &dir, NULL))
+				continue;
+
+			dx = (long long)x - cx;
+			dz = (long long)z - cz;
+			if (dx * dx + dz * dz < (long long)(MP_RESPAWN_MIN * 3 / 4) * (MP_RESPAWN_MIN * 3 / 4))
+				continue;	/* the road search drifted back toward where we were */
+
+			for (i = 0; i < MP_MAX_PLAYERS && clear; i++)
+			{
+				MP_PLAYER* o = MpGetPlayer(i);
+
+				if (o != NULL && o->active && o != me && o->carId >= 0 && o->carId < MAX_CARS)
+				{
+					long long ox = (long long)car_data[o->carId].hd.where.t[0] - x;
+					long long oz = (long long)car_data[o->carId].hd.where.t[2] - z;
+
+					if (ox > -MP_RESPAWN_CLEAR && ox < MP_RESPAWN_CLEAR &&
+						oz > -MP_RESPAWN_CLEAR && oz < MP_RESPAWN_CLEAR)
+						clear = 0;
+				}
+			}
+			if (!clear)
+				continue;
+
+			if (!MpWarpStreamTo(x, z))
+				continue;
+
+			*outX = x;
+			*outZ = z;
+			*outDir = dir;
+
+			if (gMpCtx != NULL)
+				gMpCtx->jer_log(gMpCtx,
+					"[mp] respawn: road spot %d,%d in the %d-unit ring around %d,%d (pass %d, try %d)\n",
+					x, z, r, cx, cz, pass, t);
+			return 1;
+		}
+	}
+
+	if (gMpCtx != NULL)
+		gMpCtx->jer_log(gMpCtx, "[mp] respawn: no clear road %d-%d units out from %d,%d - nearest road instead\n",
+			MP_RESPAWN_MIN, MP_RESPAWN_MAX, cx, cz);
+	return 0;
+}
+
 static int MpRoadHeadingNear(int x, int z, int want)
 {
 	int dir;
@@ -7752,6 +7864,22 @@ void MpPlaceSelfTick(void)
 
 	if (me == NULL || me->carId < 0 || me->carId >= MAX_CARS || PlayerStartInfo[0] == NULL)
 		return;
+
+	/* Only a car that is STILL ON THE LEVEL START is a fresh joiner's to move. One that
+	 * has been driven away belongs to a player already in the match: never relocate it
+	 * (or snap its camera), whatever armed this. */
+	{
+		int sdx = car_data[me->carId].hd.where.t[0] - PlayerStartInfo[0]->position.vx;
+		int sdz = car_data[me->carId].hd.where.t[2] - PlayerStartInfo[0]->position.vz;
+
+		if (sdx < -3000 || sdx > 3000 || sdz < -3000 || sdz > 3000)
+		{
+			if (gMpCtx != NULL)
+				gMpCtx->jer_log(gMpCtx, "[mp] live join: our car is already %d,%d from the level start - not placing it\n", sdx, sdz);
+			gMpPlaceSelfFrames = 0;
+			return;
+		}
+	}
 
 	/* gMpPlaceSelfFrames: >1 = settle countdown, then 1..-TRIES = try each frame */
 	if (gMpPlaceSelfFrames > 1)
@@ -8033,7 +8161,7 @@ int MpRespawnOnRoad(void)
 	MP_PLAYER* me;
 	CAR_DATA* cp;
 	int cx, cy, cz;
-	int bestX = 0, bestZ = 0, found = 0, bestRing = 0;
+	int bestX = 0, bestZ = 0, found = 0, bestRing = 0, bestDir = -1;
 
 	me = MpLocalPlayer();
 
@@ -8049,7 +8177,9 @@ int MpRespawnOnRoad(void)
 	cy = cp->hd.where.t[1];
 	cz = cp->hd.where.t[2];
 
-	found = MpFindRoadSpotNear(cx, cy, cz, -1, &bestX, &bestZ, NULL, &bestRing);
+	found = MpFindRespawnSpot(cx, cz, &bestX, &bestZ, &bestDir);
+	if (!found)
+		found = MpFindRoadSpotNear(cx, cy, cz, -1, &bestX, &bestZ, &bestDir, &bestRing);
 
 	if (!found)
 	{
@@ -8093,7 +8223,7 @@ int MpRespawnOnRoad(void)
 		/* InitCarPhysics builds an UPRIGHT orientation out of the heading, which is
 		 * half of what "respawn" means; the heading itself is kept, so the player
 		 * comes back facing the way they were. */
-		InitCarPhysics(cp, &start, cp->hd.direction);
+		InitCarPhysics(cp, &start, (bestDir >= 0) ? bestDir : MpRoadHeadingNear(bestX, bestZ, cp->hd.direction & 0xfff));
 
 		cp->hd.speed = 0;
 		cp->wheel_angle = 0;
