@@ -2372,30 +2372,52 @@ static int MpCcOwnCar(void)
 	return -1;
 }
 
-/* How many palettes the car we drive has (cars.h): a Driver 1 car or a special has
- * one, so the row reads 1/1 there instead of offering colours it would break on. */
+/* How many palettes the car SELECTED in the picker has (cars.h): the row describes
+ * the car "Respawn as this car" would give you, so browsing City/Car updates it at
+ * once. A Driver 1 car or a special has one, so it reads 1/1 there. */
 static int MpCcPaletteCount(void)
 {
-	int c = MpCcOwnCar();
+	if (mpCcModelCount <= 0 || mpCcModelIdx < 0 || mpCcModelIdx >= mpCcModelCount)
+	{
+		int c = MpCcOwnCar();
 
-	return (c >= 0) ? CarSlotPaletteCount(car_data[c].ap.model) : MP_PALETTES;
+		return (c >= 0) ? CarSlotPaletteCount(car_data[c].ap.model) : MP_PALETTES;
+	}
+
+	return CarModelPaletteCount(MpCcCity(), mpCcModels[mpCcModelIdx]);
+}
+
+/* Is the picker's selection the car we are driving? Then a palette change shows live. */
+static int MpCcPickIsOwnCar(int c)
+{
+	if (c < 0 || mpCcModelCount <= 0 || mpCcModelIdx < 0 || mpCcModelIdx >= mpCcModelCount)
+		return 0;
+
+	return MpResidentSlotForCar(MpCcCity(), mpCcModels[mpCcModelIdx]) == car_data[c].ap.model;
+}
+
+/* The palette the row shows: the player's choice (defaultPlayerPalette) clamped to
+ * what the selected car has -- the one "Respawn as this car" will paint it in. */
+static int MpCcCurPalette(int n)
+{
+	int cur = (int)defaultPlayerPalette;
+
+	return (cur >= 0 && cur < n) ? cur : 0;
 }
 
 static void MpCcLabelPalette(void* ud, char* out, int max)
 {
-	int c = MpCcOwnCar(), n = MpCcPaletteCount();
-	int cur = (c >= 0) ? (int)car_data[c].ap.palette : (int)defaultPlayerPalette;
+	int n = MpCcPaletteCount();
 
 	(void)ud;
-	snprintf(out, max, "Palette: %d/%d", (cur % n) + 1, n);
+	snprintf(out, max, "Palette: %d/%d", MpCcCurPalette(n) + 1, n);
 }
 
 static int MpCcAdjustPalette(void* ud, int dir)
 {
 	MP_PLAYER* me = MpLocalPlayer();
 	int c = MpCcOwnCar(), n = MpCcPaletteCount();
-	int cur = (c >= 0) ? (int)car_data[c].ap.palette : (int)defaultPlayerPalette;
-	int pal = ((cur % n) + dir + n) % n;
+	int pal = (MpCcCurPalette(n) + dir + n) % n;
 
 	(void)ud;
 
@@ -2409,10 +2431,10 @@ static int MpCcAdjustPalette(void* ud, int dir)
 	if (me != NULL)
 		me->palette = pal;
 
-	if (me != NULL && me->carId >= 0 && me->carId < MAX_CARS)
-		car_data[me->carId].ap.palette = (u_char)pal;
-	else if (!gMp.running && player[0].playerCarId >= 0 && player[0].playerCarId < MAX_CARS)
-		car_data[player[0].playerCarId].ap.palette = (u_char)pal;	/* single player */
+	/* Live only on the car we drive, and only when it is the one selected; a palette
+	 * for another car waits for "Respawn as this car". */
+	if (MpCcPickIsOwnCar(c))
+		car_data[c].ap.palette = (u_char)CarSlotClampPalette(car_data[c].ap.model, pal);
 
 	return JER_PAUSE_QUIT_NONE;
 }

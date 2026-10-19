@@ -6558,7 +6558,31 @@ static int MpAdoptCar(int carSlot, int city, int model, MP_PLAYER* who)
 		int was = cp->ap.model;
 
 		if (was == slot && gMpAdoptModel[carSlot] == model)
-			return 0;		/* already that car, and its verts match */
+		{
+			/* Already that car, and its verts match. OUR car may still want a new
+			 * palette ("Respawn as this car" after only the palette changed): repaint
+			 * it; the carstate's ap.palette carries it to the peers. */
+			extern u_char defaultPlayerPalette;
+			int want;
+
+			if (who != NULL && !who->isLocal)
+				return 0;
+
+			want = CarSlotClampPalette(slot, (int)defaultPlayerPalette);
+
+			if (want == (int)cp->ap.palette)
+				return 0;
+
+			cp->ap.palette = (u_char)want;
+
+			if (who != NULL)
+				who->palette = want;
+
+			if (gMpCtx != NULL)
+				gMpCtx->jer_log(gMpCtx, "[mp] same car on slot %d: repainted in palette %d\n", slot, want);
+
+			return 1;
+		}
 
 		cp->ap.model = slot;
 
