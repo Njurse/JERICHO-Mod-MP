@@ -1063,6 +1063,11 @@ static int MpOnFrame(void* userdata, void* args)
 	 * sim, which is where a level's resident slots mean anything. */
 	MpCarChangeWaitTick();
 
+	/* ...and a -mpcar [city:]model pick still waiting for its level: import and adopt
+	 * it through the same Change car path once the level is up (a no-op unless the pick
+	 * named a city other than the session's). */
+	MpLaunchPickTick();
+
 	MpNetPoll(0);
 
 	/* The advertisement is driven from here, not from the frontend's own tick: a

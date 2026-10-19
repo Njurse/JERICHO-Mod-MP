@@ -34,6 +34,7 @@ and the cleanup kills exactly what it started -- nothing else.
 """
 import argparse
 import atexit
+import glob
 import os
 import random
 import re
@@ -49,10 +50,24 @@ DEFAULT_GAME_DIR = os.path.join("src_rebuild", "bin", "Release_dev")
 # needs somewhere to put its LATE JOINERS, and a late join is a different spawn
 # path from the one a pair exercises.
 SEAT_NAMES = ("a", "b", "c", "d", "e", "f", "g", "h")
-# The game writes its log as JERICHO.log -- the LOADER owns the file. JERICHO.log
-# is kept as a fallback for a build that writes that name instead. Reporting the
-# wrong one made every run print "no JERICHO.log" even when the game logged fine.
-GAME_LOGS = ("JERICHO.log", "JERICHO.log")
+# The loader names the log after the build: a plain build writes JERICHO.log, a
+# dev/versioned one writes e.g. "JERICHO 0.10.10-dirty-dev.log". Look for the
+# exact name first, then the newest JERICHO*.log. Reporting only one spelling
+# made every run print "no JERICHO.log" even when the game logged fine.
+GAME_LOGS = ("JERICHO.log",)
+
+
+def game_log_path(run_dir):
+    """The log this seat is writing, or None if it has not created one yet."""
+    exact = os.path.join(run_dir, "JERICHO.log")
+    if os.path.exists(exact):
+        return exact
+
+    hits = glob.glob(os.path.join(run_dir, "JERICHO*.log"))
+    if not hits:
+        return None
+
+    return max(hits, key=os.path.getmtime)
 
 
 def log(msg):
@@ -202,10 +217,9 @@ def launch(run_dir, exe, args, env_extra):
 
 
 def report(run_dir, label, patterns):
-    path = next((os.path.join(run_dir, n) for n in GAME_LOGS
-                 if os.path.exists(os.path.join(run_dir, n))), None)
+    path = game_log_path(run_dir)
     if path is None:
-        log(f"{label}: no {'/'.join(GAME_LOGS)}")
+        log(f"{label}: no JERICHO*.log")
         return
 
     hits = []
@@ -221,11 +235,10 @@ def report(run_dir, label, patterns):
 
 
 def read_log(run_dir):
-    for name in GAME_LOGS:
-        path = os.path.join(run_dir, name)
-        if os.path.exists(path):
-            with open(path, "rb") as f:
-                return f.read().decode("utf-8", "replace")
+    path = game_log_path(run_dir)
+    if path is not None:
+        with open(path, "rb") as f:
+            return f.read().decode("utf-8", "replace")
     return ""
 
 
@@ -834,7 +847,7 @@ def main():
     if args.shots:
         import mpshots
 
-        seats = {name: (os.path.join(dirs[name], "JERICHO.log"), p.pid)
+        seats = {name: (game_log_path(dirs[name]) or os.path.join(dirs[name], "JERICHO.log"), p.pid)
                  for name, p in procs.items()}
 
         log(f"screenshots on every car change -> {args.shots}")

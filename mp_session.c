@@ -213,6 +213,10 @@ void MpSessionReset(void)
 	 * be under the player there. */
 	MpCarChangeWaitForget();
 
+	/* ...and a -mpcar cross-city/D1 pick still waiting for its level is the same
+	 * kind of session state. */
+	MpLaunchPickForget();
+
 	/* the palette-correction log is throttled per reported value; clear that
 	 * memory so a fresh session reports its first correction */
 	memset(gPaletteLogged, 0, sizeof(gPaletteLogged));
@@ -360,6 +364,7 @@ void MpLeaveSession(void)
 	/* ...and a Change car still waiting for a spare slot: the world it was waiting on
 	 * is going away, so the wait is not ours to keep. */
 	MpCarChangeWaitForget();
+	MpLaunchPickForget();
 
 	gMp.role = MP_ROLE_NONE;
 	gMp.connected = 0;
@@ -417,6 +422,95 @@ static void MpSendPickedCar(int model, int city)
 	if (gMpCtx != NULL)
 		gMpCtx->jer_log(gMpCtx, "[mp] told the host our car: model %d city %d\n",
 			(int)c.model, (int)c.city);
+}
+
+/* A -mpcar [city:]model pick names a car by CITY and MODEL. The engine only
+ * knows wantedCar, a model number resolved against the LEVEL's own resident pool,
+ * so a car from another city (a Driver 1 city included) is not what the engine
+ * spawns. carhacks imports it only when a Change car asks for it. Apply the
+ * launch pick through that same Change car path once the level is up: the car is
+ * imported into a spare slot, adopted by the local player, and announced to the
+ * session exactly as a pause-menu pick is. */
+static struct
+{
+	int active;
+	int city;
+	int model;
+	int settle;		/* frames to let the level and the agreed set settle */
+	int framesLeft;
+} gMpLaunchPick;
+
+static void MpLaunchPickArm(int city, int model)
+{
+	gMpLaunchPick.active = 0;
+
+	if (city < 0 || model < 0)
+		return;
+
+	gMpLaunchPick.active = 1;
+	gMpLaunchPick.city = city;
+	gMpLaunchPick.model = model;
+	/* The carhacks hotload must not run on the first sim frame: at match start the
+	 * level has just built/released its own imports and the host's agreed set is
+	 * still landing. Let that settle before asking for a spare slot. */
+	gMpLaunchPick.settle = 120;
+	/* ...and bound the wait after that: ~12 s at 25 fps. */
+	gMpLaunchPick.framesLeft = 300;
+}
+
+void MpLaunchPickForget(void)
+{
+	gMpLaunchPick.active = 0;
+}
+
+void MpLaunchPickTick(void)
+{
+	MP_PLAYER* me;
+	int city, model;
+
+	if (!gMpLaunchPick.active || !gMp.running)
+		return;
+
+	if (PlayerStartInfo[0] == NULL)
+		return;			/* the level's start records are still coming up */
+
+	if (gMpLaunchPick.settle > 0)
+	{
+		gMpLaunchPick.settle--;
+		return;
+	}
+
+	if (--gMpLaunchPick.framesLeft <= 0)
+	{
+		int wantCity = gMpLaunchPick.city, wantModel = gMpLaunchPick.model;
+
+		gMpLaunchPick.active = 0;
+
+		if (gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx,
+				"[mp] launch pick: gave up on %s model %d - no car to change after the level came up\n",
+				MpCarCityName(wantCity), wantModel);
+
+		return;
+	}
+
+	me = MpLocalPlayer();
+
+	if (me == NULL || me->carId < 0 || me->carId >= MAX_CARS)
+		return;			/* the level is still placing us; try again next frame */
+
+	city = gMpLaunchPick.city;
+	model = gMpLaunchPick.model;
+	gMpLaunchPick.active = 0;
+
+	if (gMpCtx != NULL)
+		gMpCtx->jer_log(gMpCtx,
+			"[mp] launch pick: %s model %d is from another city - applying it now\n",
+			MpCarCityName(city), model);
+
+	/* The same entry point the pause menu and MP_CARQ_LOAD use: it imports the
+	 * car if this machine does not hold it, then swaps the local car onto it. */
+	MpChangeCar(city, model);
 }
 
 static void MpLaunchLocal(void)
@@ -506,6 +600,8 @@ static void MpLaunchLocal(void)
 	 * boot argument lands in the same variable, so that is respected too.
 	 * -mpcar is now only the DEFAULT, for a machine where nobody picks: the
 	 * launchers and the headless harness. */
+	int pickCity = -1;		/* -1 = the session's own city */
+
 	if (wantedCar[0] >= 0)
 	{
 		if (gMpCtx != NULL)
@@ -527,6 +623,32 @@ static void MpLaunchLocal(void)
 			if (gMpCtx != NULL)
 				gMpCtx->jer_log(gMpCtx, "[mp] car slot %d -> model %d (city %d)\n",
 					slotNo, car, GameLevel);
+		}
+		else if (gMp.config.carCity >= 0 && gMp.config.carCity != GameLevel)
+		{
+			/* A raw model number with an explicit city prefix: `-mpcar 8:1` is
+			 * NEWCASTLE model 1, not the session city's model 1. The engine can only
+			 * spawn a model from the level's own pool, so keep the city for the
+			 * launch pick, which imports and adopts the real car after the level is
+			 * up (see MpLaunchPickTick). A city this install does not have is
+			 * reported rather than silently reduced to a different vehicle. */
+			int city = gMp.config.carCity;
+
+			if (city < CITY_COUNT && JerCityRegistered(city))
+			{
+				pickCity = city;
+
+				if (gMpCtx != NULL)
+					gMpCtx->jer_log(gMpCtx,
+						"[mp] -mpcar %s model %d: not the session's city - applied after the level is up\n",
+						MpCarCityName(city), car);
+			}
+			else if (gMpCtx != NULL)
+			{
+				gMpCtx->jer_log(gMpCtx,
+					"[mp] -mpcar city %d model %d: that city is not installed here - the session city's model stands in\n",
+					city, car);
+			}
 		}
 
 		wantedCar[0] = car;
@@ -575,11 +697,15 @@ static void MpLaunchLocal(void)
 		{
 			me->car = wantedCar[0];
 			me->carIsSlot = 0;
-			me->carCity = -1;	/* the pick is resolved against the session's city */
+			me->carCity = pickCity;	/* -1 = the session's own city */
 			me->carConfirmed = 1;
 		}
 
-		MpSendPickedCar(wantedCar[0], -1);
+		MpSendPickedCar(wantedCar[0], pickCity);
+
+		/* A pick from another city is not what the engine can spawn; import and
+		 * adopt it once the level is up, through the ordinary Change car path. */
+		MpLaunchPickArm(pickCity, wantedCar[0]);
 	}
 
 	/* Log the host's own car sources. WITH -mpcar wantedCar[0] is the pick; without
