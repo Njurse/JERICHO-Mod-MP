@@ -228,6 +228,29 @@ def main():
         clock[0] += admin.LOGIN_LOCKOUT_S + 1
         out = say(server, bob, "!login s3cret")
         check("right password after the lockout", server.clients[bob].get("admin") is True, out)
+
+        # -- !login is never shown to anyone else, and never logged in full
+        logged = []
+        real_info = server.log.info
+        server.log.info = lambda msg, *a: logged.append(msg % a if a else msg)
+        try:
+            out = say(server, bob, "!login s3cret")
+            check("!login reply goes only to the caller",
+                  out and all(c is bob for c, _t in out), out)
+            check("!login password is never sent out", not any("s3cret" in t for _c, t in out), out)
+            check("!login is logged masked",
+                  any("!login ****" in l for l in logged) and not any("s3cret" in l for l in logged), logged)
+            # without any plugin consuming it (commands plugin missing/disabled)
+            real_chat = server.plugins.chat
+            server.plugins.chat = lambda player, text: False
+            logged.clear()
+            out = say(server, bob, "!login s3cret")
+            server.plugins.chat = real_chat
+            check("an unhandled !command is not relayed",
+                  out and all(c is bob for c, _t in out) and not any("s3cret" in t for _c, t in out), out)
+            check("an unhandled !command is logged masked", not any("s3cret" in l for l in logged), logged)
+        finally:
+            server.log.info = real_info
         out = say(server, bob, "!kick Boss")
         check("a logged-in admin can kick", out[-1][1].startswith("kicked player 2"), out)
         join(server, 5, "Big Mouth")

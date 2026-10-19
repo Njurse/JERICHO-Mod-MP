@@ -2147,6 +2147,16 @@ static void MpHandleHello(int connIndex, const unsigned char* p, int len)
 /* Chat: the host is the echo point, so a line is announced
  * exactly once on every peer. Clients send to the host, which republishes to
  * everyone (including the sender); the host announces its own line directly. */
+/* "!login secret", "/kick 2": a chat COMMAND, the same test the dedicated server's
+ * commands plugin uses ('!' or '/' then a non-space, non-'!'/'/' character). Only a
+ * dedicated server runs commands; a game host has none, so it must never relay such a
+ * line -- it may carry a password meant for a server. */
+static int MpChatIsCommand(const char* t)
+{
+	return t != NULL && (t[0] == '!' || t[0] == '/') && t[1] != '\0'
+		&& t[1] != ' ' && t[1] != '!' && t[1] != '/';
+}
+
 void MpSendChat(const char* text)
 {
 	MP_CHAT c;
@@ -2157,6 +2167,12 @@ void MpSendChat(const char* text)
 	memset(&c, 0, sizeof(c));
 	c.playerId = (uint8_t)(gMp.localPlayerId < 0 ? 0 : gMp.localPlayerId);
 	snprintf(c.text, sizeof(c.text), "%s", text);
+
+	if (MpIsHost() && MpChatIsCommand(c.text))
+	{
+		MpConsoleLine("chat commands only work on a dedicated server; not sent");
+		return;
+	}
 
 	if (MpIsHost())
 	{
@@ -2190,6 +2206,15 @@ static void MpHandleChat(int connIndex, const unsigned char* p, int len)
 
 	if (MpIsHost() && from >= 0)
 		c.playerId = (uint8_t)from;
+
+	/* A peer's "!login ..." reached a game host, which runs no commands: drop it
+	 * unseen. Printing or relaying it would show a password to every player. */
+	if (MpIsHost() && MpChatIsCommand(c.text))
+	{
+		if (gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx, "[mp] dropped a chat command from player %d (not relayed)\n", (int)c.playerId);
+		return;
+	}
 
 	pl = MpGetPlayer(c.playerId);
 

@@ -165,6 +165,18 @@ def mods_match(declared, required, versions, level):
     return True
 
 
+def _is_command(line):
+    """A chat COMMAND: '!' or '/' then a non-space, non-'!'/'/' character (the
+    commands plugin's test, and the C host's MpChatIsCommand)."""
+    return len(line) >= 2 and line[0] in "!/" and line[1] not in " !/"
+
+
+def _mask_command(line):
+    """The command word only, with any arguments shown as ****: "!login ****"."""
+    parts = line.split(None, 1)
+    return parts[0] + (" ****" if len(parts) > 1 else "")
+
+
 def _chat_chunks(text, limit=95):
     """Split a server line into MP_CHAT-sized pieces (95 bytes + NUL), at spaces
     where possible and never inside a UTF-8 sequence. A line longer than one frame
@@ -641,8 +653,14 @@ class Dedicated:
         # Plugins first: a command ("!help") is consumed and never relayed.
         with self.lock:
             info = self.clients.get(conn)
-        if info is not None and self.plugins.chat(Player(conn, info), line):
-            self.log.info("[cmd] %s: %s" % (name, line.split(None, 1)[0]))
+        consumed = info is not None and self.plugins.chat(Player(conn, info), line)
+        if consumed or _is_command(line):
+            # Never relayed, never logged in full: "!login hunter2" is a password.
+            # Even with the commands plugin missing or disabled, a command-shaped
+            # line stays with its sender instead of reaching every seat.
+            self.log.info("[cmd] %s: %s" % (name, _mask_command(line)))
+            if not consumed and info is not None:
+                self.send_server_chat("commands are not available on this server", conn=conn)
             return
 
         self.log.info("[chat] %s: %s" % (name, line))
