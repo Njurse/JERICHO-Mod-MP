@@ -2439,6 +2439,59 @@ static int MpCcAdjustPalette(void* ud, int dir)
 	return JER_PAUSE_QUIT_NONE;
 }
 
+/* Point the picker at the car we drive, so Vehicle Options opens on it (and its
+ * palette) instead of the first city/car. Called once per pause open, never while
+ * browsing. Not in a car (on foot, before a spawn) or a car the roster does not
+ * list: leave the previous selection alone. */
+static void MpCcSnapToOwnCar(void)
+{
+	int c = MpCcOwnCar(), slot, city, model, i;
+
+	if (c < 0 || player[0].playerType != PLAYER_TYPE_CAR)
+		return;
+
+	slot = car_data[c].ap.model;
+
+	if (slot < 0 || slot >= MAX_CAR_RESIDENT_MODELS)
+		return;
+
+	city = GetCarModelSourceCity(slot);
+	if (city < 0)
+		city = GameLevel;	/* the level's own car */
+	model = residentCarModels[slot];
+
+	for (i = 0; i < mpCcCityCount; i++)
+	{
+		if (mpCcCities[i] != city)
+			continue;
+
+		{
+			int oldCity = mpCcCityIdx, oldModel = mpCcModelIdx, m;
+
+			mpCcCityIdx = i;
+			MpCcRebuild();		/* that city's roster */
+
+			for (m = 0; m < mpCcModelCount; m++)
+			{
+				if (mpCcModels[m] == model)
+				{
+					mpCcModelIdx = m;
+					/* the row shows the palette the car wears */
+					defaultPlayerPalette = car_data[c].ap.palette;
+					return;
+				}
+			}
+
+			mpCcCityIdx = oldCity;	/* not offered: keep the previous pick */
+			MpCcRebuild();
+			mpCcModelIdx = oldModel;
+			if (mpCcModelIdx < 0 || mpCcModelIdx >= mpCcModelCount)
+				mpCcModelIdx = 0;
+			return;
+		}
+	}
+}
+
 /* Defined with the player actions further down; the Change car submenu wants it
  * up here, where the CAR options live. */
 static int MpOptRepair(void* ud, int dir);
@@ -2514,6 +2567,7 @@ static int MpOnPauseMenu(void* userdata, void* args)
 		 * unconditionally) and its roster needs the same refresh -- the city list is
 		 * carhacks' answer, which may have changed since the menu was last opened. */
 		MpCcRebuild();
+		MpCcSnapToOwnCar();
 
 		return JER_RESULT_CONTINUE;
 	}
@@ -2535,6 +2589,7 @@ static int MpOnPauseMenu(void* userdata, void* args)
 	 * reads the city list (which a carhacks set may have changed since the last
 	 * time the menu was opened) and the city's frontend car list. */
 	MpCcRebuild();
+	MpCcSnapToOwnCar();
 
 	return JER_RESULT_CONTINUE;
 }
