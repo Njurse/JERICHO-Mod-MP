@@ -58,7 +58,7 @@ rem *.sparse.bak a local bankfill left behind; DRIVER2\ is the player's own data
 popd
 
 pushd "%HERE%" || exit /b 1
-"%SEVENZ%" a -t7z -mx=5 "%OUT%" PLAY_HOST.bat PLAY_JOIN.bat mp_bot_client.bat FIREWALL_FIX.bat BAKE_D1_CARS.bat BAKE_D1_CARS.sh update_jericho.bat update_jericho.sh README_LAN.txt README_LAN_TEST.txt
+"%SEVENZ%" a -t7z -mx=5 "%OUT%" PLAY_HOST.bat PLAY_JOIN.bat mp_bot_client.bat FIREWALL_FIX.bat BAKE_D1_CARS.bat BAKE_D1_CARS.sh update_jericho.bat update_jericho.sh modstore.bat modstore.sh README_LAN.txt README_LAN_TEST.txt
 popd
 
 rem The remote-testing agent, staged at the package ROOT (next to the exe) so the
