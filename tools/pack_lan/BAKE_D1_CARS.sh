@@ -3,7 +3,7 @@
 #  BAKE_D1_CARS.sh -- build the Driver 1 CAR files JERICHO reads, from YOUR
 #                    own copy of Driver 1.
 #
-#  The Linux/macOS twin of BAKE_D1_CARS.bat: same three steps, same guards,
+#  The Linux/macOS twin of BAKE_D1_CARS.bat: same four steps, same guards,
 #  same output. Use whichever matches the machine you are on.
 #
 #  JERICHO does NOT ship Driver 1's content -- it is copyrighted. The five
@@ -16,7 +16,8 @@
 #    2. Run this script once. It writes DRIVER/D1CARS/.
 #    3. Play. carhacks offers the five cities from then on.
 #
-#  You do not need this if DRIVER/D1CARS already exists. Re-running is safe.
+#  Re-run it after updating JERICHO if the game says D1CARS is out of date
+#  (bakes from before v0.10.9 lack the D1 wheels and sounds). Re-running is safe.
 #
 #  NEEDS: python3 on PATH; your Driver 2 data in DRIVER2/ (the wheel geometry
 #  and ride height are derived from Driver 2's own car files, not guessed).
@@ -62,23 +63,43 @@ if [ -z "$PY" ]; then
 	fail "no python on PATH. Install Python 3, then run this again."
 fi
 
+# BAKE_VERSION: bump when the bake gains something the game reads
+BAKE_VERSION=2
+if [ -d "$OUT" ] && [ "$(cat "$OUT/BAKE_VERSION" 2>/dev/null)" != "$BAKE_VERSION" ]; then
+	echo "Your existing $OUT is from an older bake (no D1 wheels/sounds) -- rebuilding it."
+	echo
+fi
+
 mkdir -p "$OUT"
 
 # The pool first: every distinct traffic shape in your Driver 1 levels.
-echo "[1/3] reading Driver 1's car shapes ..."
+echo "[1/4] reading Driver 1's car shapes ..."
 "$PY" "$T/d1pool.py" --levels "$LEV" || fail "d1pool.py failed"
 
 # One blob per city -- each is a complete small "level" holding that city's
 # cars, their palette and their texture pages.
-echo "[2/3] baking one blob per city ..."
+echo "[2/4] baking one blob per city ..."
 for C in MIAMI FRISCO LA NEWYORK NEWCASTLE; do
 	"$PY" "$T/bake.py" --pool "$T/out/pool.json" --levels "$LEV" --city "$C" --out "$OUT" || fail "bake.py $C failed"
 done
 
 # The cosmetics: a .LCF per city, carrying the per-car wheel placement. Driver
 # 2's own files are the donor, so these describe YOUR copy's proportions.
-echo "[3/3] writing the car cosmetics ..."
+echo "[3/4] writing the car cosmetics ..."
 "$PY" "$T/cosmetics1.py" --levels "$LEV" --donor "$D2" --cities "$CITIES" --write "$OUT" || fail "cosmetics1.py failed"
+
+# The sounds: Driver 1's engine/idle/horn, from YOUR DRIVER/SOUND/VOICES.BLK,
+# patched into each freshly baked city.
+echo "[4/4] adding the car sounds ..."
+if [ -f "DRIVER/SOUND/VOICES.BLK" ]; then
+	for C in MIAMI FRISCO LA NEWYORK NEWCASTLE; do
+		"$PY" "$T/add_car_sounds.py" --lev "$OUT/$C.LEV" --voices "DRIVER/SOUND/VOICES.BLK" || fail "add_car_sounds.py $C failed"
+	done
+else
+	echo "  (no DRIVER/SOUND/VOICES.BLK -- Driver 1 cars will use the host city's sounds)"
+fi
+
+echo "$BAKE_VERSION" > "$OUT/BAKE_VERSION"
 
 echo
 echo "BAKE_D1_CARS: done. $OUT now holds:"
