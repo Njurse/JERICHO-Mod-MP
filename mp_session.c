@@ -5452,6 +5452,30 @@ static void MpFollowLocalCar(void)
 	{
 		CAR_DATA* cp = &car_data[driven];
 
+		/* VALIDATE THE DESTINATION BEFORE MOVING OUR IDENTITY ONTO IT.
+		 * A slot the engine cleared (PingOutCar) has ap.carCos == NULL and no model;
+		 * a slot whose resident model was released has no mesh. Adopting either as
+		 * "what we drive" hands the session a car that cannot exist - and the world
+		 * still walks every live CAR_DATA in SetUpCivCollFlags, which reads
+		 * ap.carCos->colBox.vz at 0xD8. Leave the identity where it was and say so
+		 * once per slot; the engine cannot make a valid player car out of this. */
+		if (cp->ap.carCos == NULL ||
+			cp->ap.model < 0 || cp->ap.model >= MAX_CAR_RESIDENT_MODELS ||
+			!JerCarSlotUsable(cp->ap.model))
+		{
+			static int sMpBadSeat = -1;
+
+			if (gMpCtx != NULL && sMpBadSeat != driven)
+			{
+				sMpBadSeat = driven;
+				gMpCtx->jer_log(gMpCtx,
+					"[mp] car change: slot %d has no usable car (model %d, cosmetics %s) - not adopted\n",
+					driven, (int)cp->ap.model, (cp->ap.carCos != NULL) ? "present" : "NULL");
+			}
+
+			return;
+		}
+
 		/* Back in a car after being ON FOOT (the flag is set below, when we got out): the
 		 * player chose this car by walking up to it, so it is what the session must be
 		 * told we drive - possibly not the car we left. The FIRST seat of a match (and a
@@ -5857,6 +5881,21 @@ static void MpKeepOurCarsFromTrafficAi(void)
 		if (car_data[i].controlType == CONTROL_TYPE_NONE)
 		{
 			int was = car_data[i].controlType;
+
+			/* A slot the ENGINE cleared (PingOutCar -> ClearMem then controlType
+			 * NONE) has no cosmetics and no model left. Asking it back as a player
+			 * car made a LIVE CAR_DATA with ap.carCos == NULL: SetUpCivCollFlags
+			 * reads cp->ap.carCos->colBox.vz (offset 0xD8) for every car in the
+			 * world, so the next frame dereferenced NULL. The car is gone - give
+			 * the mark up and leave the slot free for the traffic spawner. */
+			if (car_data[i].ap.carCos == NULL ||
+				car_data[i].ap.model < 0 ||
+				car_data[i].ap.model >= MAX_CAR_RESIDENT_MODELS ||
+				!JerCarSlotUsable(car_data[i].ap.model))
+			{
+				gMpOurCars[i] = 0;
+				continue;
+			}
 
 			car_data[i].controlType = CONTROL_TYPE_PLAYER;
 			car_data[i].wheel_angle = 0;
@@ -6997,7 +7036,14 @@ static int MpChangeCarRun(int city, int model, int isRetry)
 			if (!gMpOurCars[s] || MpGetPlayerByCar(s) != NULL)
 				continue;
 
-			if (car_data[s].controlType == CONTROL_TYPE_CIV_AI)
+			/* The destination has to be a car we can actually put the player in:
+			 * a live CIV_AI body, with its own cosmetics and a resident model whose
+			 * mesh is built. A slot the engine cleared (PingOutCar) is not a car any
+			 * more, and entering it would move the local identity onto a CAR_DATA
+			 * whose ap.carCos is NULL - the SetUpCivCollFlags 0xD8 crash. */
+			if (car_data[s].controlType == CONTROL_TYPE_CIV_AI &&
+				car_data[s].ap.carCos != NULL &&
+				JerCarSlotUsable(car_data[s].ap.model))
 			{
 				seat = s;
 				break;
@@ -7160,7 +7206,12 @@ int MpSoftRestart(void)
 			if (!gMpOurCars[s] || MpGetPlayerByCar(s) != NULL)
 				continue;
 
-			if (car_data[s].controlType == CONTROL_TYPE_CIV_AI)
+			/* Same destination check as the Change car path: a cleared slot is not
+			 * a car, and a car without cosmetics or a usable resident model cannot
+			 * be put the player in (SetUpCivCollFlags reads carCos at 0xD8). */
+			if (car_data[s].controlType == CONTROL_TYPE_CIV_AI &&
+				car_data[s].ap.carCos != NULL &&
+				JerCarSlotUsable(car_data[s].ap.model))
 			{
 				seat = s;
 				break;
