@@ -22,6 +22,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(HERE)))
 sys.path.insert(0, HERE)
 
 import dediserver as d          # noqa: E402
+HERE_T = os.path.dirname(os.path.abspath(__file__))
 import mp_test as m             # noqa: E402
 
 GOOD = '''
@@ -322,6 +323,72 @@ def main():
         check("an explicit list loads exactly those (and disabled-by-default ones)",
               [n for n, _ in server2.plugins.plugins] == ["commands"]
               and "off" in server2.plugins.disabled, server2.plugins.disabled)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+    # -- config upgrade: missing keys are added, existing ones never changed
+    tmp = tempfile.mkdtemp()
+    try:
+        import json
+        import serverkit
+        path = os.path.join(tmp, "dediserver.json")
+        mine = {"name": "Jaret's VPS", "port": 4242, "admins": ["abc"], "custom": {"x": 1},
+                "mod_versions": {"carhacks": "1.0"}, "admin_password": "pw"}
+        with open(path, "w") as f:
+            json.dump(mine, f)
+        cfg, _p = d.build_config(["--config", path])
+        with open(path) as f:
+            after = json.load(f)
+        check("cfg: existing keys and values kept verbatim",
+              all(after[k] == v for k, v in mine.items()), after)
+        check("cfg: existing key order kept, new keys appended",
+              list(after)[:len(mine)] == list(mine), list(after))
+        check("cfg: missing default keys added",
+              all(k in after for k in d.DEFAULTS if not k.startswith("_")),
+              [k for k in d.DEFAULTS if k not in after])
+        check("cfg: the running config still uses the file's values",
+              cfg["port"] == 4242 and cfg["name"] == "Jaret's VPS", cfg["port"])
+        with open(path + ".bak") as f:
+            check("cfg: the old file is backed up", json.load(f) == mine)
+        os.remove(path + ".bak")
+        st = os.stat(path).st_mtime_ns
+        with open(path) as f:
+            before = f.read()
+        d.build_config(["--config", path])
+        with open(path) as f:
+            check("cfg: nothing missing -> file not rewritten, no backup",
+                  f.read() == before and os.stat(path).st_mtime_ns == st
+                  and not os.path.exists(path + ".bak"))
+
+        nested = {"a": 1, "sub": {"keep": "mine"}}
+        with open(path, "w") as f:
+            json.dump(nested, f)
+        added = serverkit.upgrade_config(path, {"a": 2, "sub": {"keep": "default", "new": 3}, "b": [1]},
+                                         say=lambda msg: None)
+        with open(path) as f:
+            got = json.load(f)
+        check("cfg: nested dicts only gain missing keys",
+              got == {"a": 1, "sub": {"keep": "mine", "new": 3}, "b": [1]}
+              and sorted(added) == ["b", "sub.new"], (got, added))
+
+        with open(path, "w") as f:
+            json.dump({"rules": 3}, f)
+        cfg, _p = d.build_config(["--config", path])
+        with open(path) as f:
+            got = json.load(f)
+        check("cfg: a legacy 'rules' file does not gain the readable rule keys",
+              not any(k in got for k in d.RULE_KEYS) and cfg["rules"] == 3 and "port" in got, got)
+
+        sys.path.insert(0, os.path.join(os.path.dirname(HERE_T), "masterserver"))
+        import masterserver as ms
+        mpath = os.path.join(tmp, "masterserver.json")
+        with open(mpath, "w") as f:
+            json.dump({"port": 8100, "motd": "hi"}, f)
+        added = serverkit.upgrade_config(mpath, ms.DEFAULTS, say=lambda msg: None)
+        with open(mpath) as f:
+            got = json.load(f)
+        check("cfg: masterserver config gains missing keys, keeps its own",
+              got["port"] == 8100 and got["motd"] == "hi" and set(ms.DEFAULTS) <= set(got), got)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

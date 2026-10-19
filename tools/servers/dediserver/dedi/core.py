@@ -18,7 +18,7 @@ import urllib.request
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # .../servers/dediserver
 sys.path.insert(0, os.path.dirname(HERE))                            # .../servers (serverkit)
 
-from serverkit import (LEVELS, Console, Log, apply_overrides,   # noqa: E402
+from serverkit import (LEVELS, Console, Log, apply_overrides, upgrade_config,   # noqa: E402
                        duration, install_signals, load_config)
 
 TOOLS = os.path.dirname(os.path.dirname(HERE))      # .../mp/tools
@@ -1409,6 +1409,19 @@ def resolve_rules(cfg, file_keys):
     return False
 
 
+def _legacy_rule_skip(path):
+    """A legacy file ("rules", none of the readable rule keys) is honoured as-is;
+    adding the readable keys would silently replace it, so they are not added."""
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            keys = set(json.load(f))
+    except (OSError, ValueError, TypeError):
+        return ()
+    if "rules" in keys and not any(k in keys for k in RULE_KEYS):
+        return RULE_KEYS
+    return ()
+
+
 def build_config(argv):
     args = parse_args(argv)
     path = args.config
@@ -1418,6 +1431,9 @@ def build_config(argv):
         if note:
             print("[dedi] " + note, file=sys.stderr)
         path = default_path if os.path.exists(default_path) else ""
+    if path:
+        upgrade_config(path, DEFAULTS, skip=_legacy_rule_skip(path),
+                       say=lambda msg: print("[dedi] " + msg, file=sys.stderr))
     cfg = load_config(path, DEFAULTS)
     apply_overrides(cfg, args, (
         ("port", "port"), ("name", "name"), ("city", "city"), ("gamemode", "gamemode"),

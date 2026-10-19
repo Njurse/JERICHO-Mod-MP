@@ -46,7 +46,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # The plumbing both servers share: Log, the config merge, signals, and (later) the
 # console. It sits one directory up, beside this file's parent -- the same place
 # proto_check lives, so one path insert serves both.
-from serverkit import (Console, LEVELS, Log, apply_overrides,   # noqa: E402
+from serverkit import (Console, LEVELS, Log, apply_overrides, upgrade_config,   # noqa: E402
                        duration, install_signals, load_config)
 
 try:
@@ -801,6 +801,9 @@ def main(argv=None):
     args = ap.parse_args(argv)
 
     try:
+        if args.config:
+            upgrade_config(args.config, DEFAULTS,
+                           say=lambda msg: sys.stderr.write("masterserver: " + msg + "\n"))
         cfg = load_config(args.config, DEFAULTS)
     except (OSError, ValueError) as e:
         sys.stderr.write("masterserver: could not read config %r: %s\n" % (args.config, e))

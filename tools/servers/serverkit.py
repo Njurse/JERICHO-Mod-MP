@@ -77,6 +77,62 @@ def load_config(path, defaults):
     return cfg
 
 
+def _add_missing(have, defaults, prefix=""):
+    """Add (in place) every key of `defaults` that `have` lacks; recurse into dicts
+    both sides hold. Existing keys and values are never touched. Returns the
+    dotted names added."""
+    added = []
+    for k, v in defaults.items():
+        if k.startswith("_"):
+            continue                       # internal, never a file key
+        if k not in have:
+            have[k] = json.loads(json.dumps(v))   # a copy: never share a default list
+            added.append(prefix + k)
+        elif isinstance(have[k], dict) and isinstance(v, dict):
+            added += _add_missing(have[k], v, prefix + k + ".")
+    return added
+
+
+def upgrade_config(path, defaults, skip=(), say=None):
+    """Add the keys a newer version introduced to an existing JSON config file.
+
+    Only MISSING keys are added (appended, in `defaults` order; nested dicts merged
+    only to add); every existing key and value is kept verbatim. `skip` names keys
+    never to add (a legacy file they would reinterpret). Nothing missing means
+    nothing is written. Before a write the old file is copied to <path>.bak; the
+    new one is written atomically. A file that cannot be read or written (absent,
+    not a JSON object, a read-only mount) is left alone. Returns the added names.
+    """
+    say = say or (lambda msg: sys.stderr.write(msg + "\n"))
+    if not path or not os.path.isfile(path):
+        return []
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            raw = f.read()
+        have = json.loads(raw)
+    except (OSError, ValueError):
+        return []
+    if not isinstance(have, dict):
+        return []
+    added = _add_missing(have, {k: v for k, v in defaults.items() if k not in skip})
+    if not added:
+        return []
+    try:
+        with open(path + ".bak", "w", encoding="utf-8") as f:
+            f.write(raw)
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(have, f, indent=2, ensure_ascii=False)
+            f.write("\n")
+        os.replace(tmp, path)
+    except OSError as e:
+        say("config %s: could not add new keys (%s): %s" % (path, e, ", ".join(added)))
+        return []
+    say("config %s: added new keys with their defaults: %s (old file kept as %s.bak)"
+        % (path, ", ".join(added), os.path.basename(path)))
+    return added
+
+
 def apply_overrides(cfg, args, pairs):
     """Copy the CLI flags that were actually given over the config.
 
