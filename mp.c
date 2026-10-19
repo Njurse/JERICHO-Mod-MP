@@ -2458,7 +2458,7 @@ static const JER_PAUSE_MENU_ITEM mpColorItems[] =
 };
 
 static const JER_PAUSE_MENU mpColorMenu =
-{ "My colour", mpColorItems, MP_MENU_ITEMS(mpColorItems), "mp.colour" };
+{ "Player Color", mpColorItems, MP_MENU_ITEMS(mpColorItems), "mp.colour" };
 
 static int MpOnPauseMenu(void* userdata, void* args)
 {
@@ -3176,17 +3176,15 @@ static const JER_PAUSE_MENU_ITEM mpPauseItems[] =
 {
 	/* label, get_label, on_activate, userdata, submenu, adjust */
 
-	/* The two SUBMENUS first - everything about the car behind one door, everything
-	 * about going to somebody behind the other - then the two switches and the
-	 * recovery action that sit alongside them. */
+	/* Most used first: Respawn is the row a player reaches for, then the car,
+	 * going to somebody and their own colour; the two switches after those, and
+	 * the admin/debug rows (kick, diagnostics) last. */
+	{ "Respawn", NULL, MpRespawn, NULL, NULL, 0 },
 	{ "Vehicle Options", NULL, NULL, NULL, &mpChangeCarMenu, 0 },
 	{ "Warp To Player", NULL, NULL, NULL, &mpWarpMenu, 0 },
+	{ "Player Color", NULL, NULL, NULL, &mpColorMenu, 0 },
 	{ NULL, MpOptLabelInvincible, MpOptToggleInvincible, NULL, NULL, 0 },
 	{ NULL, MpOptLabelImmune, MpOptToggleImmune, NULL, NULL, 0 },
-	{ "Respawn", NULL, MpRespawn, NULL, NULL, 0 },
-
-	/* ...then the rest, so the reordering costs nothing that was already here. */
-	{ "My colour", NULL, NULL, NULL, &mpColorMenu, 0 },
 	{ "Kick player", NULL, NULL, NULL, &mpKickMenu, 0 },
 	{ "Write diagnostics now", NULL, MpMenuWriteDiag, NULL, NULL, 0 },
 };

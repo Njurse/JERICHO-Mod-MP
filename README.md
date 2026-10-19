@@ -193,18 +193,17 @@ the match was built. `MP_PAUSE=1` **logs** the player rows for a test (it does n
 hold the pause -- `MP_OPENPAUSE=<secs>` does that), and `MP_DEBUG` logs each row.
 
 The engine's own pause menu keeps working, and the module adds a `Multiplayer`
-page to it with nine rows:
+page to it with eight rows:
 
 | Row | What it does |
 | --- | --- |
-| `Vehicle Options` | the car submenu: a city cycler, a car cycler, `Respawn as this car` and `Repair car`. Your vehicle is replaced in place, and every peer re-models its copy of you. The city row offers every city carhacks can serve and the session's own city alone when carhacks is absent. The page also works in SINGLE PLAYER, where the change is a purely local re-model of the car you are driving; the picker offers the whole roster of every city there too, because choosing a car that is not here yet IS the request that imports it. A pick that cannot be loaded is refused, with a reason, and leaves your car alone |
+| `Respawn` | put YOU back at the world start, in your car, repaired, with no wanted level (in a session this does not rebuild the level) |
+| `Vehicle Options` | the car submenu: a city cycler, a car cycler, `Respawn as this car`, `Repair car` and `Clear felony`. Your vehicle is replaced in place, and every peer re-models its copy of you. The city row offers every city carhacks can serve and the session's own city alone when carhacks is absent. The page also works in SINGLE PLAYER, where the change is a purely local re-model of the car you are driving; the picker offers the whole roster of every city there too, because choosing a car that is not here yet IS the request that imports it. A pick that cannot be loaded is refused, with a reason, and leaves your car alone |
 | `Warp To Player` | move your car to another player's |
+| `Player Color` | your character's suit colour, on or off, plus RGB. Off (the default) keeps the game's own colours |
 | `Invincibility` | on/off: you take no damage |
 | `Immunity` | on/off: the police leave you alone |
-| `Respawn` | put YOU back at the world start, in your car, repaired, with no wanted level (in a session this does not rebuild the level) |
-| `My colour` | your character's suit colour, on or off, plus RGB. Off (the default) keeps the game's own colours |
 | `Kick player` | (host) remove a peer from the session |
-| `Clear felony` | clear your wanted level |
 | `Write diagnostics now` | writes `mp_diag.txt` next to the game |
 
 `Restart` is handled specially in a match: instead of rebuilding the level under
