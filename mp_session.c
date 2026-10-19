@@ -1203,8 +1203,19 @@ void MpSpawnLateJoiners(void)
 				continue;
 			if (k == player[0].playerCarId || car_data[k].controlType == CONTROL_TYPE_PLAYER)
 				continue;
+			/* a car somebody got out of (stopped, empty, quiet pad): only if
+			 * nothing else is free - see the second pass */
+			if (car_data[k].controlType == CONTROL_TYPE_CIV_AI && car_data[k].ai.padid == &gMpQuietPad)
+				continue;
 			slot = k;
 			break;
+		}
+
+		for (k = 1; slot < 0 && k < MAX_CARS && k < MAX_PLAYERS; k++)
+		{
+			if (MpGetPlayerByCar(k) == NULL && k != player[0].playerCarId &&
+				car_data[k].controlType == CONTROL_TYPE_CIV_AI && car_data[k].ai.padid == &gMpQuietPad)
+				slot = k;
 		}
 
 		if (slot < 1 || slot >= MAX_CARS || slot >= MAX_PLAYERS)
@@ -6326,11 +6337,23 @@ static void MpReleaseRemoteCar(MP_PLAYER* p)
 
 	cp = &car_data[p->carId];
 
-	if (cp->controlType == CONTROL_TYPE_PLAYER && gMpCtx != NULL)
+	if (cp->controlType == CONTROL_TYPE_PLAYER)
 	{
-		gMpCtx->jer_log(gMpCtx,
-			"[mp] player %d got out; car slot %d left standing where it was\n",
-			p->id, p->carId);
+		/* Leave OUR copy as the stopped, empty civ car the owner's own engine
+		 * made it (the local get-out path does the same). Left as
+		 * CONTROL_TYPE_PLAYER it could never be entered by anyone else here
+		 * (TannerCanEnterCar takes CIV_AI only), and it kept a player slot
+		 * the late-join seat scan skips. */
+		cp->controlType = CONTROL_TYPE_CIV_AI;
+		cp->ai.c.thrustState = CIV_AI_THRUST_STOP;
+		cp->ai.c.ctrlState = CIV_AI_CTRL_EMPTY;
+		cp->wheel_angle = 0;
+		cp->ai.padid = &gMpQuietPad;
+
+		if (gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx,
+				"[mp] player %d got out; car slot %d left standing where it was (enterable)\n",
+				p->id, p->carId);
 	}
 }
 
