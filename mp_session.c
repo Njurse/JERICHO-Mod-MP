@@ -7414,6 +7414,43 @@ int MpSoftRestart(void)
 	return 1;
 }
 
+/* Place a car at (x,z) on the GROUND there, the way the engine's own InitCar does
+ * (civ_ai.c: MapHeight at the target minus the suspension offset). A bare
+ * InitCarPhysics with y=0 puts the car at world zero, which on a road that sits
+ * at y=2048 is 2048 units BELOW it - the car then falls through the map. That is
+ * the "respawn, then keep falling" loop: every placement repeated the drop.
+ *
+ * 0 is also MapHeight's answer for ground that is not resident, so the caller has
+ * to have made the spot real first (MpWarpStreamTo) - the same rule the warp and
+ * the join spawn already follow. Returns 0 when there is no ground to stand on. */
+static int MpPlaceOnGround(CAR_DATA* cp, int x, int z, int dir)
+{
+	LONGVECTOR4 start;
+	VECTOR probe;
+	int gy;
+
+	if (cp == NULL || cp->ap.carCos == NULL)
+		return 0;
+
+	probe.vx = x;
+	probe.vy = 0;
+	probe.vz = z;
+	probe.pad = 0;
+
+	gy = MapHeight(&probe);
+
+	if (gy <= -1000)
+		return 0;		/* the void: nothing to stand on */
+
+	start[0] = x;
+	start[1] = gy - cp->ap.carCos->wheelDisp[0].vy;
+	start[2] = z;
+	start[3] = 0;
+
+	InitCarPhysics(cp, &start, dir);
+	return 1;
+}
+
 /* IN A SESSION, DYING IS A RESPAWN, NOT A GAME OVER.
  *
  * The engine asks (JER_PAUSE_GAMEOVER) just before it arms the game-over pause - the death
@@ -7440,7 +7477,6 @@ int MpRespawnAfterDeath(void)
 {
 	MP_PLAYER* me;
 	CAR_DATA* cp;
-	LONGVECTOR4 start;
 	VECTOR probe;
 	int ground;
 	int x, z, dir;
@@ -7523,11 +7559,6 @@ int MpRespawnAfterDeath(void)
 		dir = PlayerStartInfo[0]->rotation;
 	}
 
-	start[0] = x;
-	start[1] = 0;				/* the engine resolves the ground under the car */
-	start[2] = z;
-	start[3] = 0;
-
 	/* Face ALONG THE ROAD: a wreck usually ends at an angle (or upside down
 	 * across the lanes), and respawning it that way left the driver to sort it out. */
 	{
@@ -7535,8 +7566,6 @@ int MpRespawnAfterDeath(void)
 
 		if (MpFindRespawnSpot(x, z, &fx, &fz, &fdir))
 		{
-			start[0] = fx;
-			start[2] = fz;
 			x = fx;
 			z = fz;
 			if (fdir >= 0)
@@ -7545,8 +7574,22 @@ int MpRespawnAfterDeath(void)
 	}
 	dir = MpRoadHeadingNear(x, z, dir & 0xfff);
 
-	InitCarPhysics(cp, &start, dir);
+	/* THE PLACEMENT RESOLVES THE GROUND. y=0 is not "the engine will sort it out":
+	 * a road at y=2048 left the car two thousand units below it, falling. If the
+	 * chosen spot is somehow void, fall back to the level start rather than drop
+	 * the player. */
+	if (!MpPlaceOnGround(cp, x, z, dir))
+	{
+		if (PlayerStartInfo[0] == NULL)
+			return 0;
 
+		x = PlayerStartInfo[0]->position.vx;
+		z = PlayerStartInfo[0]->position.vz;
+		dir = PlayerStartInfo[0]->rotation;
+
+		if (!MpPlaceOnGround(cp, x, z, dir))
+			return 0;
+	}
 	cp->hd.speed = 0;
 	cp->wheel_angle = 0;
 
@@ -7956,6 +7999,21 @@ static int MpFindRespawnSpot(int cx, int cz, int* outX, int* outZ, int* outDir)
 			if (!MpWarpStreamTo(x, z))
 				continue;
 
+			/* A resident region can still answer 0 for a cell that is not in the
+			 * barrel (the gather's measured note). For a DEATH respawn we can try
+			 * another spot; landing on a void would just fall again. */
+			{
+				VECTOR gp;
+
+				gp.vx = x;
+				gp.vy = 0;
+				gp.vz = z;
+				gp.pad = 0;
+
+				if (MapHeight(&gp) <= -1000)
+					continue;
+			}
+
 			*outX = x;
 			*outZ = z;
 			*outDir = dir;
@@ -8072,14 +8130,9 @@ void MpPlaceSelfTick(void)
 			continue;
 
 		{
-			LONGVECTOR4 start;
+			if (!MpPlaceOnGround(cp, x, z, (dir >= 0) ? dir : PlayerStartInfo[0]->rotation))
+				continue;
 
-			start[0] = x;
-			start[1] = 0;		/* the engine resolves the ground under the car */
-			start[2] = z;
-			start[3] = 0;
-
-			InitCarPhysics(cp, &start, (dir >= 0) ? dir : PlayerStartInfo[0]->rotation);
 			cp->hd.speed = 0;
 			player[0].cameraAngle = cp->hd.direction + 1536;
 
@@ -8249,15 +8302,19 @@ int MpWarpToPlayer(int playerId)
 	}
 
 	{
-		LONGVECTOR4 start;
 		JER_ARGS_RESET_CAR rc;
 
-		start[0] = bestX;
-		start[1] = 0;		/* the engine resolves the ground under the car */
-		start[2] = bestZ;
-		start[3] = 0;
+		if (!MpPlaceOnGround(myc, bestX, bestZ, dir))
+		{
+			MpNotify("Warp: no ground at that spot");
 
-		InitCarPhysics(myc, &start, dir);
+			if (gMpCtx != NULL)
+				gMpCtx->jer_log(gMpCtx,
+					"[mp] warp: spot %d,%d has no ground under it - not moving\n",
+					bestX, bestZ);
+
+			return 0;
+		}
 
 		/* Arrive stopped, and pointing the way the target is - not pointing AT
 		 * the target: the heading that matters is the one the driver can see out
@@ -8330,9 +8387,14 @@ int MpRespawnOnRoad(void)
 	cy = cp->hd.where.t[1];
 	cz = cp->hd.where.t[2];
 
-	found = MpFindRespawnSpot(cx, cz, &bestX, &bestZ, &bestDir);
-	if (!found)
-		found = MpFindRoadSpotNear(cx, cy, cz, -1, &bestX, &bestZ, &bestDir, &bestRing);
+	/* THE NEAREST ROAD, not the death-respawn ring.
+	 *
+	 * MpFindRespawnSpot deliberately picks a spot 12-30k units away: a DEATH
+	 * should not put you back on the road you crashed on. The pause row is the
+	 * other question ("I am wedged" / "I fell in the void"), and using the death
+	 * search here teleported the car 21k units to somewhere the ground may not
+	 * have streamed - the "Respawn, then keep falling" loop. */
+	found = MpFindRoadSpotNear(cx, cy, cz, -1, &bestX, &bestZ, &bestDir, &bestRing);
 
 	if (!found)
 	{
@@ -8365,18 +8427,24 @@ int MpRespawnOnRoad(void)
 	}
 
 	{
-		LONGVECTOR4 start;
 		JER_ARGS_RESET_CAR rc;
+		int placeDir = (bestDir >= 0) ? bestDir : MpRoadHeadingNear(bestX, bestZ, cp->hd.direction & 0xfff);
 
-		start[0] = bestX;
-		start[1] = 0;		/* the engine resolves the ground under the car */
-		start[2] = bestZ;
-		start[3] = 0;
+		/* InitCarPhysics builds an UPRIGHT orientation out of the heading, and
+		 * MpPlaceOnGround resolves the y from the road there. y=0 was the old
+		 * shortcut and it put the car below a road at y=2048: it fell, the engine
+		 * called it a death, and the respawn dropped it again. */
+		if (!MpPlaceOnGround(cp, bestX, bestZ, placeDir))
+		{
+			MpNotify("Respawn: no ground on that road");
 
-		/* InitCarPhysics builds an UPRIGHT orientation out of the heading, which is
-		 * half of what "respawn" means; the heading itself is kept, so the player
-		 * comes back facing the way they were. */
-		InitCarPhysics(cp, &start, (bestDir >= 0) ? bestDir : MpRoadHeadingNear(bestX, bestZ, cp->hd.direction & 0xfff));
+			if (gMpCtx != NULL)
+				gMpCtx->jer_log(gMpCtx,
+					"[mp] respawn: road point %d,%d has no ground under it - staying put\n",
+					bestX, bestZ);
+
+			return 0;
+		}
 
 		cp->hd.speed = 0;
 		cp->wheel_angle = 0;
@@ -8401,10 +8469,8 @@ int MpRespawnOnRoad(void)
 
 		if (gMpCtx != NULL)
 			gMpCtx->jer_log(gMpCtx,
-				"[mp] respawn: on the nearest road at %d,%d - ring %d, about %d units from "
-				"where the car was (%d,%d) - repaired and upright\n",
-				cp->hd.where.t[0], cp->hd.where.t[2], bestRing,
-				bestRing * MP_ROAD_RING_STEP, cx, cz);
+				"[mp] respawn: on the nearest road at %d,%d - ring %d, from (%d,%d) - repaired and upright\n",
+				cp->hd.where.t[0], cp->hd.where.t[2], bestRing, cx, cz);
 	}
 
 	return 1;
