@@ -1080,6 +1080,19 @@ Two hard-won rules:
   must never reach an ACTIVE civ state (driving/turning) — that is what used to
   crash inside `CivSteerAngle` (rva 0xC961 in one dump).
 
+**Getting out and back in is ONE transaction, not release-plus-spawn.** The peer
+releases the remote car on `MP_CARSTATE_NO_CAR` and keeps the released body's slot in
+`MP_PLAYER.leftCarSlot1`. When the owner walks back into that same body (or uses the
+pause menu's Change car while on foot — `MpChangeCarRun` re-enters the parked car and
+re-models it in place), the carstate carries `MP_CARSTATE_SAME_BODY` and
+`MpHandleCarState` puts them back on the slot it released, then runs the ordinary
+model/pose adopt. It must NOT fall through to the "we have no car for them" heal,
+which only clears `onFoot` and lets `MpSpawnLateJoiners` call `InitPlayer` on another
+slot: that is the same vehicle twice, one copy orphaned where it was parked. Entering
+a DIFFERENT car leaves the bit clear, so the parked body stays and the new one is
+built as before. Log: `[mp] player N is back in the car they left (slot M) - reusing
+the body instead of spawning another`.
+
 A model the renderer has not loaded is NOT applied (`gCarCleanModelPtr[model] ==
 NULL`): pointing `ap.model` at a mesh that does not exist is a crash, not a
 cosmetic glitch — it keeps the old model and logs.

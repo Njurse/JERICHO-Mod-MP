@@ -263,6 +263,11 @@ AI.
 - Headless levers: `MP_TEST_CARCHANGE=<secs>[,<exitSecs>]` (get out / into the nearest
   civilian), `MP_TEST_PAUSECAR=<secs>[,<city>[,<model>]][;...]` (the pause menu's
   `Apply`, including a cross-city one), `MP_TEST_CARCYCLE` (cycle every offered car).
+- The get-out/get-back-in round trip: `MP_TEST_ONFOOT=<secs>` then a later
+  `MP_TEST_PAUSECAR` on the same seat (Change car while on foot re-enters the parked
+  body). Each OTHER seat must log
+  `[mp] player %d is back in the car they left (slot %d) - reusing the body instead of spawning another`
+  and must NOT log `had no car on this machine - given the free slot` for that player.
 - The re-model on each seat:
   `[mp] player %d changed car: slot %d -> %d (%s model %d), mesh rebuilt [local=%d localId=%d row=%d]`
 - The invisible-car instrument (**must end `mesh loaded`**):
@@ -278,7 +283,9 @@ AI.
 **`mesh loaded` on both seats**, the two seats agree on the new model, and none of
 `no spare resident slot`, `keeping slot N`, `not loaded here`, or a `mesh MISSING` line
 appears. `mp_carstress.py`'s per-seat report shows every offered car driven, 0 refused,
-0 meshless. No `JERICHO.dmp`.
+0 meshless. No `JERICHO.dmp`. An on-foot round trip leaves **one** body per player:
+the re-seat line appears, the spawn line does not, and the car the player left is not
+still standing beside them.
 
 **Status** — Verified headless (`MP_TEST_CARCHANGE`, `MP_TEST_PAUSECAR`, `mp_carstress.py`).
 The invalidation rules the two seats must obey (match the vehicle in place; a mod car

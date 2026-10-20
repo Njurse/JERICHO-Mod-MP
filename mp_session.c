@@ -1376,6 +1376,12 @@ void MpSpawnLateJoiners(void)
 		}
 
 		p->carId = slot;
+		/* The recorded "car they left" (MP_PLAYER.leftCarSlot1) is only a seat to
+		 * REUSE, never a second body: now that this player has a fresh car from the
+		 * spawn path, forget it. Otherwise a later carstate could reclaim a body
+		 * that has nothing to do with the car just built. */
+		p->leftCarSlot1 = 0;
+		p->leftCarModel = -1;
 		spawned++;
 
 		if (gMpCtx != NULL)
@@ -5562,6 +5568,16 @@ static void MpFollowLocalCar(void)
 				"[mp] car change: on foot (left slot %d, parked empty for re-entry)\n",
 				me->carId);
 
+		/* REMEMBER THE BODY WE ARE STEPPING OUT OF, on our OWN row. Two things need
+		 * it: MpSendOwnCarState tells the peers when we walk back into this same
+		 * slot (MP_CARSTATE_SAME_BODY) so they re-seat us on the body they released
+		 * instead of spawning a second one, and MpChangeCarRun's on-foot path
+		 * prefers this car over any other parked one. It is only meaningful while
+		 * me->carId == leftCarSlot1 - 1; entering a DIFFERENT car leaves it stale
+		 * on purpose, and the next get-OUT overwrites it. */
+		me->leftCarSlot1 = me->carId + 1;
+		me->leftCarModel = left->ap.model;
+
 		me->carId = -1;
 		me->car = -1;
 		me->onFoot = 1;		/* OUR row: the next car we get into is a choice (above) */
@@ -6166,6 +6182,15 @@ static void MpSendOwnCarState(void)
 	if (me->carId >= 0 && me->carId < MAX_CARS)
 	{
 		cp = &car_data[me->carId];
+
+		/* Say it when this is the body we last got OUT of: the peers released it on
+		 * the NO_CAR row and can re-seat us on it instead of building a second
+		 * vehicle (MpHandleCarState). Kept on every frame while we drive that same
+		 * body, so one lost packet cannot reopen the window. Entering a DIFFERENT
+		 * car leaves leftCarSlot1 pointing elsewhere, so the bit stays clear and
+		 * the peers keep the parked body and build the new one, as before. */
+		if (me->leftCarSlot1 > 0 && me->carId == me->leftCarSlot1 - 1)
+			e.flags |= MP_CARSTATE_SAME_BODY;
 
 		/* MP_DEBUG: the ORIENTATION is now the only 16-bit field left on the wire, so
 		 * it is the only one a violent impact can saturate. If this fires, the peer is
@@ -7323,11 +7348,29 @@ static int MpChangeCarRun(int city, int model, int isRetry)
 		int seat = -1;
 		int s;
 
-		/* Get back into a car OF OURS -- one the module made, left parked and
-		 * enterable (see MpFollowLocalCar). Never a live traffic car: taking one
-		 * over and vacating it hands the traffic AI a car it cannot steer, which
-		 * is the crash that note exists to prevent. */
-		for (s = 0; s < MAX_CARS; s++)
+		/* PREFER THE CAR WE ACTUALLY GOT OUT OF. It is the body this machine last
+		 * parked, and the one the peers still hold for us (their leftCarSlot1), so
+		 * getting back into it makes the carstate carry MP_CARSTATE_SAME_BODY and
+		 * they re-seat us on it. Seating ourselves in some OTHER parked car would
+		 * read as a genuinely different vehicle and they would build a second one,
+		 * leaving this one standing. Same usability tests as the scan below. */
+		if (me->leftCarSlot1 > 0)
+		{
+			int left = me->leftCarSlot1 - 1;
+
+			if (left >= 0 && left < MAX_CARS && gMpOurCars[left] &&
+				MpGetPlayerByCar(left) == NULL &&
+				car_data[left].controlType == CONTROL_TYPE_CIV_AI &&
+				car_data[left].ap.carCos != NULL &&
+				JerCarSlotUsable(car_data[left].ap.model))
+				seat = left;
+		}
+
+		/* Otherwise: get back into any car OF OURS -- one the module made, left
+		 * parked and enterable (see MpFollowLocalCar). Never a live traffic car:
+		 * taking one over and vacating it hands the traffic AI a car it cannot
+		 * steer, which is the crash that note exists to prevent. */
+		for (s = 0; seat < 0 && s < MAX_CARS; s++)
 		{
 			if (!gMpOurCars[s] || MpGetPlayerByCar(s) != NULL)
 				continue;
@@ -7349,8 +7392,26 @@ static int MpChangeCarRun(int city, int model, int isRetry)
 		if (seat < 0)
 		{
 			if (gMpCtx != NULL)
-				gMpCtx->jer_log(gMpCtx,
-					"[mp] change car: on foot and no car of ours to get back into\n");
+			{
+				int left = me->leftCarSlot1 - 1;
+
+				/* Say WHY, not just that it failed: this is the one place a player
+				 * finds out their parked car is not usable any more, and the four
+				 * reasons are indistinguishable from the outside. */
+				if (left >= 0 && left < MAX_CARS)
+					gMpCtx->jer_log(gMpCtx,
+						"[mp] change car: on foot and no car of ours to get back into "
+						"(left slot %d: ours %d, taken %d, type %d, cosmetics %s, "
+						"model %d, usable %d)\n",
+						left, (int)gMpOurCars[left], MpGetPlayerByCar(left) != NULL,
+						(int)car_data[left].controlType,
+						(car_data[left].ap.carCos != NULL) ? "present" : "NULL",
+						(int)car_data[left].ap.model,
+						JerCarSlotUsable(car_data[left].ap.model));
+				else
+					gMpCtx->jer_log(gMpCtx,
+						"[mp] change car: on foot and no car of ours to get back into\n");
+			}
 
 			return 0;
 		}
@@ -8796,17 +8857,63 @@ static void MpHandleCarState(int connIndex, const unsigned char* p, int len)
 		 * cycle, so the heal is visible when diagnosing. */
 		if (pl->carId < 0 || pl->carId >= MAX_CARS)
 		{
-			if (pl->onFoot)
-			{
-				pl->onFoot = 0;
+			int reused = 0;
 
-				if (gMpCtx != NULL)
-					gMpCtx->jer_log(gMpCtx,
-						"[mp] heal: player %d's carstate says they are driving but we have "
-						"no car for them - re-seating them\n", pl->id);
+			/* BACK IN THE BODY THEY LAST GOT OUT OF. The owner says so explicitly
+			 * (MP_CARSTATE_SAME_BODY: walking back into their parked car, or the
+			 * pause menu's Change car while on foot, which re-enters it and
+			 * re-models it in place). We released that body on their NO_CAR row and
+			 * it is still standing here, so put them back on it. Letting the heal
+			 * below run instead would clear onFoot and the re-seat pass would call
+			 * InitPlayer on ANOTHER slot: the same vehicle twice, one of them an
+			 * orphan nobody drives.
+			 *
+			 * The body is only ours to hand back while it is still that car and
+			 * nobody else has taken it: a cleared/recycled slot, a released mesh, a
+			 * model that changed under us, a car another player (or WE) now drive -
+			 * any of those and this falls back to the spawn path, exactly as before.
+			 * The model-change block below then re-models the body if the owner's
+			 * carstate names a different vehicle (the Change car case). */
+			if ((e.flags & MP_CARSTATE_SAME_BODY) && pl->leftCarSlot1 > 0)
+			{
+				int slot = pl->leftCarSlot1 - 1;
+
+				if (slot >= 0 && slot < MAX_CARS &&
+					slot != (int)player[0].playerCarId &&
+					MpGetPlayerByCar(slot) == NULL &&
+					car_data[slot].controlType != CONTROL_TYPE_NONE &&
+					car_data[slot].ap.carCos != NULL &&
+					car_data[slot].ap.model == pl->leftCarModel &&
+					JerCarSlotUsable(car_data[slot].ap.model))
+				{
+					pl->carId = slot;
+					pl->onFoot = 0;
+					pl->leftCarSlot1 = 0;
+					pl->leftCarModel = -1;
+					reused = 1;
+
+					if (gMpCtx != NULL)
+						gMpCtx->jer_log(gMpCtx,
+							"[mp] player %d is back in the car they left (slot %d) - "
+							"reusing the body instead of spawning another\n",
+							pl->id, slot);
+				}
 			}
 
-			continue;
+			if (!reused)
+			{
+				if (pl->onFoot)
+				{
+					pl->onFoot = 0;
+
+					if (gMpCtx != NULL)
+						gMpCtx->jer_log(gMpCtx,
+							"[mp] heal: player %d's carstate says they are driving but we have "
+							"no car for them - re-seating them\n", pl->id);
+				}
+
+				continue;
+			}
 		}
 
 		if (MpRemoteTargetsLocalCar(pl->carId, "carstate", pl->id))

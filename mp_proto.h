@@ -485,6 +485,15 @@ typedef struct MP_COLOR
  * warps them into an unrelated car. Vehicles are matched by MODEL, in place
  * (MpAdoptRemoteCar). */
 #define MP_CARSTATE_HAS_BODY	1
+/* The body we are in now is the SAME `car_data` slot we last got out of (this
+ * machine's slot -- the peers know which body they released for us). The owner
+ * sets it whenever they walk back into the car they left, or use the pause menu's
+ * Change car while on foot: `MpChangeCarRun` re-enters their parked car and
+ * re-models it in place. Without this a peer could only see "was on foot, now
+ * reports a car" and its re-seat pass would build a SECOND vehicle, leaving the
+ * body it released standing where it was. An unknown bit is ignored by older
+ * readers, and an older sender simply never sets it, so no protocol bump. */
+#define MP_CARSTATE_SAME_BODY	2
 
 /* entry.model when the owner is on foot: no vehicle to drive, so the peers
  * release the car they were driving for them (it stays in the world). */
