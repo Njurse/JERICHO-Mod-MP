@@ -6720,6 +6720,9 @@ static int sMpWantCity = -2;	/* -2 = not known yet, -1 = the host city */
 static int sMpWantModel = -1;
 static int sMpStandIn;
 static int sMpStandInCar[MAX_CARS];	/* per car object: drawn as a grey stand-in */
+static int sMpReadySlot[MAX_CARS];	/* readiness stand-in: wanted slot + 1, 0 = none */
+static int sMpReadyHost[MAX_CARS];	/* the host slot the grey body sits on */
+static u_char sMpReadyPalette[MAX_CARS];	/* palette to put back on the real car */
 static int sMpCamReseat;
 static void MpCarFailsafeTick(void);
 
@@ -6731,6 +6734,9 @@ static void MpFailsafeReset(void)
 	sMpStandIn = 0;
 	sMpCamReseat = 0;
 	memset(sMpStandInCar, 0, sizeof(sMpStandInCar));
+	memset(sMpReadySlot, 0, sizeof(sMpReadySlot));
+	memset(sMpReadyHost, 0, sizeof(sMpReadyHost));
+	memset(sMpReadyPalette, 0, sizeof(sMpReadyPalette));
 }
 
 static void MpFailsafeNoteCar(int slot)
@@ -7269,6 +7275,98 @@ static void MpCarClearStandIn(int carSlot)
 int MpCarIsStandIn(int carSlot)
 {
 	return (carSlot >= 0 && carSlot < MAX_CARS) ? sMpStandInCar[carSlot] : 0;
+}
+
+/* JERICHO: the readiness stand-in, for SINGLE-PLAYER (and for any frame in which the
+ * session's own reload failsafe is not driving).
+ *
+ * The engine's slot decision (JerCarSlotState) now refuses an imported slot until every set
+ * its model names has a live pin and a mapped palette row. That is deliberately stricter
+ * than "a mesh exists", and a car already on the road can briefly be in that state while a
+ * switch/reload lands. In a session, MpCarFailsafeTick already covers this and reports the
+ * real choice over the wire; OUTSIDE a session nothing did, so the draw gate simply skipped
+ * the car and the player saw nothing. Use the SAME proven stand-in here: the host city's
+ * car 1, repointed and tinted solid grey by the draw-colour hook, until the real slot is
+ * drawable - then repoint back and rebuild its dump.
+ *
+ * The engine draw path itself never mutates cp->ap.model: only this module does, exactly as
+ * the session failsafe already does, so carhacks/mp identity keeps reading the real choice
+ * from the remembered slot rather than from the grey body. */
+void MpCarReadinessTick(void)
+{
+	extern u_char defaultPlayerPalette;
+	CAR_DATA* cp;
+	int carId, stored, want, host, city;
+
+	if (gMp.running || gInFrontend)
+		return;			/* the session failsafe owns MP; no car in the frontend */
+
+	if (player[0].playerType != PLAYER_TYPE_CAR)
+		return;			/* on foot: do not steal the parked car or the camera */
+
+	carId = player[0].playerCarId;
+
+	if (carId < 0 || carId >= MAX_CARS)
+		return;
+
+	cp = &car_data[carId];
+	stored = sMpReadySlot[carId];
+
+	if (stored > 0)
+	{
+		want = stored - 1;
+		host = sMpReadyHost[carId];
+
+		if (cp->ap.model != host)
+		{
+			/* The car object was repointed since we put the stand-in on: this is no
+			 * longer our body, so forget the memory rather than fight it. */
+			sMpReadySlot[carId] = 0;
+			MpCarClearStandIn(carId);
+			return;
+		}
+
+		if (!JerCarSlotDrawable(want))
+			return;		/* still not drawable: keep the grey body */
+
+		sMpReadySlot[carId] = 0;
+		MpCarClearStandIn(carId);
+
+		cp->ap.model = want;
+		cp->ap.carCos = &car_cosmetics[want];
+		cp->lowDetail = -1;
+		cp->ap.palette = (u_char)CarSlotClampPalette(want, (int)sMpReadyPalette[carId]);
+		CreateDentableCar(cp);
+
+		printInfo("[mp] car readiness: slot %d (%s model %d) is drawable - leaving the host city's car 1 stand-in\n",
+			want, MpCarCityName(GetCarModelSourceCity(want)), residentCarModels[want]);
+
+		return;
+	}
+
+	want = cp->ap.model;
+
+	if (want < 0 || want >= MAX_CAR_RESIDENT_MODELS)
+		return;
+
+	city = GetCarModelSourceCity(want);
+
+	if (city < 0)
+		return;			/* the level's own car: no import sets to wait for */
+
+	if (JerCarSlotDrawable(want))
+		return;
+
+	sMpReadyPalette[carId] = (u_char)cp->ap.palette;
+
+	if (MpCarStandIn(carId))
+	{
+		sMpReadySlot[carId] = want + 1;
+		sMpReadyHost[carId] = cp->ap.model;	/* MpCarStandIn repointed it */
+
+		printInfo("[mp] car readiness: slot %d (%s model %d) is not drawable yet - standing in with the host city's car 1, solid grey\n",
+			want, MpCarCityName(city), residentCarModels[want]);
+	}
 }
 
 static void MpCarFailsafeTick(void)

@@ -2618,6 +2618,11 @@ static int MpOnPreSim(void* userdata, void* args)
 	(void)userdata;
 	(void)args;
 
+	/* A local car whose imported slot is not drawable gets the same grey host-car-1
+	 * stand-in in single-player as the session failsafe gives it in MP. No-op while a
+	 * session is running (the failsafe owns that) and in the frontend. */
+	MpCarReadinessTick();
+
 	/* MP_DEBUG: is this hook still being called at all? A session whose sim silently
 	 * stops here looks alive (polls continue on the FRAME hook, remote cars keep
 	 * being adopted) while nothing owns a car any more. */
