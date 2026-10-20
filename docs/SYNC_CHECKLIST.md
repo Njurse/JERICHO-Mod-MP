@@ -749,7 +749,7 @@ own car of that number"), so picking X can hand back Y -- worse than the change 
 Candidate fixes, best fit first:
 
 1. **Retry a refused change.** A change is only *advertised* when it actually happens
-   (`MP_CARQ_CHOSEN`, after a successful build), so retrying locally until a slot frees
+   (`JER_CARQ_CHOSEN`, after a successful build), so retrying locally until a slot frees
    is invisible to the other machines and needs no wire or determinism change. It needs a
    bound, and it must not sit behind a slot that is never released.
 2. **Never silently substitute.** If a pick cannot be slotted, keep the player's CURRENT

@@ -1217,15 +1217,15 @@ A pick that still cannot be loaded is refused with a reason
 
 **Where the cities come from.** mp can only offer what this machine can actually
 hold, and a second city's car data is carhacks' business, so mp ASKS:
-`mp_carquery.h` is a four-event contract (custom JERICHO event ids, so no shared
+`jer_carquery.h` is a four-event contract (custom JERICHO event ids, so no shared
 header needed beyond that one file) answered by `carhacks/mplive.c`:
 
 | event | question | answer |
 | --- | --- | --- |
-| `MP_CARQ_CITIES` | which cities can this session offer? | every car-data city (9: CHICAGO..RIO + Driver 1's five), or 0 = "nobody knows" |
-| `MP_CARQ_SLOTS` | which slots may this city be offered in, and what model is in each? | parallel slot/model lists, or 0 = "nobody knows" (mp then keeps the engine's own table) |
-| `MP_CARQ_LOAD` | make `(city, model)` available here | `ok` |
-| `MP_CARQ_CHOSEN` | (notice) the local player now drives `(city, model)`, or the switch did not happen | none - carhacks tells the session and releases the old car's slot |
+| `JER_CARQ_CITIES` | which cities can this session offer? | every car-data city (9: CHICAGO..RIO + Driver 1's five), or 0 = "nobody knows" |
+| `JER_CARQ_SLOTS` | which slots may this city be offered in, and what model is in each? | parallel slot/model lists, or 0 = "nobody knows" (mp then keeps the engine's own table) |
+| `JER_CARQ_LOAD` | make `(city, model)` available here | `ok` |
+| `JER_CARQ_CHOSEN` | (notice) the local player now drives `(city, model)`, or the switch did not happen | none - carhacks tells the session and releases the old car's slot |
 
 No answer is not an error: mp falls back to the session's own city and its
 frontend roster (`CarAvailability[city][slot]` + `carNumLookup[city][slot]`,
@@ -1236,7 +1236,7 @@ frontend roster) so the pause picker and the frontend car screen cannot disagree
 and a mid-match pick imports the car whether or not the config-driven
 `cross_city_vehicles` hack is on.
 
-`MP_CARQ_LOAD` is not new machinery on carhacks' side either: it is the sequence a
+`JER_CARQ_LOAD` is not new machinery on carhacks' side either: it is the sequence a
 mid-match peer pick already goes through -- put the car in the session's canonical
 spare slot, then `chkImportHotLoad`, which reads that city in, builds the slot's
 geometry in the engine's own pool, applies its cosmetics and records its texture
@@ -1244,14 +1244,14 @@ pages. mp only swaps once `MpResidentSlotForCar` finds the car AND its mesh is
 built (`gCarCleanModelPtr`), because pointing a car at an unbuilt slot is a
 crash, not a cosmetic glitch.
 
-After the swap, `MpChangeCar` fires `MP_CARQ_CHOSEN` (`changed = 1` when our car
+After the swap, `MpChangeCar` fires `JER_CARQ_CHOSEN` (`changed = 1` when our car
 really is on the new car's slot, `0` when it is not), and `MpFollowLocalCar`
 fires it when the player gets back into a car on foot. That notice is when
 carhacks learns which car this player drives: it advertises the car
 (`chkNetAdvertisePick`, and `chkNetPublishSet` on the host) so every other
 machine loads it, and releases the old car's slot -- only once no player names
 that car and no car is still on the slot (`carhacks/MP_ADAPTER.md`, "Releasing a
-slot"). Advertising after the swap rather than in `MP_CARQ_LOAD` means nobody is
+slot"). Advertising after the swap rather than in `JER_CARQ_LOAD` means nobody is
 told about a car that never got driven. A direct car-to-car move (`CARCHANGE`,
 without leaving a car) does not fire it.
 

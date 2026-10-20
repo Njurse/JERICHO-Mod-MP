@@ -128,7 +128,7 @@ typedef struct MP_PLAYER
 	 * spawn request and by MpSpawnLateJoiners.
 	 *
 	 * On OUR OWN row it is set by MpFollowLocalCar when we get out, so that getting
-	 * into a car again is reported as a choice (MP_CARQ_CHOSEN) - and only then. */
+	 * into a car again is reported as a choice (JER_CARQ_CHOSEN) - and only then. */
 	int   onFoot;
 
 	/* The car this player last got OUT of (slot + 1, 0 = none) and its model, so a
@@ -546,11 +546,11 @@ const char* MpModeName(int gamemode);	/* MP_GAMEMODE_* -> display name */
 const char* MpCityLabel(int city);
 
 /* The live-car questions mp puts to other modules (carhacks) -- see
- * mp_carquery.h. Both are "no answer is not an error": 0 means nobody knew
+ * jer_carquery.h. Both are "no answer is not an error": 0 means nobody knew
  * better, and the caller falls back to the session's own city. */
 int MpCarQueryCities(int* out, int max);	/* out: 0..3 city indices; returns the count */
 int MpCarQueryLoad(int city, int model);	/* 1 = this machine holds it now */
-void MpCarQueryChosen(int city, int model, int changed);	/* notice: what we drive now (mp_carquery.h) */
+void MpCarQueryChosen(int city, int model, int changed);	/* notice: what we drive now (jer_carquery.h) */
 
 /* Which slots a city may be offered in, and the model in each. slots[] and models[] are
  * PARALLEL and `max` is the capacity of both. Returns the count; 0 = nobody knows. */

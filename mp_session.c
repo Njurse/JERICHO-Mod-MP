@@ -9,7 +9,7 @@
 #include "jer_notify.h"	/* the join toast */
 #include "jer_pause_menu.h"	/* JER_PAUSE_QUIT_*: the pause menu's codes (mirror MENU_QUIT_*) */
 #include "mp.h"
-#include "mp_carquery.h"	/* the mp <-> carhacks live-car query contract */
+#include "jer_carquery.h"	/* the mp <-> carhacks live-car query contract */
 
 #include "driver2.h"
 #include "mission.h"
@@ -6396,7 +6396,7 @@ const char* MpCarCityName(int city)
 	 * This was a hardcoded names[4] = CHICAGO/HAVANA/VEGAS/RIO, which is why the
 	 * pause menu city picker could not name a Driver 1 car-data city even once
 	 * carhacks started offering them: the COUNT already came from carhacks through
-	 * MP_CARQ_CITIES, and the NAMES did not, so the picker cycled to a real city
+	 * JER_CARQ_CITIES, and the NAMES did not, so the picker cycled to a real city
 	 * and displayed "the session city" instead.
 	 *
 	 * LevelNames is the engine's own registry, so it grows when the engine does -
@@ -6740,7 +6740,7 @@ static int MpAdoptRemoteCar(MP_PLAYER* p, int city, int model)
 /* ------------------------------------------------------------------ */
 /* Asking the other modules about live cars                            */
 /* ------------------------------------------------------------------ */
-/* mp_carquery.h is the contract: a custom JERICHO event, so this works whether
+/* jer_carquery.h is the contract: a custom JERICHO event, so this works whether
  * carhacks is compiled in beside us or loaded as a dll, and degrades to "nobody
  * knows" when it is not there at all. */
 
@@ -6749,7 +6749,7 @@ static int MpAdoptRemoteCar(MP_PLAYER* p, int city, int model)
  * offer the session's own city alone. */
 int MpCarQueryCities(int* out, int max)
 {
-	MP_CARQ_CITIES_ARGS a;
+	JER_CARQ_CITIES_ARGS a;
 
 	if (out == NULL || max <= 0)
 		return 0;
@@ -6758,7 +6758,7 @@ int MpCarQueryCities(int* out, int max)
 	a.cities = out;
 	a.max = max;
 
-	jer_fire(MP_CARQ_CITIES, &a);
+	jer_fire(JER_CARQ_CITIES, &a);
 
 	if (a.count < 0)
 		return 0;
@@ -6771,21 +6771,21 @@ int MpCarQueryCities(int* out, int max)
  * to the player rather than driven into a model this machine cannot render. */
 int MpCarQueryLoad(int city, int model)
 {
-	MP_CARQ_LOAD_ARGS a;
+	JER_CARQ_LOAD_ARGS a;
 
 	memset(&a, 0, sizeof(a));
 	a.city = city;
 	a.model = model;
 
-	jer_fire(MP_CARQ_LOAD, &a);
+	jer_fire(JER_CARQ_LOAD, &a);
 
 	return a.ok ? 1 : 0;
 }
 
-/* Which slots may `city` be offered in, and the model in each (mp_carquery.h). */
+/* Which slots may `city` be offered in, and the model in each (jer_carquery.h). */
 int MpCarQuerySlots(int city, int* slots, int* models, int max)
 {
-	MP_CARQ_SLOTS_ARGS a;
+	JER_CARQ_SLOTS_ARGS a;
 
 	if (slots == NULL || models == NULL || max <= 0)
 		return 0;
@@ -6796,7 +6796,7 @@ int MpCarQuerySlots(int city, int* slots, int* models, int max)
 	a.models = models;
 	a.max = max;
 
-	jer_fire(MP_CARQ_SLOTS, &a);
+	jer_fire(JER_CARQ_SLOTS, &a);
 
 	/* count stays 0 when nobody answered -- "no better answer", not an error: the caller
 	 * then keeps the list it already had. */
@@ -6849,7 +6849,7 @@ int MpCarListForCity(int city, int* slots, int* models, int max)
  * be given back (carhacks/net.c, chkNetReleaseSlotIfUnused). */
 void MpCarQueryChosen(int city, int model, int changed)
 {
-	MP_CARQ_CHOSEN_ARGS a;
+	JER_CARQ_CHOSEN_ARGS a;
 
 	if (model < 0)
 		return;
@@ -6863,7 +6863,7 @@ void MpCarQueryChosen(int city, int model, int changed)
 		gMpCtx->jer_log(gMpCtx, "[mp] car chosen: %s model %d (%s)\n",
 			MpCarCityName(city), model, changed ? "driving it now" : "the switch did not happen");
 
-	jer_fire(MP_CARQ_CHOSEN, &a);
+	jer_fire(JER_CARQ_CHOSEN, &a);
 }
 
 /* Change OUR OWN car, mid-match, from the pause menu.
@@ -6907,7 +6907,7 @@ static const char* MpChangeCarRefusal(int city, int model)
 /* ------------------------------------------------------------------ */
 /* A CHANGE CAR THAT HAD TO WAIT                                        */
 /*                                                                      */
-/* MP_CARQ_LOAD can legitimately answer "not yet". The pool is six      */
+/* JER_CARQ_LOAD can legitimately answer "not yet". The pool is six      */
 /* spare resident slots (CHK_IMPORT_SPARE_FIRST .. CHK_IMPORT_MAX_SLOTS) */
 /* and a change HOLDS its old slot until the release judges it free, so  */
 /* with several players changing at once the canonical slot can be busy  */
@@ -7150,7 +7150,7 @@ static int MpChangeCarRun(int city, int model, int isRetry)
 
 	changed = MpAdoptRemoteCar(me, city, model);
 
-	/* Report the OUTCOME (MP_CARQ_CHOSEN). "Driving it" is read off the car on the road, so
+	/* Report the OUTCOME (JER_CARQ_CHOSEN). "Driving it" is read off the car on the road, so
 	 * "already that car" counts as driving it, and the city is the one the slot's data came
 	 * from (-1 = the level's own car) - the identity the other machines must draw. */
 	{
