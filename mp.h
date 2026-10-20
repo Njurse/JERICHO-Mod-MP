@@ -233,6 +233,12 @@ MP_PLAYER* MpGetPlayerByCar(int carId);	/* NULL when carId is not a player */
  * car 1) because its real model is not loaded yet? Read by the draw-colour hook. */
 int MpCarIsStandIn(int carSlot);
 
+/* SP / pre-session readiness stand-in: put the local car on the host city's car 1 in
+ * solid grey while its imported resident slot is not drawable, and put it back when it
+ * is. In a running session the reload failsafe owns the same job; this covers the
+ * single-player case the draw gate would otherwise leave invisible. */
+void MpCarReadinessTick(void);
+
 /* Is the LOCAL player's car a real CHOICE yet (a pick, or -mpcar), rather than what mp
  * assigned a player who has not picked? carhacks must not put an assignment into the
  * session's import set: it takes a resident slot nobody drives. */
