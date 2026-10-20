@@ -3,7 +3,7 @@ rem ============================================================================
 rem  BAKE_D1_CARS.bat -- build the Driver 1 CAR files JERICHO reads, from YOUR
 rem                     own copy of Driver 1.
 rem
-rem  JERICHO does NOT ship Driver 1's content -- it is copyrighted. The five
+rem  JERICHO does NOT ship Driver 1's content -- it is copyrighted. The seven
 rem  Driver 1 car-data cities (MIAMI, FRISCO, LA, NEWYORK, NEWCASTLE, IVIEW, TRAIN) read files
 rem  baked OUT of it, so this script makes them from data you already own.
 rem
@@ -11,7 +11,7 @@ rem  WHAT TO DO
 rem    1. Put your Driver 1 game data in DRIVER\, beside DRIVER2\ -- the same
 rem       folder layout the game itself uses, so DRIVER\LEVELS\*.LEV is present.
 rem    2. Run this script once. It writes DRIVER\D1CARS\.
-rem    3. Play. carhacks offers the five cities from then on.
+rem    3. Play. carhacks offers the seven cities from then on.
 rem
 rem  Re-run it after updating JERICHO if the game says D1CARS is out of date
 rem  (bakes from before v0.10.9 lack the D1 wheels and sounds). Re-running is safe.
@@ -107,7 +107,7 @@ echo.
 echo BAKE_D1_CARS: done. %OUT% now holds:
 dir /b "%OUT%"
 echo.
-echo Start the game and the five Driver 1 cities will be offered.
+echo Start the game and the seven Driver 1 cities will be offered.
 pause
 exit /b 0
 

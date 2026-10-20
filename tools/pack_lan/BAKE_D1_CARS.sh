@@ -6,7 +6,7 @@
 #  The Linux/macOS twin of BAKE_D1_CARS.bat: same four steps, same guards,
 #  same output. Use whichever matches the machine you are on.
 #
-#  JERICHO does NOT ship Driver 1's content -- it is copyrighted. The five
+#  JERICHO does NOT ship Driver 1's content -- it is copyrighted. The seven
 #  Driver 1 car-data cities (MIAMI, FRISCO, LA, NEWYORK, NEWCASTLE, IVIEW, TRAIN) read files
 #  baked OUT of it, so this script makes them from data you already own.
 #
@@ -14,7 +14,7 @@
 #    1. Put your Driver 1 game data in DRIVER/, beside DRIVER2/ -- the same
 #       folder layout the game itself uses, so DRIVER/LEVELS/*.LEV is present.
 #    2. Run this script once. It writes DRIVER/D1CARS/.
-#    3. Play. carhacks offers the five cities from then on.
+#    3. Play. carhacks offers the seven cities from then on.
 #
 #  Re-run it after updating JERICHO if the game says D1CARS is out of date
 #  (bakes from before v0.10.9 lack the D1 wheels and sounds). Re-running is safe.
@@ -105,4 +105,4 @@ echo
 echo "BAKE_D1_CARS: done. $OUT now holds:"
 ls -1 "$OUT"
 echo
-echo "Start the game and the five Driver 1 cities will be offered."
+echo "Start the game and the seven Driver 1 cities will be offered."
