@@ -137,6 +137,14 @@ typedef struct MP_PLAYER
 	int   leftCarSlot1;
 	int   leftCarModel;
 
+	/* The pose the owner reported while this machine had NO car for them. A live
+	 * joiner's first carstate arrives before its local slot is assigned; building
+	 * the body at the level start and adopting the pose afterwards is the visible
+	 * "spawns in the normal place, then teleports". The spawn pass uses this pose
+	 * as the start record, so the car first appears where its owner is. */
+	int   joinedPose;		/* 1 = joinPoseX/Z/heading are valid */
+	int   joinPoseX, joinPoseZ, joinPoseHeading;
+
 	/* That player's chosen colour, as THEIR machine reported it. Off means their
 	 * character keeps the colours the game gave it. */
 	int   colorOn;
@@ -180,6 +188,8 @@ typedef struct MP_STATE
 	int ruleInvuln;
 	int ruleSet;
 	int localPlaced;
+	int liveJoin;			/* client joined a match already in progress: no gather, place on a road */
+	int gameStarted;		/* a level is up in this session: only then is our car real */
 	unsigned long busyUntilMs;		/* client: our own car was gathered next to the host */
 
 	/* the sim frame the session is synchronized on */
