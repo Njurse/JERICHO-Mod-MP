@@ -639,7 +639,7 @@ other screen. This is by design — it is *why* a slot is meaningless for a play
 **19. Extra-panel palette rows.** The engine gives a car set **eight** palette rows, so a
 set with more texture pages borrows the first page's palette for the extra ones: vehicles
 with **extra panels** — the Vegas ambulance, large SUVs, long cars — can show minor colour
-corruption. Cosmetic, known. (`README_LAN_TEST.txt` says the same.) The five Driver 1
+corruption. Cosmetic, known. (`README_LAN_TEST.txt` says the same.) The seven Driver 1
 cities carry eleven to thirteen pages and so hit this hardest, but they ship as a
 **separate content release**, not in this one.
 

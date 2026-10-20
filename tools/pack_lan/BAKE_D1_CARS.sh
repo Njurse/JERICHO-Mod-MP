@@ -7,7 +7,7 @@
 #  same output. Use whichever matches the machine you are on.
 #
 #  JERICHO does NOT ship Driver 1's content -- it is copyrighted. The five
-#  Driver 1 car-data cities (MIAMI, FRISCO, LA, NEWYORK, NEWCASTLE) read files
+#  Driver 1 car-data cities (MIAMI, FRISCO, LA, NEWYORK, NEWCASTLE, IVIEW, TRAIN) read files
 #  baked OUT of it, so this script makes them from data you already own.
 #
 #  WHAT TO DO
@@ -31,7 +31,7 @@ T="$HERE/JERICHO/MODS/d1cars/tools"
 LEV="DRIVER/LEVELS"
 D2="DRIVER2/LEVELS"
 OUT="DRIVER/D1CARS"
-CITIES="MIAMI,FRISCO,LA,NEWYORK,NEWCASTLE"
+CITIES="MIAMI,FRISCO,LA,NEWYORK,NEWCASTLE,IVIEW,TRAIN"
 
 fail() {
 	echo
@@ -64,7 +64,7 @@ if [ -z "$PY" ]; then
 fi
 
 # BAKE_VERSION: bump when the bake gains something the game reads
-BAKE_VERSION=3
+BAKE_VERSION=4
 if [ -d "$OUT" ] && [ "$(cat "$OUT/BAKE_VERSION" 2>/dev/null)" != "$BAKE_VERSION" ]; then
 	echo "Your existing $OUT is from an older bake (no D1 wheels/sounds, or pre-Miami wheels) -- rebuilding it."
 	echo
@@ -79,7 +79,7 @@ echo "[1/4] reading Driver 1's car shapes ..."
 # One blob per city -- each is a complete small "level" holding that city's
 # cars, their palette and their texture pages.
 echo "[2/4] baking one blob per city ..."
-for C in MIAMI FRISCO LA NEWYORK NEWCASTLE; do
+for C in MIAMI FRISCO LA NEWYORK NEWCASTLE IVIEW TRAIN; do
 	"$PY" "$T/bake.py" --pool "$T/out/pool.json" --levels "$LEV" --city "$C" --out "$OUT" || fail "bake.py $C failed"
 done
 
@@ -92,7 +92,7 @@ echo "[3/4] writing the car cosmetics ..."
 # patched into each freshly baked city.
 echo "[4/4] adding the car sounds ..."
 if [ -f "DRIVER/SOUND/VOICES.BLK" ]; then
-	for C in MIAMI FRISCO LA NEWYORK NEWCASTLE; do
+	for C in MIAMI FRISCO LA NEWYORK NEWCASTLE IVIEW TRAIN; do
 		"$PY" "$T/add_car_sounds.py" --lev "$OUT/$C.LEV" --voices "DRIVER/SOUND/VOICES.BLK" || fail "add_car_sounds.py $C failed"
 	done
 else

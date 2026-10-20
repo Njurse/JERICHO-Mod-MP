@@ -29,7 +29,7 @@ The rest of `DRIVER\` is out either way -- it is the Driver 1 game's own levels 
 586 MB of movies, which the car cities do not read.
 
 carhacks only offers a D1 city whose data is on disk (`chkCityAssetsPresent`, which
-tests `DRIVER\D1CARS\<CITY>.LEV`), so before a player bakes, the five cities are simply
+tests `DRIVER\D1CARS\<CITY>.LEV`), so before a player bakes, the seven cities are simply
 not offered -- the feature degrades to absent rather than to broken. A package with no
 `DRIVER\D1CARS\` and no tools would look the same as one where the player has not baked
 yet, which is why the packager warns rather than fails when the tools are missing.

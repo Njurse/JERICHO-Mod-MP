@@ -4,7 +4,7 @@ rem  BAKE_D1_CARS.bat -- build the Driver 1 CAR files JERICHO reads, from YOUR
 rem                     own copy of Driver 1.
 rem
 rem  JERICHO does NOT ship Driver 1's content -- it is copyrighted. The five
-rem  Driver 1 car-data cities (MIAMI, FRISCO, LA, NEWYORK, NEWCASTLE) read files
+rem  Driver 1 car-data cities (MIAMI, FRISCO, LA, NEWYORK, NEWCASTLE, IVIEW, TRAIN) read files
 rem  baked OUT of it, so this script makes them from data you already own.
 rem
 rem  WHAT TO DO
@@ -26,7 +26,7 @@ set "T=%~dp0JERICHO\MODS\d1cars\tools"
 set "LEV=DRIVER\LEVELS"
 set "D2=DRIVER2\LEVELS"
 set "OUT=DRIVER\D1CARS"
-set "CITIES=MIAMI,FRISCO,LA,NEWYORK,NEWCASTLE"
+set "CITIES=MIAMI,FRISCO,LA,NEWYORK,NEWCASTLE,IVIEW,TRAIN"
 
 echo BAKE_D1_CARS: baking Driver 1 car data into %OUT%
 echo.
@@ -64,7 +64,7 @@ if errorlevel 1 (
 )
 
 rem BAKE_VERSION: bump when the bake gains something the game reads
-set "BAKE_VERSION=3"
+set "BAKE_VERSION=4"
 set "HAVE_VERSION="
 if exist "%OUT%\BAKE_VERSION" set /p HAVE_VERSION=<"%OUT%\BAKE_VERSION"
 if exist "%OUT%" if not "%HAVE_VERSION%"=="%BAKE_VERSION%" (
@@ -81,7 +81,7 @@ echo [1/4] reading Driver 1's car shapes ...
 rem One blob per city -- each is a complete small "level" holding that city's cars,
 rem their palette and their texture pages.
 echo [2/4] baking one blob per city ...
-for %%C in (MIAMI FRISCO LA NEWYORK NEWCASTLE) do (
+for %%C in (MIAMI FRISCO LA NEWYORK NEWCASTLE IVIEW TRAIN) do (
 	%PY% "%T%\bake.py" --pool "%T%\out\pool.json" --levels "%LEV%" --city %%C --out "%OUT%" || goto :fail
 )
 
@@ -94,7 +94,7 @@ rem The sounds: Driver 1's engine/idle/horn, from YOUR DRIVER\SOUND\VOICES.BLK,
 rem patched into each freshly baked city.
 echo [4/4] adding the car sounds ...
 if exist "DRIVER\SOUND\VOICES.BLK" (
-	for %%C in (MIAMI FRISCO LA NEWYORK NEWCASTLE) do (
+	for %%C in (MIAMI FRISCO LA NEWYORK NEWCASTLE IVIEW TRAIN) do (
 		%PY% "%T%\add_car_sounds.py" --lev "%OUT%\%%C.LEV" --voices "DRIVER\SOUND\VOICES.BLK" || goto :fail
 	)
 ) else (
