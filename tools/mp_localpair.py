@@ -201,9 +201,30 @@ def launch(run_dir, exe, args, env_extra):
     return p
 
 
+def game_log_path(run_dir):
+    """The seat's game log, whatever this build calls it.
+
+    A release writes JERICHO.log; a DEV build names it "JERICHO <version>-dev.log"
+    (the exe's own logging convention). The rigs only looked for the release name,
+    so every dev run reported "no JERICHO.log" and FAILED a seat that had in fact
+    joined, started and driven.
+    """
+    for name in GAME_LOGS:
+        path = os.path.join(run_dir, name)
+        if os.path.exists(path):
+            return path
+
+    try:
+        names = sorted(n for n in os.listdir(run_dir)
+                       if n.startswith("JERICHO ") and n.endswith(".log"))
+    except OSError:
+        return None
+
+    return os.path.join(run_dir, names[-1]) if names else None
+
+
 def report(run_dir, label, patterns):
-    path = next((os.path.join(run_dir, n) for n in GAME_LOGS
-                 if os.path.exists(os.path.join(run_dir, n))), None)
+    path = game_log_path(run_dir)
     if path is None:
         log(f"{label}: no {'/'.join(GAME_LOGS)}")
         return
@@ -221,12 +242,11 @@ def report(run_dir, label, patterns):
 
 
 def read_log(run_dir):
-    for name in GAME_LOGS:
-        path = os.path.join(run_dir, name)
-        if os.path.exists(path):
-            with open(path, "rb") as f:
-                return f.read().decode("utf-8", "replace")
-    return ""
+    path = game_log_path(run_dir)
+    if path is None:
+        return ""
+    with open(path, "rb") as f:
+        return f.read().decode("utf-8", "replace")
 
 
 HEARTBEAT = re.compile(r"\[mp\] heartbeat: frame (\d+) ")
