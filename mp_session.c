@@ -6107,6 +6107,7 @@ static int sMpWantCity = -2;	/* -2 = not known yet, -1 = the host city */
 static int sMpWantModel = -1;
 static int sMpStandIn;
 static int sMpStandInCar[MAX_CARS];	/* per car object: drawn as a grey stand-in */
+static int sMpCamReseat;
 static void MpCarFailsafeTick(void);
 
 static void MpFailsafeReset(void)
@@ -6115,6 +6116,7 @@ static void MpFailsafeReset(void)
 	sMpWantCity = -2;
 	sMpWantModel = -1;
 	sMpStandIn = 0;
+	sMpCamReseat = 0;
 	memset(sMpStandInCar, 0, sizeof(sMpStandInCar));
 }
 
@@ -6622,6 +6624,14 @@ static int MpCarStandIn(int carSlot)
 		CreateDentableCar(cp);
 	}
 
+	/* The chase camera must follow a body that exists. If this is OUR car, re-seat
+	 * it on the stand-in; a camera left on the released slot is the spin. */
+	if (carSlot == player[0].playerCarId)
+	{
+		player[0].cameraCarId = cp->id;
+		player[0].cameraAngle = cp->hd.direction + 1536;
+	}
+
 	return fresh;
 }
 
@@ -6647,6 +6657,27 @@ static void MpCarFailsafeTick(void)
 		return;
 
 	cp = &car_data[me->carId];
+
+	/* THE WOUND CHECK: never let the chase camera target a car that has no body. If
+	 * the player's car or the camera's car is cleared/released, re-seat the camera on
+	 * our car this frame - a camera left on a released slot is the spin. */
+	if (player[0].playerType == PLAYER_TYPE_CAR &&
+		(player[0].cameraCarId < 0 || player[0].cameraCarId >= MAX_CARS ||
+		 car_data[player[0].cameraCarId].controlType == CONTROL_TYPE_NONE ||
+		 !JerCarSlotUsable(car_data[player[0].cameraCarId].ap.model)))
+	{
+		player[0].cameraCarId = me->carId;
+		player[0].cameraAngle = cp->hd.direction + 1536;
+
+		if (!sMpCamReseat && gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx,
+				"[mp] camera: re-seated on our car (slot %d) - its target had no vehicle\n",
+				me->carId);
+
+		sMpCamReseat = 1;
+	}
+	else
+		sMpCamReseat = 0;
 
 	/* Learn the choice from a healthy car once (a spawn or a car we got into);
 	 * a change sets it explicitly in MpAdoptCar, even when that load fails. */
