@@ -34,10 +34,13 @@ and the cleanup kills exactly what it started -- nothing else.
 """
 import argparse
 import atexit
+import collections
 import os
 import random
 import re
+import select
 import shutil
+import socket
 import subprocess
 import sys
 import threading
@@ -67,9 +70,16 @@ def log(msg):
 # host and the whole run is nonsense. That is the shape of a lot of the
 # confusing results so far.
 STARTED = []
+RELAY = None
 
 
 def stop_started():
+    global RELAY
+
+    if RELAY is not None:
+        RELAY.stop()
+        RELAY = None
+
     for p in reversed(STARTED):
         if p.poll() is None:
             try:
@@ -83,6 +93,152 @@ def stop_started():
 
 
 atexit.register(stop_started)
+
+
+class DelayRelay:
+    """A local TCP relay that adds a one-way delay to each direction.
+
+    The session transport is TCP, so there is nothing to parse: bytes can be
+    delayed in order and the game sees the same stream, later. Each accepted
+    client connection gets its own upstream connection to the real host, and
+    two pump threads (client->host, host->client) apply the delay.
+
+    `lag_ms` is ONE-WAY. 150 ms therefore approximates a 300 ms RTT, which is
+    the range the mp docs describe as internet play rather than LAN play.
+    Jitter is applied per received chunk and clamped at zero.
+    """
+
+    def __init__(self, listen_host, listen_port, target_host, target_port,
+                 lag_ms, jitter_ms):
+        self.listen_host = listen_host
+        self.listen_port = listen_port
+        self.target_host = target_host
+        self.target_port = target_port
+        self.lag_ms = lag_ms
+        self.jitter_ms = jitter_ms
+        self._stop = threading.Event()
+        self._listen = None
+        self._socks = []
+        self._lock = threading.Lock()
+
+    def start(self):
+        ls = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        ls.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        ls.bind((self.listen_host, self.listen_port))
+        ls.listen(8)
+        ls.settimeout(0.5)      # so the accept loop can notice stop()
+        self._listen = ls
+        threading.Thread(target=self._accept_loop, name="mp-relay-accept",
+                         daemon=True).start()
+
+    def stop(self):
+        self._stop.set()
+
+        with self._lock:
+            socks = list(self._socks)
+            self._socks.clear()
+
+        for s in socks:
+            try:
+                s.close()
+            except OSError:
+                pass
+
+        if self._listen is not None:
+            try:
+                self._listen.close()
+            except OSError:
+                pass
+            self._listen = None
+
+    def _delay(self):
+        delay = self.lag_ms / 1000.0
+
+        if self.jitter_ms:
+            delay += random.uniform(-self.jitter_ms, self.jitter_ms) / 1000.0
+            if delay < 0:
+                delay = 0.0
+
+        return delay
+
+    def _accept_loop(self):
+        while not self._stop.is_set():
+            try:
+                client, _addr = self._listen.accept()
+            except socket.timeout:
+                continue
+            except OSError:
+                break
+
+            try:
+                upstream = socket.create_connection(
+                    (self.target_host, self.target_port), timeout=5)
+            except OSError as e:
+                log(f"relay: cannot reach {self.target_host}:{self.target_port}: {e}")
+                client.close()
+                continue
+
+            for s in (client, upstream):
+                try:
+                    s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+                except OSError:
+                    pass
+
+                with self._lock:
+                    self._socks.append(s)
+
+            threading.Thread(target=self._pump, args=(client, upstream),
+                             name="mp-relay-c2s", daemon=True).start()
+            threading.Thread(target=self._pump, args=(upstream, client),
+                             name="mp-relay-s2c", daemon=True).start()
+
+    def _pump(self, src, dst):
+        """A true delay line: read continuously, send each chunk when due.
+
+        The first version slept between recv() and sendall(), which throttled a
+        continuous stream to one chunk per --lag-ms -- a 30 Hz game sending 30
+        small writes a second ended up queueing seconds of backlog. Reading into
+        a due-time queue first is what makes the delay one-way rather than
+        cumulative.
+        """
+        pending = collections.deque()
+
+        try:
+            while not self._stop.is_set():
+                readable, _, _ = select.select([src], [], [], 0.002)
+
+                if readable:
+                    data = src.recv(65536)
+
+                    if not data:
+                        break
+
+                    due = time.monotonic() + self._delay()
+
+                    # Jitter can make a later chunk "due" earlier; keep the
+                    # stream ordered by never scheduling behind what is queued.
+                    if pending and due < pending[-1][0]:
+                        due = pending[-1][0]
+
+                    pending.append((due, data))
+
+                now = time.monotonic()
+
+                while pending and pending[0][0] <= now:
+                    _due, chunk = pending.popleft()
+                    dst.sendall(chunk)
+        except OSError:
+            pass
+        finally:
+            for s in (src, dst):
+                try:
+                    s.shutdown(socket.SHUT_RDWR)
+                except OSError:
+                    pass
+                try:
+                    s.close()
+                except OSError:
+                    pass
 
 
 def stale_instances():
@@ -533,6 +689,15 @@ def main():
     ap.add_argument("--game-dir", default=DEFAULT_GAME_DIR)
     ap.add_argument("--exe", default="JERICHO_dev.exe")
     ap.add_argument("--port", type=int, default=1400)
+    ap.add_argument("--lag-ms", type=int, default=0, metavar="MS",
+                    help="one-way delay added in EACH direction by a local TCP relay "
+                         "(default 0 = off). Joiners dial 127.0.0.1:<port+1> and the "
+                         "relay forwards to --join-host:--port, so 150 means roughly "
+                         "a 300 ms round trip -- internet play, not LAN.")
+    ap.add_argument("--lag-jitter-ms", type=int, default=0, metavar="MS",
+                    help="per-chunk jitter around --lag-ms, clamped at zero "
+                         "(default 0 = none). Exercises arrival gaps and the "
+                         "interpolation buffer's starvation path.")
     ap.add_argument("--join-host", default="127.0.0.1", metavar="HOST",
                     help="what the client seats dial. Default 127.0.0.1. Use a NAME "
                          "(e.g. --join-host localhost) to exercise the DNS path, or a "
@@ -701,6 +866,36 @@ def main():
         build_run_dir(game_dir, dirs[name], f"Local{name.upper()}", args.port)
     log(f"run dirs ready under {pair_root}")
 
+    # A local relay is the only way to make latency reproducible on one PC.
+    # Every joiner dials the relay; the relay holds bytes for --lag-ms in each
+    # direction before forwarding them to the real host. The host itself is
+    # untouched -- the session is TCP, so this needs no protocol knowledge.
+    join_host = args.join_host
+    join_port = args.port
+
+    if args.lag_ms > 0 or args.lag_jitter_ms > 0:
+        global RELAY
+
+        RELAY = DelayRelay("127.0.0.1", args.port + 1,
+                           args.join_host, args.port,
+                           args.lag_ms, args.lag_jitter_ms)
+
+        try:
+            RELAY.start()
+        except OSError as e:
+            log(f"cannot start the lag relay on 127.0.0.1:{args.port + 1}: {e} "
+                f"(pick another --port)")
+            RELAY = None
+            return 2
+
+        join_host = "127.0.0.1"
+        join_port = args.port + 1
+
+        log(f"relay: {join_host}:{join_port} -> {args.join_host}:{args.port}, "
+            f"one-way {args.lag_ms} ms"
+            + (f" +/- {args.lag_jitter_ms} ms jitter" if args.lag_jitter_ms else "")
+            + " (so the round trip is about 2x that)")
+
     # NOTE: both instances want UDP/1318 for discovery, so the second one reports
     # "discovery unavailable" and simply does not browse. The join below uses the
     # address directly, which is the path that must work anyway.
@@ -830,7 +1025,7 @@ def main():
         if i == 0 and args.client_car != "default":
             argv += ["-mpcar", args.client_car]
 
-        argv += ["-join", f"{args.join_host}:{args.port}"]
+        argv += ["-join", f"{join_host}:{join_port}"]
 
         # this seat's own picks: the generic client entries first, then its own
         this_env = dict(client_env)

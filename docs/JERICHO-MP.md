@@ -65,8 +65,12 @@ There is no relay and no server of ours in the middle.
   1318 as well if you want local machines to find it.
 - **No authentication and no encryption.** Anyone who can reach the port can join,
   and the traffic is plain text. Forward it deliberately.
-- **It is LAN-tuned.** Remote cars are driven from the replicated pad with no
-  client-side prediction, so at 100-200 ms ping the world moves in visible steps.
+- **It is no longer LAN-only in feel.** Remote cars are played back through a
+  100 ms interpolation buffer (3 sim frames at 30 Hz), and a collision report now
+  carries the target's own carstate frame and position. A push that arrives after
+  the cars have separated is dropped instead of applied. At 100-200 ms ping the
+  motion is smooth; the trade-off is that a remote car is shown ~100 ms behind its
+  owner, and a very late push is rejected rather than moved.
 - **IPv4 only.** A name that resolves only to IPv6 will not connect.
 
 ## 3. Who owns what (the one rule that explains the rest)

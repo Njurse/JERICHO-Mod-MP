@@ -376,6 +376,26 @@ car it owns, so when your car touches a peer's you push yours and report it
 owner's truth. (The older "a car you drive into is not pushed" trade-off no longer
 applies — see `MpHitFrame` / `MpHandleHit` in `mp_session.c`.)
 
+**Snapshots are samples, not poses (protocol 14).** `MpHandleCarState` appends each
+snapshot to a 32-entry per-player ring, and `MpApplyRemoteCarPoses` is the only
+writer of a remote body. It advances a playout cursor one owner-frame per sim
+frame, anchored 3 frames behind the newest sample (100 ms at 30 Hz), and lerps
+position and heading while nlerping the orientation (sign-corrected, because q and
+-q are the same attitude). A starved buffer extrapolates on the last velocity for
+at most 3 frames, then holds; a cursor more than 8 frames behind is re-anchored.
+The ring is cleared on NO_CAR, SAME_BODY, a model change, a release, or a
+one-sample jump over 6000 units.
+
+**A contact carries its own timestamp.** `MP_HIT` (32 bytes, v14) names
+`targetFrame` — the target's carstate frame the sender was displaying — and
+`tgtPos`. The target keeps 64 frames of its own sent pose and drops a push that is
+older than 20 frames, names a frame it no longer has, puts the pose outside a
+`colBox`-derived tolerance, or arrives after the cars have separated. Every drop is
+logged as `ghost hit rejected`. Duplicate suppression compares `targetFrame` with
+the engine's own contact frame, not with the frame the push arrived on. The
+proximity probe is now a true fallback: it runs only when the newest sample is more
+than two frames old.
+
 ---
 
 ## 8. The pause menu, and why a session is never paused
@@ -763,18 +783,21 @@ carstate, not the mechanism.
 `MP_WELCOME` carries `arena` and the client applies it with the city, so both sides
 load the same multiplayer map without being told separately.
 
-### G. Smoothing for latency — OPEN (unchanged)
+### G. Smoothing for latency — DONE (protocol 14)
 
-Remote cars move on a fixed input delay and will rubber-band under loss. Standard
-remedies apply (interpolation buffer, extrapolation cap), and C has made the underlying
-state trustworthy, so this is now the top *quality* gap rather than a prerequisite:
-`JERICHO-MP.md` advertises internet play by direct connect, and at 100–200 ms ping the
-world moves in visible steps. It is the reason the mod is described as **LAN-tuned**.
+Remote cars are played back through a 3-frame (100 ms) interpolation buffer and
+contact reports are timestamped against the target's own timeline, so a push that
+arrives after the cars have separated is rejected rather than applied. The
+residual is the bumper's own engine: `JER_EVENT_COLLISION` is informational and
+cannot be cancelled, so a local engine can still resolve a contact against the
+delayed hull. What changed is that the OTHER car is no longer pushed by a stale
+report, and the hull itself moves continuously instead of stepping once per
+packet. At 100–200 ms ping the motion is smooth; the cost is a fixed 100 ms of
+display delay.
 
 ### H. Out of scope for now
 
-Matchmaking beyond LAN, host migration, and **latency smoothing** (item G above).
-Traffic/police replication is **no longer out of scope** — it landed (§ the traffic
+Matchmaking beyond LAN and host migration. Traffic/police replication is **no longer out of scope** — it landed (§ the traffic
 work, `MP_TAG_TRAFFIC`, `MP_PROTO_VERSION` 9); the current acceptance view is
 [`SYNC_CHECKLIST.md`](SYNC_CHECKLIST.md) domain 12. Chat is implemented (open on `T`,
 send on Enter; join/leave and chat lines go to the engine status console,

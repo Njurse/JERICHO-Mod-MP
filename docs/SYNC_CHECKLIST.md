@@ -483,21 +483,33 @@ does not own.
 **Verify** —
 - The trigger is the engine's own contact (`JER_EVENT_COLLISION`), fired before either
   car's impulse is applied; the proximity probe survives only as a fallback for an
-  overlap the engine never saw, and stands down 90 frames after a real contact.
+  overlap the engine never saw, and now runs only when the newest snapshot sample is
+  more than two frames old.
 - Contacts are armed only after `MP_HIT_ARM_FRAMES` (120) so the spawn drop cannot kick
   anyone.
+- Remote motion is a playout, not a per-packet write:
+  `[mp] interp: player %d depth=%d lag=%d mode=lerp|hold|extrap`. Steady state at
+  150 ms is `mode=lerp`, depth near 32 and lag 2-7 frames (`hold` only on a fresh
+  body; `extrap` only through a gap, capped at 3 frames).
+- Every push names the target's own timeline: `[mp] hit rx: player %d |d|=.. tf=..`.
+  A push that cannot be validated is dropped and logged:
+  `[mp] hit: ... ghost hit rejected (<reason>: age=.. |d|=.. pose=..)`.
 - On one seat: `[mp] hit: we bumped player %d (%s: closing %ld, giving up %ld units/frame)`
 - On the other: `[mp] hit: player %d bumped us (push %ld,%ld,%ld)`
-- Duplicate suppression: `... our engine has it, kept`
-- Rigs: `MP_TEST_TRAFFIC_HIT=<secs>`, `mp_localpair.py --bot pursuit`,
-  `mp_localpair.py --until "hit: "`.
+- Duplicate suppression: `... our engine has it, kept` — compared by contact frame,
+  so it works through latency.
+- The counters: `[mp] hit summary: sent=.. rx=.. applied=.. kept=.. separated=.. rejected=..`.
+- Rigs: `mp_localpair.py --lag-ms 150` (TCP relay, one-way), then
+  `--lag-ms 700 --until "ghost hit rejected"` for the stale path. Enable JerAI
+  (`JerAI = 1` in `modlist.ini`, `--bot off`) when the mp test bot's driving is not
+  wanted.
 
-**Pass** — The **same contact** shows as "we bumped" on one seat and "bumped us" on the
-other; the two sims stay within a few units (the adopt lines); the push **lands** (the
-pre-fix bug moved a car 0.005 units/frame and read as "nothing happened"). `lost=0`,
-`dumps=0`.
+**Pass** — At 0 and 150 ms the **same contact** shows as "we bumped" on one seat and
+"bumped us" (or "kept") on the other, and the push **lands**; at 700 ms a push that
+names a 47-frame-old pose is rejected with distance logged and nothing moves.
+`lost=0`, `dumps=0`.
 
-**Status** — Verified headless in both directions (pursuit bot).
+**Status** — Verified headless (JerAI driving at 0 and 150 ms; stale path at 700 ms).
 
 ---
 

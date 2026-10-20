@@ -93,9 +93,57 @@ static unsigned long gMpHitArmFrame;
  * for the same reason as the arm frame above. */
 static unsigned long gMpSelfContactFrame[MP_MAX_PLAYERS];
 
+/* Hit-path instrumentation, session state like the counters above. These answer
+ * "how often does the hand-off fire, and how often does a push arrive when the
+ * two cars are already far apart on the receiver's screen" -- the measurement the
+ * latency work is judged by. Increments are unconditional and nearly free (a few
+ * per hit); only the SUMMARY line is MP_DEBUG-gated.
+ *
+ * MpSessionReset runs before these would otherwise be declared if they lived with
+ * the collision code, so they belong here rather than beside MpHandleHit. */
+static unsigned long gMpHitSent;		/* pushes we reported */
+static unsigned long gMpHitRx;			/* pushes addressed to us */
+static unsigned long gMpHitApplied;		/* ... applied (our engine did not have it) */
+static unsigned long gMpHitKept;		/* ... dropped as the engine's duplicate */
+static unsigned long gMpHitSeparated;		/* ... arrived with the cars > MP_HIT_RADIUS apart */
+static unsigned long gMpHitRejected;		/* ... dropped: stale, unvalidatable or ghost */
+
+/* The remote snapshot ring lives here, with the other session state, because
+ * both the contact sender (MpContactPush) and the contact receiver
+ * (MpHandleHit/MpHitFrame above the playout code in file order) read it. */
+#define MP_INTERP_RING		32	/* samples kept per remote player (about 1 s) */
+
+typedef struct MP_CAR_SNAP
+{
+	unsigned frame;		/* the owner's carstate frame */
+	unsigned recvFrame;	/* local sim frame it arrived on (diagnostics) */
+	int x, y, z;
+	int heading;
+	short orient[4];
+	int vel[3];
+	int angVel[3];
+} MP_CAR_SNAP;
+
+typedef struct MP_CAR_PLAY
+{
+	MP_CAR_SNAP snap[MP_INTERP_RING];
+	int count;		/* valid samples; newest is at head */
+	int head;
+	int primed;
+	int playFrame;		/* owner frame currently being displayed */
+	int lastFrame;		/* newest received owner frame */
+	int mode;		/* 0 = lerp, 1 = hold, 2 = extrapolate (diagnostics) */
+	int playX, playY, playZ;	/* the pose actually written this frame */
+} MP_CAR_PLAY;
+
+static MP_CAR_PLAY gMpPlay[MP_MAX_PLAYERS];
+
 /* defined below, needed by the launch path above them */
 static int MpAssignedCarModel(int playerId);
 static int MpPlayerCarReady(const MP_PLAYER* p);
+static long MpClampAngVel(long v);	/* used by the playout writer, defined with the car sync */
+static void MpPlayResetAll(void);	/* session reset clears the snapshot history */
+static int MpSelfPoseAt(unsigned frame, int* x, int* y, int* z);	/* contact validation */
 
 extern int MapHeight(VECTOR* pos);	/* the engine's ground height at an x/z */
 
@@ -205,6 +253,8 @@ void MpSessionReset(void)
 	gMp.frame = 0;
 	gMpHitArmFrame = 0;	/* collisions arm afresh in every match */
 	memset(gMpSelfContactFrame, 0, sizeof(gMpSelfContactFrame));
+	gMpHitSent = gMpHitRx = gMpHitApplied = gMpHitKept = gMpHitSeparated = gMpHitRejected = 0;
+	MpPlayResetAll();	/* no snapshot history survives a match */
 	gMp.running = 0;
 	gMp.leaving = 0;
 	gMp.modsMatched = 1;
@@ -3318,11 +3368,25 @@ static void MpHandleInput(int connIndex, const unsigned char* p, int len)
 #define MP_HIT_SELF_FRAMES	4	/* our own engine reported this contact this recently */
 #define MP_HIT_PROBE_QUIET	90	/* ... and the probe stands down this long after one */
 
+/* A push may only act on a RECENT pose of the target's own timeline. Twenty
+ * frames is 667 ms at 30 Hz: enough for a 250 ms one-way link plus the 100 ms
+ * playout buffer and a host relay, short enough that a hit from long ago cannot
+ * move anybody. */
+#define MP_HIT_MAX_AGE_FRAMES	20
+#define MP_HIT_RX_RADIUS	MP_HIT_RADIUS	/* the same body scale, measured at ARRIVAL */
+
 /* The largest impulse a WELL-BEHAVED sender can produce, per axis: the normal is
  * MP_FIXEDH-scaled and the push is capped at MP_HIT_MAX_PUSH. The wire carries an
  * int32, so without this ceiling a peer could add +/-2^31 to a car's velocity at
  * any distance -- see MpHandleHit. */
 #define MP_HIT_IMPULSE_MAX	(MP_FIXEDH * MP_HIT_MAX_PUSH)
+
+/* The hit counters go to the log once per this many sim frames. Every 300 frames
+ * is 10 s at the engine's 30 Hz tick; the plan called this a per-minute line, but
+ * mp_localpair runs are commonly 40 s, so a 60 s line would never appear in
+ * exactly the runs that need it. */
+#define MP_HIT_SUMMARY_FRAMES	300
+
 
 /* Contacts arm afresh in every match (see gMpHitArmFrame at the top of this file
  * for why the arm frame is session state and not a function local). */
@@ -3332,6 +3396,24 @@ static int MpHitArmed(void)
 		gMpHitArmFrame = gMp.frame + MP_HIT_ARM_FRAMES;
 
 	return (gMp.frame >= gMpHitArmFrame);
+}
+
+/* How far the sender's view of us may be from where we recorded ourselves at the
+ * same frame. When the sample arrived it is EXACT (the sender displays a received
+ * sample), so this is mostly room for the interpolation error of a lost sample;
+ * half a car body per side makes it scale with the vehicles. */
+static int MpHitPoseTolerance(const CAR_DATA* target, const MP_PLAYER* src)
+{
+	int tol = 300;
+
+	if (target != NULL && target->ap.carCos != NULL)
+		tol += target->ap.carCos->colBox.vz / 8;
+
+	if (src != NULL && src->carId >= 0 && src->carId < MAX_CARS &&
+	    car_data[src->carId].ap.carCos != NULL)
+		tol += car_data[src->carId].ap.carCos->colBox.vz / 8;
+
+	return tol;
 }
 
 /* The contact normal US -> THEM in the velocity fix-point (MP_FIXEDH = 1.0), and
@@ -3423,6 +3505,27 @@ static int MpContactPush(MP_PLAYER* me, MP_PLAYER* pl, int localHalf, const char
 	h.impulse[1] = (int)iy;
 	h.impulse[2] = (int)iz;
 
+	/* Name WHERE and WHEN in the target's own timeline. The playout state is
+	 * what we actually collided with; if this machine has not played the target
+	 * yet, leave 0 and the receiver will refuse an unvalidatable push. */
+	{
+		MP_CAR_PLAY* tp = &gMpPlay[pl->id];
+
+		if (tp->primed && tp->playFrame != 0)
+		{
+			h.targetFrame = (uint32_t)tp->playFrame;
+			h.tgtPos[0] = tp->playX;
+			h.tgtPos[1] = tp->playY;
+			h.tgtPos[2] = tp->playZ;
+		}
+		else
+		{
+			h.tgtPos[0] = other->hd.where.t[0];
+			h.tgtPos[1] = other->hd.where.t[1];
+			h.tgtPos[2] = other->hd.where.t[2];
+		}
+	}
+
 	pl->lastHitFrame = gMp.frame;
 
 	if (MpIsHost())
@@ -3439,6 +3542,8 @@ static int MpContactPush(MP_PLAYER* me, MP_PLAYER* pl, int localHalf, const char
 		gMpCtx->jer_log(gMpCtx,
 			"[mp] hit: we bumped player %d (%s: closing %ld, giving up %ld units/frame)\n",
 			pl->id, why, closing, push);
+
+	gMpHitSent++;
 
 	return 1;
 }
@@ -3566,6 +3671,21 @@ static void MpHitFrame(void)
 			(gMp.frame - gMpSelfContactFrame[pl->id]) < MP_HIT_PROBE_QUIET)
 			continue;
 
+		/* The probe is the FALLBACK for a snapshot gap. While the owner's samples
+		 * are arriving, the engine's own contact is the trigger -- and a
+		 * distance-only test at this radius fires on near misses (measured in
+		 * the docs at ~68 probe hits against 3-5 engine contacts), so most
+		 * "phantom bumps" came from here. A gap is exactly the case the probe
+		 * exists for, so gate on the newest SAMPLE's arrival, not lastStateFrame
+		 * (which the apply path refreshes every frame even while holding). */
+		{
+			MP_CAR_PLAY* bp = &gMpPlay[pl->id];
+
+			if (bp->count > 0 &&
+			    (unsigned)(gMp.frame - bp->snap[bp->head].recvFrame) <= 2)
+				continue;
+		}
+
 		other = &car_data[pl->carId];
 
 		dx = (long long)other->hd.where.t[0] - (long long)mine->hd.where.t[0];
@@ -3659,25 +3779,111 @@ static void MpHandleHit(int connIndex, const unsigned char* p, int len)
 	if (me != NULL && h.targetId == me->id && me->carId >= 0 && me->carId < MAX_CARS)
 	{
 		CAR_DATA* cp = &car_data[me->carId];
+		MP_PLAYER* src = MpGetPlayer(from);
+		long d = -1;
+
+		/* How far apart the two cars are ON THIS MACHINE when the push lands.
+		 * Without a contact timestamp on the wire this is the only honest
+		 * "was this hit stale?" measurement available to the receiver -- and it
+		 * is the one the latency work moves: before interpolation/validation a
+		 * delayed push commonly arrives with the cars already separated. */
+		if (src != NULL && src->carId >= 0 && src->carId < MAX_CARS)
+		{
+			CAR_DATA* sc = &car_data[src->carId];
+			long long dx = (long long)sc->hd.where.t[0] - (long long)cp->hd.where.t[0];
+			long long dy = (long long)sc->hd.where.t[1] - (long long)cp->hd.where.t[1];
+			long long dz = (long long)sc->hd.where.t[2] - (long long)cp->hd.where.t[2];
+
+			d = (long)sqrt((double)(dx * dx + dy * dy + dz * dz));
+		}
+
+		gMpHitRx++;
+
+		if (d > MP_HIT_RADIUS)
+			gMpHitSeparated++;
+
+		if (MpDebugOn() && gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx,
+				"[mp] hit rx: player %d |d|=%ld srcAge=%lu tf=%u push=%ld,%ld,%ld\n",
+				from, d,
+				(src != NULL && src->lastStateFrame != 0)
+					? (unsigned long)(gMp.frame - src->lastStateFrame) : 0UL,
+				(unsigned)h.targetFrame,
+				(long)h.impulse[0], (long)h.impulse[1], (long)h.impulse[2]);
+
+		/* VALIDATE BEFORE APPLYING. targetFrame is a frame of OUR OWN carstate,
+		 * so we can ask two questions no arrival-time check could answer:
+		 *  - is this recent enough to act on at all?
+		 *  - were we actually where the sender says, when it says?
+		 * A push that fails either is a ghost: the sender collided with a pose
+		 * this machine had already left, and applying it now is the car that
+		 * bounces off nothing. */
+		{
+			int age = (h.targetFrame != 0)
+				? (int)((unsigned)gMp.frame - h.targetFrame) : 9999;
+			int hx = 0, hy = 0, hz = 0;
+			long poseD = -1;
+			const char* why = NULL;
+
+			if (h.targetFrame == 0)
+				why = "no timeline";
+			else if (age < 0 || age > MP_HIT_MAX_AGE_FRAMES)
+				why = "stale";
+			else if (!MpSelfPoseAt(h.targetFrame, &hx, &hy, &hz))
+				why = "frame not in history";
+			else
+			{
+				long long pdx = (long long)hx - h.tgtPos[0];
+				long long pdy = (long long)hy - h.tgtPos[1];
+				long long pdz = (long long)hz - h.tgtPos[2];
+
+				poseD = (long)sqrt((double)(pdx * pdx + pdy * pdy + pdz * pdz));
+
+				if (poseD > MpHitPoseTolerance(cp, src))
+					why = "pose mismatch";
+			}
+
+			/* A consistent timestamp is still not enough: by the time the push
+			 * lands the cars may have finished separating. Applying it then is
+			 * exactly the phantom bump, so a late push also has to find us
+			 * still near the other car. */
+			if (why == NULL && age > MP_HIT_SELF_FRAMES && d > MP_HIT_RX_RADIUS)
+				why = "cars separated";
+
+			if (why != NULL)
+			{
+				gMpHitRejected++;
+
+				if (gMpCtx != NULL)
+					gMpCtx->jer_log(gMpCtx,
+						"[mp] hit: player %d bumped us (push %ld,%ld,%ld) "
+						"ghost hit rejected (%s: age=%d |d|=%ld pose=%ld)\n",
+						from, (long)h.impulse[0], (long)h.impulse[1], (long)h.impulse[2],
+						why, age, d, poseD);
+				return;
+			}
+		}
 
 		/* ONCE per contact. Our own engine resolves the same collision (both
 		 * machines simulate both cars), and its rigid-body response is already in
 		 * our velocity -- so adding the peer's push as well lands one collision
-		 * twice. The engine's contact hook marks the frame it saw one; within
-		 * MP_HIT_SELF_FRAMES of that, this push is the duplicate and is dropped
-		 * (the contact is still logged, so a run can see both halves arriving).
-		 *
-		 * Outside that window nothing local moved us, which is the case the
-		 * hand-off exists for: apply it. */
+		 * twice. Compare the frame the engine saw it against targetFrame, both in
+		 * OUR numbering: the old arrival-frame window is wrong across latency,
+		 * because the push arrives many frames after the collision it describes. */
 		if (from >= 0 && from < MP_MAX_PLAYERS && gMpSelfContactFrame[from] != 0 &&
-			(gMp.frame - gMpSelfContactFrame[from]) <= MP_HIT_SELF_FRAMES)
+			(int)h.targetFrame - (int)gMpSelfContactFrame[from] <= MP_HIT_SELF_FRAMES &&
+			(int)gMpSelfContactFrame[from] - (int)h.targetFrame <= MP_HIT_SELF_FRAMES)
 		{
+			gMpHitKept++;
+
 			if (gMpCtx != NULL)
 				gMpCtx->jer_log(gMpCtx,
 					"[mp] hit: player %d bumped us (push %ld,%ld,%ld; our engine has it, kept)\n",
 					from, (long)h.impulse[0], (long)h.impulse[1], (long)h.impulse[2]);
 			return;
 		}
+
+		gMpHitApplied++;
 
 		cp->st.n.linearVelocity[0] += h.impulse[0];
 		cp->st.n.linearVelocity[1] += h.impulse[1];
@@ -3697,6 +3903,22 @@ static void MpHandleHit(int connIndex, const unsigned char* p, int len)
 		if (ci >= 0 && ci != connIndex)
 			MpSendConn(ci, MP_TAG_HIT, 0, p, len);
 	}
+}
+
+/* The hit counters, once per MP_HIT_SUMMARY_FRAMES. Counter-only: the increments
+ * are unconditional and nearly free, this line is what MP_DEBUG pays for. */
+static void MpHitSummary(void)
+{
+	if (gMp.frame == 0 || (gMp.frame % MP_HIT_SUMMARY_FRAMES) != 0)
+		return;
+
+	if (gMpHitSent == 0 && gMpHitRx == 0)
+		return;
+
+	if (MpDebugOn() && gMpCtx != NULL)
+		gMpCtx->jer_log(gMpCtx,
+			"[mp] hit summary: sent=%lu rx=%lu applied=%lu kept=%lu separated=%lu rejected=%lu\n",
+			gMpHitSent, gMpHitRx, gMpHitApplied, gMpHitKept, gMpHitSeparated, gMpHitRejected);
 }
 
 /* MP_HEARTBEAT=<secs> -- once every N seconds, say that our sim tick is still
@@ -4431,6 +4653,368 @@ static void MpTrafficClaimPass(void)
 /* One network tick (per simulation frame). Each machine owns ITS OWN car and
  * broadcasts that; everyone else adopts it, so nobody blocks on the network and
  * every car you see is the truth of the machine driving it. */
+/* ------------------------------------------------------------------ */
+/* Remote-car interpolation                                            */
+/*                                                                     */
+/* A snapshot is a SAMPLE of the owner's 30 Hz timeline, not a pose to  */
+/* write the moment it lands. The receiver keeps a short ring of them   */
+/* and plays them back a fixed 3 frames (100 ms) late, so the remote    */
+/* car moves continuously between packets instead of stepping once per  */
+/* arrival. The engine still simulates the car every frame; this only   */
+/* replaces the hard write that used to happen in MpHandleCarState.     */
+/*                                                                     */
+/* The cursor advances one owner-frame per sim frame (both machines run */
+/* the same fixed 30 Hz tick). It is clamped at newest + EXTRAP_MAX so  */
+/* a link stall cannot run it away, and re-anchored when it falls more   */
+/* than RESYNC frames behind -- which is what a long stall or lost       */
+/* burst looks like when the samples finally arrive.                     */
+/* ------------------------------------------------------------------ */
+#define MP_INTERP_DELAY		3	/* playout delay, in 30 Hz frames (100 ms) */
+#define MP_INTERP_EXTRAP_MAX	3	/* never extrapolate further than this */
+#define MP_INTERP_RESYNC	8	/* cursor this far behind: jump to newest - DELAY */
+#define MP_INTERP_SNAP_DIST	6000	/* one-sample jump: a teleport, not motion */
+#define MP_INTERP_DEBUG_FRAMES	60	/* MP_DEBUG state line every 2 s */
+
+/* MP_CAR_SNAP / MP_CAR_PLAY / gMpPlay are declared at the top of the file: the
+ * contact path reads the playout state before this code in file order. */
+
+/* Signed distance between two frame numbers. The counters are 32-bit on this
+ * platform and a match lasts minutes, so a plain subtraction is exact; the
+ * casts just keep the wrap arithmetic out of the compiler's way. */
+static int MpFrameAge(unsigned newer, unsigned older)
+{
+	return (int)((unsigned)newer - (unsigned)older);
+}
+
+static void MpPlayClear(int id)
+{
+	if (id >= 0 && id < MP_MAX_PLAYERS)
+		memset(&gMpPlay[id], 0, sizeof(gMpPlay[id]));
+}
+
+/* ------------------------------------------------------------------ */
+/* Our own pose history                                                */
+/*                                                                     */
+/* A push names the frame of OUR carstate it collided with. To decide   */
+/* whether we were really where it says, we need where we were at that  */
+/* frame -- recorded as the pose we sent, because that is exactly what  */
+/* the sender could have been displaying. 64 frames is just over two    */
+/* seconds at 30 Hz, comfortably more than the validity window.         */
+/* ------------------------------------------------------------------ */
+#define MP_SELF_HISTORY	64
+
+typedef struct MP_SELF_POSE
+{
+	unsigned frame;
+	int x, y, z;
+} MP_SELF_POSE;
+
+static MP_SELF_POSE gMpSelfPose[MP_SELF_HISTORY];
+
+static void MpPlayResetAll(void)
+{
+	memset(gMpPlay, 0, sizeof(gMpPlay));
+	memset(gMpSelfPose, 0, sizeof(gMpSelfPose));
+}
+
+static void MpRecordSelfPose(void)
+{
+	MP_PLAYER* me = MpLocalPlayer();
+	MP_SELF_POSE* h;
+
+	if (me == NULL || me->carId < 0 || me->carId >= MAX_CARS)
+		return;
+
+	h = &gMpSelfPose[gMp.frame % MP_SELF_HISTORY];
+	h->frame = (unsigned)gMp.frame;
+	h->x = car_data[me->carId].hd.where.t[0];
+	h->y = car_data[me->carId].hd.where.t[1];
+	h->z = car_data[me->carId].hd.where.t[2];
+}
+
+static int MpSelfPoseAt(unsigned frame, int* x, int* y, int* z)
+{
+	const MP_SELF_POSE* h = &gMpSelfPose[frame % MP_SELF_HISTORY];
+
+	if (h->frame != frame)
+		return 0;
+
+	*x = h->x;
+	*y = h->y;
+	*z = h->z;
+	return 1;
+}
+
+/* Store one sample. Older/duplicate frames are dropped: TCP is ordered, but a
+ * relayed snapshot can still arrive after a newer one from another path. */
+static void MpPlayPush(int id, unsigned frame, const MP_CARSTATE_ENTRY* e)
+{
+	MP_CAR_PLAY* p;
+	MP_CAR_SNAP* s;
+	int i;
+
+	if (id < 0 || id >= MP_MAX_PLAYERS || e == NULL)
+		return;
+
+	p = &gMpPlay[id];
+
+	if (p->count > 0 && MpFrameAge(frame, (unsigned)p->lastFrame) <= 0)
+		return;
+
+	/* A jump this large in one sample is not motion: a respawn, a car change
+	 * or a snapshot gap. Do not slide the body across the map -- start a fresh
+	 * timeline, exactly as the old adopt did by simply writing the new pose. */
+	if (p->count > 0)
+	{
+		MP_CAR_SNAP* newest = &p->snap[p->head];
+		long long dx = (long long)e->x - newest->x;
+		long long dy = (long long)e->y - newest->y;
+		long long dz = (long long)e->z - newest->z;
+
+		if (dx * dx + dy * dy + dz * dz >
+		    (long long)MP_INTERP_SNAP_DIST * MP_INTERP_SNAP_DIST)
+		{
+			MpPlayClear(id);
+			p = &gMpPlay[id];
+		}
+	}
+
+	p->head = (p->head + 1) % MP_INTERP_RING;
+	s = &p->snap[p->head];
+
+	s->frame = frame;
+	s->recvFrame = gMp.frame;
+	s->x = e->x;
+	s->y = e->y;
+	s->z = e->z;
+	s->heading = e->heading;
+
+	for (i = 0; i < 4; i++)
+		s->orient[i] = e->orient[i];
+	for (i = 0; i < 3; i++)
+		s->vel[i] = e->vel[i];
+	for (i = 0; i < 3; i++)
+		s->angVel[i] = e->angVel[i];
+
+	if (p->count < MP_INTERP_RING)
+		p->count++;
+
+	p->lastFrame = (int)frame;
+
+	if (!p->primed)
+	{
+		/* Start 3 frames in the past. With fewer samples than that the apply
+		 * step holds the oldest one until the cursor reaches it, which is the
+		 * 100 ms of delay this whole scheme is built on. */
+		p->playFrame = (int)frame - MP_INTERP_DELAY;
+		p->primed = 1;
+	}
+}
+
+static void MpSnapUse(const MP_CAR_SNAP* s, int* x, int* y, int* z,
+	int* heading, short orient[4], int vel[3], int angVel[3])
+{
+	int i;
+
+	*x = s->x;
+	*y = s->y;
+	*z = s->z;
+	*heading = s->heading;
+
+	for (i = 0; i < 4; i++)
+		orient[i] = s->orient[i];
+	for (i = 0; i < 3; i++)
+		vel[i] = s->vel[i];
+	for (i = 0; i < 3; i++)
+		angVel[i] = s->angVel[i];
+}
+
+static int MpLerpAngle(int a, int b, int num, int den)
+{
+	int d = ((b - a + 2048) & 4095) - 2048;
+
+	return (a + d * num / den) & 4095;
+}
+
+/* Write a remote car's rigid body. The same fields the old adopt wrote: the
+ * engine re-derives hd.direction from the quaternion, so the orientation and
+ * both velocities have to travel with the position. */
+static void MpPlayWriteBody(CAR_DATA* cp, int x, int y, int z, int heading,
+	const short orient[4], const int vel[3], const int angVel[3])
+{
+	LONGQUATERNION q;
+	MATRIX m;
+	int i;
+
+	cp->controlType = CONTROL_TYPE_PLAYER;
+
+	for (i = 0; i < 4; i++)
+		q[i] = orient[i];
+	for (i = 0; i < 4; i++)
+		cp->st.n.orientation[i] = q[i];
+	for (i = 0; i < 3; i++)
+		cp->st.n.linearVelocity[i] = vel[i];
+	for (i = 0; i < 3; i++)
+		cp->st.n.angularVelocity[i] = MpClampAngVel(angVel[i]);
+
+	LongQuaternion2Matrix(&q, &m);
+	m.t[0] = x;
+	m.t[1] = y;
+	m.t[2] = z;
+	memcpy(&cp->hd.where, &m, sizeof(m));
+
+	cp->hd.direction = heading;
+}
+
+/* Once per sim frame, before the world steps: place every remote car at the
+ * pose the playout cursor names. This is the ONLY writer of a remote car's
+ * body now, so the engine and the snapshot stream cannot fight over it. */
+static void MpApplyRemoteCarPoses(void)
+{
+	int i;
+
+	for (i = 0; i < MP_MAX_PLAYERS; i++)
+	{
+		MP_PLAYER* pl = &gMp.players[i];
+		MP_CAR_PLAY* p;
+		MP_CAR_SNAP* s0 = NULL;	/* first sample at or older than the cursor */
+		MP_CAR_SNAP* s1 = NULL;	/* first sample at or newer than the cursor */
+		const MP_CAR_SNAP* newest;
+		CAR_DATA* cp;
+		int x, y, z, heading;
+		int vel[3], angVel[3];
+		short orient[4];
+		int k;
+
+		if (!pl->active || pl->isLocal || pl->carId < 0 || pl->carId >= MAX_CARS)
+			continue;
+
+		p = &gMpPlay[pl->id];
+
+		if (p->count == 0)
+			continue;
+
+		cp = &car_data[pl->carId];
+
+		if (!p->primed)
+		{
+			p->playFrame = p->lastFrame - MP_INTERP_DELAY;
+			p->primed = 1;
+		}
+		else
+		{
+			p->playFrame++;
+		}
+
+		/* A long stall runs the cursor ahead of what we have. Clamp it, and
+		 * re-anchor when the data that finally arrives is far newer than it. */
+		if (p->playFrame > p->lastFrame + MP_INTERP_EXTRAP_MAX)
+			p->playFrame = p->lastFrame + MP_INTERP_EXTRAP_MAX;
+
+		if (MpFrameAge((unsigned)p->lastFrame, (unsigned)p->playFrame) > MP_INTERP_RESYNC)
+			p->playFrame = p->lastFrame - MP_INTERP_DELAY;
+
+		/* Walk newest -> oldest to bracket the cursor. */
+		for (k = 0; k < p->count; k++)
+		{
+			MP_CAR_SNAP* s = &p->snap[(p->head - k + MP_INTERP_RING) % MP_INTERP_RING];
+
+			if (MpFrameAge(s->frame, (unsigned)p->playFrame) >= 0)
+				s1 = s;		/* at or newer than the cursor */
+			else
+			{
+				s0 = s;		/* the first one older than it */
+				break;
+			}
+		}
+
+		newest = &p->snap[p->head];
+
+		if (s0 != NULL && s1 != NULL)
+		{
+			int den = MpFrameAge(s1->frame, s0->frame);
+			int num = MpFrameAge((unsigned)p->playFrame, s0->frame);
+			long long dot = 0;
+			int sign;
+			int j;
+
+			if (den <= 0)
+				den = 1;
+			if (num < 0)
+				num = 0;
+			if (num > den)
+				num = den;
+
+			x = (int)((long long)s0->x * (den - num) / den + (long long)s1->x * num / den);
+			y = (int)((long long)s0->y * (den - num) / den + (long long)s1->y * num / den);
+			z = (int)((long long)s0->z * (den - num) / den + (long long)s1->z * num / den);
+			heading = MpLerpAngle(s0->heading, s1->heading, num, den);
+
+			/* Normalised lerp with a sign correction: q and -q are the same
+			 * attitude, and lerping without it takes the long way round and
+			 * can flip the car. */
+			for (j = 0; j < 4; j++)
+				dot += (long long)s0->orient[j] * s1->orient[j];
+
+			sign = (dot < 0) ? -1 : 1;
+
+			for (j = 0; j < 4; j++)
+			{
+				orient[j] = (short)(((long long)s0->orient[j] * (den - num) +
+					(long long)s1->orient[j] * sign * num) / den);
+			}
+
+			for (j = 0; j < 3; j++)
+				vel[j] = s1->vel[j];
+			for (j = 0; j < 3; j++)
+				angVel[j] = s1->angVel[j];
+
+			p->mode = 0;
+		}
+		else if (s1 != NULL)
+		{
+			/* Before the oldest sample: show it (the spawn case). */
+			MpSnapUse(s1, &x, &y, &z, &heading, orient, vel, angVel);
+			p->mode = 1;
+		}
+		else
+		{
+			/* Beyond the newest sample: extrapolate on its velocity, capped. */
+			int dt = MpFrameAge((unsigned)p->playFrame, newest->frame);
+
+			if (dt < 0)
+				dt = 0;
+			if (dt > MP_INTERP_EXTRAP_MAX)
+				dt = MP_INTERP_EXTRAP_MAX;
+
+			MpSnapUse(newest, &x, &y, &z, &heading, orient, vel, angVel);
+
+			x += (int)((long long)vel[0] * dt / MP_FIXEDH);
+			y += (int)((long long)vel[1] * dt / MP_FIXEDH);
+			z += (int)((long long)vel[2] * dt / MP_FIXEDH);
+
+			p->mode = 2;
+		}
+
+		MpPlayWriteBody(cp, x, y, z, heading, orient, vel, angVel);
+
+		/* Remember the pose the sender is actually looking at: a contact report
+		 * names this frame, and MpContactPush sends this position with it. */
+		p->playX = x;
+		p->playY = y;
+		p->playZ = z;
+
+		pl->onFoot = 0;
+		pl->lastStateFrame = gMp.frame;	/* the fallback gate in MpOnNetInput reads this */
+
+		if (MpDebugOn() && gMpCtx != NULL && (gMp.frame % MP_INTERP_DEBUG_FRAMES) == 0)
+			gMpCtx->jer_log(gMpCtx,
+				"[mp] interp: player %d depth=%d lag=%d mode=%s\n",
+				pl->id, p->count, MpFrameAge((unsigned)p->lastFrame, (unsigned)p->playFrame),
+				(p->mode == 0) ? "lerp" : (p->mode == 1) ? "hold" : "extrap");
+	}
+}
+
 void MpLockstepFrame(void)
 {
 	if (!gMp.running)
@@ -4439,6 +5023,12 @@ void MpLockstepFrame(void)
 	gMpStage = "sim";
 
 	++gMp.frame;
+
+	/* Place every remote car from its snapshot buffer BEFORE anything is
+	 * simulated or sent. This is the one writer of a remote body now: the
+	 * playout cursor turns the owner's 30 Hz samples into continuous motion,
+	 * and the engine steps the car from there for this frame. */
+	MpApplyRemoteCarPoses();
 
 	/* Re-assert the traffic slot bands FIRST, before anything spawns this frame. A
 	 * level load clears the engine's reservedSlots out from under us, so this is
@@ -4564,6 +5154,10 @@ void MpLockstepFrame(void)
 	 * would pull them back together -- which is exactly where the drift came from. */
 	MpSendOwnCarState();
 
+	/* ...and record the pose we just sent. A contact report names one of these
+	 * frames; this history is how we check that we were really there. */
+	MpRecordSelfPose();
+
 	/* ...and the pedestrian, if we are not in a car: the same owner-authoritative
 	 * rule, for a thing that has a heading and a speed instead of a body. */
 	MpSendOwnPedState();
@@ -4591,6 +5185,9 @@ void MpLockstepFrame(void)
 	MpHitFrame();
 
 	MpNetPoll(0);
+
+	/* ...and if this is a summary frame, the hit counters go to the log. */
+	MpHitSummary();
 
 	gMpStage = "sim-done";
 }
@@ -6417,6 +7014,9 @@ static void MpReleaseRemoteCar(MP_PLAYER* p)
 
 	if (p == NULL || p->carId < 0 || p->carId >= MAX_CARS)
 		return;
+
+	/* The body stops being ours: its sample timeline must go with it. */
+	MpPlayClear(p->id);
 
 	cp = &car_data[p->carId];
 
@@ -8809,6 +9409,9 @@ static void MpHandleCarState(int connIndex, const unsigned char* p, int len)
 		 * does the same), so nobody is left steering an empty car. */
 		if (e.model == MP_CARSTATE_NO_CAR)
 		{
+			/* No car to drive: drop the timeline too, or walking back into a
+			 * body (or a different one) would replay the old car's motion. */
+			MpPlayClear(pl->id);
 			MpReleaseRemoteCar(pl);
 
 			/* remember what they walked away from: if they leave, it goes too */
@@ -8892,6 +9495,10 @@ static void MpHandleCarState(int connIndex, const unsigned char* p, int len)
 					pl->leftCarModel = -1;
 					reused = 1;
 
+					/* Back in the body they left: it has been standing still, so
+					 * there is no motion to interpolate from the old timeline. */
+					MpPlayClear(pl->id);
+
 					if (gMpCtx != NULL)
 						gMpCtx->jer_log(gMpCtx,
 							"[mp] player %d is back in the car they left (slot %d) - "
@@ -8919,6 +9526,7 @@ static void MpHandleCarState(int connIndex, const unsigned char* p, int len)
 		if (MpRemoteTargetsLocalCar(pl->carId, "carstate", pl->id))
 		{
 			pl->carId = -1;	/* that row's car is not ours to drive from the wire */
+			MpPlayClear(pl->id);
 			continue;
 		}
 
@@ -8959,6 +9567,10 @@ static void MpHandleCarState(int connIndex, const unsigned char* p, int len)
 					if (pl->carId < 0 || pl->carId >= MAX_CARS)
 						continue;
 
+					/* A new body: its timeline starts here, not at the old car's
+					 * last sample. */
+					MpPlayClear(pl->id);
+
 					cp = &car_data[pl->carId];
 				}
 			}
@@ -8969,14 +9581,13 @@ static void MpHandleCarState(int connIndex, const unsigned char* p, int len)
 		 * A contact is a separate message (MP_HIT: the owner of the MOVING car
 		 * pushes its own), so there is no push to leave room for here. */
 		{
-			/* The HOST<->CLIENT deviation for this REMOTE car: how far our own
-			 * simulation of it is from its owner's snapshot. One line per snapshot
-			 * that arrives, for every remote car. A small steady value is input
-			 * latency; a growing one is the two simulations drifting apart; a
-			 * spiky one is the resync fighting the engine. This is the number to
-			 * watch for "the cars are not where they are on the other machine".
-			 * (|d| is the world-unit distance, dh the heading error in 1/4096
-			 * turns.) Logged on arrival, NOT gated on our own frame counter: the
+			/* The NEWEST SAMPLE against the pose the playout is displaying. With
+			 * the 3-frame buffer this is expected to be about 100 ms of travel
+			 * (tens to a couple of hundred units while moving) -- it is the
+			 * buffer's lead, NOT a desync metric any more. A spike well beyond
+			 * that means a lost sample, an extrapolation or a teleport.
+			 * (|d| is world units, dh the heading error in 1/4096 turns.)
+			 * Logged on arrival, NOT gated on our own frame counter: the
 			 * peer's snapshot arrives on ITS cadence, which need not line up with
 			 * ours -- gating on `frame % 30` silently logged nothing.
 			 *
@@ -8997,56 +9608,18 @@ static void MpHandleCarState(int connIndex, const unsigned char* p, int len)
 					e.playerId, (unsigned)h.frame, (long)sqrt((double)d2), d2, dx, dy, dz, dh, (int)e.palette, (int)e.model);
 			}
 
-			/* Adopt in full: the owner is the truth for its own car. */
+			/* Adopt in full: the owner is the truth for its own car -- but as a
+			 * SAMPLE on the owner's timeline, not as a pose to write now. The
+			 * playout buffer smooths the gaps between samples; MpApplyRemoteCarPoses
+			 * is the only writer of this car's body. */
+			MpPlayPush(pl->id, h.frame, &e);
 
 			/* keep the remote car placed and alive: the engine spools a
 			 * non-local player car out of the world, so re-assert it
 			 * (controlType included, or the spooler parks it). */
 			cp->controlType = CONTROL_TYPE_PLAYER;
-
-			{
-				int tx = e.x, ty = e.y, tz = e.z;
-
-				cp->hd.where.t[0] = tx;
-				cp->hd.where.t[1] = ty;
-				cp->hd.where.t[2] = tz;
-
-				/* Write the WHOLE body, not a position and a heading: hd.direction
-				 * is an OUTPUT the engine re-derives from st.n.orientation, so a
-				 * correction that set only the heading left the car's ATTITUDE
-				 * unsynced (driving around upside down). Rebuild the handling matrix
-				 * with the engine's own quaternion helper rather than poking
-				 * hd.where. */
-				if (e.flags & MP_CARSTATE_HAS_BODY)
-				{
-					LONGQUATERNION q;
-					MATRIX m;
-					int i;
-
-					for (i = 0; i < 4; i++)
-						q[i] = e.orient[i];
-
-					cp->st.n.orientation[0] = q[0];
-					cp->st.n.orientation[1] = q[1];
-					cp->st.n.orientation[2] = q[2];
-					cp->st.n.orientation[3] = q[3];
-
-					for (i = 0; i < 3; i++)
-						cp->st.n.linearVelocity[i] = e.vel[i];
-					for (i = 0; i < 3; i++)
-						cp->st.n.angularVelocity[i] = MpClampAngVel(e.angVel[i]);
-
-					LongQuaternion2Matrix(&q, &m);
-					m.t[0] = tx;
-					m.t[1] = ty;
-					m.t[2] = tz;
-					memcpy(&cp->hd.where, &m, sizeof(m));
-				}
-
-			}
 		}
 
-		cp->hd.direction = e.heading;
 		pl->onFoot = 0;			/* driving again: the roster may seat them */
 		pl->lastStateFrame = gMp.frame;	/* the fallback gate in MpOnNetInput reads this */
 
