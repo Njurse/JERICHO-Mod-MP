@@ -1298,54 +1298,6 @@ static int MpOnFrame(void* userdata, void* args)
 		}
 	}
 
-	/* Test lever: MP_TEST_UPSIDEDOWN=<secs> flips our car 180 degrees on the roll
-	 * axis, waits two seconds, then calls the session's death respawn -- the same
-	 * answer the engine's game-over event gets. It is the wound check for the
-	 * spinning camera: the car must come back on a road with a live camera target.
-	 * Inert unless set. */
-	{
-		static int stage = 0;
-		static unsigned long atMs = 0;
-		const char* s = getenv("MP_TEST_UPSIDEDOWN");
-
-		if (s != NULL && gMpCtx != NULL && gMp.running)
-		{
-			if (atMs == 0)
-				atMs = MpNowMs() + (unsigned long)(atoi(s) * 1000);
-
-			if (stage == 0 && MpNowMs() >= atMs)
-			{
-				MP_PLAYER* me = MpLocalPlayer();
-
-				if (me != NULL && me->carId >= 0 && me->carId < MAX_CARS)
-				{
-					CAR_DATA* cp = &car_data[me->carId];
-
-					/* 180 degrees about the roll axis: q = (sin 90, 0, 0, cos 90). */
-					cp->st.n.orientation[0] = 4096;
-					cp->st.n.orientation[1] = 0;
-					cp->st.n.orientation[2] = 0;
-					cp->st.n.orientation[3] = 0;
-
-					stage = 1;
-					atMs = MpNowMs();
-					gMpCtx->jer_log(gMpCtx,
-						"[mp] test: MP_TEST_UPSIDEDOWN - flipped our car on the roll axis (slot %d)\n",
-						me->carId);
-				}
-			}
-			else if (stage == 1 && MpNowMs() - atMs >= 2000)
-			{
-				int ok = MpRespawnAfterDeath();
-
-				stage = 2;
-				gMpCtx->jer_log(gMpCtx,
-					"[mp] test: MP_TEST_UPSIDEDOWN -> respawn returned %d; playerCarId %d cameraCarId %d\n",
-					ok, (int)player[0].playerCarId, (int)player[0].cameraCarId);
-			}
-		}
-	}
-
 	/* Test lever: MP_TEST_FELONY=<value> sets the local car's felony rating, so a
 	 * respawn's clear-felony is observable (felony otherwise needs collisions to
 	 * rise, which a padless run does not cause). Inert unless set. */
