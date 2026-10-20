@@ -1818,6 +1818,25 @@ static void MpDrawPlayerList(void)
 	}
 }
 
+/* A car whose real model is still loading is drawn as the host city's car 1,
+ * solid grey: the stand-in body is obvious, and the chase camera never follows a
+ * slot with no mesh. Only cars marked by the reload failsafe are touched. */
+static int MpOnCarDrawColor(void* userdata, void* args)
+{
+	JER_ARGS_CAR_DRAW_COLOR* a = (JER_ARGS_CAR_DRAW_COLOR*)args;
+	CAR_DATA* cp = (CAR_DATA*)a->car;
+
+	(void)userdata;
+
+	if (cp != NULL && MpCarIsStandIn(cp->id))
+	{
+		a->flatBlack = 0;
+		a->tintR = a->tintG = a->tintB = 128;	/* solid grey */
+	}
+
+	return JER_RESULT_CONTINUE;
+}
+
 static int MpOnDrawOverlay(void* userdata, void* args)
 {
 	(void)userdata;
@@ -3384,6 +3403,7 @@ JER_MODULE_ENTRY(jer_module_mp_entry)(JERICHO_CONTEXT* ctx)
 	ctx->jer_register_hook(ctx, JER_EVENT_FRAME, MpOnFrame, NULL, 0);
 	ctx->jer_register_hook(ctx, JER_EVENT_DRAW_OVERLAY, MpUiDrawOverlay, NULL, 0);
 	ctx->jer_register_hook(ctx, JER_EVENT_DRAW_OVERLAY, MpOnDrawOverlay, NULL, 10);
+	ctx->jer_register_hook(ctx, JER_EVENT_CAR_DRAW_COLOR, MpOnCarDrawColor, NULL, 0);
 	ctx->jer_register_hook(ctx, JER_EVENT_MP_FRONTEND, MpOnMpFrontend, NULL, 0);
 	ctx->jer_register_hook(ctx, JER_EVENT_FRONTEND, MpOnFrontendConfirm, NULL, 0);
 	ctx->jer_register_hook(ctx, JER_EVENT_CMDLINE, MpOnCmdLine, NULL, 0);

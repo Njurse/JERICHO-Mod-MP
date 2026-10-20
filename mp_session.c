@@ -6106,6 +6106,7 @@ static int sMpWantSlot = -1;
 static int sMpWantCity = -2;	/* -2 = not known yet, -1 = the host city */
 static int sMpWantModel = -1;
 static int sMpStandIn;
+static int sMpStandInCar[MAX_CARS];	/* per car object: drawn as a grey stand-in */
 static void MpCarFailsafeTick(void);
 
 static void MpFailsafeReset(void)
@@ -6114,6 +6115,7 @@ static void MpFailsafeReset(void)
 	sMpWantCity = -2;
 	sMpWantModel = -1;
 	sMpStandIn = 0;
+	memset(sMpStandInCar, 0, sizeof(sMpStandInCar));
 }
 
 static void MpFailsafeNoteCar(int slot)
@@ -6588,6 +6590,52 @@ static int MpHostCarOneSlot(void)
 	return -1;
 }
 
+/* Put the host city's car 1 under a car object that has no mesh, and mark it so
+ * the draw-colour hook paints the body solid grey. `fresh` says the flag was not
+ * already set, i.e. this is the transition to log. */
+static int MpCarStandIn(int carSlot)
+{
+	extern u_char defaultPlayerPalette;
+	CAR_DATA* cp;
+	int hostSlot;
+	int fresh;
+
+	if (carSlot < 0 || carSlot >= MAX_CARS)
+		return 0;
+
+	hostSlot = MpHostCarOneSlot();
+
+	if (hostSlot < 0)
+		return 0;
+
+	cp = &car_data[carSlot];
+
+	fresh = !sMpStandInCar[carSlot];
+	sMpStandInCar[carSlot] = 1;
+
+	if (cp->ap.model != hostSlot || !JerCarSlotUsable(cp->ap.model))
+	{
+		cp->ap.model = hostSlot;
+		cp->ap.carCos = &car_cosmetics[hostSlot];
+		cp->lowDetail = -1;
+		cp->ap.palette = (u_char)CarSlotClampPalette(hostSlot, (int)defaultPlayerPalette);
+		CreateDentableCar(cp);
+	}
+
+	return fresh;
+}
+
+static void MpCarClearStandIn(int carSlot)
+{
+	if (carSlot >= 0 && carSlot < MAX_CARS)
+		sMpStandInCar[carSlot] = 0;
+}
+
+int MpCarIsStandIn(int carSlot)
+{
+	return (carSlot >= 0 && carSlot < MAX_CARS) ? sMpStandInCar[carSlot] : 0;
+}
+
 static void MpCarFailsafeTick(void)
 {
 	extern u_char defaultPlayerPalette;
@@ -6622,6 +6670,7 @@ static void MpCarFailsafeTick(void)
 		{
 			sMpStandIn = 0;
 			sMpWantSlot = want;
+			MpCarClearStandIn(me->carId);
 
 			cp->ap.model = want;
 			cp->ap.carCos = &car_cosmetics[want];
@@ -6651,18 +6700,11 @@ static void MpCarFailsafeTick(void)
 
 		if (gMpCtx != NULL)
 			gMpCtx->jer_log(gMpCtx,
-				"[mp] car reload: %s model %d is not loaded yet (slot %d) - standing in with the host city's car 1 (resident slot %d) until it does\n",
+				"[mp] car reload: %s model %d is not loaded yet (slot %d) - standing in with the host city's car 1, solid grey (resident slot %d) until it does\n",
 				MpCarCityName(sMpWantCity), sMpWantModel, want, hostSlot);
 	}
 
-	if (cp->ap.model != hostSlot || !JerCarSlotUsable(cp->ap.model))
-	{
-		cp->ap.model = hostSlot;
-		cp->ap.carCos = &car_cosmetics[hostSlot];
-		cp->lowDetail = -1;
-		cp->ap.palette = (u_char)CarSlotClampPalette(hostSlot, (int)defaultPlayerPalette);
-		CreateDentableCar(cp);
-	}
+	MpCarStandIn(me->carId);
 }
 
 /* The last (city, model) we reported NOT holding for a remote player, so "this
@@ -6748,6 +6790,8 @@ static int MpAdoptCar(int carSlot, int city, int model, MP_PLAYER* who)
 	if (JerCarSlotUsable(slot))
 	{
 		int was = cp->ap.model;
+
+		MpCarClearStandIn(carSlot);
 
 		if (was == slot && gMpAdoptModel[carSlot] == model)
 		{
@@ -6870,9 +6914,16 @@ static int MpAdoptCar(int carSlot, int city, int model, MP_PLAYER* who)
 		return 1;
 	}
 
-	/* Cannot hold it: KEEP the car we have and say so ONCE per change, not every
-	 * frame -- a carstate arrives every frame, so the repetition is the noise this
-	 * avoids. Loading it is the hotload's job (carhacks/MP_ADAPTER.md). */
+	/* Cannot hold it: put the host city's car 1 under it, painted solid grey, until
+	 * the owner's model is resident. The old body was the previous model, which on a
+	 * release/reload is exactly the slot that has just lost its mesh - the spinning
+	 * camera. Say so ONCE per change, not every frame -- a carstate arrives every
+	 * frame, so the repetition is the noise this avoids. */
+	if (MpCarStandIn(carSlot) && gMpCtx != NULL && (who == NULL || !who->isLocal))
+		gMpCtx->jer_log(gMpCtx,
+			"[mp] car load: %s model %d is not loaded yet - using the host city's car 1, solid grey, on slot %d until it does\n",
+			MpCarCityName(city), model, carSlot);
+
 	if (who != NULL && gMpCtx != NULL && who->id >= 0 && who->id < MP_MAX_PLAYERS &&
 		(!sMpCarKeepSet[who->id] || sMpCarKeepCity[who->id] != city || sMpCarKeepModel[who->id] != model))
 	{
@@ -6882,13 +6933,12 @@ static int MpAdoptCar(int carSlot, int city, int model, MP_PLAYER* who)
 
 		if (slot >= 0)
 			gMpCtx->jer_log(gMpCtx,
-				"[mp] player %d drives %s model %d (slot %d here) but that mesh is not loaded; keeping slot %d\n",
-				who->id, MpCarCityName(city), model, slot, cp->ap.model);
+				"[mp] player %d drives %s model %d (slot %d here) but that mesh is not loaded; the host city's car 1 stands in on slot %d\n",
+				who->id, MpCarCityName(city), model, slot, carSlot);
 		else
 			gMpCtx->jer_log(gMpCtx,
-				"[mp] player %d drives %s model %d, which this machine does not hold (the hotload will load it); keeping slot %d (model %d)\n",
-				who->id, MpCarCityName(city), model, cp->ap.model,
-				(cp->ap.model >= 0 && cp->ap.model < MAX_CAR_RESIDENT_MODELS) ? residentCarModels[cp->ap.model] : -1);
+				"[mp] player %d drives %s model %d, which this machine does not hold (the hotload will load it); the host city's car 1 stands in on slot %d\n",
+				who->id, MpCarCityName(city), model, carSlot);
 	}
 	else if (who == NULL && gMpCtx != NULL)
 	{
@@ -6896,13 +6946,12 @@ static int MpAdoptCar(int carSlot, int city, int model, MP_PLAYER* who)
 		 * repetition to suppress -- say it every time. */
 		if (slot >= 0)
 			gMpCtx->jer_log(gMpCtx,
-				"[mp] change car (single player): %s model %d resolves to slot %d here but that mesh is not loaded; keeping slot %d\n",
-				MpCarCityName(city), model, slot, cp->ap.model);
+				"[mp] change car (single player): %s model %d resolves to slot %d here but that mesh is not loaded; the host city's car 1 stands in on slot %d\n",
+				MpCarCityName(city), model, slot, carSlot);
 		else
 			gMpCtx->jer_log(gMpCtx,
-				"[mp] change car (single player): %s model %d is not held by this machine; keeping slot %d (model %d)\n",
-				MpCarCityName(city), model, cp->ap.model,
-				(cp->ap.model >= 0 && cp->ap.model < MAX_CAR_RESIDENT_MODELS) ? residentCarModels[cp->ap.model] : -1);
+				"[mp] change car (single player): %s model %d is not held by this machine; the host city's car 1 stands in on slot %d\n",
+				MpCarCityName(city), model, carSlot);
 	}
 
 	return 0;
