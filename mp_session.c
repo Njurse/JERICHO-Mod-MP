@@ -164,6 +164,9 @@ void MpNoteLocalPad(int pad)
 	gMpLocalAppliedPad = pad;
 }
 
+static void MpFailsafeReset(void);
+static void MpFailsafeNoteCar(int slot);
+
 void MpSessionReset(void)
 {
 	/* a session that is over must not stay on the board: the unregister is what
@@ -193,6 +196,7 @@ void MpSessionReset(void)
 
 	gMpLaunched = 0;
 	gMpLocalAppliedPad = -1;
+	MpFailsafeReset();
 	gMp.gamemode = MP_GAMEMODE_TAKEADRIDE;
 	gMp.city = 0;
 	gMp.timeOfDay = -1;
@@ -5518,6 +5522,7 @@ static void MpFollowLocalCar(void)
 		me->carCity = GetCarModelSourceCity(cp->ap.model);
 		me->palette = cp->ap.palette;
 		me->onFoot = 0;
+		MpFailsafeNoteCar(cp->ap.model);
 
 		if (reentry)
 			MpCarQueryChosen(me->carCity, me->car, 1);
@@ -6083,6 +6088,45 @@ static void MpHandleColor(int connIndex, const unsigned char* p, int len)
 	}
 }
 
+/* THE RELOAD FAILSAFE.
+ *
+ * A car reload (a change, "Reload all cars", the verifier's repair) releases the
+ * resident slot the local car is drawn from and rebuilds it. For the frames in
+ * between, ap.model names a slot with no mesh: the chase camera has no car to sit
+ * behind and spins, and the player falls through the map while the world keeps
+ * stepping. The proper car comes back on its own; what is missing is a body to
+ * stand in for it.
+ *
+ * So: if the car we are MEANT to drive is not loadable right now, put the host
+ * city's car 1 (the first civilian its own level ships) under the player and keep
+ * the session told the real choice. When the wanted slot becomes usable, put it
+ * back. This is a stopgap, not a car: it is local-only, it logs both transitions,
+ * and it never changes what the player's carstate says they drive. */
+static int sMpWantSlot = -1;
+static int sMpWantCity = -2;	/* -2 = not known yet, -1 = the host city */
+static int sMpWantModel = -1;
+static int sMpStandIn;
+static void MpCarFailsafeTick(void);
+
+static void MpFailsafeReset(void)
+{
+	sMpWantSlot = -1;
+	sMpWantCity = -2;
+	sMpWantModel = -1;
+	sMpStandIn = 0;
+}
+
+static void MpFailsafeNoteCar(int slot)
+{
+	if (slot < 0 || slot >= MAX_CAR_RESIDENT_MODELS)
+		return;
+
+	sMpWantSlot = slot;
+	sMpWantModel = residentCarModels[slot];
+	sMpWantCity = GetCarModelSourceCity(slot);
+	sMpStandIn = 0;
+}
+
 static void MpSendOwnCarState(void)
 {
 	unsigned char buf[sizeof(MP_CARSTATE) + sizeof(MP_CARSTATE_ENTRY)];
@@ -6099,6 +6143,7 @@ static void MpSendOwnCarState(void)
 	 * last frame -- adopt it BEFORE reading the pose, so this very frame already
 	 * carries the change and the peers never see the old vehicle again. */
 	MpFollowLocalCar();
+	MpCarFailsafeTick();
 
 	memset(&h, 0, sizeof(h));
 	h.frame = gMp.frame;
@@ -6150,7 +6195,16 @@ static void MpSendOwnCarState(void)
 		{
 			int slot = cp->ap.model;
 
-			if (slot >= 0 && slot < MAX_CAR_RESIDENT_MODELS && residentCarModels[slot] >= 0)
+			/* THE FAILSAFE'S BODY IS NOT THE CHOICE. While the wanted car is being
+			 * rebuilt, the local car wears the host city's car 1 so the camera has
+			 * something to follow; the session must still be told what the player
+			 * chose, or peers would see them switch to that stand-in and back. */
+			if (sMpStandIn && sMpWantModel >= 0)
+			{
+				e.model = (uint8_t)sMpWantModel;
+				e.modelCity = (uint8_t)((sMpWantCity >= 0) ? sMpWantCity : MP_CAR_CITY_SESSION);
+			}
+			else if (slot >= 0 && slot < MAX_CAR_RESIDENT_MODELS && residentCarModels[slot] >= 0)
 			{
 				int src = GetCarModelSourceCity(slot);
 
@@ -6516,6 +6570,101 @@ int MpResidentSlotForCar(int city, int model)
 	return -1;
 }
 
+/* The host city's own car 1 (or, failing that, its first civilian), in a resident
+ * slot that is really loaded. This is the body the reload failsafe puts under the
+ * player while the chosen car is being rebuilt. */
+static int MpHostCarOneSlot(void)
+{
+	int i;
+
+	for (i = 0; i < MAX_CAR_RESIDENT_MODELS; i++)
+		if (residentCarModels[i] == 1 && GetCarModelSourceCity(i) < 0 && JerCarSlotUsable(i))
+			return i;
+
+	for (i = 0; i < MAX_CAR_RESIDENT_MODELS; i++)
+		if (residentCarModels[i] >= 0 && GetCarModelSourceCity(i) < 0 && JerCarSlotUsable(i))
+			return i;
+
+	return -1;
+}
+
+static void MpCarFailsafeTick(void)
+{
+	extern u_char defaultPlayerPalette;
+	MP_PLAYER* me = MpLocalPlayer();
+	CAR_DATA* cp;
+	int want, hostSlot;
+
+	if (!gMp.running || me == NULL || !me->isLocal || me->carId < 0 || me->carId >= MAX_CARS)
+		return;
+
+	cp = &car_data[me->carId];
+
+	/* Learn the choice from a healthy car once (a spawn or a car we got into);
+	 * a change sets it explicitly in MpAdoptCar, even when that load fails. */
+	if (!sMpStandIn && sMpWantModel < 0 &&
+		cp->ap.model >= 0 && cp->ap.model < MAX_CAR_RESIDENT_MODELS &&
+		JerCarSlotUsable(cp->ap.model))
+	{
+		sMpWantSlot = cp->ap.model;
+		sMpWantModel = residentCarModels[sMpWantSlot];
+		sMpWantCity = GetCarModelSourceCity(sMpWantSlot);
+	}
+
+	if (sMpWantModel < 0)
+		return;
+
+	want = MpResidentSlotForCar(sMpWantCity, sMpWantModel);
+
+	if (want >= 0 && want < MAX_CAR_RESIDENT_MODELS && JerCarSlotUsable(want))
+	{
+		if (sMpStandIn)
+		{
+			sMpStandIn = 0;
+			sMpWantSlot = want;
+
+			cp->ap.model = want;
+			cp->ap.carCos = &car_cosmetics[want];
+			cp->lowDetail = -1;
+			cp->ap.palette = (u_char)CarSlotClampPalette(want, (int)defaultPlayerPalette);
+			CreateDentableCar(cp);
+
+			if (gMpCtx != NULL)
+				gMpCtx->jer_log(gMpCtx,
+					"[mp] car reload: %s model %d is loaded - leaving the host city's car 1 stand-in\n",
+					MpCarCityName(sMpWantCity), sMpWantModel);
+		}
+		else
+			sMpWantSlot = want;
+
+		return;
+	}
+
+	hostSlot = MpHostCarOneSlot();
+
+	if (hostSlot < 0)
+		return;
+
+	if (!sMpStandIn)
+	{
+		sMpStandIn = 1;
+
+		if (gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx,
+				"[mp] car reload: %s model %d is not loaded yet (slot %d) - standing in with the host city's car 1 (resident slot %d) until it does\n",
+				MpCarCityName(sMpWantCity), sMpWantModel, want, hostSlot);
+	}
+
+	if (cp->ap.model != hostSlot || !JerCarSlotUsable(cp->ap.model))
+	{
+		cp->ap.model = hostSlot;
+		cp->ap.carCos = &car_cosmetics[hostSlot];
+		cp->lowDetail = -1;
+		cp->ap.palette = (u_char)CarSlotClampPalette(hostSlot, (int)defaultPlayerPalette);
+		CreateDentableCar(cp);
+	}
+}
+
 /* The last (city, model) we reported NOT holding for a remote player, so "this
  * machine does not have their car" is one line per CHANGE, not per snapshot --
  * a carstate arrives every frame. `Set` is 0 until we have logged one. */
@@ -6563,6 +6712,15 @@ static int MpAdoptCar(int carSlot, int city, int model, MP_PLAYER* who)
 
 	if (carSlot < 0 || carSlot >= MAX_CARS)
 		return 0;
+
+	if (who != NULL && who->isLocal)
+	{
+		/* Remember the choice even when this load cannot happen yet: the reload
+		 * failsafe needs to know which car to put back afterwards. */
+		sMpWantCity = city;
+		sMpWantModel = model;
+		sMpWantSlot = MpResidentSlotForCar(city, model);
+	}
 
 	if (!gMpAdoptModelInit)
 	{
