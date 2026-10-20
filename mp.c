@@ -2126,7 +2126,7 @@ static int MpColorAdjustB(void* ud, int dir) { (void)ud; return MpColorAdjust(&g
  * city alone when it is not. */
 #define MPCC_MAX_CITIES	CITY_COUNT	/* JERICHO: the engine's city ROW CAPACITY (stock nine +
 					 * 16 runtime bank slots), NOT the number of cities a
-					 * session has: carhacks answers MP_CARQ_CITIES with the
+					 * session has: carhacks answers JER_CARQ_CITIES with the
 					 * cities this install actually has (chkCityCount), and the
 					 * picker TRUNCATES to this. It was 6 when only Driver 2's
 					 * four cities could be offered, and the D1 cities past the
@@ -2205,7 +2205,7 @@ static void MpCcRebuild(void)
 
 	/* SAY WHICH CITIES THE ROW OFFERS, not just the one showing. "the picker only shows
 	 * the host city" is a report this line answers directly: it names the list the row will
-	 * cycle, so a run can tell a one-city list (nobody answered MP_CARQ_CITIES, or the car
+	 * cycle, so a run can tell a one-city list (nobody answered JER_CARQ_CITIES, or the car
 	 * mods' roster hack is off) from the full one. Logged when it changes, like the roster
 	 * line below, so a list that shrinks is as visible as one that grows. */
 	if (mpCcLoggedCities != mpCcCityCount)
@@ -3253,11 +3253,12 @@ static const JER_PAUSE_MENU_ITEM mpPauseItems[] =
 {
 	/* label, get_label, on_activate, userdata, submenu, adjust */
 
-	/* Most used first: Respawn is the row a player reaches for, then the car,
-	 * going to somebody and their own colour; the two switches after those, and
-	 * the admin/debug rows (kick, diagnostics) last. */
-	{ "Respawn", NULL, MpRespawn, NULL, NULL, 0 },
+	/* Most used first: the car, then Respawn (second, so a stray press on the
+	 * top row does not respawn you), going to somebody and their own colour;
+	 * the two switches after those, and the admin/debug rows (kick,
+	 * diagnostics) last. */
 	{ "Vehicle Options", NULL, NULL, NULL, &mpChangeCarMenu, 0 },
+	{ "Respawn", NULL, MpRespawn, NULL, NULL, 0 },
 	{ "Warp To Player", NULL, NULL, NULL, &mpWarpMenu, 0 },
 	{ "Player Color", NULL, NULL, NULL, &mpColorMenu, 0 },
 	{ NULL, MpOptLabelInvincible, MpOptToggleInvincible, NULL, NULL, 0 },
@@ -3335,7 +3336,7 @@ JER_MODULE_ENTRY(jer_module_mp_entry)(JERICHO_CONTEXT* ctx)
 	 * to be unattended needs a human to click OK. Same dump, no dialog. */
 	MpSuppressCrashDialogs();
 
-	ctx->jer_register_module(ctx, "mp", "Multiplayer", "0.12.0", "JERICHO",
+	ctx->jer_register_module(ctx, "mp", "Multiplayer", "0.1.0", "JERICHO",
 		"LAN multiplayer: host/join, UDP discovery, JERICHO addon net bridge, "
 		"owner-authoritative car sync (each machine drives its own car and "
 		"broadcasts its state; peers adopt it verbatim), and in-match chat.",
