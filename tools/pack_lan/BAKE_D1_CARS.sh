@@ -64,7 +64,7 @@ if [ -z "$PY" ]; then
 fi
 
 # BAKE_VERSION: bump when the bake gains something the game reads
-BAKE_VERSION=4
+BAKE_VERSION=5
 if [ -d "$OUT" ] && [ "$(cat "$OUT/BAKE_VERSION" 2>/dev/null)" != "$BAKE_VERSION" ]; then
 	echo "Your existing $OUT is from an older bake (no D1 wheels/sounds, or pre-Miami wheels) -- rebuilding it."
 	echo

@@ -64,7 +64,7 @@ if errorlevel 1 (
 )
 
 rem BAKE_VERSION: bump when the bake gains something the game reads
-set "BAKE_VERSION=4"
+set "BAKE_VERSION=5"
 set "HAVE_VERSION="
 if exist "%OUT%\BAKE_VERSION" set /p HAVE_VERSION=<"%OUT%\BAKE_VERSION"
 if exist "%OUT%" if not "%HAVE_VERSION%"=="%BAKE_VERSION%" (
