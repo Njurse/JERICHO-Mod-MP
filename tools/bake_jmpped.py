@@ -154,9 +154,8 @@ def main():
 
     suit_set, suit_id = first_texture(blobs[0])
     print("suit texture (torso): set %d id %d" % (suit_set, suit_id))
-    # Keep the legs' own Tanner texture set/id. The palette system tints those
-    # resident Tanner pages to the player's suit colour; rewriting them to the
-    # torso page makes the legs sample the wrong part of the suit atlas.
+    for blob in blobs[6:]:
+        retexture(blob, suit_set, suit_id)
 
     spool = find_lump(data2[8:], 26)
     if spool is None:
