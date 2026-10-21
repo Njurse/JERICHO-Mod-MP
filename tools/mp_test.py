@@ -27,7 +27,7 @@ import sys
 import threading
 import time
 
-PROTO = 13                    # mp_proto.h MP_PROTO_VERSION (12: 16 players, bigger roster) -- the game drops any frame whose envelope version differs
+PROTO = 14                    # mp_proto.h MP_PROTO_VERSION (14: MP_HIT carries targetFrame + tgtPos) -- the game drops any frame whose envelope version differs
 SDK = 2                       # JERICHO_SDK_VERSION
 MP_VER = "0.1.0"              # JERICHO/MODS/mp/mod.toml version -- always advertised
 NUL = bytes([0])
@@ -76,9 +76,9 @@ TAG = {
 PEDSTATE = struct.Struct("<B3x")
 PEDSTATE_ENTRY = struct.Struct("<BBHiiiii")
 # MP_HIT: targetId, flags (MP_HIT_F_TRAFFIC = targetId is a car_data slot), 2 reserved,
-# int32 impulse[3]. MP_COLOR: count + 3 reserved, then 8-byte rows
-# (playerId, on, r, g, b, 3 spare). (MP_CHANNEL is CHANNEL, below.)
-HIT = struct.Struct("<BB2xiii")
+# int32 impulse[3], uint32 targetFrame, int32 tgtPos[3] (32 bytes since proto 14).
+# MP_COLOR: count + 3 reserved, then 8-byte rows (playerId, on, r, g, b, 3 spare).
+HIT = struct.Struct("<BB2xiiiI3i")
 HIT_F_TRAFFIC = 0x01
 # MP_STATS (count + 3 reserved) + 12-byte MP_STATS_ENTRY rows: playerId, lossPct
 # (0xFF = unknown), pingMs, rxBps, txBps -- each player's link to the hub.

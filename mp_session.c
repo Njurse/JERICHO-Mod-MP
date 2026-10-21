@@ -1234,6 +1234,9 @@ static int MpCarSlotOwnedByPlayer(int slot, int ignoreId)
 	return 0;
 }
 
+/* Defined near the leave path; MpSpawnLateJoiners needs it earlier. */
+static int MpCarSlotTakenByOther(const MP_PLAYER* leaver, int slot);
+
 /* The clearance a join must leave around every other player's car. A car is
  * about 1000 units long, so two cars this far apart cannot overlap, and a
  * joiner cannot materialise in somebody's braking distance. */
@@ -1640,12 +1643,40 @@ void MpSpawnLateJoiners(void)
 		/* The body exists now: the next carstate should record a FRESH pose, so a
 		 * later re-seat is not anchored to the pose this build used. */
 		p->joinedPose = 0;
-		/* The recorded "car they left" (MP_PLAYER.leftCarSlot1) is only a seat to
-		 * REUSE, never a second body: now that this player has a fresh car from the
-		 * spawn path, forget it. Otherwise a later carstate could reclaim a body
-		 * that has nothing to do with the car just built. */
-		p->leftCarSlot1 = 0;
-		p->leftCarModel = -1;
+
+		/* THE BODY THEY LEFT MUST NOT SURVIVE A NEW ONE.
+		 *
+		 * A player who got out left a quiet-pad body and a leftCarSlot1 claim. If
+		 * a later carstate (or this spawn path) gives them a new car, clearing the
+		 * claim alone left the old body standing: the duplicate car seen when a
+		 * player re-enters or when a stale real carstate heals an on-foot row. Drop
+		 * the old body too, unless someone else has commandeered it (the claim is
+		 * then theirs and the body must stay). */
+		if (p->leftCarSlot1 > 0)
+		{
+			int old = p->leftCarSlot1 - 1;
+
+			if (old >= 0 && old < MAX_CARS && old != slot &&
+				car_data[old].controlType == CONTROL_TYPE_CIV_AI &&
+				car_data[old].ai.padid == &gMpQuietPad &&
+				car_data[old].ap.model == p->leftCarModel &&
+				!MpCarSlotTakenByOther(p, old))
+			{
+				MpReleaseOurCarSlot(old);
+				car_data[old].controlType = CONTROL_TYPE_NONE;
+
+				if (gMpCtx != NULL)
+					gMpCtx->jer_log(gMpCtx,
+						"[mp] removed player %d's abandoned car (slot %d) before giving a new one\n",
+						p->id, old);
+			}
+
+			/* The recorded "car they left" is only a seat to REUSE, never a second
+			 * body: now that this player has a fresh car from the spawn path,
+			 * forget it. */
+			p->leftCarSlot1 = 0;
+			p->leftCarModel = -1;
+		}
 		spawned++;
 
 		if (gMpCtx != NULL)
