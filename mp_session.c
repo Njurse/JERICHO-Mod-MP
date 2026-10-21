@@ -6365,7 +6365,20 @@ static void MpFollowLocalCar(void)
 		MpFailsafeNoteCar(cp->ap.model);
 
 		if (reentry)
+		{
 			MpCarQueryChosen(me->carCity, me->car, 1);
+
+			/* CLOSE THE ROSTER WINDOW. The carstate already carries
+			 * MP_CARSTATE_SAME_BODY on this same frame (MpSendOwnCarState), but the
+			 * roster only goes out every 120 frames. A host that has just got back
+			 * in should publish its row now rather than leave peers reading the
+			 * old on-foot row for up to two seconds -- that window is exactly where
+			 * a lost/reordered carstate used to leave them stuck. Clients have no
+			 * roster to send: their pick already travels through MP_CARQ, and the
+			 * host republishes. */
+			if (MpIsHost())
+				MpHostSendRoster();
+		}
 	}
 	else if (me->carId >= 0)
 	{
@@ -6415,6 +6428,14 @@ static void MpFollowLocalCar(void)
 		me->carId = -1;
 		me->car = -1;
 		me->onFoot = 1;		/* OUR row: the next car we get into is a choice (above) */
+
+		/* Publish the on-foot row now for the same reason as re-entry below: the
+		 * carstate says NO_CAR from this frame on, but the roster would otherwise
+		 * name the car we just left for up to 120 frames. A peer that missed the
+		 * transition then sees our old car as still driven. Host only -- a
+		 * client's rows reach the others through the host's roster. */
+		if (MpIsHost())
+			MpHostSendRoster();
 	}
 }
 
@@ -10098,6 +10119,27 @@ static void MpHandleCarState(int connIndex, const unsigned char* p, int len)
 			continue;
 		}
 
+		/* REAL BODY: THE OWNER IS DRIVING. Whatever an earlier NO_CAR row
+		 * recorded is stale now -- the carstate is the owner's authority and it
+		 * arrives every frame, so a real model means they are back in a car.
+		 *
+		 * Clear this HERE, before any path below can `continue` (a car that is
+		 * ours to drive locally, a body we could not adopt), because BOTH
+		 * recovery paths gate on it: MpSpawnLateJoiners skips every row with
+		 * onFoot set, and the roster's spawn request does the same. Leaving it
+		 * set is what made a lost/reordered transition permanent: the owner was
+		 * driving, this machine had no body for them, and the re-seat pass
+		 * refused to touch them for the rest of the match. */
+		if (pl->onFoot)
+		{
+			pl->onFoot = 0;
+
+			if (gMpCtx != NULL)
+				gMpCtx->jer_log(gMpCtx,
+					"[mp] heal: player %d is driving again (carstate model %d) - "
+					"cleared onFoot before re-seating\n", pl->id, (int)e.model);
+		}
+
 		/* FIRST REAL POSE WINS. A later body state can still be the
 		 * frontend/loading car at 0,0; overwriting the good pose with it is what
 		 * built the joiner at the origin. The sender gates keep such a state out,
@@ -10129,8 +10171,10 @@ static void MpHandleCarState(int connIndex, const unsigned char* p, int len)
 		 * stops the instant its owner is back in a car -- stayed where it was,
 		 * walking the spot and playing footstep sounds.
 		 *
-		 * Clearing onFoot is the whole fix: the re-seat pass runs every 30 frames
-		 * and will seat them on its next one. Logged once per get-out/get-in
+		 * The clear itself happens above, on every real-model carstate; this
+		 * block only decides whether there is a body to hand back. When there is
+		 * not, it arms the deferred spawn for the next frame, and the 30-frame
+		 * re-seat pass remains the backstop. Logged once per get-out/get-in
 		 * cycle, so the heal is visible when diagnosing. */
 		if (pl->carId < 0 || pl->carId >= MAX_CARS)
 		{
@@ -10183,16 +10227,13 @@ static void MpHandleCarState(int connIndex, const unsigned char* p, int len)
 
 			if (!reused)
 			{
-				if (pl->onFoot)
-				{
-					pl->onFoot = 0;
-
-					if (gMpCtx != NULL)
-						gMpCtx->jer_log(gMpCtx,
-							"[mp] heal: player %d's carstate says they are driving but we have "
-							"no car for them - re-seating them\n", pl->id);
-				}
-
+				/* No body of theirs to hand back: build one through the deferred
+				 * spawn path. Arm it for the NEXT FRAME instead of waiting up to
+				 * 30 for the periodic pass -- the owner says they are driving, so
+				 * the sooner the body exists the shorter the window in which they
+				 * are invisible. The flag only requests the pass; the spawn
+				 * itself still happens on a frame, never inside the poll. */
+				gMp.pendingSpawn = 1;
 				continue;
 			}
 		}
