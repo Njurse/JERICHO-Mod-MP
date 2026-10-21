@@ -1,0 +1,17 @@
+# Build output (premake writes targetdir/objdir into the mod folder)
+obj/
+lib/
+*.dll
+*.lib
+*.pdb
+*.exp
+*.idb
+*.ilk
+
+# Python tooling
+__pycache__/
+*.pyc
+
+# Local logs and packaged output
+*.log
+out/
