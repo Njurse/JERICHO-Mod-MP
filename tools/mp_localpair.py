@@ -41,6 +41,7 @@ import re
 import select
 import shutil
 import socket
+import struct
 import subprocess
 import sys
 import threading
@@ -96,26 +97,38 @@ atexit.register(stop_started)
 
 
 class DelayRelay:
-    """A local TCP relay that adds a one-way delay to each direction.
+    """A local TCP relay that adds a one-way delay and optional frame loss.
 
-    The session transport is TCP, so there is nothing to parse: bytes can be
-    delayed in order and the game sees the same stream, later. Each accepted
-    client connection gets its own upstream connection to the real host, and
-    two pump threads (client->host, host->client) apply the delay.
+    The session transport is TCP, so the relay cannot simply drop bytes: that
+    would corrupt the stream. It parses the module's own framing instead -- a
+    u32 little-endian length followed by that many bytes, with the four-byte
+    tag at offset 4 -- and drops WHOLE frames. The receiver then sees a clean
+    stream with a message missing, which is exactly the lost-carstate/lost-
+    roster case the recovery paths must survive.
 
     `lag_ms` is ONE-WAY. 150 ms therefore approximates a 300 ms RTT, which is
     the range the mp docs describe as internet play rather than LAN play.
-    Jitter is applied per received chunk and clamped at zero.
+    Jitter is applied per received frame and clamped at zero. `drop_tags` is a
+    set of four-byte tags (e.g. JPCS, JPRS); `drop_pct` is random loss, or
+    `drop_burst`/`drop_gap` alternate a run of dropped frames with a run that
+    gets through, so a transition window can be hit deterministically.
     """
 
     def __init__(self, listen_host, listen_port, target_host, target_port,
-                 lag_ms, jitter_ms):
+                 lag_ms, jitter_ms, drop_tags=None, drop_pct=0,
+                 drop_burst=0, drop_gap=0):
         self.listen_host = listen_host
         self.listen_port = listen_port
         self.target_host = target_host
         self.target_port = target_port
         self.lag_ms = lag_ms
         self.jitter_ms = jitter_ms
+        self.drop_tags = {t.encode("ascii") if isinstance(t, str) else t
+                          for t in (drop_tags or ())}
+        self.drop_pct = drop_pct
+        self.drop_burst = drop_burst
+        self.drop_gap = drop_gap
+        self._dropped = collections.Counter()
         self._stop = threading.Event()
         self._listen = None
         self._socks = []
@@ -193,15 +206,54 @@ class DelayRelay:
                              name="mp-relay-s2c", daemon=True).start()
 
     def _pump(self, src, dst):
-        """A true delay line: read continuously, send each chunk when due.
+        """A true delay line: read continuously, send each FRAME when due.
 
-        The first version slept between recv() and sendall(), which throttled a
-        continuous stream to one chunk per --lag-ms -- a 30 Hz game sending 30
-        small writes a second ended up queueing seconds of backlog. Reading into
-        a due-time queue first is what makes the delay one-way rather than
-        cumulative.
+        Frames are the module's own envelopes (u32 length + tag + payload), so
+        the relay can drop a WHOLE message for --drop-tag without corrupting
+        the TCP stream. Bytes that do not yet form a complete frame stay
+        buffered until the rest arrives. Reading into a due-time queue first is
+        what makes the delay one-way rather than cumulative.
         """
         pending = collections.deque()
+        buf = b""
+        burst_left = 0
+        burst_gap = 0
+
+        def should_drop(frame):
+            nonlocal burst_left, burst_gap
+
+            tag = frame[4:8]
+
+            if tag not in self.drop_tags:
+                return False
+
+            if self.drop_burst > 0:
+                if burst_left > 0:
+                    burst_left -= 1
+                    dropped = True
+                elif burst_gap > 0:
+                    burst_gap -= 1
+                    dropped = False
+                else:
+                    burst_left = self.drop_burst - 1
+                    burst_gap = self.drop_gap
+                    dropped = True
+            else:
+                dropped = (self.drop_pct > 0 and
+                           random.random() * 100.0 < self.drop_pct)
+
+            if dropped:
+                with self._lock:
+                    self._dropped[tag] += 1
+                    total = self._dropped[tag]
+
+                # One line per 100 dropped frames: enough to prove the loss
+                # mode is active without flooding the run's own output.
+                if total % 100 == 1:
+                    log(f"relay: dropped {total} "
+                        f"{tag.decode('ascii', 'replace')} frame(s)")
+
+            return dropped
 
         try:
             while not self._stop.is_set():
@@ -213,14 +265,43 @@ class DelayRelay:
                     if not data:
                         break
 
-                    due = time.monotonic() + self._delay()
+                    buf += data
 
-                    # Jitter can make a later chunk "due" earlier; keep the
-                    # stream ordered by never scheduling behind what is queued.
-                    if pending and due < pending[-1][0]:
-                        due = pending[-1][0]
+                    while len(buf) >= 4:
+                        flen = struct.unpack_from("<I", buf, 0)[0]
 
-                    pending.append((due, data))
+                        if flen < 8 or flen > (16 * 1024 * 1024):
+                            # Not an mp envelope (or a corrupt length): forward
+                            # the rest verbatim rather than stall the stream.
+                            log("relay: unexpected frame length; forwarding raw bytes")
+                            due = time.monotonic() + self._delay()
+
+                            if pending and due < pending[-1][0]:
+                                due = pending[-1][0]
+
+                            pending.append((due, buf))
+                            buf = b""
+                            break
+
+                        total = 4 + flen
+
+                        if len(buf) < total:
+                            break       # wait for the rest of this frame
+
+                        frame = buf[:total]
+                        buf = buf[total:]
+
+                        if should_drop(frame):
+                            continue
+
+                        due = time.monotonic() + self._delay()
+
+                        # Jitter can make a later frame "due" earlier; keep the
+                        # stream ordered by never scheduling behind what is queued.
+                        if pending and due < pending[-1][0]:
+                            due = pending[-1][0]
+
+                        pending.append((due, frame))
 
                 now = time.monotonic()
 
@@ -698,6 +779,23 @@ def main():
                     help="per-chunk jitter around --lag-ms, clamped at zero "
                          "(default 0 = none). Exercises arrival gaps and the "
                          "interpolation buffer's starvation path.")
+    ap.add_argument("--drop-tag", action="append", default=[], metavar="TAG",
+                    help="drop WHOLE application frames with this four-byte tag "
+                         "(repeatable), e.g. JPCS (carstate) or JPRS (roster). The relay "
+                         "parses the session framing, so the TCP stream stays valid and "
+                         "the game sees a message simply missing. Requires --drop-pct "
+                         "or --drop-burst.")
+    ap.add_argument("--drop-pct", type=int, default=0, metavar="PCT",
+                    help="random loss percentage for --drop-tag frames (0..100; "
+                         "default 0 = off).")
+    ap.add_argument("--drop-burst", type=int, default=0, metavar="N",
+                    help="burst loss: drop N consecutive matching frames, then forward "
+                         "--drop-gap matching frames, and repeat. 0 = use --drop-pct "
+                         "instead.")
+    ap.add_argument("--drop-gap", type=int, default=0, metavar="N",
+                    help="matching frames forwarded between --drop-burst runs "
+                         "(default 0 = keep dropping every matching frame after the "
+                         "first burst).")
     ap.add_argument("--join-host", default="127.0.0.1", metavar="HOST",
                     help="what the client seats dial. Default 127.0.0.1. Use a NAME "
                          "(e.g. --join-host localhost) to exercise the DNS path, or a "
@@ -807,6 +905,21 @@ def main():
                          "bad run is obvious as it happens (0 = never)")
     args = ap.parse_args()
 
+    args.drop_tags = [t.strip() for t in args.drop_tag if t.strip()]
+
+    for tag in args.drop_tags:
+        if len(tag) != 4:
+            log(f"--drop-tag wants a four-byte tag such as JPCS or JPRS, got {tag!r}")
+            return 2
+
+    if args.drop_tags and args.drop_pct <= 0 and args.drop_burst <= 0:
+        log("--drop-tag needs --drop-pct or --drop-burst")
+        return 2
+
+    if args.drop_pct < 0 or args.drop_pct > 100:
+        log("--drop-pct must be 0..100")
+        return 2
+
     if args.players < 2 or args.players > len(SEAT_NAMES):
         log(f"--players must be 2..{len(SEAT_NAMES)}")
         return 2
@@ -866,19 +979,23 @@ def main():
         build_run_dir(game_dir, dirs[name], f"Local{name.upper()}", args.port)
     log(f"run dirs ready under {pair_root}")
 
-    # A local relay is the only way to make latency reproducible on one PC.
-    # Every joiner dials the relay; the relay holds bytes for --lag-ms in each
-    # direction before forwarding them to the real host. The host itself is
-    # untouched -- the session is TCP, so this needs no protocol knowledge.
+    # A local relay is the only way to make latency and frame loss reproducible on
+    # one PC. Every joiner dials the relay; the relay holds frames for --lag-ms in
+    # each direction and can drop whole --drop-tag frames before forwarding them
+    # to the real host. The host itself is untouched.
     join_host = args.join_host
     join_port = args.port
 
-    if args.lag_ms > 0 or args.lag_jitter_ms > 0:
+    drop_on = bool(args.drop_tags) and (args.drop_pct > 0 or args.drop_burst > 0)
+
+    if args.lag_ms > 0 or args.lag_jitter_ms > 0 or drop_on:
         global RELAY
 
         RELAY = DelayRelay("127.0.0.1", args.port + 1,
                            args.join_host, args.port,
-                           args.lag_ms, args.lag_jitter_ms)
+                           args.lag_ms, args.lag_jitter_ms,
+                           args.drop_tags, args.drop_pct,
+                           args.drop_burst, args.drop_gap)
 
         try:
             RELAY.start()
@@ -895,6 +1012,16 @@ def main():
             f"one-way {args.lag_ms} ms"
             + (f" +/- {args.lag_jitter_ms} ms jitter" if args.lag_jitter_ms else "")
             + " (so the round trip is about 2x that)")
+
+        if drop_on:
+            if args.drop_burst > 0:
+                loss = (f"dropping {args.drop_burst} consecutive "
+                        f"{'/'.join(args.drop_tags)} frame(s), then passing "
+                        f"{args.drop_gap}")
+            else:
+                loss = f"dropping {args.drop_pct}% of {'/'.join(args.drop_tags)} frames"
+
+            log(f"relay: {loss}")
 
     # NOTE: both instances want UDP/1318 for discovery, so the second one reports
     # "discovery unavailable" and simply does not browse. The join below uses the
