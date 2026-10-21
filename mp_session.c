@@ -6542,7 +6542,7 @@ int MpPedModelSelectable(int model)
 		return 1;
 
 	if (model == MP_PED_MODEL_JERICHO)
-		return MpPedModelAvailable(model) || JerPedImportProbe(1);
+		return MpPedModelAvailable(model) || JerPedBakedAvailable() || JerPedImportProbe(1);
 
 	return 0;
 }
@@ -6627,6 +6627,16 @@ static int MpEnsureJerichoImported(void)
 
 	if (sMpJerPedImportFailed)
 		return 0;
+
+	/* The baked JMPPED.LEV is self-contained and is the shipping path; the live
+	 * Havana import remains as a diagnostic fallback. */
+	if (JerPedBakedAvailable())
+	{
+		if (JerPedImportBaked(GameLevel) && MpEnsureJerichoInstalled())
+			return 1;
+
+		JerPedImportReset();
+	}
 
 	if (!JerPedImportProbe(1) || !JerPedImportBuild(1) || !MpEnsureJerichoInstalled())
 	{
