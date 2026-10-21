@@ -47,6 +47,7 @@ extern int gWantNight;		/* glaunch.c: 1 = the night take-a-ride level variant */
 
 #include <string.h>
 #include <stdio.h>
+#include <stdlib.h>	/* getenv: the MP_TEST_JERICHO dev lever */
 #include <math.h>	/* sqrt: the deviation readout below */
 
 /* WHICH CAR SLOTS ARE OURS.
@@ -3398,6 +3399,8 @@ static void MpTestCarCycleTick(void);
 static void MpTestLeaveTick(void);
 static void MpTestKickTick(void);
 static void MpTestOnFootTick(void);
+static int MpEnsureJerichoImported(void);
+static int MpEnsureJerichoInstalled(void);
 static void MpTestFallOffTick(void);
 
 
@@ -5332,6 +5335,22 @@ void MpLockstepFrame(void)
 	/* test lever: get out of the car part-way through (inert unless MP_TEST_ONFOOT),
 	 * so the on-foot path has a way to be exercised at all. */
 	MpTestOnFootTick();
+
+	/* test lever: import Jericho at a fixed frame, with or without a session, so
+	 * the model/page import can be exercised headlessly (inert unless
+	 * MP_TEST_JERICHO). */
+	{
+		const char* tj = getenv("MP_TEST_JERICHO");
+
+		if (tj != NULL && tj[0] != '0' && gMp.frame == 120)
+		{
+			int ok = MpEnsureJerichoImported() && MpEnsureJerichoInstalled();
+
+			if (gMpCtx != NULL)
+				gMpCtx->jer_log(gMpCtx, "[mp] test: MP_TEST_JERICHO import %s (level %d)\n",
+					ok ? "succeeded" : "FAILED", GameLevel);
+		}
+	}
 
 	/* test lever: run the pause menu's Change car path (inert unless
 	 * MP_TEST_PAUSECAR), so a mid-match vehicle change is reproducible headlessly
