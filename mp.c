@@ -2564,8 +2564,8 @@ static void MpCharLabel(void* ud, char* out, int max)
 
 	(void)ud;
 
-	if (!MpPedModelAvailable(MP_PED_MODEL_JERICHO))
-		snprintf(out, max, "Preferred Character: %s (Jericho: Havana only)",
+	if (!MpPedModelSelectable(MP_PED_MODEL_JERICHO))
+		snprintf(out, max, "Preferred Character: %s (Jericho unavailable)",
 			MpPedModelName(model));
 	else
 		snprintf(out, max, "Preferred Character: %s", MpPedModelName(model));
@@ -2587,7 +2587,7 @@ static int MpCharAdjust(void* ud, int dir)
 	{
 		model = (model + dir + MP_PED_MODEL_COUNT) % MP_PED_MODEL_COUNT;
 
-		if (MpPedModelAvailable(model))
+		if (MpPedModelSelectable(model))
 		{
 			MpSetPedModel(model);
 			break;

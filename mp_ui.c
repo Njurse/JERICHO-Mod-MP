@@ -661,15 +661,60 @@ static const JER_FE_ITEM kHostSetItems[] =
 };
 static const JER_FE_MENU kHostSetMenu = { "mp.mode", kHostSetItems, 3, NULL, NULL };
 
-static JER_FE_ITEM kJmpOptionsItems[] =
+/* Frontend character picker. Like the carhacks car roster, it is a live cycle
+ * row: left/right changes the stored choice, the label is rebuilt on every
+ * layout, and the actual model import happens when a level can hold it (or
+ * immediately if a match is already running). */
+static void LblPreferredCharacter(void* ud, char* out, int max)
 {
+	int selected = MpPedModelSelected();
+	int model = selected;
+
+	(void)ud;
+
+	if (selected == MP_PED_MODEL_JERICHO && !MpPedModelSelectable(MP_PED_MODEL_JERICHO))
+		model = MpPedModelEffective(selected);
+
+	if (!MpPedModelSelectable(MP_PED_MODEL_JERICHO))
+		snprintf(out, max, "Preferred Character: %s (Jericho unavailable)",
+			MpPedModelName(model));
+	else
+		snprintf(out, max, "Preferred Character: %s", MpPedModelName(model));
+}
+
+static int AdjPreferredCharacter(void* ud, int dir)
+{
+	int model = MpPedModelSelected();
+	int i;
+
+	(void)ud;
+
+	if (dir == 0)
+		return 1;
+
+	for (i = 0; i < MP_PED_MODEL_COUNT; i++)
+	{
+		model = (model + dir + MP_PED_MODEL_COUNT) % MP_PED_MODEL_COUNT;
+
+		if (MpPedModelSelectable(model))
+		{
+			MpSetPedModel(model);
+			break;
+		}
+	}
+
+	return 1;
+}
+
+static JER_FE_ITEM kJmpOptionsItems[] ={
 	{ "Change Name",    NULL, NULL, NULL,       NULL,       -1, 0 },
+	{ NULL, LblPreferredCharacter, NULL, NULL, AdjPreferredCharacter, -1, 0 },
 	{ NULL, LblEnforce, NULL, NULL, AdjEnforce, -1,       0 },
 	{ NULL, LblStrict,  NULL, NULL, AdjStrict,  -1,       0 },
 	{ NULL, LblPort,    NULL, NULL, AdjPort,    -1,       0 },
 	{ "Back",           NULL, NULL, NULL,       NULL,      -1,     1 },
 };
-static const JER_FE_MENU kJmpOptionsMenu = { "mp.jmpoptions", kJmpOptionsItems, 5, NULL, NULL };
+static const JER_FE_MENU kJmpOptionsMenu = { "mp.jmpoptions", kJmpOptionsItems, 6, NULL, NULL };
 
 /* Resolve every mp menu by id and point the submenu rows at what they got. The
  * item arrays are written with -1 and wired HERE, because the registered index

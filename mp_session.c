@@ -39,6 +39,7 @@ extern int gWantNight;		/* glaunch.c: 1 = the night take-a-ride level variant */
 #include "jer_map.h"	/* jer_map_*: the region maths behind "is the ground there?" */
 #include "map.h"	/* regions_across/down, MAP_REGION_SIZE, units_across_halved: map-wide join spawn */
 #include "pedest.h"	/* pUsedPeds: our player's own pedestrian, when on foot */
+#include "models.h"	/* JerPedImport*: the cross-level Jericho model/texture import */
 #include "motion_c.h"	/* SetSkelModelPointers: the character switch */
 #include "jer_npc.h"	/* jer_npc_*: the pedestrian we stand in for a REMOTE one */
 #include "camera.h"	/* InitCamera: snap the camera with a placed late joiner */
@@ -6497,27 +6498,47 @@ int MpPedModelAvailable(int model)
 		return 1;
 
 	case MP_PED_MODEL_JERICHO:
-		if (GameLevel != 1)
-			return 0;
-
 		for (i = 0; i < 6; i++)
 		{
 			if (pmJerichoModels[i] == NULL)
 				return 0;
 		}
 
-		return 1;
+		/* Native Havana models are already resident; imported models are ready
+		 * only when their pages and palette are in place. */
+		return (GameLevel == 1) ? 1 : JerPedImportReady();
 
-	/* The cop/civilian rows are the engine's DrawCiv family; they are named on
-	 * the wire so the id space will not move, but their picker rows land later. */
 	default:
 		return 0;
 	}
 }
 
+static int sMpJerPedInstalledLevel = -1;
+
+/* UI-facing: may this character be OFFERED here? Jericho is selectable even
+ * before it is resident, because selecting it is what triggers the import. */
+int MpPedModelSelectable(int model)
+{
+	if (model == MP_PED_MODEL_TANNER)
+		return 1;
+
+	if (model == MP_PED_MODEL_JERICHO)
+		return MpPedModelAvailable(model) || JerPedImportProbe(1);
+
+	return 0;
+}
+
 int MpPedModelEffective(int model)
 {
-	return MpPedModelAvailable(model) ? model : MP_PED_MODEL_TANNER;
+	if (!MpPedModelAvailable(model))
+		return MP_PED_MODEL_TANNER;
+
+	/* Jericho's models can be resident while its palette pairs have not been
+	 * appended yet (native Havana). Do not draw a half-installed character. */
+	if (model == MP_PED_MODEL_JERICHO && sMpJerPedInstalledLevel != GameLevel)
+		return MP_PED_MODEL_TANNER;
+
+	return model;
 }
 
 int MpPedModelSelected(void)
@@ -6549,6 +6570,61 @@ static void MpSelectLocalPalette(void)
 			MP_COLOR_STRENGTH));
 }
 
+/* Import Jericho on demand. One refusal per level is remembered so a stored
+ * Jericho on a machine without Havana's data does not retry every frame; an
+ * explicit re-selection clears the flag. */
+static int sMpJerPedImportFailed;
+static int sMpJerPedImportLevel = -1;
+
+/* Make the resident six models usable for drawing: append their palette pairs,
+ * rebuild the Jericho vertex list and rebind the skeleton. One success per
+ * level; a failure leaves MpPedModelEffective on Tanner. */
+static int MpEnsureJerichoInstalled(void)
+{
+	if (!MpPedModelAvailable(MP_PED_MODEL_JERICHO))
+		return 0;
+
+	if (sMpJerPedInstalledLevel == GameLevel)
+		return 1;
+
+	if (!JerPedInstallModels())
+		return 0;
+
+	sMpJerPedInstalledLevel = GameLevel;
+	return 1;
+}
+
+static int MpEnsureJerichoImported(void)
+{
+	if (MpPedModelAvailable(MP_PED_MODEL_JERICHO))
+		return MpEnsureJerichoInstalled();
+
+	if (sMpJerPedImportLevel != GameLevel)
+	{
+		sMpJerPedImportLevel = GameLevel;
+		sMpJerPedImportFailed = 0;
+		sMpJerPedInstalledLevel = -1;
+	}
+
+	if (sMpJerPedImportFailed)
+		return 0;
+
+	if (!JerPedImportProbe(1) || !JerPedImportBuild(1) || !MpEnsureJerichoInstalled())
+	{
+		sMpJerPedImportFailed = 1;
+		JerPedImportReset();
+
+		if (gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx,
+				"[mp] character: Jericho import failed on level %d - staying on Tanner\n",
+				GameLevel);
+
+		return 0;
+	}
+
+	return MpPedModelAvailable(MP_PED_MODEL_JERICHO);
+}
+
 /* Apply the chosen character to OUR pedestrian, if we have one. While in a car
  * there is no ped; the next MpSendOwnPedState on foot calls this again, which is
  * exactly "apply when you next get out". */
@@ -6565,6 +6641,14 @@ static void MpApplyLocalPedModel(void)
 
 	if (ped == NULL)
 		return;
+
+	/* A stored Jericho that was chosen before the level loaded is imported here,
+	 * on the first frame the player actually has a pedestrian. */
+	if (gMp.config.pedModel == MP_PED_MODEL_JERICHO)
+	{
+		MpEnsureJerichoImported();
+		MpEnsureJerichoInstalled();
+	}
 
 	model = MpPedModelEffective(gMp.config.pedModel);
 	type = MpPedTypeForModel(model);
@@ -6598,12 +6682,35 @@ int MpSetPedModel(int model)
 	if (model < 0 || model >= MP_PED_MODEL_COUNT)
 		return 0;
 
-	if (!MpPedModelAvailable(model))
+	if (!MpPedModelSelectable(model))
 	{
 		MpNotify(model == MP_PED_MODEL_JERICHO
-			? "Jericho is only available in Havana"
+			? "Jericho is unavailable (Havana data is not installed)"
 			: "That character is not available");
 
+		return 0;
+	}
+
+	/* An explicit pick is also a retry: a previous import failure must not keep
+	 * Jericho refused for the rest of the level. */
+	sMpJerPedImportLevel = GameLevel;
+	sMpJerPedImportFailed = 0;
+
+	if (model == MP_PED_MODEL_JERICHO && !MpPedModelAvailable(MP_PED_MODEL_JERICHO))
+	{
+		/* At the frontend there is no level to pin pages into. Persist the choice;
+		 * MpApplyLocalPedModel imports it on the first on-foot frame. */
+		if (gMp.running && !MpEnsureJerichoImported())
+		{
+			MpNotify("Jericho could not be imported - staying on the current character");
+
+			return 0;
+		}
+	}
+
+	if (gMp.running && model == MP_PED_MODEL_JERICHO && !MpEnsureJerichoInstalled())
+	{
+		MpNotify("Jericho could not be prepared - staying on the current character");
 		return 0;
 	}
 
@@ -6615,10 +6722,9 @@ int MpSetPedModel(int model)
 	if (me != NULL)
 		me->pedModel = model;
 
-	MpApplyLocalPedModel();
-
 	if (gMp.running)
 	{
+		MpApplyLocalPedModel();
 		MpSendColors(0);	/* identity travels with colour */
 		MpSendOwnPedState();	/* and with the pose, when there is one */
 	}
@@ -6786,6 +6892,16 @@ static void MpDriveRemotePed(MP_PLAYER* p)
 
 		return;
 	}
+
+	/* A remote owner may have chosen Jericho. Import it here, on the machine
+	 * that has to draw the stand-in, before choosing the ped type. A failure
+	 * falls back to Tanner through MpPedModelEffective and is remembered for the
+	 * level, so a peer without Havana's data does not retry every frame. */
+	if (p->pedModel == MP_PED_MODEL_JERICHO && !MpPedModelAvailable(MP_PED_MODEL_JERICHO))
+		MpEnsureJerichoImported();
+
+	if (p->pedModel == MP_PED_MODEL_JERICHO)
+		MpEnsureJerichoInstalled();
 
 	if (n != NULL)
 	{

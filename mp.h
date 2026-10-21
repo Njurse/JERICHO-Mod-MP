@@ -386,7 +386,8 @@ void MpSelfClearFelony(void);		/* pause menu: clear the local player's wanted le
 
 /* Preferred on-foot character (MP_PED_MODEL_*). The owner is the only writer of
  * its own choice; everyone else mirrors it through the wire. */
-int  MpPedModelAvailable(int model);	/* can THIS level draw that character? */
+int  MpPedModelAvailable(int model);	/* can THIS level draw that character now? */
+int  MpPedModelSelectable(int model);	/* may the UI offer it (import pending is OK)? */
 int  MpPedModelEffective(int model);	/* model, or Tanner when unavailable here */
 int  MpPedModelSelected(void);		/* the local player's own choice (config) */
 int  MpSetPedModel(int model);		/* owner: persist, apply, broadcast; 0 = refused */
