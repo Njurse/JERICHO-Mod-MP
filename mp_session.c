@@ -5638,6 +5638,30 @@ static void MpTestOnFootTick(void)
 	ChangeCarPlayerToPed(0);
 }
 
+/* Why a claimed left car cannot be entered here, or NULL when every gate the
+ * lever applies passes. The named reasons are the point: "no left car" covered
+ * a missing claim, a rejected body and a machine that never held the car, and
+ * those need different fixes. */
+static const char* MpLeftCarRejectReason(const MP_PLAYER* p, int left)
+{
+	if (left < 0 || left >= MAX_CARS)
+		return "slot out of range";
+
+	if (car_data[left].controlType != CONTROL_TYPE_CIV_AI)
+		return "controlType is not CIV_AI";
+
+	if (car_data[left].ap.carCos == NULL)
+		return "no cosmetics (carCos NULL)";
+
+	if (car_data[left].ap.model != p->leftCarModel)
+		return "model does not match the recorded leftCarModel";
+
+	if (car_data[left].ai.padid != &gMpQuietPad)
+		return "pad is not the quiet pad";
+
+	return NULL;
+}
+
 /* MP_TEST_ENTER_LEFT=<secs>[,<playerId>] -- walk into the car ANOTHER player
  * left, from a headless run.
  *
@@ -5651,7 +5675,14 @@ static void MpTestOnFootTick(void)
  *
  * <playerId> defaults to 0xFFFF = the first non-local row with a left car. The
  * local player must be ON FOOT; this is the "another player" path, not the
- * owner walking back into their own car (MP_TEST_PAUSECAR covers that). */
+ * owner walking back into their own car (MP_TEST_PAUSECAR covers that).
+ *
+ * A third field, <exitSecs>, makes the lever walk back OUT that many seconds
+ * after it entered (the engine's own ActivatePlayerPedestrian +
+ * ChangeCarPlayerToPed), parking the commandeered body. That is how the
+ * commandeer-then-get-out case is exercised headlessly: the new owner's row
+ * keeps leftCarSlot1 on the body, and the original owner's return must not
+ * delete it. */
 static void MpTestEnterLeftTick(void)
 {
 	static int done;
@@ -5659,14 +5690,39 @@ static void MpTestEnterLeftTick(void)
 	static int notedOnFoot;
 	static int notedMissing;
 	static unsigned long startMs;
+	static unsigned long exitAtMs;
 	const char* s;
 	const char* comma;
-	int secs, want = 0xFFFF, i, slot = -1, owner = -1;
+	int secs, want = 0xFFFF, exitSecs = 0, i, slot = -1, owner = -1;
+	const MP_PLAYER* seen = NULL;		/* target row, even with no claim */
+	const MP_PLAYER* claim = NULL;		/* first claimed slot that failed a gate */
+	const char* why = NULL;			/* its rejection reason */
+	int claimLeft = -1;
 	MP_PLAYER* me;
 	unsigned long now = MpNowMs();
 
-	if (done || !gMp.running)
+	if (!gMp.running)
 		return;
+
+	if (done)
+	{
+		if (exitAtMs != 0 && (long)(now - exitAtMs) >= 0)
+		{
+			exitAtMs = 0;
+
+			if (player[0].playerCarId >= 0 && player[0].playerCarId < MAX_CARS)
+			{
+				if (gMpCtx != NULL)
+					gMpCtx->jer_log(gMpCtx,
+						"[mp] test: enter left car - getting OUT again, parking the commandeered car\n");
+
+				ActivatePlayerPedestrian(&car_data[player[0].playerCarId], NULL, 0, NULL, TANNER_MODEL);
+				ChangeCarPlayerToPed(0);
+			}
+		}
+
+		return;
+	}
 
 	s = gTestEnterLeftStr;
 
@@ -5687,7 +5743,14 @@ static void MpTestEnterLeftTick(void)
 	comma = strchr(s, ',');
 
 	if (comma != NULL)
+	{
+		const char* comma2 = strchr(comma + 1, ',');
+
 		want = atoi(comma + 1);
+
+		if (comma2 != NULL)
+			exitSecs = atoi(comma2 + 1);
+	}
 
 	if (startMs == 0)
 		startMs = MpNowMs();
@@ -5717,24 +5780,36 @@ static void MpTestEnterLeftTick(void)
 		const MP_PLAYER* p = &gMp.players[i];
 		int left;
 
-		if (!p->active || p->isLocal || p->leftCarSlot1 <= 0)
+		if (!p->active || p->isLocal)
 			continue;
 
 		if (want != 0xFFFF && p->id != want)
 			continue;
 
-		left = p->leftCarSlot1 - 1;
+		if (seen == NULL)
+			seen = p;
 
-		if (left < 0 || left >= MAX_CARS ||
-			car_data[left].controlType != CONTROL_TYPE_CIV_AI ||
-			car_data[left].ap.carCos == NULL ||
-			car_data[left].ap.model != p->leftCarModel ||
-			car_data[left].ai.padid != &gMpQuietPad)
+		if (p->leftCarSlot1 <= 0)
 			continue;
 
-		slot = left;
-		owner = p->id;
-		break;
+		left = p->leftCarSlot1 - 1;
+
+		/* A claimed body is the only thing the lever can enter. Remember the
+		 * first one that fails so the log names WHY, instead of saying there is
+		 * no left car at all. */
+		if (MpLeftCarRejectReason(p, left) == NULL)
+		{
+			slot = left;
+			owner = p->id;
+			break;
+		}
+
+		if (claim == NULL)
+		{
+			claim = p;
+			claimLeft = left;
+			why = MpLeftCarRejectReason(p, left);
+		}
 	}
 
 	if (slot < 0)
@@ -5744,9 +5819,48 @@ static void MpTestEnterLeftTick(void)
 			notedMissing = 1;
 
 			if (gMpCtx != NULL)
-				gMpCtx->jer_log(gMpCtx,
-					"[mp] test: enter left car - no left car for player %d on this machine\n",
-					(want == 0xFFFF) ? -1 : want);
+			{
+				if (want != 0xFFFF && seen == NULL)
+				{
+					gMpCtx->jer_log(gMpCtx,
+						"[mp] test: enter left car - no left car for player %d on this machine: "
+						"no active non-local roster row with that id\n",
+						want);
+				}
+				else if (claim != NULL)
+				{
+					int inRange = (claimLeft >= 0 && claimLeft < MAX_CARS);
+
+					gMpCtx->jer_log(gMpCtx,
+						"[mp] test: enter left car - no left car for player %d on this machine: "
+						"player %d active=1 local=0 carId=%d onFoot=%d leftCarSlot1=%d "
+						"slot=%d controlType=%d model=%d leftModel=%d quietpad=%d carCos=%s - rejected: %s\n",
+						claim->id, claim->id, claim->carId, claim->onFoot, claim->leftCarSlot1,
+						claimLeft,
+						inRange ? (int)car_data[claimLeft].controlType : -1,
+						inRange ? (int)car_data[claimLeft].ap.model : -1,
+						claim->leftCarModel,
+						(inRange && car_data[claimLeft].ai.padid == &gMpQuietPad) ? 1 : 0,
+						(inRange && car_data[claimLeft].ap.carCos != NULL) ? "present" : "NULL",
+						(why != NULL) ? why : "unknown");
+				}
+				else
+				{
+					const MP_PLAYER* row = seen;
+
+					gMpCtx->jer_log(gMpCtx,
+						"[mp] test: enter left car - no left car for player %d on this machine: "
+						"player %d active=%d local=0 carId=%d onFoot=%d leftCarSlot1=%d leftCarModel=%d - "
+						"no claim on this machine (it never held the body, or the NO_CAR rows arrived before a local slot was assigned)\n",
+						(row != NULL) ? row->id : ((want == 0xFFFF) ? -1 : want),
+						(row != NULL) ? row->id : -1,
+						(row != NULL) ? 1 : 0,
+						(row != NULL) ? row->carId : -99,
+						(row != NULL) ? row->onFoot : -1,
+						(row != NULL) ? row->leftCarSlot1 : -1,
+						(row != NULL) ? row->leftCarModel : -1);
+				}
+			}
 		}
 
 		return;
@@ -5766,7 +5880,33 @@ static void MpTestEnterLeftTick(void)
 				car_data[slot].ai.padid == &gMpQuietPad ? 1 : 0, can);
 
 		if (can)
+		{
+			/* THE ENGINE'S GET-IN PATH PUTS THE LOCAL TANNER AWAY, and this
+			 * lever must do the same. ChangePedPlayerToCar clears
+			 * player[0].pPed first, so capture the ped before the call and
+			 * remove it after -- exactly as MpChangeCarRun's re-entry does.
+			 *
+			 * Without this the ped from the get-out stays in the pool with
+			 * padId 0, numTannerPeds never drops, and the next get-out builds
+			 * a SECOND ped for the same player. The stale one is then driven
+			 * after its player has moved on; the last time this ran, the exit
+			 * wrote a world coordinate over vsync_callback and the intr thread
+			 * called it (intrThreadMain+0x7E). */
+			LPPEDESTRIAN ped = player[0].pPed;
+
 			ChangePedPlayerToCar(0, &car_data[slot]);
+			RemovePlayerPedestrian(ped);
+
+			if (exitSecs > 0)
+			{
+				exitAtMs = now + (unsigned long)exitSecs * 1000;
+
+				if (gMpCtx != NULL)
+					gMpCtx->jer_log(gMpCtx,
+						"[mp] test: enter left car - will get OUT again in %ds, parking the commandeered car\n",
+						exitSecs);
+			}
+		}
 	}
 }
 
@@ -6522,6 +6662,41 @@ static void MpFollowLocalCar(void)
 			gMpCtx->jer_log(gMpCtx,
 				"[mp] car change: now driving slot %d model %d (was slot %d)\n",
 				driven, cp->ap.model, me->carId);
+
+		/* THE BODY WE LEFT IS NOT OURS ANY MORE. Getting into a DIFFERENT car
+		 * (commandeering one) used to leave the old parked body standing, and the
+		 * next get-out overwrote leftCarSlot1 -- so nothing ever removed it. That
+		 * is the extra car the peers see but this machine does not: the abandoned
+		 * body keeps its own slot and its own claim.
+		 *
+		 * Drop it here, under the same ownership rule as every other removal: only
+		 * while it is still the parked, quiet-pad body and nobody else drives or
+		 * claims it. If we got back into the body we left, leave the claim alone --
+		 * MpSendOwnCarState needs it to send MP_CARSTATE_SAME_BODY. */
+		if (me->leftCarSlot1 > 0)
+		{
+			int old = me->leftCarSlot1 - 1;
+
+			if (old >= 0 && old < MAX_CARS && old != driven &&
+				car_data[old].controlType == CONTROL_TYPE_CIV_AI &&
+				car_data[old].ai.padid == &gMpQuietPad &&
+				!MpCarSlotTakenByOther(me, old))
+			{
+				MpReleaseOurCarSlot(old);
+				car_data[old].controlType = CONTROL_TYPE_NONE;
+
+				if (gMpCtx != NULL)
+					gMpCtx->jer_log(gMpCtx,
+						"[mp] removed the car we left (slot %d) after getting into slot %d\n",
+						old, driven);
+			}
+
+			if (old != driven)
+			{
+				me->leftCarSlot1 = 0;
+				me->leftCarModel = -1;
+			}
+		}
 
 		me->carId = driven;
 		me->car = (cp->ap.model >= 0 && cp->ap.model < MAX_CAR_RESIDENT_MODELS)
@@ -7512,7 +7687,19 @@ static int MpCarSlotTakenByOther(const MP_PLAYER* leaver, int slot)
 	{
 		const MP_PLAYER* o = &gMp.players[i];
 
-		if (o != leaver && o->active && o->carId == slot)
+		if (o == leaver || !o->active)
+			continue;
+
+		/* DRIVING IT, OR PARKED IT AND STILL STANDING NEXT TO IT.
+		 *
+		 * carId alone missed the commandeer-then-get-out case: the new owner's
+		 * row has carId < 0 but leftCarSlot1 names this body, and the body is
+		 * CIV_AI + the quiet pad, so every other test calls it free. The original
+		 * owner's spawn then took it for an abandoned duplicate and deleted the
+		 * car its new owner could still walk back into. A left-car claim is
+		 * ownership here for the same reason MpCarSlotOwnedByPlayer treats it as
+		 * ownership when choosing a slot. */
+		if (o->carId == slot || o->leftCarSlot1 == slot + 1)
 			return 1;
 	}
 
@@ -10359,10 +10546,12 @@ static void MpHandleCarState(int connIndex, const unsigned char* p, int len)
 			 *
 			 * The body is only ours to hand back while it is still that car and
 			 * nobody else has taken it: a cleared/recycled slot, a released mesh, a
-			 * model that changed under us, a car another player (or WE) now drive -
-			 * any of those and this falls back to the spawn path, exactly as before.
-			 * The model-change block below then re-models the body if the owner's
-			 * carstate names a different vehicle (the Change car case). */
+			 * model that changed under us, a car another player (or WE) now drive,
+			 * or ANOTHER PLAYER'S PARKED CLAIM on it (their leftCarSlot1) - any of
+			 * those and this falls back to the spawn path, exactly as before.
+			 * The claim test matters: a player who commandeered the body and then
+			 * got out has carId < 0 but still owns it through leftCarSlot1, and
+			 * MpGetPlayerByCar alone would hand it back to the original owner. */
 			if ((e.flags & MP_CARSTATE_SAME_BODY) && pl->leftCarSlot1 > 0)
 			{
 				int slot = pl->leftCarSlot1 - 1;
@@ -10370,6 +10559,7 @@ static void MpHandleCarState(int connIndex, const unsigned char* p, int len)
 				if (slot >= 0 && slot < MAX_CARS &&
 					slot != (int)player[0].playerCarId &&
 					MpGetPlayerByCar(slot) == NULL &&
+					!MpCarSlotTakenByOther(pl, slot) &&
 					car_data[slot].controlType != CONTROL_TYPE_NONE &&
 					car_data[slot].ap.carCos != NULL &&
 					car_data[slot].ap.model == pl->leftCarModel &&
