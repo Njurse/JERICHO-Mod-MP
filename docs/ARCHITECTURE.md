@@ -370,6 +370,17 @@ non-deterministic simulations cannot be reconciled that way -- the follower's vi
 a remote car wandered +/-100-900 units while driving, and no threshold fixes that.
 With adoption it is 0-2 units.
 
+**The owner also owns the siren.** `MP_CARSTATE_SIREN` (1 << 3;
+`MP_CARSTATE_SAME_BODY` already occupies 1 << 1) says the driven car is a police
+model with its lightbar on. The engine only draws a cop bar for
+`CONTROL_TYPE_PURSUER_AI`, roadblock or cutscene cars, and a remote player car is
+`CONTROL_TYPE_PLAYER`, so `MpHandleCarState` calls `AddCopCarLight` itself when
+the bit is set -- the same call the traffic mirror makes for `MP_TRAFFIC_SIREN`.
+The owner decides; the current condition is
+`CarHasSiren(cp->ap.model) && cp->ai.p.dying < 75`, with the real player siren-on
+state still a TODO. No protocol bump: an older peer ignores the unknown bit. The
+siren SOUND is unchanged.
+
 **Contacts are handed off, not simulated twice.** A machine can only move the ONE
 car it owns, so when your car touches a peer's you push yours and report it
 (`MP_HIT`); the peer's machine pushes theirs. Both cars move and each stays its
