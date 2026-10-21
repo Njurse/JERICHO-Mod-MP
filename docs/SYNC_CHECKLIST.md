@@ -263,6 +263,11 @@ AI.
 - Headless levers: `MP_TEST_CARCHANGE=<secs>[,<exitSecs>]` (get out / into the nearest
   civilian), `MP_TEST_PAUSECAR=<secs>[,<city>[,<model>]][;...]` (the pause menu's
   `Apply`, including a cross-city one), `MP_TEST_CARCYCLE` (cycle every offered car).
+- The get-out/get-back-in round trip: `MP_TEST_ONFOOT=<secs>` then a later
+  `MP_TEST_PAUSECAR` on the same seat (Change car while on foot re-enters the parked
+  body). Each OTHER seat must log
+  `[mp] player %d is back in the car they left (slot %d) - reusing the body instead of spawning another`
+  and must NOT log `had no car on this machine - given the free slot` for that player.
 - The re-model on each seat:
   `[mp] player %d changed car: slot %d -> %d (%s model %d), mesh rebuilt [local=%d localId=%d row=%d]`
 - The invisible-car instrument (**must end `mesh loaded`**):
@@ -278,11 +283,40 @@ AI.
 **`mesh loaded` on both seats**, the two seats agree on the new model, and none of
 `no spare resident slot`, `keeping slot N`, `not loaded here`, or a `mesh MISSING` line
 appears. `mp_carstress.py`'s per-seat report shows every offered car driven, 0 refused,
-0 meshless. No `JERICHO.dmp`.
+0 meshless. No `JERICHO.dmp`. An on-foot round trip leaves **one** body per player:
+the re-seat line appears, the spawn line does not, and the car the player left is not
+still standing beside them.
 
 **Status** — Verified headless (`MP_TEST_CARCHANGE`, `MP_TEST_PAUSECAR`, `mp_carstress.py`).
 The invalidation rules the two seats must obey (match the vehicle in place; a mod car
 reaches the traffic AI only as a stopped, empty car) are in [`ARCHITECTURE.md` §15](ARCHITECTURE.md).
+
+### 6b. Commandeering another player's parked car (2026-10-21)
+
+The on-foot sibling of a car swap: one player walks into the car another left. Run the
+lever on a seat that was present for the exit (the host, or a joiner already in); a
+machine that never held the body cannot enter it.
+
+    --seat-env client1=MP_TEST_ONFOOT=25
+    --seat-env host=MP_TEST_ONFOOT=35 --seat-env host=MP_TEST_ENTER_LEFT=45,1,10
+    --seat-env client1=MP_TEST_PAUSECAR=65,3,3 --seat-env host=MP_TEST_PAUSECAR=75,3,2
+
+Pass bar: the commando logs `enter left car - player N slot S ... TannerCanEnterCar=1`
+and adopts that slot; the original owner's return gets a **different** free slot; the
+commando keeps the body and walks back into it (`change car: got back into slot S`); and
+**cars persist**: no `removed the car we left` and no
+`removed player N's abandoned car` appears for the old car, which stays parked on every
+seat. `MP_TEST_ENTER_LEFT`'s failure line names the row/slot state and the rejected
+predicate instead of a bare "no left car"; the `leftCarSlot1 == 0` branch means the
+machine never held that body (the materialization follow-up in
+[`OPEN_ISSUES.md`](OPEN_ISSUES.md)).
+
+Measured 2026-10-21, three seats: PASS, `dumps=0`, `simFrames a:3181 b:3182 c:2971`;
+the host entered player 1's body at 29875, parked it again at 37058, player 1's return
+got slot 3 at 44914, and the host walked back into its commandeered body at 52322.
+The host's old car and the peers' copies of it stayed parked. The ENTER_LEFT get-in
+must put the local Tanner away (`RemovePlayerPedestrian`); a leaked ped was what
+produced the `intrThreadMain+0x7E` / `vsync_callback` crash on the following exit.
 
 ### 6a. Why changes were refused — one real bug, and what is left
 
@@ -476,21 +510,33 @@ does not own.
 **Verify** —
 - The trigger is the engine's own contact (`JER_EVENT_COLLISION`), fired before either
   car's impulse is applied; the proximity probe survives only as a fallback for an
-  overlap the engine never saw, and stands down 90 frames after a real contact.
+  overlap the engine never saw, and now runs only when the newest snapshot sample is
+  more than two frames old.
 - Contacts are armed only after `MP_HIT_ARM_FRAMES` (120) so the spawn drop cannot kick
   anyone.
+- Remote motion is a playout, not a per-packet write:
+  `[mp] interp: player %d depth=%d lag=%d mode=lerp|hold|extrap`. Steady state at
+  150 ms is `mode=lerp`, depth near 32 and lag 2-7 frames (`hold` only on a fresh
+  body; `extrap` only through a gap, capped at 3 frames).
+- Every push names the target's own timeline: `[mp] hit rx: player %d |d|=.. tf=..`.
+  A push that cannot be validated is dropped and logged:
+  `[mp] hit: ... ghost hit rejected (<reason>: age=.. |d|=.. pose=..)`.
 - On one seat: `[mp] hit: we bumped player %d (%s: closing %ld, giving up %ld units/frame)`
 - On the other: `[mp] hit: player %d bumped us (push %ld,%ld,%ld)`
-- Duplicate suppression: `... our engine has it, kept`
-- Rigs: `MP_TEST_TRAFFIC_HIT=<secs>`, `mp_localpair.py --bot pursuit`,
-  `mp_localpair.py --until "hit: "`.
+- Duplicate suppression: `... our engine has it, kept` — compared by contact frame,
+  so it works through latency.
+- The counters: `[mp] hit summary: sent=.. rx=.. applied=.. kept=.. separated=.. rejected=..`.
+- Rigs: `mp_localpair.py --lag-ms 150` (TCP relay, one-way), then
+  `--lag-ms 700 --until "ghost hit rejected"` for the stale path. Enable JerAI
+  (`JerAI = 1` in `modlist.ini`, `--bot off`) when the mp test bot's driving is not
+  wanted.
 
-**Pass** — The **same contact** shows as "we bumped" on one seat and "bumped us" on the
-other; the two sims stay within a few units (the adopt lines); the push **lands** (the
-pre-fix bug moved a car 0.005 units/frame and read as "nothing happened"). `lost=0`,
-`dumps=0`.
+**Pass** — At 0 and 150 ms the **same contact** shows as "we bumped" on one seat and
+"bumped us" (or "kept") on the other, and the push **lands**; at 700 ms a push that
+names a 47-frame-old pose is rejected with distance logged and nothing moves.
+`lost=0`, `dumps=0`.
 
-**Status** — Verified headless in both directions (pursuit bot).
+**Status** — Verified headless (JerAI driving at 0 and 150 ms; stale path at 700 ms).
 
 ---
 

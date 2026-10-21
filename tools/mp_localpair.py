@@ -34,10 +34,14 @@ and the cleanup kills exactly what it started -- nothing else.
 """
 import argparse
 import atexit
+import collections
 import os
 import random
 import re
+import select
 import shutil
+import socket
+import struct
 import subprocess
 import sys
 import threading
@@ -67,9 +71,16 @@ def log(msg):
 # host and the whole run is nonsense. That is the shape of a lot of the
 # confusing results so far.
 STARTED = []
+RELAY = None
 
 
 def stop_started():
+    global RELAY
+
+    if RELAY is not None:
+        RELAY.stop()
+        RELAY = None
+
     for p in reversed(STARTED):
         if p.poll() is None:
             try:
@@ -83,6 +94,232 @@ def stop_started():
 
 
 atexit.register(stop_started)
+
+
+class DelayRelay:
+    """A local TCP relay that adds a one-way delay and optional frame loss.
+
+    The session transport is TCP, so the relay cannot simply drop bytes: that
+    would corrupt the stream. It parses the module's own framing instead -- a
+    u32 little-endian length followed by that many bytes, with the four-byte
+    tag at offset 4 -- and drops WHOLE frames. The receiver then sees a clean
+    stream with a message missing, which is exactly the lost-carstate/lost-
+    roster case the recovery paths must survive.
+
+    `lag_ms` is ONE-WAY. 150 ms therefore approximates a 300 ms RTT, which is
+    the range the mp docs describe as internet play rather than LAN play.
+    Jitter is applied per received frame and clamped at zero. `drop_tags` is a
+    set of four-byte tags (e.g. JPCS, JPRS); `drop_pct` is random loss, or
+    `drop_burst`/`drop_gap` alternate a run of dropped frames with a run that
+    gets through, so a transition window can be hit deterministically.
+    """
+
+    def __init__(self, listen_host, listen_port, target_host, target_port,
+                 lag_ms, jitter_ms, drop_tags=None, drop_pct=0,
+                 drop_burst=0, drop_gap=0):
+        self.listen_host = listen_host
+        self.listen_port = listen_port
+        self.target_host = target_host
+        self.target_port = target_port
+        self.lag_ms = lag_ms
+        self.jitter_ms = jitter_ms
+        self.drop_tags = {t.encode("ascii") if isinstance(t, str) else t
+                          for t in (drop_tags or ())}
+        self.drop_pct = drop_pct
+        self.drop_burst = drop_burst
+        self.drop_gap = drop_gap
+        self._dropped = collections.Counter()
+        self._stop = threading.Event()
+        self._listen = None
+        self._socks = []
+        self._lock = threading.Lock()
+
+    def start(self):
+        ls = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        ls.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        ls.bind((self.listen_host, self.listen_port))
+        ls.listen(8)
+        ls.settimeout(0.5)      # so the accept loop can notice stop()
+        self._listen = ls
+        threading.Thread(target=self._accept_loop, name="mp-relay-accept",
+                         daemon=True).start()
+
+    def stop(self):
+        self._stop.set()
+
+        with self._lock:
+            socks = list(self._socks)
+            self._socks.clear()
+
+        for s in socks:
+            try:
+                s.close()
+            except OSError:
+                pass
+
+        if self._listen is not None:
+            try:
+                self._listen.close()
+            except OSError:
+                pass
+            self._listen = None
+
+    def _delay(self):
+        delay = self.lag_ms / 1000.0
+
+        if self.jitter_ms:
+            delay += random.uniform(-self.jitter_ms, self.jitter_ms) / 1000.0
+            if delay < 0:
+                delay = 0.0
+
+        return delay
+
+    def _accept_loop(self):
+        while not self._stop.is_set():
+            try:
+                client, _addr = self._listen.accept()
+            except socket.timeout:
+                continue
+            except OSError:
+                break
+
+            try:
+                upstream = socket.create_connection(
+                    (self.target_host, self.target_port), timeout=5)
+            except OSError as e:
+                log(f"relay: cannot reach {self.target_host}:{self.target_port}: {e}")
+                client.close()
+                continue
+
+            for s in (client, upstream):
+                try:
+                    s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+                except OSError:
+                    pass
+
+                with self._lock:
+                    self._socks.append(s)
+
+            threading.Thread(target=self._pump, args=(client, upstream),
+                             name="mp-relay-c2s", daemon=True).start()
+            threading.Thread(target=self._pump, args=(upstream, client),
+                             name="mp-relay-s2c", daemon=True).start()
+
+    def _pump(self, src, dst):
+        """A true delay line: read continuously, send each FRAME when due.
+
+        Frames are the module's own envelopes (u32 length + tag + payload), so
+        the relay can drop a WHOLE message for --drop-tag without corrupting
+        the TCP stream. Bytes that do not yet form a complete frame stay
+        buffered until the rest arrives. Reading into a due-time queue first is
+        what makes the delay one-way rather than cumulative.
+        """
+        pending = collections.deque()
+        buf = b""
+        burst_left = 0
+        burst_gap = 0
+
+        def should_drop(frame):
+            nonlocal burst_left, burst_gap
+
+            tag = frame[4:8]
+
+            if tag not in self.drop_tags:
+                return False
+
+            if self.drop_burst > 0:
+                if burst_left > 0:
+                    burst_left -= 1
+                    dropped = True
+                elif burst_gap > 0:
+                    burst_gap -= 1
+                    dropped = False
+                else:
+                    burst_left = self.drop_burst - 1
+                    burst_gap = self.drop_gap
+                    dropped = True
+            else:
+                dropped = (self.drop_pct > 0 and
+                           random.random() * 100.0 < self.drop_pct)
+
+            if dropped:
+                with self._lock:
+                    self._dropped[tag] += 1
+                    total = self._dropped[tag]
+
+                # One line per 100 dropped frames: enough to prove the loss
+                # mode is active without flooding the run's own output.
+                if total % 100 == 1:
+                    log(f"relay: dropped {total} "
+                        f"{tag.decode('ascii', 'replace')} frame(s)")
+
+            return dropped
+
+        try:
+            while not self._stop.is_set():
+                readable, _, _ = select.select([src], [], [], 0.002)
+
+                if readable:
+                    data = src.recv(65536)
+
+                    if not data:
+                        break
+
+                    buf += data
+
+                    while len(buf) >= 4:
+                        flen = struct.unpack_from("<I", buf, 0)[0]
+
+                        if flen < 8 or flen > (16 * 1024 * 1024):
+                            # Not an mp envelope (or a corrupt length): forward
+                            # the rest verbatim rather than stall the stream.
+                            log("relay: unexpected frame length; forwarding raw bytes")
+                            due = time.monotonic() + self._delay()
+
+                            if pending and due < pending[-1][0]:
+                                due = pending[-1][0]
+
+                            pending.append((due, buf))
+                            buf = b""
+                            break
+
+                        total = 4 + flen
+
+                        if len(buf) < total:
+                            break       # wait for the rest of this frame
+
+                        frame = buf[:total]
+                        buf = buf[total:]
+
+                        if should_drop(frame):
+                            continue
+
+                        due = time.monotonic() + self._delay()
+
+                        # Jitter can make a later frame "due" earlier; keep the
+                        # stream ordered by never scheduling behind what is queued.
+                        if pending and due < pending[-1][0]:
+                            due = pending[-1][0]
+
+                        pending.append((due, frame))
+
+                now = time.monotonic()
+
+                while pending and pending[0][0] <= now:
+                    _due, chunk = pending.popleft()
+                    dst.sendall(chunk)
+        except OSError:
+            pass
+        finally:
+            for s in (src, dst):
+                try:
+                    s.shutdown(socket.SHUT_RDWR)
+                except OSError:
+                    pass
+                try:
+                    s.close()
+                except OSError:
+                    pass
 
 
 def stale_instances():
@@ -201,9 +438,30 @@ def launch(run_dir, exe, args, env_extra):
     return p
 
 
+def game_log_path(run_dir):
+    """The seat's game log, whatever this build calls it.
+
+    A release writes JERICHO.log; a DEV build names it "JERICHO <version>-dev.log"
+    (the exe's own logging convention). The rigs only looked for the release name,
+    so every dev run reported "no JERICHO.log" and FAILED a seat that had in fact
+    joined, started and driven.
+    """
+    for name in GAME_LOGS:
+        path = os.path.join(run_dir, name)
+        if os.path.exists(path):
+            return path
+
+    try:
+        names = sorted(n for n in os.listdir(run_dir)
+                       if n.startswith("JERICHO ") and n.endswith(".log"))
+    except OSError:
+        return None
+
+    return os.path.join(run_dir, names[-1]) if names else None
+
+
 def report(run_dir, label, patterns):
-    path = next((os.path.join(run_dir, n) for n in GAME_LOGS
-                 if os.path.exists(os.path.join(run_dir, n))), None)
+    path = game_log_path(run_dir)
     if path is None:
         log(f"{label}: no {'/'.join(GAME_LOGS)}")
         return
@@ -221,12 +479,11 @@ def report(run_dir, label, patterns):
 
 
 def read_log(run_dir):
-    for name in GAME_LOGS:
-        path = os.path.join(run_dir, name)
-        if os.path.exists(path):
-            with open(path, "rb") as f:
-                return f.read().decode("utf-8", "replace")
-    return ""
+    path = game_log_path(run_dir)
+    if path is None:
+        return ""
+    with open(path, "rb") as f:
+        return f.read().decode("utf-8", "replace")
 
 
 HEARTBEAT = re.compile(r"\[mp\] heartbeat: frame (\d+) ")
@@ -513,6 +770,32 @@ def main():
     ap.add_argument("--game-dir", default=DEFAULT_GAME_DIR)
     ap.add_argument("--exe", default="JERICHO_dev.exe")
     ap.add_argument("--port", type=int, default=1400)
+    ap.add_argument("--lag-ms", type=int, default=0, metavar="MS",
+                    help="one-way delay added in EACH direction by a local TCP relay "
+                         "(default 0 = off). Joiners dial 127.0.0.1:<port+1> and the "
+                         "relay forwards to --join-host:--port, so 150 means roughly "
+                         "a 300 ms round trip -- internet play, not LAN.")
+    ap.add_argument("--lag-jitter-ms", type=int, default=0, metavar="MS",
+                    help="per-chunk jitter around --lag-ms, clamped at zero "
+                         "(default 0 = none). Exercises arrival gaps and the "
+                         "interpolation buffer's starvation path.")
+    ap.add_argument("--drop-tag", action="append", default=[], metavar="TAG",
+                    help="drop WHOLE application frames with this four-byte tag "
+                         "(repeatable), e.g. JPCS (carstate) or JPRS (roster). The relay "
+                         "parses the session framing, so the TCP stream stays valid and "
+                         "the game sees a message simply missing. Requires --drop-pct "
+                         "or --drop-burst.")
+    ap.add_argument("--drop-pct", type=int, default=0, metavar="PCT",
+                    help="random loss percentage for --drop-tag frames (0..100; "
+                         "default 0 = off).")
+    ap.add_argument("--drop-burst", type=int, default=0, metavar="N",
+                    help="burst loss: drop N consecutive matching frames, then forward "
+                         "--drop-gap matching frames, and repeat. 0 = use --drop-pct "
+                         "instead.")
+    ap.add_argument("--drop-gap", type=int, default=0, metavar="N",
+                    help="matching frames forwarded between --drop-burst runs "
+                         "(default 0 = keep dropping every matching frame after the "
+                         "first burst).")
     ap.add_argument("--join-host", default="127.0.0.1", metavar="HOST",
                     help="what the client seats dial. Default 127.0.0.1. Use a NAME "
                          "(e.g. --join-host localhost) to exercise the DNS path, or a "
@@ -622,6 +905,21 @@ def main():
                          "bad run is obvious as it happens (0 = never)")
     args = ap.parse_args()
 
+    args.drop_tags = [t.strip() for t in args.drop_tag if t.strip()]
+
+    for tag in args.drop_tags:
+        if len(tag) != 4:
+            log(f"--drop-tag wants a four-byte tag such as JPCS or JPRS, got {tag!r}")
+            return 2
+
+    if args.drop_tags and args.drop_pct <= 0 and args.drop_burst <= 0:
+        log("--drop-tag needs --drop-pct or --drop-burst")
+        return 2
+
+    if args.drop_pct < 0 or args.drop_pct > 100:
+        log("--drop-pct must be 0..100")
+        return 2
+
     if args.players < 2 or args.players > len(SEAT_NAMES):
         log(f"--players must be 2..{len(SEAT_NAMES)}")
         return 2
@@ -680,6 +978,50 @@ def main():
     for name in names:
         build_run_dir(game_dir, dirs[name], f"Local{name.upper()}", args.port)
     log(f"run dirs ready under {pair_root}")
+
+    # A local relay is the only way to make latency and frame loss reproducible on
+    # one PC. Every joiner dials the relay; the relay holds frames for --lag-ms in
+    # each direction and can drop whole --drop-tag frames before forwarding them
+    # to the real host. The host itself is untouched.
+    join_host = args.join_host
+    join_port = args.port
+
+    drop_on = bool(args.drop_tags) and (args.drop_pct > 0 or args.drop_burst > 0)
+
+    if args.lag_ms > 0 or args.lag_jitter_ms > 0 or drop_on:
+        global RELAY
+
+        RELAY = DelayRelay("127.0.0.1", args.port + 1,
+                           args.join_host, args.port,
+                           args.lag_ms, args.lag_jitter_ms,
+                           args.drop_tags, args.drop_pct,
+                           args.drop_burst, args.drop_gap)
+
+        try:
+            RELAY.start()
+        except OSError as e:
+            log(f"cannot start the lag relay on 127.0.0.1:{args.port + 1}: {e} "
+                f"(pick another --port)")
+            RELAY = None
+            return 2
+
+        join_host = "127.0.0.1"
+        join_port = args.port + 1
+
+        log(f"relay: {join_host}:{join_port} -> {args.join_host}:{args.port}, "
+            f"one-way {args.lag_ms} ms"
+            + (f" +/- {args.lag_jitter_ms} ms jitter" if args.lag_jitter_ms else "")
+            + " (so the round trip is about 2x that)")
+
+        if drop_on:
+            if args.drop_burst > 0:
+                loss = (f"dropping {args.drop_burst} consecutive "
+                        f"{'/'.join(args.drop_tags)} frame(s), then passing "
+                        f"{args.drop_gap}")
+            else:
+                loss = f"dropping {args.drop_pct}% of {'/'.join(args.drop_tags)} frames"
+
+            log(f"relay: {loss}")
 
     # NOTE: both instances want UDP/1318 for discovery, so the second one reports
     # "discovery unavailable" and simply does not browse. The join below uses the
@@ -810,7 +1152,7 @@ def main():
         if i == 0 and args.client_car != "default":
             argv += ["-mpcar", args.client_car]
 
-        argv += ["-join", f"{args.join_host}:{args.port}"]
+        argv += ["-join", f"{join_host}:{join_port}"]
 
         # this seat's own picks: the generic client entries first, then its own
         this_env = dict(client_env)

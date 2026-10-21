@@ -133,18 +133,18 @@ def main():
         while got(p) is not None:
             pass
     # -- HIT: only the car that takes it; a traffic hit goes to the slot's owner
-    hit = m.HIT.pack(6, 0, 10, 0, -10)
+    hit = m.HIT.pack(6, 0, 10, 0, -10, 0, 0, 0, 0)
     check("a bump is routed to its target", relay.hit(server, pairs[4][0], 4, hit) == 6)
     r6 = got(6, 1.0)
     check("the target got the bump verbatim", r6 == (m.TAG["hit"], hit), repr(r6))
     check("nobody else got it", got(5) is None and got(4) is None)
-    check("a bump aimed at yourself is dropped", relay.hit(server, pairs[4][0], 4, m.HIT.pack(4, 0, 1, 1, 1)) is None)
+    check("a bump aimed at yourself is dropped", relay.hit(server, pairs[4][0], 4, m.HIT.pack(4, 0, 1, 1, 1, 0, 0, 0, 0)) is None)
     check("a short bump is dropped", relay.hit(server, pairs[4][0], 4, hit[:8]) is None)
-    check("a bump on an absent player is dropped", relay.hit(server, pairs[4][0], 4, m.HIT.pack(9, 0, 1, 1, 1)) is None)
+    check("a bump on an absent player is dropped", relay.hit(server, pairs[4][0], 4, m.HIT.pack(9, 0, 1, 1, 1, 0, 0, 0, 0)) is None)
     # 3 clients (ids 4..6) -> clients count 7 machines (ids + 1): 12 // 7 = 1 slot each,
     # rank 5 owns slot 25 (mp_session.c MpTrafficBandFor)
     check("band maths matches the game", relay.traffic_band(5, 7) == (25, 25) and relay.traffic_band(6, 7) == (26, 31))
-    thit = m.HIT.pack(25, m.HIT_F_TRAFFIC, 1, 2, 3)
+    thit = m.HIT.pack(25, m.HIT_F_TRAFFIC, 1, 2, 3, 0, 0, 0, 0)
     check("a traffic bump goes to the slot's owner", relay.hit(server, pairs[4][0], 4, thit) == 5)
     check("the owner got it", got(5, 1.0) == (m.TAG["hit"], thit))
 

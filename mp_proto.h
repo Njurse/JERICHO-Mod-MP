@@ -38,7 +38,13 @@
 extern "C" {
 #endif
 
-#define MP_PROTO_VERSION	13	/* 13: Driver 1 adds IVIEW (9) and TRAIN (10); runtime bank cities move from 9+N to 11+N.
+#define MP_PROTO_VERSION	15	/* 15: MP_CARSTATE carries leftModel/leftModelCity so a late
+				 *     joiner can materialize the parked car a player left.
+				 *     MP_CARSTATE_ENTRY is 55 bytes (was 53).
+				 * 14: MP_HIT carries targetFrame + tgtPos, so a contact can be
+				 *     validated against the target's own pose timeline instead
+				 *     of being applied on arrival. MP_HIT is 32 bytes (was 16).
+				 * 13: Driver 1 adds IVIEW (9) and TRAIN (10); runtime bank cities move from 9+N to 11+N.
 				 * 12: MP_MAX_PLAYERS is 16, so MP_ROSTER and every
 					 * per-player wire row grew by sizeof -- an 8-player
 					 * build must REFUSE a 16-player session rather than
@@ -485,6 +491,23 @@ typedef struct MP_COLOR
  * warps them into an unrelated car. Vehicles are matched by MODEL, in place
  * (MpAdoptRemoteCar). */
 #define MP_CARSTATE_HAS_BODY	1
+#define MP_CARSTATE_SIREN	8	/* owner has siren/lights on (police car) */
+/* The body we are in now is the SAME `car_data` slot we last got out of (this
+ * machine's slot -- the peers know which body they released for us). The owner
+ * sets it whenever they walk back into the car they left, or use the pause menu's
+ * Change car while on foot: `MpChangeCarRun` re-enters their parked car and
+ * re-models it in place. Without this a peer could only see "was on foot, now
+ * reports a car" and its re-seat pass would build a SECOND vehicle, leaving the
+ * body it released standing where it was. An unknown bit is ignored by older
+ * readers, and an older sender simply never sets it, so no protocol bump. */
+#define MP_CARSTATE_SAME_BODY	2
+
+/* The NO_CAR row also describes the car the owner walked away from: leftModel /
+ * leftModelCity name it, and the row's palette, x/y/z and heading carry its
+ * colour and pose. A machine that was present when the owner got out already has
+ * that body and ignores this; a joiner that arrived afterwards uses it to build
+ * the parked CIV_AI car instead of seeing a player whose car never existed. */
+#define MP_CARSTATE_LEFT_CAR	4
 
 /* entry.model when the owner is on foot: no vehicle to drive, so the peers
  * release the car they were driving for them (it stays in the world). */
@@ -493,7 +516,7 @@ typedef struct MP_COLOR
 typedef struct MP_CARSTATE_ENTRY
 {
 	uint8_t  playerId;
-	uint8_t  flags;		/* MP_CARSTATE_HAS_BODY */
+	uint8_t  flags;		/* MP_CARSTATE_HAS_BODY | MP_CARSTATE_SIREN */
 	uint8_t  palette;	/* owner's car colour (cp->ap.palette) -- owner-authoritative */
 	uint8_t  model;		/* the VEHICLE the owner is driving (cp->ap.model);
 				 * MP_CARSTATE_NO_CAR = on foot, so the peers stop
@@ -508,6 +531,8 @@ typedef struct MP_CARSTATE_ENTRY
 				 * reaches +-1.5 MILLION), so a 16-bit field truncated
 				 * every snapshot into a different spin. */
 	int32_t  vel[3];	/* st.n.linearVelocity */
+	uint8_t  leftModel;	/* MP_CARSTATE_LEFT_CAR: the parked car's model NUMBER */
+	uint8_t  leftModelCity;	/* ...and the city that number belongs to */
 } MP_CARSTATE_ENTRY;
 
 /* ------------------------------------------------------------------ */
@@ -665,6 +690,22 @@ typedef struct MP_HIT
 	uint8_t  flags;		/* MP_HIT_F_* */
 	uint8_t  reserved[2];
 	int32_t  impulse[3];	/* velocity delta to ADD to the target's car */
+
+	/* WHERE AND WHEN the contact happened, in the TARGET's own timeline.
+	 *
+	 * The sender collided with the pose its interpolation playout was
+	 * displaying, so `targetFrame` is a carstate frame number the TARGET
+	 * itself sent, and `tgtPos` is that same pose in world units. The target
+	 * can therefore look the frame up in its own short pose history and check
+	 * that it really was there -- a push that names a frame the target never
+	 * occupied, or that arrives long after the cars have separated, is a
+	 * ghost and is dropped instead of applied.
+	 *
+	 * 0 means "no timeline" (a sender that has not played this player yet).
+	 * The receiver treats it as unvalidatable and drops the push; contacts
+	 * only arm 120 frames into a match, by which point the buffer is primed. */
+	uint32_t targetFrame;	/* the TARGET's carstate frame at the contact */
+	int32_t  tgtPos[3];	/* the sender's view of the target car at that frame */
 } MP_HIT;
 
 #pragma pack(pop)
@@ -681,8 +722,8 @@ static_assert(sizeof(MP_SESSION) == 12, "MP_SESSION layout");
 static_assert(sizeof(MP_PLAYER_INPUT) == 4, "MP_PLAYER_INPUT layout");
 static_assert(sizeof(MP_INPUT) == 4, "MP_INPUT layout");
 static_assert(sizeof(MP_ROSTER_ENTRY) == 29, "MP_ROSTER_ENTRY layout");
-static_assert(sizeof(MP_CARSTATE_ENTRY) == 53, "MP_CARSTATE_ENTRY layout");
-static_assert(sizeof(MP_HIT) == 16, "MP_HIT layout");
+static_assert(sizeof(MP_CARSTATE_ENTRY) == 55, "MP_CARSTATE_ENTRY layout");
+static_assert(sizeof(MP_HIT) == 32, "MP_HIT layout");
 static_assert(sizeof(MP_STATS_ENTRY) == 12, "MP_STATS_ENTRY layout");
 static_assert(sizeof(MP_CARSTATE) == 8, "MP_CARSTATE layout");
 static_assert(sizeof(MP_TRAFFIC_ENTRY) == 56, "MP_TRAFFIC_ENTRY layout");

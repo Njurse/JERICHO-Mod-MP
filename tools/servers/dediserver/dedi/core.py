@@ -1233,7 +1233,13 @@ class Dedicated:
                 pass
 
         try:
-            conn.shutdown(socket.SHUT_RDWR)      # wake their blocked recv; cleanup runs
+            # HALF-CLOSE, not SHUT_RDWR. The KICK frame is already in the socket;
+            # SHUT_RDWR at this point can discard it, which is exactly the
+            # "server switched city, rejoin" case the client never hears -- it
+            # drops to the frontend instead of arming its auto-rejoin. Closing
+            # the write side sends FIN after the KICK, so the peer reads the
+            # frame first and then EOF. Same rule as _reject above.
+            conn.shutdown(socket.SHUT_WR)
         except OSError:
             pass
 

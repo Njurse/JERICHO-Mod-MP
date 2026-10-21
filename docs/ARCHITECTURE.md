@@ -370,11 +370,42 @@ non-deterministic simulations cannot be reconciled that way -- the follower's vi
 a remote car wandered +/-100-900 units while driving, and no threshold fixes that.
 With adoption it is 0-2 units.
 
+**The owner also owns the siren.** `MP_CARSTATE_SIREN` (1 << 3;
+`MP_CARSTATE_SAME_BODY` already occupies 1 << 1) says the driven car is a police
+model with its lightbar on. The engine only draws a cop bar for
+`CONTROL_TYPE_PURSUER_AI`, roadblock or cutscene cars, and a remote player car is
+`CONTROL_TYPE_PLAYER`, so `MpHandleCarState` calls `AddCopCarLight` itself when
+the bit is set -- the same call the traffic mirror makes for `MP_TRAFFIC_SIREN`.
+The owner decides; the current condition is
+`CarHasSiren(cp->ap.model) && cp->ai.p.dying < 75`, with the real player siren-on
+state still a TODO. No protocol bump: an older peer ignores the unknown bit. The
+siren SOUND is unchanged.
+
 **Contacts are handed off, not simulated twice.** A machine can only move the ONE
 car it owns, so when your car touches a peer's you push yours and report it
 (`MP_HIT`); the peer's machine pushes theirs. Both cars move and each stays its
 owner's truth. (The older "a car you drive into is not pushed" trade-off no longer
 applies — see `MpHitFrame` / `MpHandleHit` in `mp_session.c`.)
+
+**Snapshots are samples, not poses (protocol 14).** `MpHandleCarState` appends each
+snapshot to a 32-entry per-player ring, and `MpApplyRemoteCarPoses` is the only
+writer of a remote body. It advances a playout cursor one owner-frame per sim
+frame, anchored 3 frames behind the newest sample (100 ms at 30 Hz), and lerps
+position and heading while nlerping the orientation (sign-corrected, because q and
+-q are the same attitude). A starved buffer extrapolates on the last velocity for
+at most 3 frames, then holds; a cursor more than 8 frames behind is re-anchored.
+The ring is cleared on NO_CAR, SAME_BODY, a model change, a release, or a
+one-sample jump over 6000 units.
+
+**A contact carries its own timestamp.** `MP_HIT` (32 bytes, v14) names
+`targetFrame` — the target's carstate frame the sender was displaying — and
+`tgtPos`. The target keeps 64 frames of its own sent pose and drops a push that is
+older than 20 frames, names a frame it no longer has, puts the pose outside a
+`colBox`-derived tolerance, or arrives after the cars have separated. Every drop is
+logged as `ghost hit rejected`. Duplicate suppression compares `targetFrame` with
+the engine's own contact frame, not with the frame the push arrived on. The
+proximity probe is now a true fallback: it runs only when the newest sample is more
+than two frames old.
 
 ---
 
@@ -763,18 +794,21 @@ carstate, not the mechanism.
 `MP_WELCOME` carries `arena` and the client applies it with the city, so both sides
 load the same multiplayer map without being told separately.
 
-### G. Smoothing for latency — OPEN (unchanged)
+### G. Smoothing for latency — DONE (protocol 14)
 
-Remote cars move on a fixed input delay and will rubber-band under loss. Standard
-remedies apply (interpolation buffer, extrapolation cap), and C has made the underlying
-state trustworthy, so this is now the top *quality* gap rather than a prerequisite:
-`JERICHO-MP.md` advertises internet play by direct connect, and at 100–200 ms ping the
-world moves in visible steps. It is the reason the mod is described as **LAN-tuned**.
+Remote cars are played back through a 3-frame (100 ms) interpolation buffer and
+contact reports are timestamped against the target's own timeline, so a push that
+arrives after the cars have separated is rejected rather than applied. The
+residual is the bumper's own engine: `JER_EVENT_COLLISION` is informational and
+cannot be cancelled, so a local engine can still resolve a contact against the
+delayed hull. What changed is that the OTHER car is no longer pushed by a stale
+report, and the hull itself moves continuously instead of stepping once per
+packet. At 100–200 ms ping the motion is smooth; the cost is a fixed 100 ms of
+display delay.
 
 ### H. Out of scope for now
 
-Matchmaking beyond LAN, host migration, and **latency smoothing** (item G above).
-Traffic/police replication is **no longer out of scope** — it landed (§ the traffic
+Matchmaking beyond LAN and host migration. Traffic/police replication is **no longer out of scope** — it landed (§ the traffic
 work, `MP_TAG_TRAFFIC`, `MP_PROTO_VERSION` 9); the current acceptance view is
 [`SYNC_CHECKLIST.md`](SYNC_CHECKLIST.md) domain 12. Chat is implemented (open on `T`,
 send on Enter; join/leave and chat lines go to the engine status console,
@@ -1079,6 +1113,19 @@ Two hard-won rules:
   `TannerCanEnterCar` still accepts it so the player can walk back and get in. It
   must never reach an ACTIVE civ state (driving/turning) — that is what used to
   crash inside `CivSteerAngle` (rva 0xC961 in one dump).
+
+**Getting out and back in is ONE transaction, not release-plus-spawn.** The peer
+releases the remote car on `MP_CARSTATE_NO_CAR` and keeps the released body's slot in
+`MP_PLAYER.leftCarSlot1`. When the owner walks back into that same body (or uses the
+pause menu's Change car while on foot — `MpChangeCarRun` re-enters the parked car and
+re-models it in place), the carstate carries `MP_CARSTATE_SAME_BODY` and
+`MpHandleCarState` puts them back on the slot it released, then runs the ordinary
+model/pose adopt. It must NOT fall through to the "we have no car for them" heal,
+which only clears `onFoot` and lets `MpSpawnLateJoiners` call `InitPlayer` on another
+slot: that is the same vehicle twice, one copy orphaned where it was parked. Entering
+a DIFFERENT car leaves the bit clear, so the parked body stays and the new one is
+built as before. Log: `[mp] player N is back in the car they left (slot M) - reusing
+the body instead of spawning another`.
 
 A model the renderer has not loaded is NOT applied (`gCarCleanModelPtr[model] ==
 NULL`): pointing `ap.model` at a mesh that does not exist is a crash, not a

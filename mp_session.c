@@ -31,12 +31,14 @@ extern int gBootMpLevel;	/* main.c: 1 = the small multiplayer map, 0 = the full 
 extern int gBootMpArena;	/* main.c: which multiplayer map (0/1) */
 extern int gWantNight;		/* glaunch.c: 1 = the night take-a-ride level variant */
 #include "players.h"	/* InitPlayer: a late joiner needs a car the same way the engine makes one */
+#include "ai.h"		/* TannerCanEnterCar: the gate the enter-left test lever checks */
 #include "handling.h"	/* LongQuaternion2Matrix: rebuild a car's matrix from its body */
 #include "state.h"
 #include "objcoll.h"	/* CellEmpty: the engine's own scenery test (the warp's landing check) */
 #include "dr2roads.h"	/* JerRoadAt: the engine's own road network (prefer a road to land on) */
 #include "dr2roads.h"	/* FindSurfaceD2: the real ground height at a point */
 #include "jer_map.h"	/* jer_map_*: the region maths behind "is the ground there?" */
+#include "map.h"	/* regions_across/down, MAP_REGION_SIZE, units_across_halved: map-wide join spawn */
 #include "pedest.h"	/* pUsedPeds: our player's own pedestrian, when on foot */
 #include "jer_npc.h"	/* jer_npc_*: the pedestrian we stand in for a REMOTE one */
 #include "camera.h"	/* InitCamera: snap the camera with a placed late joiner */
@@ -93,9 +95,57 @@ static unsigned long gMpHitArmFrame;
  * for the same reason as the arm frame above. */
 static unsigned long gMpSelfContactFrame[MP_MAX_PLAYERS];
 
+/* Hit-path instrumentation, session state like the counters above. These answer
+ * "how often does the hand-off fire, and how often does a push arrive when the
+ * two cars are already far apart on the receiver's screen" -- the measurement the
+ * latency work is judged by. Increments are unconditional and nearly free (a few
+ * per hit); only the SUMMARY line is MP_DEBUG-gated.
+ *
+ * MpSessionReset runs before these would otherwise be declared if they lived with
+ * the collision code, so they belong here rather than beside MpHandleHit. */
+static unsigned long gMpHitSent;		/* pushes we reported */
+static unsigned long gMpHitRx;			/* pushes addressed to us */
+static unsigned long gMpHitApplied;		/* ... applied (our engine did not have it) */
+static unsigned long gMpHitKept;		/* ... dropped as the engine's duplicate */
+static unsigned long gMpHitSeparated;		/* ... arrived with the cars > MP_HIT_RADIUS apart */
+static unsigned long gMpHitRejected;		/* ... dropped: stale, unvalidatable or ghost */
+
+/* The remote snapshot ring lives here, with the other session state, because
+ * both the contact sender (MpContactPush) and the contact receiver
+ * (MpHandleHit/MpHitFrame above the playout code in file order) read it. */
+#define MP_INTERP_RING		32	/* samples kept per remote player (about 1 s) */
+
+typedef struct MP_CAR_SNAP
+{
+	unsigned frame;		/* the owner's carstate frame */
+	unsigned recvFrame;	/* local sim frame it arrived on (diagnostics) */
+	int x, y, z;
+	int heading;
+	short orient[4];
+	int vel[3];
+	int angVel[3];
+} MP_CAR_SNAP;
+
+typedef struct MP_CAR_PLAY
+{
+	MP_CAR_SNAP snap[MP_INTERP_RING];
+	int count;		/* valid samples; newest is at head */
+	int head;
+	int primed;
+	int playFrame;		/* owner frame currently being displayed */
+	int lastFrame;		/* newest received owner frame */
+	int mode;		/* 0 = lerp, 1 = hold, 2 = extrapolate (diagnostics) */
+	int playX, playY, playZ;	/* the pose actually written this frame */
+} MP_CAR_PLAY;
+
+static MP_CAR_PLAY gMpPlay[MP_MAX_PLAYERS];
+
 /* defined below, needed by the launch path above them */
 static int MpAssignedCarModel(int playerId);
 static int MpPlayerCarReady(const MP_PLAYER* p);
+static long MpClampAngVel(long v);	/* used by the playout writer, defined with the car sync */
+static void MpPlayResetAll(void);	/* session reset clears the snapshot history */
+static int MpSelfPoseAt(unsigned frame, int* x, int* y, int* z);	/* contact validation */
 
 extern int MapHeight(VECTOR* pos);	/* the engine's ground height at an x/z */
 
@@ -125,6 +175,12 @@ static int gMpLaunched;
 #define MP_PLACE_SELF_TRIES	90
 static int gMpPlaceSelfFrames;
 static int gMpPlaceSelfTry;	/* frames spent trying to place (MpPlaceSelfTick) */
+/* Map-wide join placement (full-city Take a Ride only): the ONE region streamed
+ * for this join, and how many centers have been probed inside it. -1 = none
+ * chosen yet. Kept across ticks so a join never thrashes the streamer. */
+static int gMpWideRegion = -1;
+static int gMpWideTries;
+static int gMpPlaceSelfHoldY;	/* the y the car is pinned at while placement runs */
 static int gMpLocalAppliedPad = -1;	/* the pad that drove OUR car, -1 = none seen yet */
 
 /* The road search (defined with the warp/respawn helpers, used by the join spawn
@@ -205,10 +261,19 @@ void MpSessionReset(void)
 	gMp.frame = 0;
 	gMpHitArmFrame = 0;	/* collisions arm afresh in every match */
 	memset(gMpSelfContactFrame, 0, sizeof(gMpSelfContactFrame));
+	gMpHitSent = gMpHitRx = gMpHitApplied = gMpHitKept = gMpHitSeparated = gMpHitRejected = 0;
+	MpPlayResetAll();	/* no snapshot history survives a match */
 	gMp.running = 0;
 	gMp.leaving = 0;
 	gMp.modsMatched = 1;
 	gMp.localPlaced = 0;
+	gMp.liveJoin = 0;
+	gMp.gameStarted = 0;
+	gMpPlaceSelfFrames = 0;
+	gMpPlaceSelfTry = 0;
+	gMpWideRegion = -1;
+	gMpWideTries = 0;
+	gMpPlaceSelfHoldY = 0;
 
 	/* ...and a "change car" still waiting for a spare slot is session state too: it must not
 	 * outlive the session it was asked in. MpLeaveSession forgets it, but every OTHER way back
@@ -1124,6 +1189,105 @@ static int MpPlayerCarReady(const MP_PLAYER* p)
 	return p->carConfirmed || p->id == 0;
 }
 
+/* Is this CAR_DATA slot OWNED by somebody? A join may only ever build a car in a
+ * slot that nobody drives here and nobody has a claim on:
+ *
+ *   - the local engine car (slot 0 / player[0].playerCarId) and any
+ *     CONTROL_TYPE_PLAYER slot;
+ *   - any car an active roster row names (MpGetPlayerByCar is the same test seen
+ *     through the registry);
+ *   - ANY row's leftCarSlot1 -- the body a player got OUT of and is standing
+ *     next to. That body is CIV_AI + the quiet pad, so every other test calls it
+ *     free, and InitPlayer on it is exactly the "put back on a road, repaired,
+ *     felony cleared" reset players report when someone joins. This test must
+ *     not be limited to active rows: a roster can drop a row for one poll gap
+ *     while the body still belongs to that player.
+ *
+ * `ignoreId` is the player being seated; their own row is not a conflict. */
+static int MpCarSlotOwnedByPlayer(int slot, int ignoreId)
+{
+	int i;
+
+	if (slot < 0 || slot >= MAX_CARS)
+		return 1;
+
+	if (slot == 0 || slot == (int)player[0].playerCarId)
+		return 1;
+
+	if (car_data[slot].controlType == CONTROL_TYPE_PLAYER)
+		return 1;
+
+	for (i = 0; i < MP_MAX_PLAYERS; i++)
+	{
+		const MP_PLAYER* p = &gMp.players[i];
+
+		if (p->id == ignoreId)
+			continue;
+
+		if (p->active && p->carId == slot)
+			return 1;
+
+		if (p->leftCarSlot1 == slot + 1)
+			return 1;
+	}
+
+	return 0;
+}
+
+/* Defined near the leave path; MpSpawnLateJoiners needs it earlier. */
+static int MpCarSlotTakenByOther(const MP_PLAYER* leaver, int slot);
+
+/* The clearance a join must leave around every other player's car. A car is
+ * about 1000 units long, so two cars this far apart cannot overlap, and a
+ * joiner cannot materialise in somebody's braking distance. */
+#define MP_JOIN_CLEAR	2000
+
+/* Is (x,z) at least MP_JOIN_CLEAR from every OTHER player's car? `ignoreId` is
+ * the player being seated and `ignoreSlot` the CAR_DATA being placed, if any
+ * (a live joiner's own car is still on the level start while we choose its new
+ * spot, and must not veto it). Slot -1 is the local engine car, checked
+ * explicitly because the host-side spawn must not rely on a roster row naming
+ * it. */
+static int MpJoinSpotClearOfPlayers(int x, int z, int ignoreId, int ignoreSlot)
+{
+	long long dx, dz;
+	int i;
+
+	for (i = -1; i < MP_MAX_PLAYERS; i++)
+	{
+		int slot;
+
+		if (i < 0)
+		{
+			slot = (int)player[0].playerCarId;
+		}
+		else
+		{
+			const MP_PLAYER* o = &gMp.players[i];
+
+			if (!o->active || o->id == ignoreId)
+				continue;
+
+			slot = o->carId;
+		}
+
+		if (slot < 0 || slot >= MAX_CARS || slot == ignoreSlot)
+			continue;
+
+		if (car_data[slot].controlType == CONTROL_TYPE_NONE)
+			continue;		/* an engine-cleared slot is not a car */
+
+		dx = (long long)car_data[slot].hd.where.t[0] - x;
+		dz = (long long)car_data[slot].hd.where.t[2] - z;
+
+		if (dx > -MP_JOIN_CLEAR && dx < MP_JOIN_CLEAR &&
+			dz > -MP_JOIN_CLEAR && dz < MP_JOIN_CLEAR)
+			return 0;
+	}
+
+	return 1;
+}
+
 /* JERICHO: is the LOCAL player's car a real choice yet? See mp.h. A joiner that has
  * not picked is driving whatever its own machine happened to have - measured: a client
  * advertises "CHICAGO model 0" while it is still on the title screen. carhacks must not
@@ -1190,6 +1354,14 @@ void MpSpawnLateJoiners(void)
 		if (p == NULL || p->isLocal || p->carId >= 0 || p->onFoot || !MpPlayerCarReady(p))
 			continue;
 
+		/* NO PLACEHOLDER FOR A LIVE JOINER: wait until its owner has reported a
+		 * pose. Building now would put the car on a near-start road (or the level
+		 * start) until the first carstate corrects it -- the visible "spawns in the
+		 * normal place, then teleports". A returning player already has a pose from
+		 * earlier in the match, so this only delays a brand-new body. */
+		if (gMp.running && !p->joinedPose)
+			continue;
+
 		/* The smallest CAR_DATA slot no player is already driving. Counting the
 		 * rows was only correct while the cars occupied a contiguous [0, n): after
 		 * a player LEAVES, its slot is free but the count still points at a slot
@@ -1203,22 +1375,22 @@ void MpSpawnLateJoiners(void)
 		slot = -1;
 		for (k = 1; k < MAX_CARS && k < MAX_PLAYERS; k++)
 		{
-			if (MpGetPlayerByCar(k) != NULL)
-				continue;
-			if (k == player[0].playerCarId || car_data[k].controlType == CONTROL_TYPE_PLAYER)
-				continue;
 			/* a car somebody got out of (stopped, empty, quiet pad): only if
 			 * nothing else is free - see the second pass */
 			if (car_data[k].controlType == CONTROL_TYPE_CIV_AI && car_data[k].ai.padid == &gMpQuietPad)
 				continue;
+
+			if (MpCarSlotOwnedByPlayer(k, id))
+				continue;
+
 			slot = k;
 			break;
 		}
 
 		for (k = 1; slot < 0 && k < MAX_CARS && k < MAX_PLAYERS; k++)
 		{
-			if (MpGetPlayerByCar(k) == NULL && k != player[0].playerCarId &&
-				car_data[k].controlType == CONTROL_TYPE_CIV_AI && car_data[k].ai.padid == &gMpQuietPad)
+			if (car_data[k].controlType == CONTROL_TYPE_CIV_AI && car_data[k].ai.padid == &gMpQuietPad &&
+				!MpCarSlotOwnedByPlayer(k, id))
 				slot = k;
 		}
 
@@ -1276,18 +1448,86 @@ void MpSpawnLateJoiners(void)
 			int col = 0, row = 0, dx = 0, dz = 0;
 			int rx = 0, rz = 0, rdir = -1;
 			int onRoad = 0;
+			int baseX = PlayerStartInfo[0]->position.vx;
+			int baseZ = PlayerStartInfo[0]->position.vz;
 
-			if (id > 0)
+			/* AT THE POSE ITS OWNER ANNOUNCED. This is the live-joiner case: the
+			 * first carstate arrived before this machine assigned a slot, so build
+			 * the body where it actually is instead of at a near-start road and then
+			 * moving it. The y stays the engine's (resolved from the ground under
+			 * x/z, main.c's own convention); the owner's next sample carries its
+			 * exact y, so a region this machine has not streamed cannot keep it in
+			 * the air. */
+			if (p->joinedPose)
 			{
+				PlayerStartInfo[slot]->position.vx = p->joinPoseX;
+				PlayerStartInfo[slot]->position.vz = p->joinPoseZ;
+				PlayerStartInfo[slot]->rotation = (u_short)(p->joinPoseHeading & 0xfff);
+				onRoad = 2;		/* 2 = the owner's announced pose */
+			}
+			else if (id > 0)
+			{
+				int tries;
+
+				/* The level-start region may not be resident any more: the host can
+				 * have driven away while this joiner was loading. A search there sees
+				 * no road, and InitPlayer then resolves vy over no ground -- the
+				 * "joiner in the air" copy. Centre on the host's LIVE x/z instead;
+				 * only the x/z is a search centre, never the car's height (that is
+				 * still the engine's, from the ground under the chosen spot). */
+				if (!jer_map_region_resident(jer_map_region_of(baseX, baseZ)) &&
+					player[0].playerCarId >= 0 && player[0].playerCarId < MAX_CARS)
+				{
+					baseX = car_data[player[0].playerCarId].hd.where.t[0];
+					baseZ = car_data[player[0].playerCarId].hd.where.t[2];
+
+					if (gMpCtx != NULL)
+						gMpCtx->jer_log(gMpCtx,
+							"[mp] spawn: level start region %d is not resident - searching around the host at %d,%d\n",
+							jer_map_region_of(PlayerStartInfo[0]->position.vx,
+								PlayerStartInfo[0]->position.vz), baseX, baseZ);
+				}
+
 				/* No spooling here on purpose: MpWarpSpotOk already refuses a spot
 				 * whose ground is not resident, and moving the streamer while a join
 				 * is being placed is how players end up in the void. Near the level
-				 * start the region is resident by definition. */
-				onRoad = MpFindRoadSpotNear(PlayerStartInfo[0]->position.vx, 0,
-					PlayerStartInfo[0]->position.vz, p->id, &rx, &rz, &rdir, NULL);
+				 * start the region is resident by definition.
+				 *
+				 * CLEAR OF EVERY OTHER CAR. The ring search stops at the first ring
+				 * with a road, which can be a short hop from the host's own car --
+				 * the "late joiner on top of the host" report. Retry around centres
+				 * pushed one clearance-step out in all four directions, so the first
+				 * ring the search can return is already clear. */
+				for (tries = 0; tries < 4 && !onRoad; tries++)
+				{
+					int sx = 0, sz = 0, sdir = -1;
+					int cx = baseX;
+					int cz = baseZ;
+					int step = MP_JOIN_CLEAR + 1200;
+
+					if (tries == 0)
+						cx += step;
+					else if (tries == 1)
+						cx -= step;
+					else if (tries == 2)
+						cz += step;
+					else
+						cz -= step;
+
+					if (!MpFindRoadSpotNear(cx, 0, cz, p->id + tries * 64, &sx, &sz, &sdir, NULL))
+						continue;
+
+					if (!MpJoinSpotClearOfPlayers(sx, sz, id, -1))
+						continue;
+
+					rx = sx;
+					rz = sz;
+					rdir = sdir;
+					onRoad = 1;
+				}
 			}
 
-			if (onRoad)
+			if (onRoad == 1)
 			{
 				PlayerStartInfo[slot]->position.vx = rx;
 				PlayerStartInfo[slot]->position.vz = rz;
@@ -1296,7 +1536,7 @@ void MpSpawnLateJoiners(void)
 				PlayerStartInfo[slot]->rotation = (u_short)
 					((rdir >= 0) ? rdir : PlayerStartInfo[0]->rotation);
 			}
-			else
+			else if (onRoad == 0)
 			{
 				int cell = id - 1;
 
@@ -1310,18 +1550,27 @@ void MpSpawnLateJoiners(void)
 				PlayerStartInfo[slot]->position.vz = PlayerStartInfo[0]->position.vz + dz;
 				PlayerStartInfo[slot]->rotation = PlayerStartInfo[0]->rotation;
 			}
+			/* onRoad == 2: the announced pose is already written above; it must
+			 * NOT be replaced by the road/grid blocks (they would write rx/rz,
+			 * which are unset on this path -- that was the origin spawn). */
 
 			if (gMpCtx != NULL)
 			{
-				if (onRoad)
+				if (onRoad == 2)
 					gMpCtx->jer_log(gMpCtx,
-						"[mp] spawn: player %d -> slot %d on a road at %d,%d facing %d (%s)\n",
+						"[mp] spawn: player %d -> slot %d at its announced pose %d,%d heading %d (no placeholder at the level start)\n",
+						id, slot, PlayerStartInfo[slot]->position.vx,
+						PlayerStartInfo[slot]->position.vz, PlayerStartInfo[slot]->rotation);
+				else if (onRoad)
+					gMpCtx->jer_log(gMpCtx,
+						"[mp] spawn: player %d -> slot %d on a road at %d,%d facing %d (%s), clear of every other car by %d\n",
 						id, slot, PlayerStartInfo[slot]->position.vx,
 						PlayerStartInfo[slot]->position.vz, PlayerStartInfo[slot]->rotation,
-						(rdir >= 0) ? "along the road" : "level heading, no road angle");
+						(rdir >= 0) ? "along the road" : "level heading, no road angle",
+						MP_JOIN_CLEAR);
 				else
 					gMpCtx->jer_log(gMpCtx,
-						"[mp] spawn: player %d -> slot %d at the level's own start %d,%d (+%d,%d grid %d,%d), no road in reach, no y\n",
+						"[mp] spawn: player %d -> slot %d at the level's own start %d,%d (+%d,%d grid %d,%d), no clear road in reach - grid fallback NOT checked against other cars, no y\n",
 						id, slot, PlayerStartInfo[slot]->position.vx,
 						PlayerStartInfo[slot]->position.vz, dx, dz, col, row);
 			}
@@ -1347,6 +1596,20 @@ void MpSpawnLateJoiners(void)
 
 		if (MpRemoteTargetsLocalCar(slot, "spawn (InitPlayer)", id))
 			continue;
+
+		/* BELT AND BRACES, and the answer to the open reset report: the scan above
+		 * already refuses owned slots, but a join must never reach InitPlayer on a
+		 * body that belongs to someone even if a future scan regresses. Refuse and
+		 * say which slot, so a log is conclusive about what was not touched. */
+		if (MpCarSlotOwnedByPlayer(slot, id))
+		{
+			if (gMpCtx != NULL)
+				gMpCtx->jer_log(gMpCtx,
+					"[mp] spawn: refused slot %d for player %d - car is owned (controlType %d, our car %d, named by a player row %d)\n",
+					slot, id, (int)car_data[slot].controlType, (int)player[0].playerCarId,
+					MpGetPlayerByCar(slot) != NULL ? 1 : 0);
+			continue;
+		}
 
 		padid = (char)-slot;
 
@@ -1376,6 +1639,18 @@ void MpSpawnLateJoiners(void)
 		}
 
 		p->carId = slot;
+
+		/* The body exists now: the next carstate should record a FRESH pose, so a
+		 * later re-seat is not anchored to the pose this build used. */
+		p->joinedPose = 0;
+
+		/* CARS PERSIST. A player who got out left a quiet-pad body and a
+		 * leftCarSlot1 claim. Giving them a new car does not delete that body:
+		 * it stays parked and keeps the claim (the claim is overwritten on their
+		 * next get-out). This is deliberate -- the old car is a world car another
+		 * player can walk to, not a duplicate to clean up. The ownership guards
+		 * (MpCarSlotTakenByOther and the SAME_BODY gate) keep another row from
+		 * deleting or reclaiming it. */
 		spawned++;
 
 		if (gMpCtx != NULL)
@@ -2784,6 +3059,17 @@ static void MpHandleWelcome(const unsigned char* p, int len)
 		gMp.running = 1;
 		gMp.subGame = w.subGame;
 
+		/* WE JOINED A MATCH ALREADY IN PROGRESS. That is a different placement
+		 * problem from both machines launching together: the level places our car
+		 * on its own start, which is where the host came in, and the old
+		 * client-side gather would then drop us beside the first peer it heard
+		 * from. Mark the join so the gather is skipped and MpPlaceSelfTick owns
+		 * the spawn. Cleared by MpSessionReset. */
+		gMp.liveJoin = 1;
+
+		if (gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx, "[mp] live join: not gathering beside a peer - our car will be placed on a clear road\n");
+
 		/* adopt the host's level so we load the same map, then let the
 		 * joining player pick their own vehicle -- the car select's START
 		 * launches us into the running game. */
@@ -3040,9 +3326,14 @@ int MpOnNetSpawn(void* userdata, void* args)
 			}
 		}
 
-		/* The HEIGHT is the local start record's -- forcing it to 0 dropped the
-		 * remote car in from above, because the level's datum is not y=0. */
-		PlayerStartInfo[slot]->position.vy = PlayerStartInfo[0]->position.vy;
+		/* ONLY x/z/rotation come from the level-start record. This is NOT a live
+		 * car: the hook fires from InitGameVariables, which has just rebuilt slot
+		 * 0's record from levelstartpos (main.c), and the engine's own spawn loop
+		 * below resolves the ground from the record's x/z. The height stays the
+		 * engine's convention (0, main.c), never a y read from a car -- a y taken
+		 * at one x/z and applied at another is the "late joiner above the host"
+		 * report this path used to cause. */
+		PlayerStartInfo[slot]->position.vy = 0;
 		PlayerStartInfo[slot]->position.vx = PlayerStartInfo[0]->position.vx + 900 * slot;
 		PlayerStartInfo[slot]->position.vz = PlayerStartInfo[0]->position.vz;
 		PlayerStartInfo[slot]->rotation = PlayerStartInfo[0]->rotation;
@@ -3101,6 +3392,7 @@ static void MpTestCarCycleTick(void);
 static void MpTestLeaveTick(void);
 static void MpTestKickTick(void);
 static void MpTestOnFootTick(void);
+static void MpTestEnterLeftTick(void);
 static void MpTestFallOffTick(void);
 
 
@@ -3312,11 +3604,25 @@ static void MpHandleInput(int connIndex, const unsigned char* p, int len)
 #define MP_HIT_SELF_FRAMES	4	/* our own engine reported this contact this recently */
 #define MP_HIT_PROBE_QUIET	90	/* ... and the probe stands down this long after one */
 
+/* A push may only act on a RECENT pose of the target's own timeline. Twenty
+ * frames is 667 ms at 30 Hz: enough for a 250 ms one-way link plus the 100 ms
+ * playout buffer and a host relay, short enough that a hit from long ago cannot
+ * move anybody. */
+#define MP_HIT_MAX_AGE_FRAMES	20
+#define MP_HIT_RX_RADIUS	MP_HIT_RADIUS	/* the same body scale, measured at ARRIVAL */
+
 /* The largest impulse a WELL-BEHAVED sender can produce, per axis: the normal is
  * MP_FIXEDH-scaled and the push is capped at MP_HIT_MAX_PUSH. The wire carries an
  * int32, so without this ceiling a peer could add +/-2^31 to a car's velocity at
  * any distance -- see MpHandleHit. */
 #define MP_HIT_IMPULSE_MAX	(MP_FIXEDH * MP_HIT_MAX_PUSH)
+
+/* The hit counters go to the log once per this many sim frames. Every 300 frames
+ * is 10 s at the engine's 30 Hz tick; the plan called this a per-minute line, but
+ * mp_localpair runs are commonly 40 s, so a 60 s line would never appear in
+ * exactly the runs that need it. */
+#define MP_HIT_SUMMARY_FRAMES	300
+
 
 /* Contacts arm afresh in every match (see gMpHitArmFrame at the top of this file
  * for why the arm frame is session state and not a function local). */
@@ -3326,6 +3632,24 @@ static int MpHitArmed(void)
 		gMpHitArmFrame = gMp.frame + MP_HIT_ARM_FRAMES;
 
 	return (gMp.frame >= gMpHitArmFrame);
+}
+
+/* How far the sender's view of us may be from where we recorded ourselves at the
+ * same frame. When the sample arrived it is EXACT (the sender displays a received
+ * sample), so this is mostly room for the interpolation error of a lost sample;
+ * half a car body per side makes it scale with the vehicles. */
+static int MpHitPoseTolerance(const CAR_DATA* target, const MP_PLAYER* src)
+{
+	int tol = 300;
+
+	if (target != NULL && target->ap.carCos != NULL)
+		tol += target->ap.carCos->colBox.vz / 8;
+
+	if (src != NULL && src->carId >= 0 && src->carId < MAX_CARS &&
+	    car_data[src->carId].ap.carCos != NULL)
+		tol += car_data[src->carId].ap.carCos->colBox.vz / 8;
+
+	return tol;
 }
 
 /* The contact normal US -> THEM in the velocity fix-point (MP_FIXEDH = 1.0), and
@@ -3417,6 +3741,27 @@ static int MpContactPush(MP_PLAYER* me, MP_PLAYER* pl, int localHalf, const char
 	h.impulse[1] = (int)iy;
 	h.impulse[2] = (int)iz;
 
+	/* Name WHERE and WHEN in the target's own timeline. The playout state is
+	 * what we actually collided with; if this machine has not played the target
+	 * yet, leave 0 and the receiver will refuse an unvalidatable push. */
+	{
+		MP_CAR_PLAY* tp = &gMpPlay[pl->id];
+
+		if (tp->primed && tp->playFrame != 0)
+		{
+			h.targetFrame = (uint32_t)tp->playFrame;
+			h.tgtPos[0] = tp->playX;
+			h.tgtPos[1] = tp->playY;
+			h.tgtPos[2] = tp->playZ;
+		}
+		else
+		{
+			h.tgtPos[0] = other->hd.where.t[0];
+			h.tgtPos[1] = other->hd.where.t[1];
+			h.tgtPos[2] = other->hd.where.t[2];
+		}
+	}
+
 	pl->lastHitFrame = gMp.frame;
 
 	if (MpIsHost())
@@ -3433,6 +3778,8 @@ static int MpContactPush(MP_PLAYER* me, MP_PLAYER* pl, int localHalf, const char
 		gMpCtx->jer_log(gMpCtx,
 			"[mp] hit: we bumped player %d (%s: closing %ld, giving up %ld units/frame)\n",
 			pl->id, why, closing, push);
+
+	gMpHitSent++;
 
 	return 1;
 }
@@ -3560,6 +3907,21 @@ static void MpHitFrame(void)
 			(gMp.frame - gMpSelfContactFrame[pl->id]) < MP_HIT_PROBE_QUIET)
 			continue;
 
+		/* The probe is the FALLBACK for a snapshot gap. While the owner's samples
+		 * are arriving, the engine's own contact is the trigger -- and a
+		 * distance-only test at this radius fires on near misses (measured in
+		 * the docs at ~68 probe hits against 3-5 engine contacts), so most
+		 * "phantom bumps" came from here. A gap is exactly the case the probe
+		 * exists for, so gate on the newest SAMPLE's arrival, not lastStateFrame
+		 * (which the apply path refreshes every frame even while holding). */
+		{
+			MP_CAR_PLAY* bp = &gMpPlay[pl->id];
+
+			if (bp->count > 0 &&
+			    (unsigned)(gMp.frame - bp->snap[bp->head].recvFrame) <= 2)
+				continue;
+		}
+
 		other = &car_data[pl->carId];
 
 		dx = (long long)other->hd.where.t[0] - (long long)mine->hd.where.t[0];
@@ -3653,25 +4015,111 @@ static void MpHandleHit(int connIndex, const unsigned char* p, int len)
 	if (me != NULL && h.targetId == me->id && me->carId >= 0 && me->carId < MAX_CARS)
 	{
 		CAR_DATA* cp = &car_data[me->carId];
+		MP_PLAYER* src = MpGetPlayer(from);
+		long d = -1;
+
+		/* How far apart the two cars are ON THIS MACHINE when the push lands.
+		 * Without a contact timestamp on the wire this is the only honest
+		 * "was this hit stale?" measurement available to the receiver -- and it
+		 * is the one the latency work moves: before interpolation/validation a
+		 * delayed push commonly arrives with the cars already separated. */
+		if (src != NULL && src->carId >= 0 && src->carId < MAX_CARS)
+		{
+			CAR_DATA* sc = &car_data[src->carId];
+			long long dx = (long long)sc->hd.where.t[0] - (long long)cp->hd.where.t[0];
+			long long dy = (long long)sc->hd.where.t[1] - (long long)cp->hd.where.t[1];
+			long long dz = (long long)sc->hd.where.t[2] - (long long)cp->hd.where.t[2];
+
+			d = (long)sqrt((double)(dx * dx + dy * dy + dz * dz));
+		}
+
+		gMpHitRx++;
+
+		if (d > MP_HIT_RADIUS)
+			gMpHitSeparated++;
+
+		if (MpDebugOn() && gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx,
+				"[mp] hit rx: player %d |d|=%ld srcAge=%lu tf=%u push=%ld,%ld,%ld\n",
+				from, d,
+				(src != NULL && src->lastStateFrame != 0)
+					? (unsigned long)(gMp.frame - src->lastStateFrame) : 0UL,
+				(unsigned)h.targetFrame,
+				(long)h.impulse[0], (long)h.impulse[1], (long)h.impulse[2]);
+
+		/* VALIDATE BEFORE APPLYING. targetFrame is a frame of OUR OWN carstate,
+		 * so we can ask two questions no arrival-time check could answer:
+		 *  - is this recent enough to act on at all?
+		 *  - were we actually where the sender says, when it says?
+		 * A push that fails either is a ghost: the sender collided with a pose
+		 * this machine had already left, and applying it now is the car that
+		 * bounces off nothing. */
+		{
+			int age = (h.targetFrame != 0)
+				? (int)((unsigned)gMp.frame - h.targetFrame) : 9999;
+			int hx = 0, hy = 0, hz = 0;
+			long poseD = -1;
+			const char* why = NULL;
+
+			if (h.targetFrame == 0)
+				why = "no timeline";
+			else if (age < 0 || age > MP_HIT_MAX_AGE_FRAMES)
+				why = "stale";
+			else if (!MpSelfPoseAt(h.targetFrame, &hx, &hy, &hz))
+				why = "frame not in history";
+			else
+			{
+				long long pdx = (long long)hx - h.tgtPos[0];
+				long long pdy = (long long)hy - h.tgtPos[1];
+				long long pdz = (long long)hz - h.tgtPos[2];
+
+				poseD = (long)sqrt((double)(pdx * pdx + pdy * pdy + pdz * pdz));
+
+				if (poseD > MpHitPoseTolerance(cp, src))
+					why = "pose mismatch";
+			}
+
+			/* A consistent timestamp is still not enough: by the time the push
+			 * lands the cars may have finished separating. Applying it then is
+			 * exactly the phantom bump, so a late push also has to find us
+			 * still near the other car. */
+			if (why == NULL && age > MP_HIT_SELF_FRAMES && d > MP_HIT_RX_RADIUS)
+				why = "cars separated";
+
+			if (why != NULL)
+			{
+				gMpHitRejected++;
+
+				if (gMpCtx != NULL)
+					gMpCtx->jer_log(gMpCtx,
+						"[mp] hit: player %d bumped us (push %ld,%ld,%ld) "
+						"ghost hit rejected (%s: age=%d |d|=%ld pose=%ld)\n",
+						from, (long)h.impulse[0], (long)h.impulse[1], (long)h.impulse[2],
+						why, age, d, poseD);
+				return;
+			}
+		}
 
 		/* ONCE per contact. Our own engine resolves the same collision (both
 		 * machines simulate both cars), and its rigid-body response is already in
 		 * our velocity -- so adding the peer's push as well lands one collision
-		 * twice. The engine's contact hook marks the frame it saw one; within
-		 * MP_HIT_SELF_FRAMES of that, this push is the duplicate and is dropped
-		 * (the contact is still logged, so a run can see both halves arriving).
-		 *
-		 * Outside that window nothing local moved us, which is the case the
-		 * hand-off exists for: apply it. */
+		 * twice. Compare the frame the engine saw it against targetFrame, both in
+		 * OUR numbering: the old arrival-frame window is wrong across latency,
+		 * because the push arrives many frames after the collision it describes. */
 		if (from >= 0 && from < MP_MAX_PLAYERS && gMpSelfContactFrame[from] != 0 &&
-			(gMp.frame - gMpSelfContactFrame[from]) <= MP_HIT_SELF_FRAMES)
+			(int)h.targetFrame - (int)gMpSelfContactFrame[from] <= MP_HIT_SELF_FRAMES &&
+			(int)gMpSelfContactFrame[from] - (int)h.targetFrame <= MP_HIT_SELF_FRAMES)
 		{
+			gMpHitKept++;
+
 			if (gMpCtx != NULL)
 				gMpCtx->jer_log(gMpCtx,
 					"[mp] hit: player %d bumped us (push %ld,%ld,%ld; our engine has it, kept)\n",
 					from, (long)h.impulse[0], (long)h.impulse[1], (long)h.impulse[2]);
 			return;
 		}
+
+		gMpHitApplied++;
 
 		cp->st.n.linearVelocity[0] += h.impulse[0];
 		cp->st.n.linearVelocity[1] += h.impulse[1];
@@ -3691,6 +4139,22 @@ static void MpHandleHit(int connIndex, const unsigned char* p, int len)
 		if (ci >= 0 && ci != connIndex)
 			MpSendConn(ci, MP_TAG_HIT, 0, p, len);
 	}
+}
+
+/* The hit counters, once per MP_HIT_SUMMARY_FRAMES. Counter-only: the increments
+ * are unconditional and nearly free, this line is what MP_DEBUG pays for. */
+static void MpHitSummary(void)
+{
+	if (gMp.frame == 0 || (gMp.frame % MP_HIT_SUMMARY_FRAMES) != 0)
+		return;
+
+	if (gMpHitSent == 0 && gMpHitRx == 0)
+		return;
+
+	if (MpDebugOn() && gMpCtx != NULL)
+		gMpCtx->jer_log(gMpCtx,
+			"[mp] hit summary: sent=%lu rx=%lu applied=%lu kept=%lu separated=%lu rejected=%lu\n",
+			gMpHitSent, gMpHitRx, gMpHitApplied, gMpHitKept, gMpHitSeparated, gMpHitRejected);
 }
 
 /* MP_HEARTBEAT=<secs> -- once every N seconds, say that our sim tick is still
@@ -3718,6 +4182,7 @@ static const char* gHeartbeatStr;
 static const char* gTestLeaveStr;
 static const char* gTestKickStr;
 static const char* gTestOnFootStr;
+static const char* gTestEnterLeftStr;
 static const char* gTestCarChangeStr;
 static const char* gTestCityChangeStr;
 static const char* gTestCarCycleStr;
@@ -3739,6 +4204,7 @@ static void MpResolveTestLevers(void)
 	gTestLeaveStr = getenv("MP_TEST_LEAVE");
 	gTestKickStr = getenv("MP_TEST_KICK");
 	gTestOnFootStr = getenv("MP_TEST_ONFOOT");
+	gTestEnterLeftStr = getenv("MP_TEST_ENTER_LEFT");
 	gTestCarChangeStr = getenv("MP_TEST_CARCHANGE");
 	gTestCityChangeStr = getenv("MP_TEST_CITYCHANGE");
 	gTestCarCycleStr = getenv("MP_TEST_CARCYCLE");
@@ -4425,6 +4891,368 @@ static void MpTrafficClaimPass(void)
 /* One network tick (per simulation frame). Each machine owns ITS OWN car and
  * broadcasts that; everyone else adopts it, so nobody blocks on the network and
  * every car you see is the truth of the machine driving it. */
+/* ------------------------------------------------------------------ */
+/* Remote-car interpolation                                            */
+/*                                                                     */
+/* A snapshot is a SAMPLE of the owner's 30 Hz timeline, not a pose to  */
+/* write the moment it lands. The receiver keeps a short ring of them   */
+/* and plays them back a fixed 3 frames (100 ms) late, so the remote    */
+/* car moves continuously between packets instead of stepping once per  */
+/* arrival. The engine still simulates the car every frame; this only   */
+/* replaces the hard write that used to happen in MpHandleCarState.     */
+/*                                                                     */
+/* The cursor advances one owner-frame per sim frame (both machines run */
+/* the same fixed 30 Hz tick). It is clamped at newest + EXTRAP_MAX so  */
+/* a link stall cannot run it away, and re-anchored when it falls more   */
+/* than RESYNC frames behind -- which is what a long stall or lost       */
+/* burst looks like when the samples finally arrive.                     */
+/* ------------------------------------------------------------------ */
+#define MP_INTERP_DELAY		3	/* playout delay, in 30 Hz frames (100 ms) */
+#define MP_INTERP_EXTRAP_MAX	3	/* never extrapolate further than this */
+#define MP_INTERP_RESYNC	8	/* cursor this far behind: jump to newest - DELAY */
+#define MP_INTERP_SNAP_DIST	6000	/* one-sample jump: a teleport, not motion */
+#define MP_INTERP_DEBUG_FRAMES	60	/* MP_DEBUG state line every 2 s */
+
+/* MP_CAR_SNAP / MP_CAR_PLAY / gMpPlay are declared at the top of the file: the
+ * contact path reads the playout state before this code in file order. */
+
+/* Signed distance between two frame numbers. The counters are 32-bit on this
+ * platform and a match lasts minutes, so a plain subtraction is exact; the
+ * casts just keep the wrap arithmetic out of the compiler's way. */
+static int MpFrameAge(unsigned newer, unsigned older)
+{
+	return (int)((unsigned)newer - (unsigned)older);
+}
+
+static void MpPlayClear(int id)
+{
+	if (id >= 0 && id < MP_MAX_PLAYERS)
+		memset(&gMpPlay[id], 0, sizeof(gMpPlay[id]));
+}
+
+/* ------------------------------------------------------------------ */
+/* Our own pose history                                                */
+/*                                                                     */
+/* A push names the frame of OUR carstate it collided with. To decide   */
+/* whether we were really where it says, we need where we were at that  */
+/* frame -- recorded as the pose we sent, because that is exactly what  */
+/* the sender could have been displaying. 64 frames is just over two    */
+/* seconds at 30 Hz, comfortably more than the validity window.         */
+/* ------------------------------------------------------------------ */
+#define MP_SELF_HISTORY	64
+
+typedef struct MP_SELF_POSE
+{
+	unsigned frame;
+	int x, y, z;
+} MP_SELF_POSE;
+
+static MP_SELF_POSE gMpSelfPose[MP_SELF_HISTORY];
+
+static void MpPlayResetAll(void)
+{
+	memset(gMpPlay, 0, sizeof(gMpPlay));
+	memset(gMpSelfPose, 0, sizeof(gMpSelfPose));
+}
+
+static void MpRecordSelfPose(void)
+{
+	MP_PLAYER* me = MpLocalPlayer();
+	MP_SELF_POSE* h;
+
+	if (me == NULL || me->carId < 0 || me->carId >= MAX_CARS)
+		return;
+
+	h = &gMpSelfPose[gMp.frame % MP_SELF_HISTORY];
+	h->frame = (unsigned)gMp.frame;
+	h->x = car_data[me->carId].hd.where.t[0];
+	h->y = car_data[me->carId].hd.where.t[1];
+	h->z = car_data[me->carId].hd.where.t[2];
+}
+
+static int MpSelfPoseAt(unsigned frame, int* x, int* y, int* z)
+{
+	const MP_SELF_POSE* h = &gMpSelfPose[frame % MP_SELF_HISTORY];
+
+	if (h->frame != frame)
+		return 0;
+
+	*x = h->x;
+	*y = h->y;
+	*z = h->z;
+	return 1;
+}
+
+/* Store one sample. Older/duplicate frames are dropped: TCP is ordered, but a
+ * relayed snapshot can still arrive after a newer one from another path. */
+static void MpPlayPush(int id, unsigned frame, const MP_CARSTATE_ENTRY* e)
+{
+	MP_CAR_PLAY* p;
+	MP_CAR_SNAP* s;
+	int i;
+
+	if (id < 0 || id >= MP_MAX_PLAYERS || e == NULL)
+		return;
+
+	p = &gMpPlay[id];
+
+	if (p->count > 0 && MpFrameAge(frame, (unsigned)p->lastFrame) <= 0)
+		return;
+
+	/* A jump this large in one sample is not motion: a respawn, a car change
+	 * or a snapshot gap. Do not slide the body across the map -- start a fresh
+	 * timeline, exactly as the old adopt did by simply writing the new pose. */
+	if (p->count > 0)
+	{
+		MP_CAR_SNAP* newest = &p->snap[p->head];
+		long long dx = (long long)e->x - newest->x;
+		long long dy = (long long)e->y - newest->y;
+		long long dz = (long long)e->z - newest->z;
+
+		if (dx * dx + dy * dy + dz * dz >
+		    (long long)MP_INTERP_SNAP_DIST * MP_INTERP_SNAP_DIST)
+		{
+			MpPlayClear(id);
+			p = &gMpPlay[id];
+		}
+	}
+
+	p->head = (p->head + 1) % MP_INTERP_RING;
+	s = &p->snap[p->head];
+
+	s->frame = frame;
+	s->recvFrame = gMp.frame;
+	s->x = e->x;
+	s->y = e->y;
+	s->z = e->z;
+	s->heading = e->heading;
+
+	for (i = 0; i < 4; i++)
+		s->orient[i] = e->orient[i];
+	for (i = 0; i < 3; i++)
+		s->vel[i] = e->vel[i];
+	for (i = 0; i < 3; i++)
+		s->angVel[i] = e->angVel[i];
+
+	if (p->count < MP_INTERP_RING)
+		p->count++;
+
+	p->lastFrame = (int)frame;
+
+	if (!p->primed)
+	{
+		/* Start 3 frames in the past. With fewer samples than that the apply
+		 * step holds the oldest one until the cursor reaches it, which is the
+		 * 100 ms of delay this whole scheme is built on. */
+		p->playFrame = (int)frame - MP_INTERP_DELAY;
+		p->primed = 1;
+	}
+}
+
+static void MpSnapUse(const MP_CAR_SNAP* s, int* x, int* y, int* z,
+	int* heading, short orient[4], int vel[3], int angVel[3])
+{
+	int i;
+
+	*x = s->x;
+	*y = s->y;
+	*z = s->z;
+	*heading = s->heading;
+
+	for (i = 0; i < 4; i++)
+		orient[i] = s->orient[i];
+	for (i = 0; i < 3; i++)
+		vel[i] = s->vel[i];
+	for (i = 0; i < 3; i++)
+		angVel[i] = s->angVel[i];
+}
+
+static int MpLerpAngle(int a, int b, int num, int den)
+{
+	int d = ((b - a + 2048) & 4095) - 2048;
+
+	return (a + d * num / den) & 4095;
+}
+
+/* Write a remote car's rigid body. The same fields the old adopt wrote: the
+ * engine re-derives hd.direction from the quaternion, so the orientation and
+ * both velocities have to travel with the position. */
+static void MpPlayWriteBody(CAR_DATA* cp, int x, int y, int z, int heading,
+	const short orient[4], const int vel[3], const int angVel[3])
+{
+	LONGQUATERNION q;
+	MATRIX m;
+	int i;
+
+	cp->controlType = CONTROL_TYPE_PLAYER;
+
+	for (i = 0; i < 4; i++)
+		q[i] = orient[i];
+	for (i = 0; i < 4; i++)
+		cp->st.n.orientation[i] = q[i];
+	for (i = 0; i < 3; i++)
+		cp->st.n.linearVelocity[i] = vel[i];
+	for (i = 0; i < 3; i++)
+		cp->st.n.angularVelocity[i] = MpClampAngVel(angVel[i]);
+
+	LongQuaternion2Matrix(&q, &m);
+	m.t[0] = x;
+	m.t[1] = y;
+	m.t[2] = z;
+	memcpy(&cp->hd.where, &m, sizeof(m));
+
+	cp->hd.direction = heading;
+}
+
+/* Once per sim frame, before the world steps: place every remote car at the
+ * pose the playout cursor names. This is the ONLY writer of a remote car's
+ * body now, so the engine and the snapshot stream cannot fight over it. */
+static void MpApplyRemoteCarPoses(void)
+{
+	int i;
+
+	for (i = 0; i < MP_MAX_PLAYERS; i++)
+	{
+		MP_PLAYER* pl = &gMp.players[i];
+		MP_CAR_PLAY* p;
+		MP_CAR_SNAP* s0 = NULL;	/* first sample at or older than the cursor */
+		MP_CAR_SNAP* s1 = NULL;	/* first sample at or newer than the cursor */
+		const MP_CAR_SNAP* newest;
+		CAR_DATA* cp;
+		int x, y, z, heading;
+		int vel[3], angVel[3];
+		short orient[4];
+		int k;
+
+		if (!pl->active || pl->isLocal || pl->carId < 0 || pl->carId >= MAX_CARS)
+			continue;
+
+		p = &gMpPlay[pl->id];
+
+		if (p->count == 0)
+			continue;
+
+		cp = &car_data[pl->carId];
+
+		if (!p->primed)
+		{
+			p->playFrame = p->lastFrame - MP_INTERP_DELAY;
+			p->primed = 1;
+		}
+		else
+		{
+			p->playFrame++;
+		}
+
+		/* A long stall runs the cursor ahead of what we have. Clamp it, and
+		 * re-anchor when the data that finally arrives is far newer than it. */
+		if (p->playFrame > p->lastFrame + MP_INTERP_EXTRAP_MAX)
+			p->playFrame = p->lastFrame + MP_INTERP_EXTRAP_MAX;
+
+		if (MpFrameAge((unsigned)p->lastFrame, (unsigned)p->playFrame) > MP_INTERP_RESYNC)
+			p->playFrame = p->lastFrame - MP_INTERP_DELAY;
+
+		/* Walk newest -> oldest to bracket the cursor. */
+		for (k = 0; k < p->count; k++)
+		{
+			MP_CAR_SNAP* s = &p->snap[(p->head - k + MP_INTERP_RING) % MP_INTERP_RING];
+
+			if (MpFrameAge(s->frame, (unsigned)p->playFrame) >= 0)
+				s1 = s;		/* at or newer than the cursor */
+			else
+			{
+				s0 = s;		/* the first one older than it */
+				break;
+			}
+		}
+
+		newest = &p->snap[p->head];
+
+		if (s0 != NULL && s1 != NULL)
+		{
+			int den = MpFrameAge(s1->frame, s0->frame);
+			int num = MpFrameAge((unsigned)p->playFrame, s0->frame);
+			long long dot = 0;
+			int sign;
+			int j;
+
+			if (den <= 0)
+				den = 1;
+			if (num < 0)
+				num = 0;
+			if (num > den)
+				num = den;
+
+			x = (int)((long long)s0->x * (den - num) / den + (long long)s1->x * num / den);
+			y = (int)((long long)s0->y * (den - num) / den + (long long)s1->y * num / den);
+			z = (int)((long long)s0->z * (den - num) / den + (long long)s1->z * num / den);
+			heading = MpLerpAngle(s0->heading, s1->heading, num, den);
+
+			/* Normalised lerp with a sign correction: q and -q are the same
+			 * attitude, and lerping without it takes the long way round and
+			 * can flip the car. */
+			for (j = 0; j < 4; j++)
+				dot += (long long)s0->orient[j] * s1->orient[j];
+
+			sign = (dot < 0) ? -1 : 1;
+
+			for (j = 0; j < 4; j++)
+			{
+				orient[j] = (short)(((long long)s0->orient[j] * (den - num) +
+					(long long)s1->orient[j] * sign * num) / den);
+			}
+
+			for (j = 0; j < 3; j++)
+				vel[j] = s1->vel[j];
+			for (j = 0; j < 3; j++)
+				angVel[j] = s1->angVel[j];
+
+			p->mode = 0;
+		}
+		else if (s1 != NULL)
+		{
+			/* Before the oldest sample: show it (the spawn case). */
+			MpSnapUse(s1, &x, &y, &z, &heading, orient, vel, angVel);
+			p->mode = 1;
+		}
+		else
+		{
+			/* Beyond the newest sample: extrapolate on its velocity, capped. */
+			int dt = MpFrameAge((unsigned)p->playFrame, newest->frame);
+
+			if (dt < 0)
+				dt = 0;
+			if (dt > MP_INTERP_EXTRAP_MAX)
+				dt = MP_INTERP_EXTRAP_MAX;
+
+			MpSnapUse(newest, &x, &y, &z, &heading, orient, vel, angVel);
+
+			x += (int)((long long)vel[0] * dt / MP_FIXEDH);
+			y += (int)((long long)vel[1] * dt / MP_FIXEDH);
+			z += (int)((long long)vel[2] * dt / MP_FIXEDH);
+
+			p->mode = 2;
+		}
+
+		MpPlayWriteBody(cp, x, y, z, heading, orient, vel, angVel);
+
+		/* Remember the pose the sender is actually looking at: a contact report
+		 * names this frame, and MpContactPush sends this position with it. */
+		p->playX = x;
+		p->playY = y;
+		p->playZ = z;
+
+		pl->onFoot = 0;
+		pl->lastStateFrame = gMp.frame;	/* the fallback gate in MpOnNetInput reads this */
+
+		if (MpDebugOn() && gMpCtx != NULL && (gMp.frame % MP_INTERP_DEBUG_FRAMES) == 0)
+			gMpCtx->jer_log(gMpCtx,
+				"[mp] interp: player %d depth=%d lag=%d mode=%s\n",
+				pl->id, p->count, MpFrameAge((unsigned)p->lastFrame, (unsigned)p->playFrame),
+				(p->mode == 0) ? "lerp" : (p->mode == 1) ? "hold" : "extrap");
+	}
+}
+
 void MpLockstepFrame(void)
 {
 	if (!gMp.running)
@@ -4433,6 +5261,20 @@ void MpLockstepFrame(void)
 	gMpStage = "sim";
 
 	++gMp.frame;
+
+	/* Place every remote car from its snapshot buffer BEFORE anything is
+	 * simulated or sent. This is the one writer of a remote body now: the
+	 * playout cursor turns the owner's 30 Hz samples into continuous motion,
+	 * and the engine steps the car from there for this frame. */
+	MpApplyRemoteCarPoses();
+
+	/* A LIVE JOINER LEAVES THE LEVEL START HERE, BEFORE ANY STATE IS SENT. The
+	 * engine builds its car on the level's own start -- where the host came in --
+	 * and the owner-authoritative carstate goes out from MpSendOwnCarState later
+	 * in this same tick. Placing now means the peers never see the start pose at
+	 * all; the old FRAME-hook call ran after the send, and a second state could
+	 * overwrite an earlier successful placement. */
+	MpPlaceSelfTick();
 
 	/* Re-assert the traffic slot bands FIRST, before anything spawns this frame. A
 	 * level load clears the engine's reservedSlots out from under us, so this is
@@ -4487,6 +5329,7 @@ void MpLockstepFrame(void)
 	/* test lever: get out of the car part-way through (inert unless MP_TEST_ONFOOT),
 	 * so the on-foot path has a way to be exercised at all. */
 	MpTestOnFootTick();
+	MpTestEnterLeftTick();
 
 	/* test lever: run the pause menu's Change car path (inert unless
 	 * MP_TEST_PAUSECAR), so a mid-match vehicle change is reproducible headlessly
@@ -4558,6 +5401,10 @@ void MpLockstepFrame(void)
 	 * would pull them back together -- which is exactly where the drift came from. */
 	MpSendOwnCarState();
 
+	/* ...and record the pose we just sent. A contact report names one of these
+	 * frames; this history is how we check that we were really there. */
+	MpRecordSelfPose();
+
 	/* ...and the pedestrian, if we are not in a car: the same owner-authoritative
 	 * rule, for a thing that has a heading and a speed instead of a body. */
 	MpSendOwnPedState();
@@ -4585,6 +5432,9 @@ void MpLockstepFrame(void)
 	MpHitFrame();
 
 	MpNetPoll(0);
+
+	/* ...and if this is a summary frame, the hit counters go to the log. */
+	MpHitSummary();
 
 	gMpStage = "sim-done";
 }
@@ -4760,6 +5610,278 @@ static void MpTestOnFootTick(void)
 	 * it. Mirror the engine: activate the ped, then step out. */
 	ActivatePlayerPedestrian(&car_data[me->carId], NULL, 0, NULL, TANNER_MODEL);
 	ChangeCarPlayerToPed(0);
+}
+
+/* Why a claimed left car cannot be entered here, or NULL when every gate the
+ * lever applies passes. The named reasons are the point: "no left car" covered
+ * a missing claim, a rejected body and a machine that never held the car, and
+ * those need different fixes. */
+static const char* MpLeftCarRejectReason(const MP_PLAYER* p, int left)
+{
+	if (left < 0 || left >= MAX_CARS)
+		return "slot out of range";
+
+	if (car_data[left].controlType != CONTROL_TYPE_CIV_AI)
+		return "controlType is not CIV_AI";
+
+	if (car_data[left].ap.carCos == NULL)
+		return "no cosmetics (carCos NULL)";
+
+	if (car_data[left].ap.model != p->leftCarModel)
+		return "model does not match the recorded leftCarModel";
+
+	if (car_data[left].ai.padid != &gMpQuietPad)
+		return "pad is not the quiet pad";
+
+	return NULL;
+}
+
+/* MP_TEST_ENTER_LEFT=<secs>[,<playerId>] -- walk into the car ANOTHER player
+ * left, from a headless run.
+ *
+ * The get-out paths leave the body CIV_AI with the quiet pad, which is exactly
+ * what TannerCanEnterCar accepts; the missing half of issue #56 is whether any
+ * other machine actually holds that body. A headless run has no way to walk up
+ * and press the key, so this lever performs the same gate and reports the
+ * answer: find the target row's leftCarSlot1, check the body is the parked
+ * CIV_AI car with that model and pad, call TannerCanEnterCar, and only then
+ * call ChangePedPlayerToCar. The log line is the evidence either way.
+ *
+ * <playerId> defaults to 0xFFFF = the first non-local row with a left car. The
+ * local player must be ON FOOT; this is the "another player" path, not the
+ * owner walking back into their own car (MP_TEST_PAUSECAR covers that).
+ *
+ * A third field, <exitSecs>, makes the lever walk back OUT that many seconds
+ * after it entered (the engine's own ActivatePlayerPedestrian +
+ * ChangeCarPlayerToPed), parking the commandeered body. That is how the
+ * commandeer-then-get-out case is exercised headlessly: the new owner's row
+ * keeps leftCarSlot1 on the body, and the original owner's return must not
+ * delete it. */
+static void MpTestEnterLeftTick(void)
+{
+	static int done;
+	static int noted;
+	static int notedOnFoot;
+	static int notedMissing;
+	static unsigned long startMs;
+	static unsigned long exitAtMs;
+	const char* s;
+	const char* comma;
+	int secs, want = 0xFFFF, exitSecs = 0, i, slot = -1, owner = -1;
+	const MP_PLAYER* seen = NULL;		/* target row, even with no claim */
+	const MP_PLAYER* claim = NULL;		/* first claimed slot that failed a gate */
+	const char* why = NULL;			/* its rejection reason */
+	int claimLeft = -1;
+	MP_PLAYER* me;
+	unsigned long now = MpNowMs();
+
+	if (!gMp.running)
+		return;
+
+	if (done)
+	{
+		if (exitAtMs != 0 && (long)(now - exitAtMs) >= 0)
+		{
+			exitAtMs = 0;
+
+			if (player[0].playerCarId >= 0 && player[0].playerCarId < MAX_CARS)
+			{
+				if (gMpCtx != NULL)
+					gMpCtx->jer_log(gMpCtx,
+						"[mp] test: enter left car - getting OUT again, parking the commandeered car\n");
+
+				ActivatePlayerPedestrian(&car_data[player[0].playerCarId], NULL, 0, NULL, TANNER_MODEL);
+				ChangeCarPlayerToPed(0);
+			}
+		}
+
+		return;
+	}
+
+	s = gTestEnterLeftStr;
+
+	if (s == NULL)
+		return;
+
+	if (!noted)
+	{
+		noted = 1;
+
+		if (gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx,
+				"[mp] test: MP_TEST_ENTER_LEFT=%s armed (frame %lu)\n",
+				s, gMp.frame);
+	}
+
+	secs = atoi(s);
+	comma = strchr(s, ',');
+
+	if (comma != NULL)
+	{
+		const char* comma2 = strchr(comma + 1, ',');
+
+		want = atoi(comma + 1);
+
+		if (comma2 != NULL)
+			exitSecs = atoi(comma2 + 1);
+	}
+
+	if (startMs == 0)
+		startMs = MpNowMs();
+
+	if ((now - startMs) < (unsigned long)(secs * 1000))
+		return;
+
+	me = MpLocalPlayer();
+
+	if (me == NULL || me->carId >= 0 || player[0].playerCarId >= 0)
+	{
+		if (!notedOnFoot)
+		{
+			notedOnFoot = 1;
+
+			if (gMpCtx != NULL)
+				gMpCtx->jer_log(gMpCtx,
+					"[mp] test: enter left car needs the local player ON FOOT (carId %d)\n",
+					me != NULL ? me->carId : -99);
+		}
+
+		return;
+	}
+
+	for (i = 0; i < MP_MAX_PLAYERS; i++)
+	{
+		const MP_PLAYER* p = &gMp.players[i];
+		int left;
+
+		if (!p->active || p->isLocal)
+			continue;
+
+		if (want != 0xFFFF && p->id != want)
+			continue;
+
+		if (seen == NULL)
+			seen = p;
+
+		if (p->leftCarSlot1 <= 0)
+			continue;
+
+		left = p->leftCarSlot1 - 1;
+
+		/* A claimed body is the only thing the lever can enter. Remember the
+		 * first one that fails so the log names WHY, instead of saying there is
+		 * no left car at all. */
+		if (MpLeftCarRejectReason(p, left) == NULL)
+		{
+			slot = left;
+			owner = p->id;
+			break;
+		}
+
+		if (claim == NULL)
+		{
+			claim = p;
+			claimLeft = left;
+			why = MpLeftCarRejectReason(p, left);
+		}
+	}
+
+	if (slot < 0)
+	{
+		if (!notedMissing)
+		{
+			notedMissing = 1;
+
+			if (gMpCtx != NULL)
+			{
+				if (want != 0xFFFF && seen == NULL)
+				{
+					gMpCtx->jer_log(gMpCtx,
+						"[mp] test: enter left car - no left car for player %d on this machine: "
+						"no active non-local roster row with that id\n",
+						want);
+				}
+				else if (claim != NULL)
+				{
+					int inRange = (claimLeft >= 0 && claimLeft < MAX_CARS);
+
+					gMpCtx->jer_log(gMpCtx,
+						"[mp] test: enter left car - no left car for player %d on this machine: "
+						"player %d active=1 local=0 carId=%d onFoot=%d leftCarSlot1=%d "
+						"slot=%d controlType=%d model=%d leftModel=%d quietpad=%d carCos=%s - rejected: %s\n",
+						claim->id, claim->id, claim->carId, claim->onFoot, claim->leftCarSlot1,
+						claimLeft,
+						inRange ? (int)car_data[claimLeft].controlType : -1,
+						inRange ? (int)car_data[claimLeft].ap.model : -1,
+						claim->leftCarModel,
+						(inRange && car_data[claimLeft].ai.padid == &gMpQuietPad) ? 1 : 0,
+						(inRange && car_data[claimLeft].ap.carCos != NULL) ? "present" : "NULL",
+						(why != NULL) ? why : "unknown");
+				}
+				else
+				{
+					const MP_PLAYER* row = seen;
+
+					gMpCtx->jer_log(gMpCtx,
+						"[mp] test: enter left car - no left car for player %d on this machine: "
+						"player %d active=%d local=0 carId=%d onFoot=%d leftCarSlot1=%d leftCarModel=%d - "
+						"no claim on this machine (it never held the body, or the NO_CAR rows arrived before a local slot was assigned)\n",
+						(row != NULL) ? row->id : ((want == 0xFFFF) ? -1 : want),
+						(row != NULL) ? row->id : -1,
+						(row != NULL) ? 1 : 0,
+						(row != NULL) ? row->carId : -99,
+						(row != NULL) ? row->onFoot : -1,
+						(row != NULL) ? row->leftCarSlot1 : -1,
+						(row != NULL) ? row->leftCarModel : -1);
+				}
+			}
+		}
+
+		return;
+	}
+
+	done = 1;
+
+	{
+		int can = TannerCanEnterCar(&car_data[slot], 0);
+
+		if (gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx,
+				"[mp] test: enter left car - player %d slot %d model %d control %d "
+				"quietpad %d TannerCanEnterCar=%d\n",
+				owner, slot, (int)car_data[slot].ap.model,
+				(int)car_data[slot].controlType,
+				car_data[slot].ai.padid == &gMpQuietPad ? 1 : 0, can);
+
+		if (can)
+		{
+			/* THE ENGINE'S GET-IN PATH PUTS THE LOCAL TANNER AWAY, and this
+			 * lever must do the same. ChangePedPlayerToCar clears
+			 * player[0].pPed first, so capture the ped before the call and
+			 * remove it after -- exactly as MpChangeCarRun's re-entry does.
+			 *
+			 * Without this the ped from the get-out stays in the pool with
+			 * padId 0, numTannerPeds never drops, and the next get-out builds
+			 * a SECOND ped for the same player. The stale one is then driven
+			 * after its player has moved on; the last time this ran, the exit
+			 * wrote a world coordinate over vsync_callback and the intr thread
+			 * called it (intrThreadMain+0x7E). */
+			LPPEDESTRIAN ped = player[0].pPed;
+
+			ChangePedPlayerToCar(0, &car_data[slot]);
+			RemovePlayerPedestrian(ped);
+
+			if (exitSecs > 0)
+			{
+				exitAtMs = now + (unsigned long)exitSecs * 1000;
+
+				if (gMpCtx != NULL)
+					gMpCtx->jer_log(gMpCtx,
+						"[mp] test: enter left car - will get OUT again in %ds, parking the commandeered car\n",
+						exitSecs);
+			}
+		}
+	}
 }
 
 /* MP_TEST_PAUSECAR=<secs>[,<city>,<model>][;<secs>[,<city>,<model>]...] -- run the
@@ -5525,7 +6647,20 @@ static void MpFollowLocalCar(void)
 		MpFailsafeNoteCar(cp->ap.model);
 
 		if (reentry)
+		{
 			MpCarQueryChosen(me->carCity, me->car, 1);
+
+			/* CLOSE THE ROSTER WINDOW. The carstate already carries
+			 * MP_CARSTATE_SAME_BODY on this same frame (MpSendOwnCarState), but the
+			 * roster only goes out every 120 frames. A host that has just got back
+			 * in should publish its row now rather than leave peers reading the
+			 * old on-foot row for up to two seconds -- that window is exactly where
+			 * a lost/reordered carstate used to leave them stuck. Clients have no
+			 * roster to send: their pick already travels through MP_CARQ, and the
+			 * host republishes. */
+			if (MpIsHost())
+				MpHostSendRoster();
+		}
 	}
 	else if (me->carId >= 0)
 	{
@@ -5562,9 +6697,27 @@ static void MpFollowLocalCar(void)
 				"[mp] car change: on foot (left slot %d, parked empty for re-entry)\n",
 				me->carId);
 
+		/* REMEMBER THE BODY WE ARE STEPPING OUT OF, on our OWN row. Two things need
+		 * it: MpSendOwnCarState tells the peers when we walk back into this same
+		 * slot (MP_CARSTATE_SAME_BODY) so they re-seat us on the body they released
+		 * instead of spawning a second one, and MpChangeCarRun's on-foot path
+		 * prefers this car over any other parked one. It is only meaningful while
+		 * me->carId == leftCarSlot1 - 1; entering a DIFFERENT car leaves it stale
+		 * on purpose, and the next get-OUT overwrites it. */
+		me->leftCarSlot1 = me->carId + 1;
+		me->leftCarModel = left->ap.model;
+
 		me->carId = -1;
 		me->car = -1;
 		me->onFoot = 1;		/* OUR row: the next car we get into is a choice (above) */
+
+		/* Publish the on-foot row now for the same reason as re-entry below: the
+		 * carstate says NO_CAR from this frame on, but the roster would otherwise
+		 * name the car we just left for up to 120 frames. A peer that missed the
+		 * transition then sees our old car as still driven. Host only -- a
+		 * client's rows reach the others through the host's roster. */
+		if (MpIsHost())
+			MpHostSendRoster();
 	}
 }
 
@@ -6107,6 +7260,9 @@ static int sMpWantCity = -2;	/* -2 = not known yet, -1 = the host city */
 static int sMpWantModel = -1;
 static int sMpStandIn;
 static int sMpStandInCar[MAX_CARS];	/* per car object: drawn as a grey stand-in */
+static int sMpReadySlot[MAX_CARS];	/* readiness stand-in: wanted slot + 1, 0 = none */
+static int sMpReadyHost[MAX_CARS];	/* the host slot the grey body sits on */
+static u_char sMpReadyPalette[MAX_CARS];	/* palette to put back on the real car */
 static int sMpCamReseat;
 static void MpCarFailsafeTick(void);
 
@@ -6118,6 +7274,9 @@ static void MpFailsafeReset(void)
 	sMpStandIn = 0;
 	sMpCamReseat = 0;
 	memset(sMpStandInCar, 0, sizeof(sMpStandInCar));
+	memset(sMpReadySlot, 0, sizeof(sMpReadySlot));
+	memset(sMpReadyHost, 0, sizeof(sMpReadyHost));
+	memset(sMpReadyPalette, 0, sizeof(sMpReadyPalette));
 }
 
 static void MpFailsafeNoteCar(int slot)
@@ -6143,6 +7302,18 @@ static void MpSendOwnCarState(void)
 	if (me == NULL)
 		return;
 
+	/* NO WORLD OF OURS YET. A joining client reaches `running` a few frames before
+	 * its level is up, and StepSim (and so this send) can still be running on the
+	 * frontend/attract world. car_data[0] there is either zeroed or the demo's car
+	 * at the origin, and a body from it put a pose at 0,0 on the wire with a model
+	 * that is not ours -- peers built the joiner at the origin, in the air, before
+	 * its real pose arrived. Nothing about our car is meaningful until we are in
+	 * the match. `gameStarted` is set by JER_EVENT_GAME_START (MpOnGameStart), when
+	 * the level's cars really exist; the frontend check is the same refusal for the
+	 * window before it. */
+	if (gInFrontend || !gMp.gameStarted)
+		return;
+
 	/* The engine may have moved us into another car (or out of one) since the
 	 * last frame -- adopt it BEFORE reading the pose, so this very frame already
 	 * carries the change and the peers never see the old vehicle again. */
@@ -6163,9 +7334,67 @@ static void MpSendOwnCarState(void)
 	e.model = MP_CARSTATE_NO_CAR;
 	e.modelCity = MP_CAR_CITY_SESSION;
 
+	cp = NULL;
+
 	if (me->carId >= 0 && me->carId < MAX_CARS)
 	{
 		cp = &car_data[me->carId];
+
+		/* NOT A CAR YET. WELCOME sets our row's carId to engine slot 0 before the
+		 * level exists, and the frontend/loading world has that CAR_DATA zeroed
+		 * (controlType NONE, no model). A body sent from it carried a pose of
+		 * 0,0 with a model that is not ours -- peers built the joiner at the world
+		 * origin, in the air, before its real pose ever arrived. Keep the NO_CAR
+		 * default until the engine has actually given us a car. */
+		if (player[0].playerType != PLAYER_TYPE_CAR ||
+			cp->controlType == CONTROL_TYPE_NONE || cp->ap.carCos == NULL ||
+			cp->ap.model < 0 || cp->ap.model >= MAX_CAR_RESIDENT_MODELS ||
+			!JerCarSlotUsable(cp->ap.model))
+		{
+			cp = NULL;
+		}
+	}
+
+	/* THE CAR THEY WALKED AWAY FROM. A machine that was present for the get-out
+	 * already holds this body and ignores the extra fields; a joiner that arrived
+	 * afterwards has only the pedstate stand-in, so this is the only way it can
+	 * build the parked car. Only advertise a body still parked by us: if someone
+	 * has commandeered it, it is a player car now, not our left car. */
+	if (cp == NULL && me->leftCarSlot1 > 0)
+	{
+		int left = me->leftCarSlot1 - 1;
+
+		if (left >= 0 && left < MAX_CARS &&
+			car_data[left].controlType == CONTROL_TYPE_CIV_AI &&
+			car_data[left].ai.padid == &gMpQuietPad &&
+			car_data[left].ap.carCos != NULL &&
+			car_data[left].ap.model >= 0 && car_data[left].ap.model < MAX_CAR_RESIDENT_MODELS &&
+			residentCarModels[car_data[left].ap.model] >= 0 &&
+			JerCarSlotUsable(car_data[left].ap.model))
+		{
+			int src = GetCarModelSourceCity(car_data[left].ap.model);
+
+			e.flags |= MP_CARSTATE_LEFT_CAR;
+			e.leftModel = (uint8_t)residentCarModels[car_data[left].ap.model];
+			e.leftModelCity = (uint8_t)((src >= 0) ? src : MP_CAR_CITY_SESSION);
+			e.palette = (uint8_t)car_data[left].ap.palette;
+			e.x = car_data[left].hd.where.t[0];
+			e.y = car_data[left].hd.where.t[1];
+			e.z = car_data[left].hd.where.t[2];
+			e.heading = car_data[left].hd.direction;
+		}
+	}
+
+	if (cp != NULL)
+	{
+		/* Say it when this is the body we last got OUT of: the peers released it on
+		 * the NO_CAR row and can re-seat us on it instead of building a second
+		 * vehicle (MpHandleCarState). Kept on every frame while we drive that same
+		 * body, so one lost packet cannot reopen the window. Entering a DIFFERENT
+		 * car leaves leftCarSlot1 pointing elsewhere, so the bit stays clear and
+		 * the peers keep the parked body and build the new one, as before. */
+		if (me->leftCarSlot1 > 0 && me->carId == me->leftCarSlot1 - 1)
+			e.flags |= MP_CARSTATE_SAME_BODY;
 
 		/* MP_DEBUG: the ORIENTATION is now the only 16-bit field left on the wire, so
 		 * it is the only one a violent impact can saturate. If this fires, the peer is
@@ -6233,6 +7462,14 @@ static void MpSendOwnCarState(void)
 		e.angVel[0] = cp->st.n.angularVelocity[0];
 		e.angVel[1] = cp->st.n.angularVelocity[1];
 		e.angVel[2] = cp->st.n.angularVelocity[2];
+
+		/* Siren / lightbar state (owner-authoritative). Traffic already does this
+		 * via MP_TRAFFIC_SIREN; player cars need the same so a remote copy draws
+		 * the light and plays the sound. The engine only auto-draws for PURSUER_AI
+		 * / roadblock / cutscene, so we must tell the peers explicitly.
+		 * TODO: replace dying<75 with the real player "siren is on" condition. */
+		if (CarHasSiren(cp->ap.model) && cp->ai.p.dying < 75)
+			e.flags |= MP_CARSTATE_SIREN;
 	}
 
 	memcpy(buf, &h, sizeof(h));
@@ -6393,6 +7630,9 @@ static void MpReleaseRemoteCar(MP_PLAYER* p)
 	if (p == NULL || p->carId < 0 || p->carId >= MAX_CARS)
 		return;
 
+	/* The body stops being ours: its sample timeline must go with it. */
+	MpPlayClear(p->id);
+
 	cp = &car_data[p->carId];
 
 	if (cp->controlType == CONTROL_TYPE_PLAYER)
@@ -6424,7 +7664,19 @@ static int MpCarSlotTakenByOther(const MP_PLAYER* leaver, int slot)
 	{
 		const MP_PLAYER* o = &gMp.players[i];
 
-		if (o != leaver && o->active && o->carId == slot)
+		if (o == leaver || !o->active)
+			continue;
+
+		/* DRIVING IT, OR PARKED IT AND STILL STANDING NEXT TO IT.
+		 *
+		 * carId alone missed the commandeer-then-get-out case: the new owner's
+		 * row has carId < 0 but leftCarSlot1 names this body, and the body is
+		 * CIV_AI + the quiet pad, so every other test calls it free. The original
+		 * owner's spawn then took it for an abandoned duplicate and deleted the
+		 * car its new owner could still walk back into. A left-car claim is
+		 * ownership here for the same reason MpCarSlotOwnedByPlayer treats it as
+		 * ownership when choosing a slot. */
+		if (o->carId == slot || o->leftCarSlot1 == slot + 1)
 			return 1;
 	}
 
@@ -6644,6 +7896,98 @@ static void MpCarClearStandIn(int carSlot)
 int MpCarIsStandIn(int carSlot)
 {
 	return (carSlot >= 0 && carSlot < MAX_CARS) ? sMpStandInCar[carSlot] : 0;
+}
+
+/* JERICHO: the readiness stand-in, for SINGLE-PLAYER (and for any frame in which the
+ * session's own reload failsafe is not driving).
+ *
+ * The engine's slot decision (JerCarSlotState) now refuses an imported slot until every set
+ * its model names has a live pin and a mapped palette row. That is deliberately stricter
+ * than "a mesh exists", and a car already on the road can briefly be in that state while a
+ * switch/reload lands. In a session, MpCarFailsafeTick already covers this and reports the
+ * real choice over the wire; OUTSIDE a session nothing did, so the draw gate simply skipped
+ * the car and the player saw nothing. Use the SAME proven stand-in here: the host city's
+ * car 1, repointed and tinted solid grey by the draw-colour hook, until the real slot is
+ * drawable - then repoint back and rebuild its dump.
+ *
+ * The engine draw path itself never mutates cp->ap.model: only this module does, exactly as
+ * the session failsafe already does, so carhacks/mp identity keeps reading the real choice
+ * from the remembered slot rather than from the grey body. */
+void MpCarReadinessTick(void)
+{
+	extern u_char defaultPlayerPalette;
+	CAR_DATA* cp;
+	int carId, stored, want, host, city;
+
+	if (gMp.running || gInFrontend)
+		return;			/* the session failsafe owns MP; no car in the frontend */
+
+	if (player[0].playerType != PLAYER_TYPE_CAR)
+		return;			/* on foot: do not steal the parked car or the camera */
+
+	carId = player[0].playerCarId;
+
+	if (carId < 0 || carId >= MAX_CARS)
+		return;
+
+	cp = &car_data[carId];
+	stored = sMpReadySlot[carId];
+
+	if (stored > 0)
+	{
+		want = stored - 1;
+		host = sMpReadyHost[carId];
+
+		if (cp->ap.model != host)
+		{
+			/* The car object was repointed since we put the stand-in on: this is no
+			 * longer our body, so forget the memory rather than fight it. */
+			sMpReadySlot[carId] = 0;
+			MpCarClearStandIn(carId);
+			return;
+		}
+
+		if (!JerCarSlotDrawable(want))
+			return;		/* still not drawable: keep the grey body */
+
+		sMpReadySlot[carId] = 0;
+		MpCarClearStandIn(carId);
+
+		cp->ap.model = want;
+		cp->ap.carCos = &car_cosmetics[want];
+		cp->lowDetail = -1;
+		cp->ap.palette = (u_char)CarSlotClampPalette(want, (int)sMpReadyPalette[carId]);
+		CreateDentableCar(cp);
+
+		printInfo("[mp] car readiness: slot %d (%s model %d) is drawable - leaving the host city's car 1 stand-in\n",
+			want, MpCarCityName(GetCarModelSourceCity(want)), residentCarModels[want]);
+
+		return;
+	}
+
+	want = cp->ap.model;
+
+	if (want < 0 || want >= MAX_CAR_RESIDENT_MODELS)
+		return;
+
+	city = GetCarModelSourceCity(want);
+
+	if (city < 0)
+		return;			/* the level's own car: no import sets to wait for */
+
+	if (JerCarSlotDrawable(want))
+		return;
+
+	sMpReadyPalette[carId] = (u_char)cp->ap.palette;
+
+	if (MpCarStandIn(carId))
+	{
+		sMpReadySlot[carId] = want + 1;
+		sMpReadyHost[carId] = cp->ap.model;	/* MpCarStandIn repointed it */
+
+		printInfo("[mp] car readiness: slot %d (%s model %d) is not drawable yet - standing in with the host city's car 1, solid grey\n",
+			want, MpCarCityName(city), residentCarModels[want]);
+	}
 }
 
 static void MpCarFailsafeTick(void)
@@ -7323,11 +8667,29 @@ static int MpChangeCarRun(int city, int model, int isRetry)
 		int seat = -1;
 		int s;
 
-		/* Get back into a car OF OURS -- one the module made, left parked and
-		 * enterable (see MpFollowLocalCar). Never a live traffic car: taking one
-		 * over and vacating it hands the traffic AI a car it cannot steer, which
-		 * is the crash that note exists to prevent. */
-		for (s = 0; s < MAX_CARS; s++)
+		/* PREFER THE CAR WE ACTUALLY GOT OUT OF. It is the body this machine last
+		 * parked, and the one the peers still hold for us (their leftCarSlot1), so
+		 * getting back into it makes the carstate carry MP_CARSTATE_SAME_BODY and
+		 * they re-seat us on it. Seating ourselves in some OTHER parked car would
+		 * read as a genuinely different vehicle and they would build a second one,
+		 * leaving this one standing. Same usability tests as the scan below. */
+		if (me->leftCarSlot1 > 0)
+		{
+			int left = me->leftCarSlot1 - 1;
+
+			if (left >= 0 && left < MAX_CARS && gMpOurCars[left] &&
+				MpGetPlayerByCar(left) == NULL &&
+				car_data[left].controlType == CONTROL_TYPE_CIV_AI &&
+				car_data[left].ap.carCos != NULL &&
+				JerCarSlotUsable(car_data[left].ap.model))
+				seat = left;
+		}
+
+		/* Otherwise: get back into any car OF OURS -- one the module made, left
+		 * parked and enterable (see MpFollowLocalCar). Never a live traffic car:
+		 * taking one over and vacating it hands the traffic AI a car it cannot
+		 * steer, which is the crash that note exists to prevent. */
+		for (s = 0; seat < 0 && s < MAX_CARS; s++)
 		{
 			if (!gMpOurCars[s] || MpGetPlayerByCar(s) != NULL)
 				continue;
@@ -7349,8 +8711,26 @@ static int MpChangeCarRun(int city, int model, int isRetry)
 		if (seat < 0)
 		{
 			if (gMpCtx != NULL)
-				gMpCtx->jer_log(gMpCtx,
-					"[mp] change car: on foot and no car of ours to get back into\n");
+			{
+				int left = me->leftCarSlot1 - 1;
+
+				/* Say WHY, not just that it failed: this is the one place a player
+				 * finds out their parked car is not usable any more, and the four
+				 * reasons are indistinguishable from the outside. */
+				if (left >= 0 && left < MAX_CARS)
+					gMpCtx->jer_log(gMpCtx,
+						"[mp] change car: on foot and no car of ours to get back into "
+						"(left slot %d: ours %d, taken %d, type %d, cosmetics %s, "
+						"model %d, usable %d)\n",
+						left, (int)gMpOurCars[left], MpGetPlayerByCar(left) != NULL,
+						(int)car_data[left].controlType,
+						(car_data[left].ap.carCos != NULL) ? "present" : "NULL",
+						(int)car_data[left].ap.model,
+						JerCarSlotUsable(car_data[left].ap.model));
+				else
+					gMpCtx->jer_log(gMpCtx,
+						"[mp] change car: on foot and no car of ours to get back into\n");
+			}
 
 			return 0;
 		}
@@ -7963,7 +9343,8 @@ static int MpWarpSpotOk(int x, int z)
 static int MpWarpStreamTo(int x, int z)
 {
 	static VECTOR sWarpSpool;
-	int region;
+	VECTOR* oldSpoolXZ;
+	int region, ok;
 
 	if (MpWarpSpotOk(x, z))
 		return 1;
@@ -7976,6 +9357,15 @@ static int MpWarpStreamTo(int x, int z)
 	if (!jer_map_region_has_data(region))
 		return 0;
 
+	/* HAND THE STREAMER BACK WHEN THE CALL ENDS. jer_map_spool_to reads
+	 * MainPlayer.spoolXZ to decide where to stream, and the caller's pointer is the
+	 * engine's own (the player car's hd.where.t, or the pedestrian's position).
+	 * Leaving it on a module static -- which this used to do -- strands the
+	 * streamer at the destination for the rest of the match: the car drives away
+	 * and the world stops following it. Only the spool call itself needs the
+	 * static, because ControlMap must read the destination while it runs. */
+	oldSpoolXZ = MainPlayer.spoolXZ;
+
 	sWarpSpool.vx = x;
 	sWarpSpool.vy = 0;
 	sWarpSpool.vz = z;
@@ -7985,7 +9375,11 @@ static int MpWarpStreamTo(int x, int z)
 
 	jer_map_spool_to(x, z);
 
-	return MpWarpSpotOk(x, z);	/* synchronous on PC, so readable now */
+	MainPlayer.spoolXZ = oldSpoolXZ;
+
+	ok = MpWarpSpotOk(x, z);	/* synchronous on PC, so readable now */
+
+	return ok;
 }
 
 /* ------------------------------------------------------------------ */
@@ -8283,12 +9677,236 @@ static int MpRoadHeadingNear(int x, int z, int want)
 	return dir;
 }
 
+/* Put the joiner's car on a chosen spot, snap the camera with it, and log what
+ * kind of spot it was. Returns 0 when there is no ground under it. */
+static int MpPlaceSelfAt(CAR_DATA* cp, int x, int z, int dir, const char* how, int attempt)
+{
+	VECTOR gp;
+	int ground;
+
+	/* THE GROUND HAS TO BE REAL AT THE MOMENT OF PLACEMENT. An unstreamed cell
+	 * answers with the sea/default plane -- a perfectly plausible height, which is
+	 * how a car ends up standing in the air. JerRoadAt is the road map's own
+	 * answer: if it no longer sees road here, refuse and let the caller try
+	 * another spot or take the fallback. */
+	if (!JerRoadAt(x, 0, z))
+		return 0;
+
+	gp.vx = x;
+	gp.vy = 0;
+	gp.vz = z;
+	gp.pad = 0;
+	ground = MapHeight(&gp);
+
+	if (!MpPlaceOnGround(cp, x, z, (dir >= 0) ? dir : PlayerStartInfo[0]->rotation))
+		return 0;
+
+	cp->hd.speed = 0;
+	player[0].cameraAngle = cp->hd.direction + 1536;
+
+	/* snap the camera with the car instead of letting it swing across */
+	player[0].pos[0] = x;
+	player[0].pos[2] = z;
+	InitCamera(&player[0]);
+
+	if (gMpCtx != NULL)
+		gMpCtx->jer_log(gMpCtx,
+			"[mp] live join: placed our car at %d,%d,%d dir %d, ground %d (%s, try %d, frame %d)\n",
+			x, cp->hd.where.t[1], z, dir, ground, how, attempt, gMpPlaceSelfTry);
+
+	return 1;
+}
+
+/* Stream the REGION under (x,z), without requiring the point itself to be a
+ * landable cell. A region centre is only a stream target -- the road search
+ * inside the region supplies the landing spot -- so it must not be put through
+ * MpWarpSpotOk's CellEmpty/height gate. Returns 1 when the region has data and
+ * is now resident. */
+static int MpStreamRegionAt(int x, int z)
+{
+	static VECTOR sSpool;	/* spoolXZ must outlive the call */
+	VECTOR* oldSpoolXZ;
+	int ok;
+
+	if (!jer_map_ready() || !jer_map_region_has_data(jer_map_region_of(x, z)))
+		return 0;
+
+	oldSpoolXZ = MainPlayer.spoolXZ;
+
+	sSpool.vx = x;
+	sSpool.vy = 0;
+	sSpool.vz = z;
+	sSpool.pad = 0;
+
+	MainPlayer.spoolXZ = &sSpool;
+
+	ok = jer_map_spool_to(x, z);
+
+	MainPlayer.spoolXZ = oldSpoolXZ;
+
+	return ok;
+}
+
+/* A map-wide road spot for a late join into a FULL-CITY Take a Ride.
+ *
+ * The near-start ring cannot serve here: the level's start may be in one corner
+ * of the city. The map streams as a 2x2 window of REGIONS, so a point cannot be
+ * tested until its region is in a barrel -- and forcing region after region
+ * evicts the one just loaded (there are four barrels). So this chooses ONE
+ * data-bearing region, keeps that choice across ticks, streams it once, and only
+ * then offers several large-offset centers inside it to the same road search the
+ * near-start path uses. `carId` is our own car, still standing on the level
+ * start; it must not veto its own destination.
+ *
+ * Returns 1 and fills the outputs. 0 means this region has no usable road for
+ * us: the caller takes the safe near-start road instead of streaming again. */
+#define MP_JOIN_WIDE_TRIES	8	/* centers probed inside the chosen region */
+
+static int MpFindRoadSpotWide(int carId, int* outX, int* outZ, int* outDir)
+{
+	unsigned int rnd;
+	int regionWorld, margin, span, t;
+
+	if (!jer_map_ready() || regions_across <= 0 || regions_down <= 0 ||
+		units_across_halved <= 0 || units_down_halved <= 0)
+		return 0;
+
+	regionWorld = MAP_REGION_SIZE * MAP_CELL_SIZE;
+
+	if (regionWorld <= 0)
+		return 0;
+
+	rnd = gMp.seed ^ (unsigned int)((gMpWideRegion + 1) * 2654435761u) ^ (unsigned int)MpNowMs();
+
+	/* Choose and stream ONE region, once for this join. */
+	if (gMpWideRegion < 0)
+	{
+		int startRegion = jer_map_region_of(PlayerStartInfo[0]->position.vx,
+			PlayerStartInfo[0]->position.vz);
+		int attempt;
+
+		for (attempt = 0; attempt < 32; attempt++)
+		{
+			int r, rx, rz, cx, cz;
+
+			rnd = rnd * 1103515245u + 12345u;
+
+			r = (int)((rnd >> 8) % (unsigned int)(regions_across * regions_down));
+
+			if (r == startRegion || !jer_map_region_has_data(r))
+				continue;
+
+			rx = r % regions_across;
+			rz = r / regions_across;
+
+			cx = rx * regionWorld - units_across_halved + regionWorld / 2;
+			cz = rz * regionWorld - units_down_halved + regionWorld / 2;
+
+			/* The ONLY spool this placement makes. A region with nothing to load
+			 * is re-picked rather than landed in. The point is a stream target,
+			 * not a landing spot, so it skips MpWarpSpotOk's cell test. */
+			if (!MpStreamRegionAt(cx, cz))
+				continue;
+
+			gMpWideRegion = r;
+			gMpWideTries = 0;
+
+			if (gMpCtx != NULL)
+				gMpCtx->jer_log(gMpCtx,
+					"[mp] live join: map-wide region %d chosen (center %d,%d)\n",
+					r, cx, cz);
+			break;
+		}
+
+		if (gMpWideRegion < 0)
+			return 0;
+	}
+
+	{
+		int rx = gMpWideRegion % regions_across;
+		int rz = gMpWideRegion / regions_across;
+		int x0 = rx * regionWorld - units_across_halved;
+		int z0 = rz * regionWorld - units_down_halved;
+
+		/* Keep each center's 7.2k road-probe ring inside the resident region. A
+		 * region too small for that is probed from its middle; MpWarpSpotOk then
+		 * refuses any ring point that fell into a neighbour. */
+		margin = 12000;
+
+		if (regionWorld < 2 * margin + 1000)
+			margin = 0;
+
+		span = regionWorld - 2 * margin;
+
+		if (span < 1)
+			span = 1;
+
+		for (t = gMpWideTries; t < MP_JOIN_WIDE_TRIES; t++)
+		{
+			int cx, cz, x, z, dir = -1;
+
+			rnd = rnd * 1103515245u + 12345u;
+			cx = x0 + margin + (int)((rnd >> 8) % (unsigned int)span);
+			rnd = rnd * 1103515245u + 12345u;
+			cz = z0 + margin + (int)((rnd >> 8) % (unsigned int)span);
+
+			gMpWideTries++;
+
+			if (!MpFindRoadSpotNear(cx, 0, cz, gMpWideRegion + t * 97, &x, &z, &dir, NULL))
+				continue;
+
+			if (!MpWarpSpotOk(x, z))
+				continue;
+
+			if (!MpJoinSpotClearOfPlayers(x, z, -1, carId))
+				continue;
+
+			if (!MpWarpStreamTo(x, z))	/* confirm the final spot's area */
+				continue;
+
+			if (gMpCtx != NULL)
+				gMpCtx->jer_log(gMpCtx,
+					"[mp] live join: map-wide road %d,%d dir %d in region %d (clear by %d, center %d,%d)\n",
+					x, z, dir, gMpWideRegion, MP_JOIN_CLEAR, cx, cz);
+
+			*outX = x;
+			*outZ = z;
+			*outDir = dir;
+			return 1;
+		}
+	}
+
+	return 0;
+}
+
+/* The last resort before the level start: stream the start region once (the
+ * probes may never have had its road data resident), then ask the near-start
+ * road search again. */
+static int MpPlaceSelfFallback(CAR_DATA* cp, int carId, int seed)
+{
+	int sx = PlayerStartInfo[0]->position.vx;
+	int sz = PlayerStartInfo[0]->position.vz;
+	int fx = 0, fz = 0, fdir = -1;
+
+	if (MpWarpStreamTo(sx, sz) &&
+		MpFindRoadSpotNear(sx, 0, sz, seed, &fx, &fz, &fdir, NULL) &&
+		MpJoinSpotClearOfPlayers(fx, fz, -1, carId) &&
+		MpPlaceSelfAt(cp, fx, fz, fdir, "near-start fallback", 0))
+		return 1;
+
+	if (gMpCtx != NULL)
+		gMpCtx->jer_log(gMpCtx,
+			"[mp] live join: near-start fallback found no clear road - keeping the level start\n");
+
+	return 0;
+}
+
 void MpPlaceSelfTick(void)
 {
 	MP_PLAYER* me;
 	CAR_DATA* cp;
 	unsigned int rnd;
-	int k, i;
+	int k, i, carId;
 
 	if (gMpPlaceSelfFrames <= 0)
 		return;
@@ -8302,15 +9920,25 @@ void MpPlaceSelfTick(void)
 
 	me = MpLocalPlayer();
 
-	if (me == NULL || me->carId < 0 || me->carId >= MAX_CARS || PlayerStartInfo[0] == NULL)
+	if (me == NULL || PlayerStartInfo[0] == NULL)
+		return;
+
+	/* THE FIRST FRAME THE CAR EXISTS. Our roster row adopts the engine's car in
+	 * MpFollowLocalCar, which runs later in this same tick (MpSendOwnCarState), so
+	 * waiting for me->carId would delay placement by a frame -- and the frame it
+	 * delays is the one whose state the peers receive. The engine's own slot is
+	 * the car the level just built for us, so use it now. */
+	carId = (me->carId >= 0 && me->carId < MAX_CARS) ? me->carId : (int)player[0].playerCarId;
+
+	if (carId < 0 || carId >= MAX_CARS)
 		return;
 
 	/* Only a car that is STILL ON THE LEVEL START is a fresh joiner's to move. One that
 	 * has been driven away belongs to a player already in the match: never relocate it
 	 * (or snap its camera), whatever armed this. */
 	{
-		int sdx = car_data[me->carId].hd.where.t[0] - PlayerStartInfo[0]->position.vx;
-		int sdz = car_data[me->carId].hd.where.t[2] - PlayerStartInfo[0]->position.vz;
+		int sdx = car_data[carId].hd.where.t[0] - PlayerStartInfo[0]->position.vx;
+		int sdz = car_data[carId].hd.where.t[2] - PlayerStartInfo[0]->position.vz;
 
 		if (sdx < -3000 || sdx > 3000 || sdz < -3000 || sdz > 3000)
 		{
@@ -8319,6 +9947,28 @@ void MpPlaceSelfTick(void)
 			gMpPlaceSelfFrames = 0;
 			return;
 		}
+	}
+
+	/* HOLD THE CAR STILL WHILE WE SORT THE SPAWN. The engine's initial pose can be
+	 * over ground this machine has not streamed, and a car that falls or rolls
+	 * while the road search runs is one the driver sees move before it teleports.
+	 * Pin x/y/z and the heading, and zero the speed, on every frame spent looking;
+	 * the placement below writes the final pose. */
+	{
+		CAR_DATA* hold = &car_data[carId];
+		MATRIX m;
+
+		if (gMpPlaceSelfTry == 0)
+			gMpPlaceSelfHoldY = hold->hd.where.t[1];
+
+		hold->hd.speed = 0;
+		hold->hd.where.t[0] = PlayerStartInfo[0]->position.vx;
+		hold->hd.where.t[1] = gMpPlaceSelfHoldY;
+		hold->hd.where.t[2] = PlayerStartInfo[0]->position.vz;
+		hold->hd.direction = PlayerStartInfo[0]->rotation;
+
+		_RotMatrixY(&m, (short)hold->hd.direction);
+		memcpy(hold->hd.where.m, m.m, sizeof(hold->hd.where.m));
 	}
 
 	/* gMpPlaceSelfFrames: >1 = settle countdown, then 1..-TRIES = try each frame */
@@ -8334,7 +9984,39 @@ void MpPlaceSelfTick(void)
 		gMpCtx->jer_log(gMpCtx, "[mp] place-self reason: live join welcome (armed once); last rx %s conn %d frame %lu\n",
 			gMpLastRxTag, gMpLastRxConn, gMpLastRxFrame);
 
-	cp = &car_data[me->carId];
+	cp = &car_data[carId];
+
+	/* FULL-CITY TAKE A RIDE (gBootMpLevel == 0): a random road ANYWHERE on the
+	 * map, not the near-start ring. One region is streamed for this join; if it
+	 * has no road for us, the near-start fallback follows rather than thrashing
+	 * the streamer through region after region. */
+	if (!gBootMpLevel)
+	{
+		int x = 0, z = 0, dir = -1;
+
+		if (MpFindRoadSpotWide(carId, &x, &z, &dir) &&
+			MpPlaceSelfAt(cp, x, z, dir, "map-wide", gMpWideTries))
+		{
+			gMpPlaceSelfFrames = 0;
+			return;
+		}
+
+		/* No region could even be streamed yet: the level is still settling, so
+		 * retry on the next tick instead of falling back on the first frame. */
+		if (gMpWideRegion < 0 && gMpPlaceSelfTry < 8)
+			return;
+
+		if (gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx,
+				"[mp] live join: no map-wide road (region %d, %d center(s) tried) - near-start fallback\n",
+				gMpWideRegion, gMpWideTries);
+
+		(void)MpPlaceSelfFallback(cp, carId, me->id + 8192);
+		gMpPlaceSelfFrames = 0;
+		return;
+	}
+
+	/* SMALL ARENA: the near-start ring, clear of the others, is the right answer. */
 	rnd = gMp.seed ^ (unsigned int)((me->id + 7) * 2654435761u) ^ (unsigned int)MpNowMs();
 
 	for (k = 0; k < 8; k++)
@@ -8359,7 +10041,8 @@ void MpPlaceSelfTick(void)
 				int dx = car_data[o->carId].hd.where.t[0] - x;
 				int dz = car_data[o->carId].hd.where.t[2] - z;
 
-				if (dx > -2000 && dx < 2000 && dz > -2000 && dz < 2000)
+				if (dx > -MP_JOIN_CLEAR && dx < MP_JOIN_CLEAR &&
+					dz > -MP_JOIN_CLEAR && dz < MP_JOIN_CLEAR)
 					clear = 0;
 			}
 		}
@@ -8367,22 +10050,8 @@ void MpPlaceSelfTick(void)
 		if (!clear)
 			continue;
 
-		{
-			if (!MpPlaceOnGround(cp, x, z, (dir >= 0) ? dir : PlayerStartInfo[0]->rotation))
-				continue;
-
-			cp->hd.speed = 0;
-			player[0].cameraAngle = cp->hd.direction + 1536;
-
-			/* snap the camera with the car instead of letting it swing across */
-			player[0].pos[0] = x;
-			player[0].pos[2] = z;
-			InitCamera(&player[0]);
-		}
-
-		if (gMpCtx != NULL)
-			gMpCtx->jer_log(gMpCtx, "[mp] live join: placed our car at %d,%d dir %d (try %d, frame %d)\n",
-				x, z, dir, k, gMpPlaceSelfTry);
+		if (!MpPlaceSelfAt(cp, x, z, dir, "near-start", k))
+			continue;
 
 		gMpPlaceSelfFrames = 0;
 		return;
@@ -8391,10 +10060,12 @@ void MpPlaceSelfTick(void)
 	if (gMpPlaceSelfTry < MP_PLACE_SELF_TRIES)
 		return;		/* road data may still be streaming: try again next frame */
 
-	gMpPlaceSelfFrames = 0;
+	/* LAST RESORT, BEFORE THE LEVEL START: stream the start region once and ask
+	 * the near-start search again. Leaving the car on the level start is the final
+	 * answer, not the first. */
+	(void)MpPlaceSelfFallback(cp, carId, me->id + 4096);
 
-	if (gMpCtx != NULL)
-		gMpCtx->jer_log(gMpCtx, "[mp] live join: no clear road spot found - kept the level start\n");
+	gMpPlaceSelfFrames = 0;
 }
 
 /* Where to put the car, in the target's own axes: `along` is measured along
@@ -8714,6 +10385,167 @@ int MpRespawnOnRoad(void)
 	return 1;
 }
 
+/* A player is on foot and this machine has no body for the car they left: build
+ * the parked car from the NO_CAR row. A machine that was present for the get-out
+ * already has it; this exists for a joiner that arrived afterwards, which
+ * otherwise sees only the player's pedstate stand-in.
+ *
+ * The body is built through the same InitPlayer path as every other remote car,
+ * then parked exactly as the owner's own get-out parks it (CIV_AI + STOP/EMPTY +
+ * the quiet pad), so TannerCanEnterCar accepts it and the traffic AI ignores it. */
+static void MpMaterializeLeftCar(MP_PLAYER* pl, const MP_CARSTATE_ENTRY* e)
+{
+	static unsigned long lastLogMs;
+	int slot, k, resident, rot, city;
+
+	if (pl == NULL || e == NULL || !gMp.running)
+		return;
+
+	/* Already have it? A claim that still names a parked body is enough. Do not
+	 * compare the model: a re-model (the owner's Change car) is still the same
+	 * body, and building a second one would be the duplicate this avoids. */
+	if (pl->leftCarSlot1 > 0)
+	{
+		int have = pl->leftCarSlot1 - 1;
+
+		/* Someone is DRIVING it -- the local player may have just commandeered
+		 * it, and MpFollowLocalCar may not have adopted that yet. Drop the stale
+		 * claim and do not build a second body. */
+		if (have >= 0 && have < MAX_CARS && car_data[have].controlType == CONTROL_TYPE_PLAYER)
+		{
+			pl->leftCarSlot1 = 0;
+			pl->leftCarModel = -1;
+			return;
+		}
+
+		/* Someone else drives or claims it now: the claim moved with the body.
+		 * Drop our stale claim and do NOT build a second car -- this is the
+		 * commandeer case, and it is the difference between one body and two. */
+		if (MpCarSlotTakenByOther(pl, have))
+		{
+			pl->leftCarSlot1 = 0;
+			pl->leftCarModel = -1;
+			return;
+		}
+
+		if (have >= 0 && have < MAX_CARS &&
+			car_data[have].controlType == CONTROL_TYPE_CIV_AI &&
+			car_data[have].ai.padid == &gMpQuietPad &&
+			car_data[have].ap.carCos != NULL)
+		{
+			pl->leftCarModel = car_data[have].ap.model;
+			return;
+		}
+
+		if (gMpCtx != NULL && (MpNowMs() - lastLogMs) > 2000)
+		{
+			lastLogMs = MpNowMs();
+			gMpCtx->jer_log(gMpCtx,
+				"[mp] left car: player %d's claim on slot %d is not a parked body "
+				"(type %d pad %d cos %s) - rebuilding\n",
+				pl->id, have,
+				(have >= 0 && have < MAX_CARS) ? (int)car_data[have].controlType : -1,
+				(have >= 0 && have < MAX_CARS && car_data[have].ai.padid == &gMpQuietPad) ? 1 : 0,
+				(have >= 0 && have < MAX_CARS && car_data[have].ap.carCos != NULL) ? "present" : "NULL");
+		}
+
+		pl->leftCarSlot1 = 0;
+		pl->leftCarModel = -1;
+	}
+
+	if (e->leftModel == MP_CARSTATE_NO_CAR)
+		return;
+
+	city = (e->leftModelCity == MP_CAR_CITY_SESSION) ? -1 : (int)e->leftModelCity;
+	resident = MpResidentSlotForCar(city, (int)e->leftModel);
+
+	if (resident < 0 || !JerCarSlotUsable(resident))
+	{
+		if (gMpCtx != NULL && (MpNowMs() - lastLogMs) > 2000)
+		{
+			lastLogMs = MpNowMs();
+			gMpCtx->jer_log(gMpCtx,
+				"[mp] left car: player %d left %s model %d, which this machine does not hold - not built\n",
+				pl->id, MpCarCityName(city), (int)e->leftModel);
+		}
+		return;
+	}
+
+	/* The same slot rule as a join: a free PLAYER row, never slot 0 or a car
+	 * anyone drives or claims. The second pass allows a quiet-pad body only when
+	 * nothing else is free; the ownership test still rejects another row's car. */
+	slot = -1;
+	for (k = 1; k < MAX_CARS && k < MAX_PLAYERS; k++)
+	{
+		if (car_data[k].controlType == CONTROL_TYPE_CIV_AI && car_data[k].ai.padid == &gMpQuietPad)
+			continue;
+		if (MpCarSlotOwnedByPlayer(k, -1))
+			continue;
+		slot = k;
+		break;
+	}
+
+	for (k = 1; slot < 0 && k < MAX_CARS && k < MAX_PLAYERS; k++)
+	{
+		if (car_data[k].controlType == CONTROL_TYPE_CIV_AI && car_data[k].ai.padid == &gMpQuietPad &&
+			!MpCarSlotOwnedByPlayer(k, -1))
+			slot = k;
+	}
+
+	if (slot < 1 || slot >= MAX_CARS || slot >= MAX_PLAYERS)
+	{
+		if (gMpCtx != NULL && (MpNowMs() - lastLogMs) > 2000)
+		{
+			lastLogMs = MpNowMs();
+			gMpCtx->jer_log(gMpCtx,
+				"[mp] left car: no free car slot for player %d's model %d\n",
+				pl->id, (int)e->leftModel);
+		}
+		return;
+	}
+
+	rot = (int)(e->heading & 0xfff);
+	{
+		LONGVECTOR4 start;
+		char padid = (char)-slot;
+		MATRIX m;
+
+		start[0] = e->x;
+		start[1] = e->y;
+		start[2] = e->z;
+		start[3] = 0;
+
+		InitPlayer(&player[slot], &car_data[slot], CONTROL_TYPE_PLAYER, rot, &start,
+			(int)e->leftModel, (int)e->palette, &padid);
+
+		car_data[slot].ap.needsDenting = 1;
+		car_data[slot].hd.where.t[0] = e->x;
+		car_data[slot].hd.where.t[1] = e->y;
+		car_data[slot].hd.where.t[2] = e->z;
+		car_data[slot].hd.direction = rot;
+
+		_RotMatrixY(&m, (short)rot);
+		memcpy(car_data[slot].hd.where.m, m.m, sizeof(car_data[slot].hd.where.m));
+	}
+
+	car_data[slot].controlType = CONTROL_TYPE_CIV_AI;
+	car_data[slot].ai.c.thrustState = CIV_AI_THRUST_STOP;
+	car_data[slot].ai.c.ctrlState = CIV_AI_CTRL_EMPTY;
+	car_data[slot].wheel_angle = 0;
+	car_data[slot].ai.padid = &gMpQuietPad;
+	gMpOurCars[slot] = 1;
+
+	pl->leftCarSlot1 = slot + 1;
+	pl->leftCarModel = car_data[slot].ap.model;
+	pl->carId = -1;
+	pl->onFoot = 1;
+
+	if (gMpCtx != NULL)
+		gMpCtx->jer_log(gMpCtx,
+			"[mp] left car: materialized player %d's parked car (slot %d, model %d) at %d,%d\n",
+			pl->id, slot, (int)e->leftModel, (int)e->x, (int)e->z);
+}
+
 static void MpHandleCarState(int connIndex, const unsigned char* p, int len)
 {
 	MP_CARSTATE h;
@@ -8748,6 +10580,9 @@ static void MpHandleCarState(int connIndex, const unsigned char* p, int len)
 		 * does the same), so nobody is left steering an empty car. */
 		if (e.model == MP_CARSTATE_NO_CAR)
 		{
+			/* No car to drive: drop the timeline too, or walking back into a
+			 * body (or a different one) would replay the old car's motion. */
+			MpPlayClear(pl->id);
 			MpReleaseRemoteCar(pl);
 
 			/* remember what they walked away from: if they leave, it goes too */
@@ -8774,7 +10609,51 @@ static void MpHandleCarState(int connIndex, const unsigned char* p, int len)
 			pl->car = -1;
 			pl->onFoot = 1;
 
+			/* A joiner that arrived after the get-out has no local body for
+			 * the car they left; the NO_CAR row names it. A machine that was
+			 * present still holds the body and the helper is a no-op. */
+			if (e.flags & MP_CARSTATE_LEFT_CAR)
+				MpMaterializeLeftCar(pl, &e);
+
 			continue;
+		}
+
+		/* REAL BODY: THE OWNER IS DRIVING. Whatever an earlier NO_CAR row
+		 * recorded is stale now -- the carstate is the owner's authority and it
+		 * arrives every frame, so a real model means they are back in a car.
+		 *
+		 * Clear this HERE, before any path below can `continue` (a car that is
+		 * ours to drive locally, a body we could not adopt), because BOTH
+		 * recovery paths gate on it: MpSpawnLateJoiners skips every row with
+		 * onFoot set, and the roster's spawn request does the same. Leaving it
+		 * set is what made a lost/reordered transition permanent: the owner was
+		 * driving, this machine had no body for them, and the re-seat pass
+		 * refused to touch them for the rest of the match. */
+		if (pl->onFoot)
+		{
+			pl->onFoot = 0;
+
+			if (gMpCtx != NULL)
+				gMpCtx->jer_log(gMpCtx,
+					"[mp] heal: player %d is driving again (carstate model %d) - "
+					"cleared onFoot before re-seating\n", pl->id, (int)e.model);
+		}
+
+		/* FIRST REAL POSE WINS. A later body state can still be the
+		 * frontend/loading car at 0,0; overwriting the good pose with it is what
+		 * built the joiner at the origin. The sender gates keep such a state out,
+		 * but the ordering here is what makes the spawn deterministic. */
+		if (!pl->joinedPose)
+		{
+			if (gMpCtx != NULL)
+				gMpCtx->jer_log(gMpCtx,
+					"[mp] join pose: player %d wire %d,%d h=%d model=%d frame=%u conn=%d\n",
+					pl->id, e.x, e.z, (int)e.heading, (int)e.model, (unsigned)h.frame, connIndex);
+
+			pl->joinedPose = 1;
+			pl->joinPoseX = e.x;
+			pl->joinPoseZ = e.z;
+			pl->joinPoseHeading = (int)(e.heading & 0xfff);
 		}
 
 		/* HEAL: the owner's own carstate says they are DRIVING, but this machine
@@ -8791,27 +10670,80 @@ static void MpHandleCarState(int connIndex, const unsigned char* p, int len)
 		 * stops the instant its owner is back in a car -- stayed where it was,
 		 * walking the spot and playing footstep sounds.
 		 *
-		 * Clearing onFoot is the whole fix: the re-seat pass runs every 30 frames
-		 * and will seat them on its next one. Logged once per get-out/get-in
+		 * The clear itself happens above, on every real-model carstate; this
+		 * block only decides whether there is a body to hand back. When there is
+		 * not, it arms the deferred spawn for the next frame, and the 30-frame
+		 * re-seat pass remains the backstop. Logged once per get-out/get-in
 		 * cycle, so the heal is visible when diagnosing. */
 		if (pl->carId < 0 || pl->carId >= MAX_CARS)
 		{
-			if (pl->onFoot)
-			{
-				pl->onFoot = 0;
+			int reused = 0;
 
-				if (gMpCtx != NULL)
-					gMpCtx->jer_log(gMpCtx,
-						"[mp] heal: player %d's carstate says they are driving but we have "
-						"no car for them - re-seating them\n", pl->id);
+			/* BACK IN THE BODY THEY LAST GOT OUT OF. The owner says so explicitly
+			 * (MP_CARSTATE_SAME_BODY: walking back into their parked car, or the
+			 * pause menu's Change car while on foot, which re-enters it and
+			 * re-models it in place). We released that body on their NO_CAR row and
+			 * it is still standing here, so put them back on it. Letting the heal
+			 * below run instead would clear onFoot and the re-seat pass would call
+			 * InitPlayer on ANOTHER slot: the same vehicle twice, one of them an
+			 * orphan nobody drives.
+			 *
+			 * The body is only ours to hand back while it is still that car and
+			 * nobody else has taken it: a cleared/recycled slot, a released mesh, a
+			 * model that changed under us, a car another player (or WE) now drive,
+			 * or ANOTHER PLAYER'S PARKED CLAIM on it (their leftCarSlot1) - any of
+			 * those and this falls back to the spawn path, exactly as before.
+			 * The claim test matters: a player who commandeered the body and then
+			 * got out has carId < 0 but still owns it through leftCarSlot1, and
+			 * MpGetPlayerByCar alone would hand it back to the original owner. */
+			if ((e.flags & MP_CARSTATE_SAME_BODY) && pl->leftCarSlot1 > 0)
+			{
+				int slot = pl->leftCarSlot1 - 1;
+
+				if (slot >= 0 && slot < MAX_CARS &&
+					slot != (int)player[0].playerCarId &&
+					MpGetPlayerByCar(slot) == NULL &&
+					!MpCarSlotTakenByOther(pl, slot) &&
+					car_data[slot].controlType != CONTROL_TYPE_NONE &&
+					car_data[slot].ap.carCos != NULL &&
+					car_data[slot].ap.model == pl->leftCarModel &&
+					JerCarSlotUsable(car_data[slot].ap.model))
+				{
+					pl->carId = slot;
+					pl->onFoot = 0;
+					pl->leftCarSlot1 = 0;
+					pl->leftCarModel = -1;
+					reused = 1;
+
+					/* Back in the body they left: it has been standing still, so
+					 * there is no motion to interpolate from the old timeline. */
+					MpPlayClear(pl->id);
+
+					if (gMpCtx != NULL)
+						gMpCtx->jer_log(gMpCtx,
+							"[mp] player %d is back in the car they left (slot %d) - "
+							"reusing the body instead of spawning another\n",
+							pl->id, slot);
+				}
 			}
 
-			continue;
+			if (!reused)
+			{
+				/* No body of theirs to hand back: build one through the deferred
+				 * spawn path. Arm it for the NEXT FRAME instead of waiting up to
+				 * 30 for the periodic pass -- the owner says they are driving, so
+				 * the sooner the body exists the shorter the window in which they
+				 * are invisible. The flag only requests the pass; the spawn
+				 * itself still happens on a frame, never inside the poll. */
+				gMp.pendingSpawn = 1;
+				continue;
+			}
 		}
 
 		if (MpRemoteTargetsLocalCar(pl->carId, "carstate", pl->id))
 		{
 			pl->carId = -1;	/* that row's car is not ours to drive from the wire */
+			MpPlayClear(pl->id);
 			continue;
 		}
 
@@ -8852,6 +10784,10 @@ static void MpHandleCarState(int connIndex, const unsigned char* p, int len)
 					if (pl->carId < 0 || pl->carId >= MAX_CARS)
 						continue;
 
+					/* A new body: its timeline starts here, not at the old car's
+					 * last sample. */
+					MpPlayClear(pl->id);
+
 					cp = &car_data[pl->carId];
 				}
 			}
@@ -8862,14 +10798,13 @@ static void MpHandleCarState(int connIndex, const unsigned char* p, int len)
 		 * A contact is a separate message (MP_HIT: the owner of the MOVING car
 		 * pushes its own), so there is no push to leave room for here. */
 		{
-			/* The HOST<->CLIENT deviation for this REMOTE car: how far our own
-			 * simulation of it is from its owner's snapshot. One line per snapshot
-			 * that arrives, for every remote car. A small steady value is input
-			 * latency; a growing one is the two simulations drifting apart; a
-			 * spiky one is the resync fighting the engine. This is the number to
-			 * watch for "the cars are not where they are on the other machine".
-			 * (|d| is the world-unit distance, dh the heading error in 1/4096
-			 * turns.) Logged on arrival, NOT gated on our own frame counter: the
+			/* The NEWEST SAMPLE against the pose the playout is displaying. With
+			 * the 3-frame buffer this is expected to be about 100 ms of travel
+			 * (tens to a couple of hundred units while moving) -- it is the
+			 * buffer's lead, NOT a desync metric any more. A spike well beyond
+			 * that means a lost sample, an extrapolation or a teleport.
+			 * (|d| is world units, dh the heading error in 1/4096 turns.)
+			 * Logged on arrival, NOT gated on our own frame counter: the
 			 * peer's snapshot arrives on ITS cadence, which need not line up with
 			 * ours -- gating on `frame % 30` silently logged nothing.
 			 *
@@ -8890,56 +10825,24 @@ static void MpHandleCarState(int connIndex, const unsigned char* p, int len)
 					e.playerId, (unsigned)h.frame, (long)sqrt((double)d2), d2, dx, dy, dz, dh, (int)e.palette, (int)e.model);
 			}
 
-			/* Adopt in full: the owner is the truth for its own car. */
+			/* Adopt in full: the owner is the truth for its own car -- but as a
+			 * SAMPLE on the owner's timeline, not as a pose to write now. The
+			 * playout buffer smooths the gaps between samples; MpApplyRemoteCarPoses
+			 * is the only writer of this car's body. */
+			MpPlayPush(pl->id, h.frame, &e);
 
 			/* keep the remote car placed and alive: the engine spools a
 			 * non-local player car out of the world, so re-assert it
 			 * (controlType included, or the spooler parks it). */
 			cp->controlType = CONTROL_TYPE_PLAYER;
-
-			{
-				int tx = e.x, ty = e.y, tz = e.z;
-
-				cp->hd.where.t[0] = tx;
-				cp->hd.where.t[1] = ty;
-				cp->hd.where.t[2] = tz;
-
-				/* Write the WHOLE body, not a position and a heading: hd.direction
-				 * is an OUTPUT the engine re-derives from st.n.orientation, so a
-				 * correction that set only the heading left the car's ATTITUDE
-				 * unsynced (driving around upside down). Rebuild the handling matrix
-				 * with the engine's own quaternion helper rather than poking
-				 * hd.where. */
-				if (e.flags & MP_CARSTATE_HAS_BODY)
-				{
-					LONGQUATERNION q;
-					MATRIX m;
-					int i;
-
-					for (i = 0; i < 4; i++)
-						q[i] = e.orient[i];
-
-					cp->st.n.orientation[0] = q[0];
-					cp->st.n.orientation[1] = q[1];
-					cp->st.n.orientation[2] = q[2];
-					cp->st.n.orientation[3] = q[3];
-
-					for (i = 0; i < 3; i++)
-						cp->st.n.linearVelocity[i] = e.vel[i];
-					for (i = 0; i < 3; i++)
-						cp->st.n.angularVelocity[i] = MpClampAngVel(e.angVel[i]);
-
-					LongQuaternion2Matrix(&q, &m);
-					m.t[0] = tx;
-					m.t[1] = ty;
-					m.t[2] = tz;
-					memcpy(&cp->hd.where, &m, sizeof(m));
-				}
-
-			}
 		}
 
-		cp->hd.direction = e.heading;
+		/* Apply owner's siren state so the remote car lights up. The engine
+		 * only draws the bar for PURSUER_AI / roadblock / cutscene, so we
+		 * force the same call the traffic mirror uses. */
+		if (e.flags & MP_CARSTATE_SIREN)
+			AddCopCarLight(cp);
+
 		pl->onFoot = 0;			/* driving again: the roster may seat them */
 		pl->lastStateFrame = gMp.frame;	/* the fallback gate in MpOnNetInput reads this */
 
@@ -9002,8 +10905,14 @@ static void MpHandleCarState(int connIndex, const unsigned char* p, int len)
 
 		/* Client-side gather: the first time we hear a peer's car, drop our
 		 * own car right next to it so both players start together -- each
-		 * machine's take-a-ride spawn point can be right across the map. */
-		if (!MpIsHost() && !gMp.localPlaced)
+		 * machine's take-a-ride spawn point can be right across the map.
+		 *
+		 * NEVER FOR A LIVE JOIN. A joiner arrives where the host already is, so
+		 * gathering would put it back on top of them; and because this runs in the
+		 * state poll, it used to move the car AFTER MpPlaceSelfTick had read it as
+		 * "still on the level start", which made place-self abort instead of moving
+		 * it away. A live join is placed by MpPlaceSelfTick alone. */
+		if (!MpIsHost() && !gMp.localPlaced && !gMp.liveJoin)
 		{
 			MP_PLAYER* me = MpLocalPlayer();
 
@@ -9166,10 +11075,16 @@ static void MpHandleCarState(int connIndex, const unsigned char* p, int len)
 		}
 
 		/* The host is the hub: pass a CLIENT's car on to the other clients, so every
-		 * machine sees every car (each sends only its own). */
-		if (MpIsHost() && connIndex >= 0)
-			MpHostRelay(connIndex, MP_TAG_CARSTATE, 0, p, len);
+		 * machine sees every car (each sends only its own).
+		 *
+		 * OUTSIDE the row loop, and after every `continue`: a NO_CAR row is the
+		 * transition a late joiner needs most (it releases the parked body and lets
+		 * the stand-in pedestrian spawn), and relaying from inside the loop skipped
+		 * exactly that row. It also relayed a multi-row frame once per row. */
 	}
+
+	if (MpIsHost() && connIndex >= 0)
+		MpHostRelay(connIndex, MP_TAG_CARSTATE, 0, p, len);
 }
 
 /* (the old client-only MpSendCarState is folded into MpSendOwnCarState above:

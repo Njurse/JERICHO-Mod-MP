@@ -1126,7 +1126,6 @@ static int MpOnFrame(void* userdata, void* args)
 	MpChatGrabKeyboard((gMp.chatOpen || MpUiManualEditing()) ? 1 : 0);
 	jer_input_block(gMp.chatOpen);	/* typing never drives the car, horn, camera or pause */
 	MpRejoinTick();		/* a server city change: rejoin, then restore our car */
-	MpPlaceSelfTick();	/* a live join: off the level start, onto a road away from others */
 
 	/* Test lever: MP_TEST_CITYCONFIRM=<secs>[,<gameType>[,<role>]] fires the
 	 * take-a-ride CITY CONFIRM the way the frontend does (CutSceneCitySelectScreen
@@ -2618,6 +2617,11 @@ static int MpOnPreSim(void* userdata, void* args)
 	(void)userdata;
 	(void)args;
 
+	/* A local car whose imported slot is not drawable gets the same grey host-car-1
+	 * stand-in in single-player as the session failsafe gives it in MP. No-op while a
+	 * session is running (the failsafe owns that) and in the frontend. */
+	MpCarReadinessTick();
+
 	/* MP_DEBUG: is this hook still being called at all? A session whose sim silently
 	 * stops here looks alive (polls continue on the FRAME hook, remote cars keep
 	 * being adopted) while nothing owns a car any more. */
@@ -2900,6 +2904,11 @@ static int MpOnGameStart(void* userdata, void* args)
 
 	if (!MpIsActive() || gMpCtx == NULL)
 		return JER_RESULT_CONTINUE;
+
+	/* A level is up: our car (and every peer's copy) is real from this moment.
+	 * MpSendOwnCarState refuses to send anything before this, because the
+	 * frontend/loading world's car_data is zeroed or a demo car at the origin. */
+	gMp.gameStarted = 1;
 
 	for (i = 0; i < MP_MAX_PLAYERS; i++)
 	{
