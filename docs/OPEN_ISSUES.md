@@ -73,6 +73,16 @@ Pass criteria:
   leaked local Tanner was the source of the `intrThreadMain+0x7E` crash: the exit
   wrote a world coordinate over `vsync_callback`.
 
+## Decision: one owned left car, several persistent world cars (2026-10-21)
+
+Cars persist when a player gets into a different car, but **ownership stays with the
+most recent car they got out of**: `leftCarSlot1` is a single field, and the next
+get-out overwrites it. An older abandoned car remains in the world as an unclaimed
+`CIV_AI` body another player can walk to and commandeer. Keeping several of them
+owned would need a bounded per-player list and a list in `MP_CARSTATE_NO_CAR`; that
+is not implemented. The single-claim contract is deliberate: it matches the one left
+car the late-joiner wire row describes and keeps the ownership checks simple.
+
 ## Build caveat found while fixing this
 
 Changing `mp.h` did not recompile every mp source on an incremental build — only
