@@ -100,7 +100,7 @@ def main():
     for pid, (srv, _cli) in pairs.items():
         server.clients[srv] = {"id": pid, "name": "P%d" % pid, "addr": "127.0.0.1:%d" % pid}
         _cli.settimeout(1.0)
-    ped = m.PEDSTATE.pack(1) + m.PEDSTATE_ENTRY.pack(4, 1, 0, 100, -20, 300, 1024, 40)
+    ped = m.PEDSTATE.pack(1) + m.PEDSTATE_ENTRY.pack(4, 1, m.PED_MODEL_JERICHO, 0, 100, -20, 300, 1024, 40)
     check("an on-foot frame is relayed", server.relay_peer_state(pairs[4][0], m.TAG["ped"], ped, 4))
     for pid in (5, 6):
         tag, payload = m.recv_frame(pairs[pid][1])
@@ -133,29 +133,29 @@ def main():
         while got(p) is not None:
             pass
     # -- HIT: only the car that takes it; a traffic hit goes to the slot's owner
-    hit = m.HIT.pack(6, 0, 10, 0, -10)
+    hit = m.HIT.pack(6, 0, 10, 0, -10, 0, 0, 0, 0)
     check("a bump is routed to its target", relay.hit(server, pairs[4][0], 4, hit) == 6)
     r6 = got(6, 1.0)
     check("the target got the bump verbatim", r6 == (m.TAG["hit"], hit), repr(r6))
     check("nobody else got it", got(5) is None and got(4) is None)
-    check("a bump aimed at yourself is dropped", relay.hit(server, pairs[4][0], 4, m.HIT.pack(4, 0, 1, 1, 1)) is None)
+    check("a bump aimed at yourself is dropped", relay.hit(server, pairs[4][0], 4, m.HIT.pack(4, 0, 1, 1, 1, 0, 0, 0, 0)) is None)
     check("a short bump is dropped", relay.hit(server, pairs[4][0], 4, hit[:8]) is None)
-    check("a bump on an absent player is dropped", relay.hit(server, pairs[4][0], 4, m.HIT.pack(9, 0, 1, 1, 1)) is None)
+    check("a bump on an absent player is dropped", relay.hit(server, pairs[4][0], 4, m.HIT.pack(9, 0, 1, 1, 1, 0, 0, 0, 0)) is None)
     # 3 clients (ids 4..6) -> clients count 7 machines (ids + 1): 12 // 7 = 1 slot each,
     # rank 5 owns slot 25 (mp_session.c MpTrafficBandFor)
     check("band maths matches the game", relay.traffic_band(5, 7) == (25, 25) and relay.traffic_band(6, 7) == (26, 31))
-    thit = m.HIT.pack(25, m.HIT_F_TRAFFIC, 1, 2, 3)
+    thit = m.HIT.pack(25, m.HIT_F_TRAFFIC, 1, 2, 3, 0, 0, 0, 0)
     check("a traffic bump goes to the slot's owner", relay.hit(server, pairs[4][0], 4, thit) == 5)
     check("the owner got it", got(5, 1.0) == (m.TAG["hit"], thit))
 
     # -- COLOR: own rows only, whole table to everyone, dropped on leave
-    mine = m.COLOR.pack(2) + m.COLOR_ENTRY.pack(4, 1, 255, 0, 0) + m.COLOR_ENTRY.pack(5, 1, 0, 0, 255)
+    mine = m.COLOR.pack(2) + m.COLOR_ENTRY.pack(4, 1, 255, 0, 0, 0) + m.COLOR_ENTRY.pack(5, 1, 0, 0, 255, 0)
     check("only the sender's own colour row is kept", relay.color(server, pairs[4][0], 4, mine) == 1)
-    table = m.COLOR.pack(1) + m.COLOR_ENTRY.pack(4, 1, 255, 0, 0)
+    table = m.COLOR.pack(1) + m.COLOR_ENTRY.pack(4, 1, 255, 0, 0, 0)
     check("everyone got the table, sender included",
           all(got(p, 1.0) == (m.TAG["color"], table) for p in (4, 5, 6)))
-    relay.color(server, pairs[6][0], 6, m.COLOR.pack(1) + m.COLOR_ENTRY.pack(6, 0, 1, 2, 3))
-    both = m.COLOR.pack(2) + m.COLOR_ENTRY.pack(4, 1, 255, 0, 0) + m.COLOR_ENTRY.pack(6, 0, 1, 2, 3)
+    relay.color(server, pairs[6][0], 6, m.COLOR.pack(1) + m.COLOR_ENTRY.pack(6, 0, 1, 2, 3, 0))
+    both = m.COLOR.pack(2) + m.COLOR_ENTRY.pack(4, 1, 255, 0, 0, 0) + m.COLOR_ENTRY.pack(6, 0, 1, 2, 3, 0)
     check("the table holds every player, in id order", relay.color_table(server) == both)
     for p in (4, 5, 6):
         got(p, 1.0)
@@ -179,7 +179,7 @@ def main():
     pings = {}
     for i in range(m.ROSTER.unpack_from(rows, 0)[0]):
         e = m.ROSTER_ENTRY.unpack_from(rows, m.ROSTER.size + i * m.ROSTER_ENTRY.size)
-        pings[e[0]] = e[5]
+        pings[e[0]] = e[6]
     check("the roster carries the measured ping", pings.get(5) == rtt and pings.get(4) == 0, repr(pings))
     check("a stale or foreign PONG is ignored",
           server.note_pong(pairs[5][0], _st.pack("<I", (_core._ms32() + 100000) & 0xFFFFFFFF)) is None)
@@ -199,14 +199,14 @@ def main():
     pals = {}
     for i in range(m.ROSTER.unpack_from(rows, 0)[0]):
         e = m.ROSTER_ENTRY.unpack_from(rows, m.ROSTER.size + i * m.ROSTER_ENTRY.size)
-        pals[e[0]] = e[6]
+        pals[e[0]] = e[7]
     check("the roster carries the picked palette", pals.get(6) == 4, repr(pals))
     server.note_car_pick(pairs[6][0], bytes([9, 1, 2, 0]))
     rows = server.roster_bytes()
     e = [m.ROSTER_ENTRY.unpack_from(rows, m.ROSTER.size + i * m.ROSTER_ENTRY.size)
          for i in range(m.ROSTER.unpack_from(rows, 0)[0])]
     check("an unflagged palette byte is ignored (old clients)",
-          [r[6] for r in e if r[0] == 6] == [4], repr(e))
+          [r[7] for r in e if r[0] == 6] == [4], repr(e))
     # -- LINK STATS: one row per client, rates from the bytes each way, loss unknown
     body = server.stats_bytes()
     n = m.STATS.unpack_from(body, 0)[0]
@@ -344,6 +344,26 @@ def main():
           not d.is_private_host("143.198.78.241") and not d.is_private_host("172.32.5.4"))
     check("a name is the operator's business, not a private address",
           not d.is_private_host("jerichomp.animetiddi.es") and not d.is_private_host(""))
+
+    # -- CHARACTER: the model id rides in the colour row, the pose and the roster
+    from dedi import relay as _relay
+    _relay.color(server, pairs[6][0], 6,
+                 m.COLOR.pack(1) + m.COLOR_ENTRY.pack(6, 0, 1, 2, 3, m.PED_MODEL_JERICHO))
+    check("the colour row's pedModel is kept", server.ped_models.get(6) == m.PED_MODEL_JERICHO,
+          repr(server.ped_models))
+    raw = server.roster_bytes()
+    roster_models = {}
+    for i in range(m.ROSTER.unpack_from(raw, 0)[0]):
+        e = m.ROSTER_ENTRY.unpack_from(raw, m.ROSTER.size + i * m.ROSTER_ENTRY.size)
+        roster_models[e[0]] = e[5]
+    check("the roster carries the owner's character",
+          roster_models.get(6) == m.PED_MODEL_JERICHO, repr(roster_models))
+    pose = m.PEDSTATE.pack(1) + m.PEDSTATE_ENTRY.pack(
+        6, 0, m.PED_MODEL_TANNER, 0, 0, 0, 0, 0, 0)
+    check("an on-foot pose is relayed",
+          server.relay_peer_state(pairs[6][0], m.TAG["ped"], pose, 6))
+    check("the pose's pedModel is kept too", server.ped_models.get(6) == m.PED_MODEL_TANNER,
+          repr(server.ped_models))
 
     # -- stop sets the event the run loop watches
     server.cmd_stop("")

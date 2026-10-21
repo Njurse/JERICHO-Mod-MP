@@ -89,6 +89,10 @@ def color(server, conn, pid, payload):
         if row[0] == pid:
             with server.lock:
                 server.colors[pid] = bytes(row)
+                # The same row carries the owner's character (byte 5). It is stored
+                # next to the colour so the roster snapshot and the rebroadcast table
+                # both carry it, exactly the way colour already travels.
+                server.ped_models[pid] = row[5]
             kept += 1
     table = color_table(server)
     if kept and table:

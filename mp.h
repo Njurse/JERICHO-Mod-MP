@@ -72,6 +72,12 @@ typedef struct MP_CONFIG
 	int  colorOn;			/* 0 = keep the original colours (default) */
 	int  colorR, colorG, colorB;	/* 0..255 */
 
+	/* MY CHARACTER. MP_PED_MODEL_*; 0 is Tanner and the default. Persisted so a
+	 * player keeps their pick across sessions, like the car and its palette.
+	 * The value is the owner's CHOICE; MpEffectivePedModel() decides whether this
+	 * level can actually draw it (Jericho's models exist on Havana only). */
+	int  pedModel;
+
 	/* THE DISCOVERY SERVER (master), for the Online browser. Empty = the Online
 	 * screen says so and lists nothing; that is an unset state, not a bad one.
 	 * "host", "host:port" and "http://host:port" are all accepted. */
@@ -149,6 +155,10 @@ typedef struct MP_PLAYER
 	 * character keeps the colours the game gave it. */
 	int   colorOn;
 	int   colorR, colorG, colorB;
+
+	/* MP_PED_MODEL_*: the character that player has chosen. The owner is the only
+	 * writer; everyone else mirrors it from JPCL / the roster / JPPD. */
+	int   pedModel;
 } MP_PLAYER;
 
 /* ------------------------------------------------------------------ */
@@ -373,6 +383,14 @@ int  MpWarpToPlayer(int playerId);	/* pause menu: warp our car -- or our own
 					 * another player (in a car or on foot) */
 int  MpRespawnOnRoad(void);		/* pause menu: back onto the nearest road, repaired */
 void MpSelfClearFelony(void);		/* pause menu: clear the local player's wanted level */
+
+/* Preferred on-foot character (MP_PED_MODEL_*). The owner is the only writer of
+ * its own choice; everyone else mirrors it through the wire. */
+int  MpPedModelAvailable(int model);	/* can THIS level draw that character? */
+int  MpPedModelEffective(int model);	/* model, or Tanner when unavailable here */
+int  MpPedModelSelected(void);		/* the local player's own choice (config) */
+int  MpSetPedModel(int model);		/* owner: persist, apply, broadcast; 0 = refused */
+const char* MpPedModelName(int model);	/* "Tanner" / "Jericho" / ... for the menu */
 
 /* Addon network bridge (mp_bridge.c / jer_net.h). */
 void MpBridgeDeliver(const char* channel, int peer, const void* data, int len);

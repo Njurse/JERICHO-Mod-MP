@@ -3,14 +3,18 @@
  * via jer_frontend.h (native buttons + navigation, no overlay).
  *
  * Menu tree:
- *   mp.root     LAN | Split-Screen | Back
- *   mp.lan      Host Game | Join Game | Options | Back
+ *   mp.root     Online | LAN | JMP Options | Split-Screen | Back
+ *   mp.lan      Host Game | Join Game | Back
  *   mp.host     Take a Ride | Back
  *   mp.mode     Single Player | Multiplayer | Back          (the take-a-ride question)
  *   mp.join     <LAN servers...> / Manual IP / Back
  *   mp.lobby    <players...> / Start Match (host) or Leave / Back
- *   mp.options  Change Name | Enforce Mods | Port / Back
+ *   mp.jmpoptions  Change Name | Enforce Mods | Port / Back
  *   mp.name     10 character slots / Done / Back
+ *
+ * "JMP Options" used to be an "Options" row INSIDE the LAN page. It moved up one
+ * level because it is session configuration, not a LAN action: hosting, joining
+ * and the options a player changes before either are siblings on the root page.
  *
  * THE MATCH'S CITY, TIME OF DAY AND WEATHER ARE NOT SET HERE. They are the host's
  * choices on the ENGINE'S OWN screens -- the city screen, then the combined Time of
@@ -60,7 +64,8 @@ enum
 				 * said `mode` for a while, so the enum now matches it) */
 	M_JOIN,
 	M_LOBBY,
-	M_OPTIONS,
+	M_JMP_OPTIONS,		/* was M_OPTIONS: the same page, moved out of LAN and
+				 * renamed "JMP Options" (registered id mp.jmpoptions) */
 	M_NAME,
 	M_MANUAL,
 	M_COUNT
@@ -70,7 +75,7 @@ enum
  * (-1 = not registered). */
 static const char* const kMenuIds[M_COUNT] = {
 	"mp.root", "mp.lan", "mp.online", "mp.host", "mp.mode", "mp.join",
-	"mp.lobby", "mp.options", "mp.name", "mp.manual"
+	"mp.lobby", "mp.jmpoptions", "mp.name", "mp.manual"
 };
 static int gMenuIdx[M_COUNT];
 static int gMenusResolved;	/* set once MpResolveMenus has run: an index is only
@@ -604,7 +609,7 @@ static int ActNameDone(void* ud)
 	snprintf(gMp.config.playerName, sizeof(gMp.config.playerName), "%s", gNameEdit);
 	gMp.config.firstNameSet = 1;
 	MpConfigSave();
-	jer_frontend_open(gMenuIdx[M_OPTIONS]);
+	jer_frontend_open(gMenuIdx[M_JMP_OPTIONS]);
 	return 1;
 }
 
@@ -617,19 +622,22 @@ static JER_FE_ITEM kRootItems[] =
 	 * player who has been told an address wants. */
 	{ "Online",       NULL, NULL, NULL,           NULL, -1, 0 },
 	{ "LAN",          NULL, NULL, NULL,           NULL, -1, 0 },
+	/* JMP OPTIONS is a SIBLING of LAN, not a row inside it: it configures the
+	 * session (name, mod matching, port) whichever way the player is about to
+	 * connect. */
+	{ "JMP Options",  NULL, NULL, NULL,           NULL, -1, 0 },
 	{ "Split-Screen", NULL, NULL, ActSplitScreen, NULL, -1,    0 },
 	{ "Back",         NULL, NULL, NULL,           NULL, -1,    1 },
 };
-static const JER_FE_MENU kRootMenu = { "mp.root", kRootItems, 4, NULL, NULL };
+static const JER_FE_MENU kRootMenu = { "mp.root", kRootItems, 5, NULL, NULL };
 
 static JER_FE_ITEM kLanItems[] =
 {
 	{ "Host Game", NULL, NULL, ActHostGame, NULL, -1,    0 },
 	{ "Join Game", NULL, NULL, ActJoinEnter, NULL, -1,    0 },
-	{ "Options",   NULL, NULL, NULL,         NULL, -1, 0 },
 	{ "Back",      NULL, NULL, NULL,         NULL, -1,        1 },
 };
-static const JER_FE_MENU kLanMenu = { "mp.lan", kLanItems, 4, NULL, NULL };
+static const JER_FE_MENU kLanMenu = { "mp.lan", kLanItems, 3, NULL, NULL };
 
 static const JER_FE_ITEM kHostItems[] =
 {
@@ -653,7 +661,7 @@ static const JER_FE_ITEM kHostSetItems[] =
 };
 static const JER_FE_MENU kHostSetMenu = { "mp.mode", kHostSetItems, 3, NULL, NULL };
 
-static JER_FE_ITEM kOptionsItems[] =
+static JER_FE_ITEM kJmpOptionsItems[] =
 {
 	{ "Change Name",    NULL, NULL, NULL,       NULL,       -1, 0 },
 	{ NULL, LblEnforce, NULL, NULL, AdjEnforce, -1,       0 },
@@ -661,7 +669,7 @@ static JER_FE_ITEM kOptionsItems[] =
 	{ NULL, LblPort,    NULL, NULL, AdjPort,    -1,       0 },
 	{ "Back",           NULL, NULL, NULL,       NULL,      -1,     1 },
 };
-static const JER_FE_MENU kOptionsMenu = { "mp.options", kOptionsItems, 5, NULL, NULL };
+static const JER_FE_MENU kJmpOptionsMenu = { "mp.jmpoptions", kJmpOptionsItems, 5, NULL, NULL };
 
 /* Resolve every mp menu by id and point the submenu rows at what they got. The
  * item arrays are written with -1 and wired HERE, because the registered index
@@ -682,10 +690,10 @@ static void MpResolveMenus(void)
 
 	kRootItems[0].submenu = gMenuIdx[M_ONLINE];
 	kRootItems[1].submenu = gMenuIdx[M_LAN];
+	kRootItems[2].submenu = gMenuIdx[M_JMP_OPTIONS];
 	kLanItems[0].submenu = gMenuIdx[M_HOST];
 	kLanItems[1].submenu = gMenuIdx[M_JOIN];
-	kLanItems[2].submenu = gMenuIdx[M_OPTIONS];
-	kOptionsItems[0].submenu = gMenuIdx[M_NAME];
+	kJmpOptionsItems[0].submenu = gMenuIdx[M_NAME];
 
 	gMenusResolved = 1;
 }
@@ -2210,7 +2218,7 @@ void MpUiInit(void)
 	jer_frontend_register_menu(&kHostSetMenu);
 	jer_frontend_register_menu(&gJoinMenu);
 	jer_frontend_register_menu(&gLobbyMenu);
-	jer_frontend_register_menu(&kOptionsMenu);
+	jer_frontend_register_menu(&kJmpOptionsMenu);
 	jer_frontend_register_menu(&gNameMenu);
 	jer_frontend_register_menu(&gManualMenu);
 

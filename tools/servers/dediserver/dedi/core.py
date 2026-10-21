@@ -326,6 +326,7 @@ class Dedicated:
         self.clients = {}        # conn -> {"id", "name", "addr"}
         self.cars = {}           # playerId -> one MP_CARSTATE_ENTRY
         self.colors = {}         # playerId -> its MP_COLOR_ENTRY (8 bytes), the owner's word
+        self.ped_models = {}     # playerId -> MP_PED_MODEL_* last reported by the owner
         self.stop = threading.Event()
         self.started = time.time()
 
@@ -495,13 +496,15 @@ class Dedicated:
                     _pid, _fl, palette, model, model_city = m.CARSTATE_ENTRY.unpack_from(car, 0)[:5]
                     ready = m.ROSTER_FLAG_CAR_READY
                 rows.append((info["id"], info["name"], model, model_city, palette, ready,
-                             info.get("ping", 0)))
+                             info.get("ping", 0),
+                             self.ped_models.get(info["id"], m.PED_MODEL_TANNER)))
         rows.sort(key=lambda r: r[0])
 
         out = bytearray(m.ROSTER.pack(len(rows), 0, 0, 0))
-        for pid, name, model, model_city, palette, ready, ping in rows:
+        for pid, name, model, model_city, palette, ready, ping, ped_model in rows:
             out += m.ROSTER_ENTRY.pack(
                 pid & 0xFF, 0, model & 0xFF, model_city & 0xFF, ready,
+                ped_model & 0xFF,                     # MP_PED_MODEL_*: the late-join snapshot
                 min(int(ping), 0xFFFF),               # ping: our PING -> their PONG round trip
                 palette & 0xFFFF,
                 name.encode("latin1", "replace")[: m.ROSTER_NAME_MAX - 1])
@@ -623,6 +626,12 @@ class Dedicated:
             except (ValueError, IndexError, struct.error):
                 self.log.debug("player %d: dropping a malformed or foreign on-foot frame" % pid)
                 return False
+            # The pose carries the owner's character too (entry byte 2). Keep it for
+            # the roster snapshot, so a joiner gets the model even while this player
+            # is in a car and sending no poses. The frame itself still goes out
+            # verbatim -- peers read the same field.
+            with self.lock:
+                self.ped_models[pid] = payload[m.PEDSTATE.size + 2]
         self.broadcast(payload, tag, skip=conn)
         return True
 
@@ -922,6 +931,7 @@ class Dedicated:
                 if info:
                     self.cars.pop(info["id"], None)
                     self.colors.pop(info["id"], None)
+                    self.ped_models.pop(info["id"], None)
                 _NET.pop(conn, None)
             if info:
                 self.plugins.call("on_player_leave", Player(conn, info))

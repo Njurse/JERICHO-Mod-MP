@@ -342,7 +342,7 @@ def main():
             e = m.ROSTER_ENTRY.unpack_from(raw, m.ROSTER.size + i * m.ROSTER_ENTRY.size)
             rows[e[0]] = e
         check("car pick: recorded under the picker's id",
-              ok and rows[2][2] == 7 and rows[2][3] == 1 and rows[2][6] == 3, rows.get(2))
+              ok and rows[2][2] == 7 and rows[2][3] == 1 and rows[2][7] == 3, rows.get(2))
         check("car pick: the other player's row is untouched",
               rows[1] == m.ROSTER_ENTRY.unpack_from(before, m.ROSTER.size), (rows[1],))
         check("car pick: no row for id 0 (the server has no player)", 0 not in rows, sorted(rows))

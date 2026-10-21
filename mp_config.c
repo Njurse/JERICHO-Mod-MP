@@ -448,6 +448,12 @@ void MpConfigLoad(void)
 	MP_CLAMP_CONFIG_COLOR(gMp.config.colorR);
 	MP_CLAMP_CONFIG_COLOR(gMp.config.colorG);
 	MP_CLAMP_CONFIG_COLOR(gMp.config.colorB);
+
+	/* Preferred on-foot character. Keep the stored CHOICE even if this level
+	 * cannot draw it (Havana-only Jericho): the player will be back on Havana. */
+	gMp.config.pedModel = jer_config_get_int("mp", "ped_model", MP_PED_MODEL_TANNER);
+	if (gMp.config.pedModel < 0 || gMp.config.pedModel >= MP_PED_MODEL_COUNT)
+		gMp.config.pedModel = MP_PED_MODEL_TANNER;
 	if (gMp.config.strictVersion < 0 || gMp.config.strictVersion > 1)
 		gMp.config.strictVersion = 0;
 
@@ -506,6 +512,7 @@ void MpConfigSave(void)
 	jer_config_set_int("mp", "color_r", gMp.config.colorR);
 	jer_config_set_int("mp", "color_g", gMp.config.colorG);
 	jer_config_set_int("mp", "color_b", gMp.config.colorB);
+	jer_config_set_int("mp", "ped_model", gMp.config.pedModel);
 	jer_config_set_str("mp", "player_name", gMp.config.playerName);
 	jer_config_set_str("mp", "host_name", gMp.config.hostName);
 	jer_config_set_str("mp", "master_url", gMp.config.masterUrl);

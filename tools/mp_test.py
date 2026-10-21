@@ -27,7 +27,7 @@ import sys
 import threading
 import time
 
-PROTO = 13                    # mp_proto.h MP_PROTO_VERSION (12: 16 players, bigger roster) -- the game drops any frame whose envelope version differs
+PROTO = 15                    # mp_proto.h MP_PROTO_VERSION (15: ped model id in JPCL/roster/JPPD) -- the game drops any frame whose envelope version differs
 SDK = 2                       # JERICHO_SDK_VERSION
 MP_VER = "0.1.0"              # JERICHO/MODS/mp/mod.toml version -- always advertised
 NUL = bytes([0])
@@ -72,13 +72,22 @@ TAG = {
 # a standalone session/lobby broadcast that nothing ever sent or handled. Keep this
 # table to the tags the code actually has; a retired one is dropped here too.
 # MP_PEDSTATE (count + 3 reserved) and its 24-byte MP_PEDSTATE_ENTRY rows
-# (playerId, flags, spare, x, y, z, heading, speed): an on-foot player's pose.
+# (playerId, flags, pedModel, spare, x, y, z, heading, speed): an on-foot player's
+# pose, carrying the owner's current character.
 PEDSTATE = struct.Struct("<B3x")
-PEDSTATE_ENTRY = struct.Struct("<BBHiiiii")
+PEDSTATE_ENTRY = struct.Struct("<BBBBiiiii")
+# MP_PED_MODEL_*: the wire values are stable (mp_proto.h).
+PED_MODEL_TANNER = 0
+PED_MODEL_JERICHO = 1
+PED_MODEL_COP = 2
+PED_MODEL_CIVILIAN = 3
 # MP_HIT: targetId, flags (MP_HIT_F_TRAFFIC = targetId is a car_data slot), 2 reserved,
 # int32 impulse[3]. MP_COLOR: count + 3 reserved, then 8-byte rows
-# (playerId, on, r, g, b, 3 spare). (MP_CHANNEL is CHANNEL, below.)
-HIT = struct.Struct("<BB2xiii")
+# (playerId, on, r, g, b, pedModel, 2 spare). (MP_CHANNEL is CHANNEL, below.)
+# MP_HIT: targetId, flags (MP_HIT_F_TRAFFIC = targetId is a car_data slot), 2 reserved,
+# impulse[3], the target's carstate frame, and the sender's view of the target car
+# at that frame (tgtPos[3]). 32 bytes since protocol 14.
+HIT = struct.Struct("<BB2xiiiIiii")
 HIT_F_TRAFFIC = 0x01
 # MP_STATS (count + 3 reserved) + 12-byte MP_STATS_ENTRY rows: playerId, lossPct
 # (0xFF = unknown), pingMs, rxBps, txBps -- each player's link to the hub.
@@ -87,7 +96,7 @@ STATS_ENTRY = struct.Struct("<BBHII")
 STATS_LOSS_UNKNOWN = 0xFF
 CAR_PICK = struct.Struct("<BB2x")    # MP_CAR: model (0xFF none), city (0xFF = session)
 COLOR = struct.Struct("<B3x")
-COLOR_ENTRY = struct.Struct("<BBBBB3x")
+COLOR_ENTRY = struct.Struct("<BBBBBB2x")  # playerId, on, r, g, b, pedModel, 2 spare
 TRAFFIC_SLOT_FIRST = 20          # dr2limits.h JER_SLOT_TRAFFIC_FIRST (MAX_CARS 32 - 12)
 TRAFFIC_SLOT_COUNT = 12
 MAX_CARS = 32
@@ -124,7 +133,7 @@ ROSTER_NAME_MAX = 20          # mp_proto.h MP_ROSTER_NAME_MAX
 ROSTER_FLAG_HOST = 1          # mp_proto.h MP_ROSTER_FLAG_HOST
 ROSTER_FLAG_CAR_READY = 2     # mp_proto.h MP_ROSTER_FLAG_CAR_READY
 ROSTER = struct.Struct("<4B")          # count, reserved[3] = 4
-ROSTER_ENTRY = struct.Struct("<5B2H20s")  # id, carId, model, modelCity, flags, ping, palette, name[20] = 29 (model 0xFF = on foot)
+ROSTER_ENTRY = struct.Struct("<6B2H20s")  # id, carId, model, modelCity, flags, pedModel, ping, palette, name[20] = 30 (model 0xFF = on foot)
 
 REJECT_NAMES = {0: "NONE", 1: "FULL", 2: "VERSION", 3: "MODS", 4: "INPROGRESS", 5: "CUSTOM"}
 REJECT_IDS = {v.lower(): k for k, v in REJECT_NAMES.items() if k != 0}

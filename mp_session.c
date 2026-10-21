@@ -39,6 +39,7 @@ extern int gWantNight;		/* glaunch.c: 1 = the night take-a-ride level variant */
 #include "jer_map.h"	/* jer_map_*: the region maths behind "is the ground there?" */
 #include "map.h"	/* regions_across/down, MAP_REGION_SIZE, units_across_halved: map-wide join spawn */
 #include "pedest.h"	/* pUsedPeds: our player's own pedestrian, when on foot */
+#include "motion_c.h"	/* SetSkelModelPointers: the character switch */
 #include "jer_npc.h"	/* jer_npc_*: the pedestrian we stand in for a REMOTE one */
 #include "camera.h"	/* InitCamera: snap the camera with a placed late joiner */
 #include "jer_ped_palette.h"	/* jer_ped_palette_reset: scope the suit-colour cache to a session */
@@ -1050,6 +1051,11 @@ void MpHostSendRoster(void)
 		e->model = 0xff;
 		e->modelCity = MP_CAR_CITY_SESSION;
 		e->palette = (uint16_t)p->palette;
+		/* Identity, not appearance: a late joiner needs the character BEFORE the
+		 * first pose, and a player in a car is not sending poses at all. Use the
+		 * config for ourselves (the registry row is fed from the wire). */
+		e->pedModel = (uint8_t)MpPedModelEffective(
+			p->isLocal ? gMp.config.pedModel : p->pedModel);
 
 		/* Whether THIS host has a car for that player yet -- the same gate the
 		 * spawn uses, and the only way a third machine can tell "their pick has
@@ -1724,6 +1730,11 @@ static void MpHandleRoster(const unsigned char* p, int len)
 			pl->carCity = (e->modelCity == MP_CAR_CITY_SESSION) ? -1 : (int)e->modelCity;
 		}
 		pl->palette = (int)e->palette;
+		/* The roster is the late-join snapshot: it names the character the owner
+		 * chose, so a joiner can draw the right ped before JPPD arrives. Stored as
+		 * the EFFECTIVE model for this level; the owner's choice stays in its row
+		 * for when the level changes back. */
+		pl->pedModel = MpPedModelEffective((int)e->pedModel);
 
 		/* The host has a car for them: build OUR copy of it. Without this a third
 		 * machine never gives a late joiner a car at all -- its carstate entries
@@ -5372,14 +5383,17 @@ void MpLockstepFrame(void)
 	{
 		/* our own colour, whenever it stops matching what we last sent */
 		static int lastOn = -1, lastR = -1, lastG = -1, lastB = -1;
+		static int lastModel = -1;
 
 		if (gMp.config.colorOn != lastOn || gMp.config.colorR != lastR ||
-		    gMp.config.colorG != lastG || gMp.config.colorB != lastB)
+		    gMp.config.colorG != lastG || gMp.config.colorB != lastB ||
+		    gMp.config.pedModel != lastModel)
 		{
 			lastOn = gMp.config.colorOn;
 			lastR = gMp.config.colorR;
 			lastG = gMp.config.colorG;
 			lastB = gMp.config.colorB;
+			lastModel = gMp.config.pedModel;
 
 			MpSendColors(0);
 		}
@@ -6446,6 +6460,175 @@ static LPPEDESTRIAN MpLocalPed(void)
 	return NULL;
 }
 
+/* ------------------------------------------------------------------ */
+/* PREFERRED CHARACTER                                                */
+/*                                                                    */
+/* The owner chooses; this file owns the switch. Tanner and Jericho   */
+/* are the two SKELETON characters, so changing one is a rebind of the */
+/* same bones and vertex lists InitTanner built. The palette is not  */
+/* touched: a ped's colour is chosen per draw from JER_EVENT_PED_DRAW, */
+/* and re-selecting it here only makes the first frame after a swap   */
+/* correct.                                                           */
+/*                                                                    */
+/* Jericho's JERI_* models belong to Old Havana's model lump. The      */
+/* pointers, not the city number, are the authority: before the level */
+/* has read its models they are NULL, and drawing one would crash.    */
+/* ------------------------------------------------------------------ */
+
+const char* MpPedModelName(int model)
+{
+	switch (model)
+	{
+	case MP_PED_MODEL_TANNER:	return "Tanner";
+	case MP_PED_MODEL_JERICHO:	return "Jericho";
+	case MP_PED_MODEL_COP:		return "Cop";
+	case MP_PED_MODEL_CIVILIAN:	return "Civilian";
+	default:			return "?";
+	}
+}
+
+int MpPedModelAvailable(int model)
+{
+	int i;
+
+	switch (model)
+	{
+	case MP_PED_MODEL_TANNER:
+		return 1;
+
+	case MP_PED_MODEL_JERICHO:
+		if (GameLevel != 1)
+			return 0;
+
+		for (i = 0; i < 6; i++)
+		{
+			if (pmJerichoModels[i] == NULL)
+				return 0;
+		}
+
+		return 1;
+
+	/* The cop/civilian rows are the engine's DrawCiv family; they are named on
+	 * the wire so the id space will not move, but their picker rows land later. */
+	default:
+		return 0;
+	}
+}
+
+int MpPedModelEffective(int model)
+{
+	return MpPedModelAvailable(model) ? model : MP_PED_MODEL_TANNER;
+}
+
+int MpPedModelSelected(void)
+{
+	return gMp.config.pedModel;
+}
+
+/* The skeleton a character uses. Only the two skeleton families are selectable
+ * today. */
+static int MpPedTypeForModel(int model)
+{
+	return (MpPedModelEffective(model) == MP_PED_MODEL_JERICHO) ? OTHER_MODEL : TANNER_MODEL;
+}
+
+/* Put the local player's active palette choice back on the selector. The draw
+ * (MpOnPedDraw) recomputes it every frame; doing it here means the frame that
+ * follows a skeleton swap is already right. */
+static void MpSelectLocalPalette(void)
+{
+	if (!gMp.config.colorOn)
+	{
+		jer_ped_palette_select(-1);
+		return;
+	}
+
+	jer_ped_palette_select(
+		jer_ped_palette_team_colour(
+			jer_colour_make(gMp.config.colorR, gMp.config.colorG, gMp.config.colorB),
+			MP_COLOR_STRENGTH));
+}
+
+/* Apply the chosen character to OUR pedestrian, if we have one. While in a car
+ * there is no ped; the next MpSendOwnPedState on foot calls this again, which is
+ * exactly "apply when you next get out". */
+static void MpApplyLocalPedModel(void)
+{
+	MP_PLAYER* me = MpLocalPlayer();
+	LPPEDESTRIAN ped;
+	int model, type;
+
+	if (me == NULL || me->carId >= 0)
+		return;
+
+	ped = MpLocalPed();
+
+	if (ped == NULL)
+		return;
+
+	model = MpPedModelEffective(gMp.config.pedModel);
+	type = MpPedTypeForModel(model);
+
+	if (ped->pedType == type)
+		return;
+
+	ped->pedType = (char)type;
+
+	/* THE SAME PATH InitTanner AND THE MOTION CODE USE. This rebinds Skel[].pModel
+	 * and bodyShiftValue together, so the bones, the vertex lists
+	 * (cJerichoVNumbers) and the draw code stay one consistent skeleton. */
+	SetSkelModelPointers(type);
+
+	MpSelectLocalPalette();
+
+	if (gMpCtx != NULL)
+		gMpCtx->jer_log(gMpCtx,
+			"[mp] character: local player is now %s (pedType %d)\n",
+			MpPedModelName(model), type);
+}
+
+/* Owner -> peers: persist the choice, apply it if we are on foot, and tell
+ * everyone. A client's JPCL row goes to the host, which republishes the table;
+ * the host sends the table itself. JPPD carries the same id on the next pose, so
+ * an on-foot swap is visible on the frame that changes it. */
+int MpSetPedModel(int model)
+{
+	MP_PLAYER* me;
+
+	if (model < 0 || model >= MP_PED_MODEL_COUNT)
+		return 0;
+
+	if (!MpPedModelAvailable(model))
+	{
+		MpNotify(model == MP_PED_MODEL_JERICHO
+			? "Jericho is only available in Havana"
+			: "That character is not available");
+
+		return 0;
+	}
+
+	gMp.config.pedModel = model;
+	MpConfigSave();
+
+	me = MpLocalPlayer();
+
+	if (me != NULL)
+		me->pedModel = model;
+
+	MpApplyLocalPedModel();
+
+	if (gMp.running)
+	{
+		MpSendColors(0);	/* identity travels with colour */
+		MpSendOwnPedState();	/* and with the pose, when there is one */
+	}
+
+	if (gMpCtx != NULL)
+		gMpCtx->jer_log(gMpCtx, "[mp] character: chose %s\n", MpPedModelName(model));
+
+	return 1;
+}
+
 /* Owner -> peers: where our on-foot player is and how fast they are moving.
  * Sent only while on foot; the car state already says "no car" (model 0xFF), so a
  * peer knows to look for this rather than guessing from a paused car. */
@@ -6485,6 +6668,11 @@ static void MpSendOwnPedState(void)
 		return;
 	}
 
+	/* We may have got out of a car since the choice was made (or the level may
+	 * have changed under a stored Havana-only pick). This is the "apply the next
+	 * time they exit" point. */
+	MpApplyLocalPedModel();
+
 	memset(&h, 0, sizeof(h));
 	memset(&e, 0, sizeof(e));
 
@@ -6492,6 +6680,7 @@ static void MpSendOwnPedState(void)
 
 	e.playerId = (uint8_t)me->id;
 	e.flags = (uint8_t)(p->speed != 0 ? MP_PED_MOVING : 0);
+	e.pedModel = (uint8_t)MpPedModelEffective(gMp.config.pedModel);
 	e.x = p->position.vx;
 	e.y = p->position.vy;
 	e.z = p->position.vz;
@@ -6554,6 +6743,7 @@ static void MpHandlePedState(int connIndex, const unsigned char* p, int len)
 		pl->pedZ = e.z;
 		pl->pedHeading = (int)(e.heading & 0xFFF);
 		pl->pedSpeed = e.speed;
+		pl->pedModel = MpPedModelEffective((int)e.pedModel);
 		pl->pedLastMs = MpNowMs();
 	}
 
@@ -6597,9 +6787,30 @@ static void MpDriveRemotePed(MP_PLAYER* p)
 		return;
 	}
 
+	if (n != NULL)
+	{
+		int want = MpPedTypeForModel(p->pedModel);
+
+		if (((LPPEDESTRIAN)n)->pedType != want)
+		{
+			/* The owner changed character. Rebuild the stand-in rather than
+			 * mutating a ped whose motion/vertex state belongs to the old model:
+			 * the spawn path is the same one a fresh player takes, and the
+			 * skeleton is rebound by the draw code on its first frame. */
+			jer_npc_despawn(n);
+			p->ped = NULL;
+			n = NULL;
+
+			if (gMpCtx != NULL)
+				gMpCtx->jer_log(gMpCtx,
+					"[mp] ped: player %d changed character to %s; stand-in rebuilt\n",
+					p->id, MpPedModelName(p->pedModel));
+		}
+	}
+
 	if (n == NULL)
 	{
-		n = jer_npc_spawn_model(TANNER_MODEL, p->pedX, p->pedZ);
+		n = jer_npc_spawn_model(MpPedTypeForModel(p->pedModel), p->pedX, p->pedZ);
 
 		if (n == NULL)
 		{
@@ -6844,6 +7055,7 @@ static void MpSendColors(int whole)
 				e.r = (uint8_t)gMp.config.colorR;
 				e.g = (uint8_t)gMp.config.colorG;
 				e.b = (uint8_t)gMp.config.colorB;
+				e.pedModel = (uint8_t)MpPedModelEffective(gMp.config.pedModel);
 			}
 			else
 			{
@@ -6851,6 +7063,7 @@ static void MpSendColors(int whole)
 				e.r = (uint8_t)p->colorR;
 				e.g = (uint8_t)p->colorG;
 				e.b = (uint8_t)p->colorB;
+				e.pedModel = (uint8_t)MpPedModelEffective(p->pedModel);
 			}
 
 			memcpy(buf + sizeof(h) + n * sizeof(e), &e, sizeof(e));
@@ -6871,6 +7084,7 @@ static void MpSendColors(int whole)
 		e.r = (uint8_t)gMp.config.colorR;
 		e.g = (uint8_t)gMp.config.colorG;
 		e.b = (uint8_t)gMp.config.colorB;
+		e.pedModel = (uint8_t)MpPedModelEffective(gMp.config.pedModel);
 
 		memcpy(buf + sizeof(h), &e, sizeof(e));
 		n = 1;
@@ -6934,6 +7148,7 @@ static void MpHandleColor(int connIndex, const unsigned char* p, int len)
 			pl->colorR = e.r;
 			pl->colorG = e.g;
 			pl->colorB = e.b;
+			pl->pedModel = MpPedModelEffective((int)e.pedModel);
 		}
 	}
 }

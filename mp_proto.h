@@ -38,7 +38,14 @@
 extern "C" {
 #endif
 
-#define MP_PROTO_VERSION	14	/* 14: MP_HIT carries targetFrame + tgtPos, so a contact can be
+#define MP_PROTO_VERSION	15	/* 15: the preferred on-foot character rides with the
+				 *     player identity: MP_COLOR_ENTRY's first spare byte
+				 *     (JPCL), a new MP_ROSTER_ENTRY byte, and
+				 *     MP_PEDSTATE_ENTRY.spare (JPPD). One id, three
+				 *     chances to learn it, so a late joiner has it
+				 *     before the first pose and a mid-match change
+				 *     reaches every peer.
+				 * 14: MP_HIT carries targetFrame + tgtPos, so a contact can be
 				 *     validated against the target's own pose timeline instead
 				 *     of being applied on arrival. MP_HIT is 32 bytes (was 16).
 				 * 13: Driver 1 adds IVIEW (9) and TRAIN (10); runtime bank cities move from 9+N to 11+N.
@@ -115,6 +122,22 @@ extern "C" {
 #define MP_TAG_CAR	"JPCC"	/* client -> host: the car this player picked */
 #define MP_TAG_TRAFFIC	"JPTF"	/* either side: replicated traffic/police car state (owner -> peers) */
 
+/* The on-foot character a player has chosen. Wire values are STABLE: they are
+ * stored in mp.ini and compared across machines, so never renumber one.
+ *
+ * TANNER and JERICHO are the two SKELETON characters: they switch through
+ * SetSkelModelPointers. COP and CIVILIAN are the engine's sprite-drawn
+ * civilian path (DrawCiv), not a skeleton; they are listed here so the id space
+ * does not change when their picker rows land. */
+enum
+{
+	MP_PED_MODEL_TANNER = 0,	/* pmTannerModels[], the default */
+	MP_PED_MODEL_JERICHO = 1,	/* pmJerichoModels[] -- models exist only on Havana */
+	MP_PED_MODEL_COP = 2,		/* CIVILIAN + CopStand, the engine's cop look */
+	MP_PED_MODEL_CIVILIAN = 3,	/* the engine's civilian variants */
+	MP_PED_MODEL_COUNT
+};
+
 /* The 'JPSW' meeting-point message (MP_SPAWN) has been RETIRED: the two
  * machines already agree on the engine's own deterministic spawn, and a client
  * gathers itself beside the host (MpHandleCarState). Tag 95's slot is free but
@@ -154,6 +177,7 @@ typedef struct MP_ROSTER_ENTRY
 	uint8_t  modelCity;	/* city `model` belongs to: MP_CAR_CITY_SESSION = the
 				 * session's city, 0..3 = a cross-city import */
 	uint8_t  flags;		/* MP_ROSTER_FLAG_* */
+	uint8_t  pedModel;	/* MP_PED_MODEL_*: the character this player is using */
 	uint16_t ping;		/* round trip in ms, as the host measured it */
 	uint16_t palette;	/* the player's palette (was named `reserved`; it has only
 				 * ever held this, so the name now says so) */
@@ -439,7 +463,8 @@ typedef struct MP_PEDSTATE_ENTRY
 {
 	uint8_t  playerId;
 	uint8_t  flags;		/* MP_PED_MOVING etc. */
-	uint16_t spare;
+	uint8_t  pedModel;	/* MP_PED_MODEL_*: the owner's current character */
+	uint8_t  spare;
 	int32_t  x, y, z;	/* the ped's own position, engine units */
 	int32_t  heading;	/* 0..4095 */
 	int32_t  speed;		/* signed: > 0 forward, < 0 backpedal, 0 standing */
@@ -466,7 +491,8 @@ typedef struct MP_COLOR_ENTRY
 	uint8_t playerId;
 	uint8_t on;
 	uint8_t r, g, b;
-	uint8_t spare[3];
+	uint8_t pedModel;	/* MP_PED_MODEL_*: identity travels with colour */
+	uint8_t spare[2];
 } MP_COLOR_ENTRY;		/* 8 bytes */
 
 static_assert(sizeof(MP_COLOR_ENTRY) == 8, "MP_COLOR_ENTRY layout");
@@ -708,7 +734,7 @@ static_assert(sizeof(MP_REJECT) == 68, "MP_REJECT layout");
 static_assert(sizeof(MP_SESSION) == 12, "MP_SESSION layout");
 static_assert(sizeof(MP_PLAYER_INPUT) == 4, "MP_PLAYER_INPUT layout");
 static_assert(sizeof(MP_INPUT) == 4, "MP_INPUT layout");
-static_assert(sizeof(MP_ROSTER_ENTRY) == 29, "MP_ROSTER_ENTRY layout");
+static_assert(sizeof(MP_ROSTER_ENTRY) == 30, "MP_ROSTER_ENTRY layout");
 static_assert(sizeof(MP_CARSTATE_ENTRY) == 53, "MP_CARSTATE_ENTRY layout");
 static_assert(sizeof(MP_HIT) == 32, "MP_HIT layout");
 static_assert(sizeof(MP_STATS_ENTRY) == 12, "MP_STATS_ENTRY layout");

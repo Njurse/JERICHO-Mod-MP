@@ -2553,6 +2553,60 @@ static const JER_PAUSE_MENU_ITEM mpColorItems[] =
 static const JER_PAUSE_MENU mpColorMenu =
 { "Player Color", mpColorItems, MP_MENU_ITEMS(mpColorItems), "mp.colour" };
 
+/* Preferred Character: the on-foot model picker, directly below the colour row
+ * because the two are the player's identity. It is a CYCLER for the same reason
+ * the car roster is one -- a module page cannot nest a second level -- and it
+ * SKIPS characters this level cannot draw (Jericho's JERI_* models exist only in
+ * Havana), so left/right never selects a broken skeleton. */
+static void MpCharLabel(void* ud, char* out, int max)
+{
+	int model = MpPedModelEffective(MpPedModelSelected());
+
+	(void)ud;
+
+	if (!MpPedModelAvailable(MP_PED_MODEL_JERICHO))
+		snprintf(out, max, "Preferred Character: %s (Jericho: Havana only)",
+			MpPedModelName(model));
+	else
+		snprintf(out, max, "Preferred Character: %s", MpPedModelName(model));
+}
+
+static int MpCharAdjust(void* ud, int dir)
+{
+	int model = MpPedModelSelected();
+	int i;
+
+	(void)ud;
+
+	if (dir == 0)
+		return JER_PAUSE_QUIT_NONE;
+
+	/* Walk in the asked direction until a character this level can draw. With
+	 * only Tanner available (any city but Havana) the row simply stays put. */
+	for (i = 0; i < MP_PED_MODEL_COUNT; i++)
+	{
+		model = (model + dir + MP_PED_MODEL_COUNT) % MP_PED_MODEL_COUNT;
+
+		if (MpPedModelAvailable(model))
+		{
+			MpSetPedModel(model);
+			break;
+		}
+	}
+
+	return JER_PAUSE_QUIT_NONE;
+}
+
+static const JER_PAUSE_MENU_ITEM mpPlayerItems[] =
+{
+	/* label, get_label, on_activate, userdata, submenu, adjust */
+	{ "Player Color", NULL, NULL, NULL, &mpColorMenu, 0 },
+	{ NULL, MpCharLabel, MpCharAdjust, NULL, NULL, 1 },
+};
+
+static const JER_PAUSE_MENU mpPlayerMenu =
+{ "Player Options", mpPlayerItems, MP_MENU_ITEMS(mpPlayerItems), "mp.player" };
+
 static int MpOnPauseMenu(void* userdata, void* args)
 {
 	JER_ARGS_PAUSE_MENU* pm = (JER_ARGS_PAUSE_MENU*)args;
@@ -3299,14 +3353,14 @@ static const JER_PAUSE_MENU_ITEM mpPauseItems[] =
 {
 	/* label, get_label, on_activate, userdata, submenu, adjust */
 
-	/* Most used first: the car, then Respawn (second, so a stray press on the
-	 * top row does not respawn you), going to somebody and their own colour;
-	 * the two switches after those, and the admin/debug rows (kick,
-	 * diagnostics) last. */
-	{ "Vehicle Options", NULL, NULL, NULL, &mpChangeCarMenu, 0 },
+	/* Respawn first, then the two things that shape a player: their car and
+	 * their character. Player Color and Preferred Character live one level down
+	 * in Player Options, together with the colour they depend on. Then the
+	 * movement row, the two local switches, and the admin/debug rows last. */
 	{ "Respawn", NULL, MpRespawn, NULL, NULL, 0 },
+	{ "Vehicle Options", NULL, NULL, NULL, &mpChangeCarMenu, 0 },
+	{ "Player Options", NULL, NULL, NULL, &mpPlayerMenu, 0 },
 	{ "Warp To Player", NULL, NULL, NULL, &mpWarpMenu, 0 },
-	{ "Player Color", NULL, NULL, NULL, &mpColorMenu, 0 },
 	{ NULL, MpOptLabelInvincible, MpOptToggleInvincible, NULL, NULL, 0 },
 	{ NULL, MpOptLabelImmune, MpOptToggleImmune, NULL, NULL, 0 },
 	{ "Kick player", NULL, NULL, NULL, &mpKickMenu, 0 },
