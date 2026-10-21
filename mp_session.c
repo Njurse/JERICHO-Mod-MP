@@ -179,6 +179,7 @@ static int gMpPlaceSelfTry;	/* frames spent trying to place (MpPlaceSelfTick) */
  * chosen yet. Kept across ticks so a join never thrashes the streamer. */
 static int gMpWideRegion = -1;
 static int gMpWideTries;
+static int gMpPlaceSelfHoldY;	/* the y the car is pinned at while placement runs */
 static int gMpLocalAppliedPad = -1;	/* the pad that drove OUR car, -1 = none seen yet */
 
 /* The road search (defined with the warp/respawn helpers, used by the join spawn
@@ -271,6 +272,7 @@ void MpSessionReset(void)
 	gMpPlaceSelfTry = 0;
 	gMpWideRegion = -1;
 	gMpWideTries = 0;
+	gMpPlaceSelfHoldY = 0;
 
 	/* ...and a "change car" still waiting for a spare slot is session state too: it must not
 	 * outlive the session it was asked in. MpLeaveSession forgets it, but every OTHER way back
@@ -1521,7 +1523,7 @@ void MpSpawnLateJoiners(void)
 				}
 			}
 
-			if (onRoad)
+			if (onRoad == 1)
 			{
 				PlayerStartInfo[slot]->position.vx = rx;
 				PlayerStartInfo[slot]->position.vz = rz;
@@ -1530,7 +1532,7 @@ void MpSpawnLateJoiners(void)
 				PlayerStartInfo[slot]->rotation = (u_short)
 					((rdir >= 0) ? rdir : PlayerStartInfo[0]->rotation);
 			}
-			else
+			else if (onRoad == 0)
 			{
 				int cell = id - 1;
 
@@ -1544,6 +1546,9 @@ void MpSpawnLateJoiners(void)
 				PlayerStartInfo[slot]->position.vz = PlayerStartInfo[0]->position.vz + dz;
 				PlayerStartInfo[slot]->rotation = PlayerStartInfo[0]->rotation;
 			}
+			/* onRoad == 2: the announced pose is already written above; it must
+			 * NOT be replaced by the road/grid blocks (they would write rx/rz,
+			 * which are unset on this path -- that was the origin spawn). */
 
 			if (gMpCtx != NULL)
 			{
@@ -1630,6 +1635,10 @@ void MpSpawnLateJoiners(void)
 		}
 
 		p->carId = slot;
+
+		/* The body exists now: the next carstate should record a FRESH pose, so a
+		 * later re-seat is not anchored to the pose this build used. */
+		p->joinedPose = 0;
 		/* The recorded "car they left" (MP_PLAYER.leftCarSlot1) is only a seat to
 		 * REUSE, never a second body: now that this player has a fresh car from the
 		 * spawn path, forget it. Otherwise a later carstate could reclaim a body
@@ -9587,6 +9596,28 @@ void MpPlaceSelfTick(void)
 		}
 	}
 
+	/* HOLD THE CAR STILL WHILE WE SORT THE SPAWN. The engine's initial pose can be
+	 * over ground this machine has not streamed, and a car that falls or rolls
+	 * while the road search runs is one the driver sees move before it teleports.
+	 * Pin x/y/z and the heading, and zero the speed, on every frame spent looking;
+	 * the placement below writes the final pose. */
+	{
+		CAR_DATA* hold = &car_data[carId];
+		MATRIX m;
+
+		if (gMpPlaceSelfTry == 0)
+			gMpPlaceSelfHoldY = hold->hd.where.t[1];
+
+		hold->hd.speed = 0;
+		hold->hd.where.t[0] = PlayerStartInfo[0]->position.vx;
+		hold->hd.where.t[1] = gMpPlaceSelfHoldY;
+		hold->hd.where.t[2] = PlayerStartInfo[0]->position.vz;
+		hold->hd.direction = PlayerStartInfo[0]->rotation;
+
+		_RotMatrixY(&m, (short)hold->hd.direction);
+		memcpy(hold->hd.where.m, m.m, sizeof(hold->hd.where.m));
+	}
+
 	/* gMpPlaceSelfFrames: >1 = settle countdown, then 1..-TRIES = try each frame */
 	if (gMpPlaceSelfFrames > 1)
 	{
@@ -10067,16 +10098,22 @@ static void MpHandleCarState(int connIndex, const unsigned char* p, int len)
 			continue;
 		}
 
-		/* REMEMBER WHERE THE OWNER SAYS THEY ARE, even while this machine has no
-		 * body for them. A live joiner's first carstate arrives before its local
-		 * slot is assigned; MpSpawnLateJoiners builds the body at THIS pose instead
-		 * of at a level-start road, so the car never appears somewhere else first
-		 * and then teleports. The y is not stored: InitCar resolves the ground
-		 * under x/z, and the owner's next sample carries its y. */
-		pl->joinedPose = 1;
-		pl->joinPoseX = e.x;
-		pl->joinPoseZ = e.z;
-		pl->joinPoseHeading = (int)(e.heading & 0xfff);
+		/* FIRST REAL POSE WINS. A later body state can still be the
+		 * frontend/loading car at 0,0; overwriting the good pose with it is what
+		 * built the joiner at the origin. The sender gates keep such a state out,
+		 * but the ordering here is what makes the spawn deterministic. */
+		if (!pl->joinedPose)
+		{
+			if (gMpCtx != NULL)
+				gMpCtx->jer_log(gMpCtx,
+					"[mp] join pose: player %d wire %d,%d h=%d model=%d frame=%u conn=%d\n",
+					pl->id, e.x, e.z, (int)e.heading, (int)e.model, (unsigned)h.frame, connIndex);
+
+			pl->joinedPose = 1;
+			pl->joinPoseX = e.x;
+			pl->joinPoseZ = e.z;
+			pl->joinPoseHeading = (int)(e.heading & 0xfff);
+		}
 
 		/* HEAL: the owner's own carstate says they are DRIVING, but this machine
 		 * holds no car for them. Believe the owner -- it is the authority for its
