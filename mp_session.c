@@ -6697,7 +6697,6 @@ static void MpApplyLocalPedModel(void)
 int MpSetPedModel(int model)
 {
 	MP_PLAYER* me;
-
 	if (model < 0 || model >= MP_PED_MODEL_COUNT)
 		return 0;
 
@@ -6752,6 +6751,23 @@ int MpSetPedModel(int model)
 		gMpCtx->jer_log(gMpCtx, "[mp] character: chose %s\n", MpPedModelName(model));
 
 	return 1;
+}
+
+/* Headless verification lever: import Jericho at level start, regardless of the
+ * player being in a car or a session. Inert unless MP_TEST_JERICHO is set. */
+void MpTestJerichoImport(void)
+{
+	const char* s = getenv("MP_TEST_JERICHO");
+	int ok;
+
+	if (s == NULL || s[0] == '0' || GameLevel < 0)
+		return;
+
+	ok = MpEnsureJerichoImported() && MpEnsureJerichoInstalled();
+
+	if (gMpCtx != NULL)
+		gMpCtx->jer_log(gMpCtx, "[mp] test: MP_TEST_JERICHO import %s (level %d)\n",
+			ok ? "succeeded" : "FAILED", GameLevel);
 }
 
 /* Owner -> peers: where our on-foot player is and how fast they are moving.

@@ -2964,6 +2964,8 @@ static int MpOnGameStart(void* userdata, void* args)
 	 * frontend/loading world's car_data is zeroed or a demo car at the origin. */
 	gMp.gameStarted = 1;
 
+	MpTestJerichoImport();
+
 	for (i = 0; i < MP_MAX_PLAYERS; i++)
 	{
 		MP_PLAYER* p = &gMp.players[i];

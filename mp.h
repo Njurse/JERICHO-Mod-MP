@@ -392,6 +392,7 @@ int  MpPedModelEffective(int model);	/* model, or Tanner when unavailable here *
 int  MpPedModelSelected(void);		/* the local player's own choice (config) */
 int  MpSetPedModel(int model);		/* owner: persist, apply, broadcast; 0 = refused */
 const char* MpPedModelName(int model);	/* "Tanner" / "Jericho" / ... for the menu */
+void MpTestJerichoImport(void);		/* headless lever: MP_TEST_JERICHO */
 
 /* Addon network bridge (mp_bridge.c / jer_net.h). */
 void MpBridgeDeliver(const char* channel, int peer, const void* data, int len);
