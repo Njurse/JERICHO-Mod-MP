@@ -21,7 +21,7 @@ import struct
 import sys
 
 MAGIC = b"JMPPED\0\0"
-VERSION = 1
+VERSION = 2
 MODEL_NAMES = [
     "JERI_TORSO",
     "JERI_HEAD",
@@ -30,6 +30,15 @@ MODEL_NAMES = [
     "JERI_U_ARM_RIGHT",
     "JERI_L_ARM_RIGHT",
 ]
+LEG_NAMES = [
+    "THIGH_LEFT",
+    "CALF_LEFT",
+    "FOOT_LEFT",
+    "THIGH_RIGHT",
+    "CALF_RIGHT",
+    "FOOT_RIGHT",
+]
+ALL_NAMES = MODEL_NAMES + LEG_NAMES
 PAGE_SETS = (23, 25)
 SECTOR = 2048
 
@@ -86,7 +95,7 @@ def main():
     models = find_lump(data2[8:], 1)
     blobs = []
     source_indices = []
-    for name in MODEL_NAMES:
+    for name in ALL_NAMES:
         try:
             index = name_list.index(name.encode("ascii"))
         except ValueError:
@@ -103,11 +112,11 @@ def main():
         instance = struct.unpack_from("<h", blob, 4)[0]
         if instance >= 0:
             if instance not in source_indices:
-                raise RuntimeError("%s is an instance of model %d, not one of the six"
-                                   % (MODEL_NAMES[i], instance))
+                raise RuntimeError("%s is an instance of model %d, not one of the baked models"
+                                   % (ALL_NAMES[i], instance))
             local = source_indices.index(instance)
             struct.pack_into("<h", blob, 4, local)
-            print("  %s instance -> local %d" % (MODEL_NAMES[i], local))
+            print("  %s instance -> local %d" % (ALL_NAMES[i], local))
 
     spool = find_lump(data2[8:], 26)
     if spool is None:
