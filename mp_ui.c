@@ -2270,6 +2270,13 @@ void MpUiInit(void)
 	/* resolve the real registered index of each menu (see MpResolveMenus) */
 	MpResolveMenus();
 
+	/* Preflight the frontend character row once, so the log says whether Jericho
+	 * is available even before the player opens JMP Options. This is the same
+	 * probe the row itself uses; it loads Havana's model table if needed. */
+	if (gMpCtx != NULL)
+		gMpCtx->jer_log(gMpCtx, "[mp] frontend character: Jericho %s\n",
+			MpPedModelSelectable(MP_PED_MODEL_JERICHO) ? "selectable" : "unavailable");
+
 	jer_frontend_set_main_entry("mp.root");
 
 	/* gManualIp is the source of truth now, so there is nothing to render here --
