@@ -6697,6 +6697,15 @@ static void MpApplyLocalPedModel(void)
 	MpSelectLocalPalette();
 	sLocalSkelGen = gen;
 
+	/* Drop any motion/frame state inherited from the previous model. Reuse the
+	 * engine's fresh on-foot setup, then stand still at its first frame. */
+	ped->type = PED_ACTION_WALK;
+	SetupPedestrian(ped);
+	ped->speed = 0;
+	ped->velocity.vx = 0;
+	ped->velocity.vy = 0;
+	ped->velocity.vz = 0;
+
 	if (gMpCtx != NULL)
 		gMpCtx->jer_log(gMpCtx,
 			"[mp] character: local player is now %s (pedType %d)\n",
