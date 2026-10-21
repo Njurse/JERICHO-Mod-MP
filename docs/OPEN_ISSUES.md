@@ -1,10 +1,11 @@
 # Open issues — mp
 
-## Late-join spawn: two verification gaps (2026-10-20)
+## Late-join spawn and ownership: status (2026-10-21)
 
-Fixed on `fix/mp-late-join-spawn` (commits `4d7e9ca1`, `9900e6aa`). Both gaps below
-are **guarded in code** and the full-city and arena 3-seat rigs pass, but neither
-scenario has been exercised end-to-end.
+Fixed on `fix/mp-late-join-spawn` (commits `4d7e9ca1`, `9900e6aa`). The on-foot
+ownership path is now exercised end to end; the remaining gap is a joiner that
+arrives **after** the owner has already got out, which cannot see a body it never
+held (follow-up below).
 
 ### 1. A join while another player is on foot next to their car
 
@@ -13,17 +14,35 @@ behind `MP_PLAYER.leftCarSlot1`, and logs:
 
     [mp] spawn: refused slot %d for player %d - car is owned (...)
 
-**Not yet run:** three seats; the first joiner gets out with
-`MP_TEST_CARCHANGE=<secs>,<exitSecs>` **before** the second joiner arrives, so the
-join pass sees a `CONTROL_TYPE_CIV_AI` + `gMpQuietPad` body that is still that
-player's parked car.
+**Verified 2026-10-21 on three seats.** The commandeer half was staged with the
+owner getting out *after* the late joiner was in:
 
-Pass criteria:
+    --seat-env client1=MP_TEST_ONFOOT=25
+    --seat-env host=MP_TEST_ONFOOT=35 --seat-env host=MP_TEST_ENTER_LEFT=45,1,10
+    --seat-env client1=MP_TEST_PAUSECAR=65,3,3 --seat-env host=MP_TEST_PAUSECAR=75,3,2
 
-- the parked body keeps its slot, damage and felony;
-- the joiner is seated on a different slot (or the pass logs `refused slot`);
-- when the on-foot player walks back in they re-seat on their own body
-  (`MP_CARSTATE_SAME_BODY`), not a fresh spawn.
+Result: PASS, `dumps=0`; the host found and entered player 1's parked body
+(`enter left car - player 1 slot 1 ... TannerCanEnterCar=1`), player 1's return was
+given a different free slot, the host kept the commandeered body and walked back
+into it (`change car: got back into slot 1`), and no seat ended with two bodies for
+one player. The host also removed the car it had left behind when it commandeered
+(`removed the car we left (slot 0) after getting into slot 1`).
+
+The earlier `no left car for player 1 on this machine` report is the other case: a
+machine that joined **after** the owner had already got out never held that body.
+That is the follow-up below, not a claim or predicate failure -- a seat that was
+present for the exit finds the body and passes every gate.
+
+### Follow-up: materialize a left car on a joiner that missed the exit
+
+A late joiner that arrives while a player is on foot has only that player's
+`MP_PEDSTATE` stand-in; it never had the abandoned `CIV_AI` + quiet-pad body, and
+`leftCarSlot1` is only recorded when the carstate's NO_CAR row follows a local slot
+this machine assigned. Implement this by carrying the left car's model and pose (in
+`MP_CARSTATE_NO_CAR` and/or `MP_PEDSTATE`), building the parked body on join, and
+recording `leftCarSlot1` for it. Not implemented; it does not affect the same-body
+invariant for machines that were present, and `MP_TEST_ENTER_LEFT`'s failure line
+now names this case explicitly instead of saying only "no left car".
 
 ### 2. A dedicated-server city-change rejoin
 
@@ -37,6 +56,19 @@ Pass criteria:
 
 - after the relaunch the client sends carstates again (peer poses keep updating);
 - `gMp.gameStarted` is set; if it is not, the client is visible but frozen.
+
+## Ownership fixes made during this verification (2026-10-21)
+
+- `MpCarSlotTakenByOther` now counts another row's `leftCarSlot1` as ownership, so a
+  commandeered-then-parked body is not deleted by the original owner's spawn.
+- The `MP_CARSTATE_SAME_BODY` reuse gate rejects a slot another row claims through
+  `leftCarSlot1`; without that the original owner reclaimed the commando's parked car.
+- `MpFollowLocalCar` removes the body the local player left when they get into a
+  *different* car. That was the extra car the peers kept after a commandeer.
+- `MP_TEST_ENTER_LEFT` now calls `RemovePlayerPedestrian` after
+  `ChangePedPlayerToCar`, as the engine's get-in path and `MP_TEST_PAUSECAR` do. The
+  leaked local Tanner was the source of the `intrThreadMain+0x7E` crash: the exit
+  wrote a world coordinate over `vsync_callback`.
 
 ## Build caveat found while fixing this
 
