@@ -6615,9 +6615,6 @@ static int MpEnsureJerichoInstalled(void)
 
 static int MpEnsureJerichoImported(void)
 {
-	if (MpPedModelAvailable(MP_PED_MODEL_JERICHO))
-		return MpEnsureJerichoInstalled();
-
 	if (sMpJerPedImportLevel != GameLevel)
 	{
 		sMpJerPedImportLevel = GameLevel;
@@ -6628,15 +6625,22 @@ static int MpEnsureJerichoImported(void)
 	if (sMpJerPedImportFailed)
 		return 0;
 
-	/* The baked JMPPED.LEV is self-contained and is the shipping path; the live
-	 * Havana import remains as a diagnostic fallback. */
+	/* Prefer the self-contained bake on EVERY city, including Havana. Havana's
+	 * native JERI pages are streamed area pages and are not guaranteed to be
+	 * resident when the player switches; the baked copies live in the
+	 * lower-half pool and keep the palette/CLUTs consistent. */
 	if (JerPedBakedAvailable())
 	{
+		sMpJerPedInstalledLevel = -1;
+
 		if (JerPedImportBaked(GameLevel) && MpEnsureJerichoInstalled())
 			return 1;
 
 		JerPedImportReset();
 	}
+
+	if (MpPedModelAvailable(MP_PED_MODEL_JERICHO))
+		return MpEnsureJerichoInstalled();
 
 	if (!JerPedImportProbe(1) || !JerPedImportBuild(1) || !MpEnsureJerichoInstalled())
 	{
