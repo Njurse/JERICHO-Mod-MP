@@ -24,9 +24,9 @@ owner getting out *after* the late joiner was in:
 Result: PASS, `dumps=0`; the host found and entered player 1's parked body
 (`enter left car - player 1 slot 1 ... TannerCanEnterCar=1`), player 1's return was
 given a different free slot, the host kept the commandeered body and walked back
-into it (`change car: got back into slot 1`), and no seat ended with two bodies for
-one player. The host also removed the car it had left behind when it commandeered
-(`removed the car we left (slot 0) after getting into slot 1`).
+into it (`change car: got back into slot 1`), and **cars persist**: the host's car
+from before the commandeer stayed parked, as did the peers' copies, with no
+`removed the car we left` or `removed player N's abandoned car` line.
 
 The earlier `no left car for player 1 on this machine` report is the other case: a
 machine that joined **after** the owner had already got out never held that body.
@@ -63,8 +63,11 @@ Pass criteria:
   commandeered-then-parked body is not deleted by the original owner's spawn.
 - The `MP_CARSTATE_SAME_BODY` reuse gate rejects a slot another row claims through
   `leftCarSlot1`; without that the original owner reclaimed the commando's parked car.
-- `MpFollowLocalCar` removes the body the local player left when they get into a
-  *different* car. That was the extra car the peers kept after a commandeer.
+- **Cars persist.** Getting into a different car no longer removes the body the player
+  left: `MpFollowLocalCar` and the spawn path both keep it standing, and the
+  `leftCarSlot1` claim stays until the next get-out. The ownership guards above keep
+  another row from deleting or reclaiming it. This deliberately restores the parked
+  extra car -- the old car is a world car, not an orphan to clean up.
 - `MP_TEST_ENTER_LEFT` now calls `RemovePlayerPedestrian` after
   `ChangePedPlayerToCar`, as the engine's get-in path and `MP_TEST_PAUSECAR` do. The
   leaked local Tanner was the source of the `intrThreadMain+0x7E` crash: the exit

@@ -303,19 +303,20 @@ machine that never held the body cannot enter it.
 
 Pass bar: the commando logs `enter left car - player N slot S ... TannerCanEnterCar=1`
 and adopts that slot; the original owner's return gets a **different** free slot; the
-commando keeps the body and walks back into it (`change car: got back into slot S`); the
-body the local player left behind is removed when they commandeer
-(`removed the car we left (slot O) after getting into slot S`); no
-`removed player N's abandoned car` appears for the commandeered slot; and no seat has
-two bodies for one player. `MP_TEST_ENTER_LEFT`'s failure line names the row/slot state
-and the rejected predicate instead of a bare "no left car"; the
-`leftCarSlot1 == 0` branch means the machine never held that body (the materialization
-follow-up in [`OPEN_ISSUES.md`](OPEN_ISSUES.md)).
+commando keeps the body and walks back into it (`change car: got back into slot S`); and
+**cars persist**: no `removed the car we left` and no
+`removed player N's abandoned car` appears for the old car, which stays parked on every
+seat. `MP_TEST_ENTER_LEFT`'s failure line names the row/slot state and the rejected
+predicate instead of a bare "no left car"; the `leftCarSlot1 == 0` branch means the
+machine never held that body (the materialization follow-up in
+[`OPEN_ISSUES.md`](OPEN_ISSUES.md)).
 
-Measured 2026-10-21, three seats: PASS, `dumps=0`, `simFrames a:3146 b:3143 c:2969`,
-one body per player on every seat. The ENTER_LEFT get-in must put the local Tanner away
-(`RemovePlayerPedestrian`); a leaked ped was what produced the
-`intrThreadMain+0x7E` / `vsync_callback` crash on the following exit.
+Measured 2026-10-21, three seats: PASS, `dumps=0`, `simFrames a:3181 b:3182 c:2971`;
+the host entered player 1's body at 29875, parked it again at 37058, player 1's return
+got slot 3 at 44914, and the host walked back into its commandeered body at 52322.
+The host's old car and the peers' copies of it stayed parked. The ENTER_LEFT get-in
+must put the local Tanner away (`RemovePlayerPedestrian`); a leaked ped was what
+produced the `intrThreadMain+0x7E` / `vsync_callback` crash on the following exit.
 
 ### 6a. Why changes were refused — one real bug, and what is left
 

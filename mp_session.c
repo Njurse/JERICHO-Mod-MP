@@ -1644,39 +1644,13 @@ void MpSpawnLateJoiners(void)
 		 * later re-seat is not anchored to the pose this build used. */
 		p->joinedPose = 0;
 
-		/* THE BODY THEY LEFT MUST NOT SURVIVE A NEW ONE.
-		 *
-		 * A player who got out left a quiet-pad body and a leftCarSlot1 claim. If
-		 * a later carstate (or this spawn path) gives them a new car, clearing the
-		 * claim alone left the old body standing: the duplicate car seen when a
-		 * player re-enters or when a stale real carstate heals an on-foot row. Drop
-		 * the old body too, unless someone else has commandeered it (the claim is
-		 * then theirs and the body must stay). */
-		if (p->leftCarSlot1 > 0)
-		{
-			int old = p->leftCarSlot1 - 1;
-
-			if (old >= 0 && old < MAX_CARS && old != slot &&
-				car_data[old].controlType == CONTROL_TYPE_CIV_AI &&
-				car_data[old].ai.padid == &gMpQuietPad &&
-				car_data[old].ap.model == p->leftCarModel &&
-				!MpCarSlotTakenByOther(p, old))
-			{
-				MpReleaseOurCarSlot(old);
-				car_data[old].controlType = CONTROL_TYPE_NONE;
-
-				if (gMpCtx != NULL)
-					gMpCtx->jer_log(gMpCtx,
-						"[mp] removed player %d's abandoned car (slot %d) before giving a new one\n",
-						p->id, old);
-			}
-
-			/* The recorded "car they left" is only a seat to REUSE, never a second
-			 * body: now that this player has a fresh car from the spawn path,
-			 * forget it. */
-			p->leftCarSlot1 = 0;
-			p->leftCarModel = -1;
-		}
+		/* CARS PERSIST. A player who got out left a quiet-pad body and a
+		 * leftCarSlot1 claim. Giving them a new car does not delete that body:
+		 * it stays parked and keeps the claim (the claim is overwritten on their
+		 * next get-out). This is deliberate -- the old car is a world car another
+		 * player can walk to, not a duplicate to clean up. The ownership guards
+		 * (MpCarSlotTakenByOther and the SAME_BODY gate) keep another row from
+		 * deleting or reclaiming it. */
 		spawned++;
 
 		if (gMpCtx != NULL)
@@ -6662,41 +6636,6 @@ static void MpFollowLocalCar(void)
 			gMpCtx->jer_log(gMpCtx,
 				"[mp] car change: now driving slot %d model %d (was slot %d)\n",
 				driven, cp->ap.model, me->carId);
-
-		/* THE BODY WE LEFT IS NOT OURS ANY MORE. Getting into a DIFFERENT car
-		 * (commandeering one) used to leave the old parked body standing, and the
-		 * next get-out overwrote leftCarSlot1 -- so nothing ever removed it. That
-		 * is the extra car the peers see but this machine does not: the abandoned
-		 * body keeps its own slot and its own claim.
-		 *
-		 * Drop it here, under the same ownership rule as every other removal: only
-		 * while it is still the parked, quiet-pad body and nobody else drives or
-		 * claims it. If we got back into the body we left, leave the claim alone --
-		 * MpSendOwnCarState needs it to send MP_CARSTATE_SAME_BODY. */
-		if (me->leftCarSlot1 > 0)
-		{
-			int old = me->leftCarSlot1 - 1;
-
-			if (old >= 0 && old < MAX_CARS && old != driven &&
-				car_data[old].controlType == CONTROL_TYPE_CIV_AI &&
-				car_data[old].ai.padid == &gMpQuietPad &&
-				!MpCarSlotTakenByOther(me, old))
-			{
-				MpReleaseOurCarSlot(old);
-				car_data[old].controlType = CONTROL_TYPE_NONE;
-
-				if (gMpCtx != NULL)
-					gMpCtx->jer_log(gMpCtx,
-						"[mp] removed the car we left (slot %d) after getting into slot %d\n",
-						old, driven);
-			}
-
-			if (old != driven)
-			{
-				me->leftCarSlot1 = 0;
-				me->leftCarModel = -1;
-			}
-		}
 
 		me->carId = driven;
 		me->car = (cp->ap.model >= 0 && cp->ap.model < MAX_CAR_RESIDENT_MODELS)
