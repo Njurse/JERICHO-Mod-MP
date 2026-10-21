@@ -122,13 +122,13 @@ WHAT TO EXPECT (the honest v1 limits)
      its own can wear another's colours. Two or three cities is playable; the paint is
      where you would notice.
 
-   * DRIVER 1 CARS: the five Driver 1 car-data cities -- MIAMI, FRISCO, LA, NEWYORK,
-     NEWCASTLE -- appear in the car lists only after you bake them, which this package
+   * DRIVER 1 CARS: the seven Driver 1 car-data cities -- MIAMI, FRISCO, LA, NEWYORK,
+     NEWCASTLE, IVIEW, TRAIN -- appear in the car lists only after you bake them, which this package
      does not do for you because that data belongs to Driver 1. If you own Driver 1,
      put its game data in the DRIVER folder next to DRIVER2 (the layout the game uses,
      so DRIVER\LEVELS\*.LEV is there) and run BAKE_D1_CARS.bat (Windows) or
      BAKE_D1_CARS.sh (Linux) once. It needs Python 3.
-     Until then the five cities are simply not offered; nothing is broken.
+     Until then the seven cities are simply not offered; nothing is broken.
    * Damage is not shared on a PLAYER car: if your car is badly bent on your
      screen it can look straight on the other player's, and vice versa. Damage to
      TRAFFIC cars IS shared, so a wreck you caused looks the same to both of you.

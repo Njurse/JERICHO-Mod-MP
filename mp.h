@@ -229,6 +229,10 @@ MP_PLAYER* MpLocalPlayer(void);
 MP_PLAYER* MpGetPlayer(int id);
 MP_PLAYER* MpGetPlayerByCar(int carId);	/* NULL when carId is not a player */
 
+/* Is this car object drawing the reload failsafe's grey stand-in (the host city's
+ * car 1) because its real model is not loaded yet? Read by the draw-colour hook. */
+int MpCarIsStandIn(int carSlot);
+
 /* Is the LOCAL player's car a real CHOICE yet (a pick, or -mpcar), rather than what mp
  * assigned a player who has not picked? carhacks must not put an assignment into the
  * session's import set: it takes a resident slot nobody drives. */

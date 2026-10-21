@@ -164,6 +164,9 @@ void MpNoteLocalPad(int pad)
 	gMpLocalAppliedPad = pad;
 }
 
+static void MpFailsafeReset(void);
+static void MpFailsafeNoteCar(int slot);
+
 void MpSessionReset(void)
 {
 	/* a session that is over must not stay on the board: the unregister is what
@@ -193,6 +196,7 @@ void MpSessionReset(void)
 
 	gMpLaunched = 0;
 	gMpLocalAppliedPad = -1;
+	MpFailsafeReset();
 	gMp.gamemode = MP_GAMEMODE_TAKEADRIDE;
 	gMp.city = 0;
 	gMp.timeOfDay = -1;
@@ -1203,8 +1207,19 @@ void MpSpawnLateJoiners(void)
 				continue;
 			if (k == player[0].playerCarId || car_data[k].controlType == CONTROL_TYPE_PLAYER)
 				continue;
+			/* a car somebody got out of (stopped, empty, quiet pad): only if
+			 * nothing else is free - see the second pass */
+			if (car_data[k].controlType == CONTROL_TYPE_CIV_AI && car_data[k].ai.padid == &gMpQuietPad)
+				continue;
 			slot = k;
 			break;
+		}
+
+		for (k = 1; slot < 0 && k < MAX_CARS && k < MAX_PLAYERS; k++)
+		{
+			if (MpGetPlayerByCar(k) == NULL && k != player[0].playerCarId &&
+				car_data[k].controlType == CONTROL_TYPE_CIV_AI && car_data[k].ai.padid == &gMpQuietPad)
+				slot = k;
 		}
 
 		if (slot < 1 || slot >= MAX_CARS || slot >= MAX_PLAYERS)
@@ -5507,6 +5522,7 @@ static void MpFollowLocalCar(void)
 		me->carCity = GetCarModelSourceCity(cp->ap.model);
 		me->palette = cp->ap.palette;
 		me->onFoot = 0;
+		MpFailsafeNoteCar(cp->ap.model);
 
 		if (reentry)
 			MpCarQueryChosen(me->carCity, me->car, 1);
@@ -6072,6 +6088,49 @@ static void MpHandleColor(int connIndex, const unsigned char* p, int len)
 	}
 }
 
+/* THE RELOAD FAILSAFE.
+ *
+ * A car reload (a change, "Reload all cars", the verifier's repair) releases the
+ * resident slot the local car is drawn from and rebuilds it. For the frames in
+ * between, ap.model names a slot with no mesh: the chase camera has no car to sit
+ * behind and spins, and the player falls through the map while the world keeps
+ * stepping. The proper car comes back on its own; what is missing is a body to
+ * stand in for it.
+ *
+ * So: if the car we are MEANT to drive is not loadable right now, put the host
+ * city's car 1 (the first civilian its own level ships) under the player and keep
+ * the session told the real choice. When the wanted slot becomes usable, put it
+ * back. This is a stopgap, not a car: it is local-only, it logs both transitions,
+ * and it never changes what the player's carstate says they drive. */
+static int sMpWantSlot = -1;
+static int sMpWantCity = -2;	/* -2 = not known yet, -1 = the host city */
+static int sMpWantModel = -1;
+static int sMpStandIn;
+static int sMpStandInCar[MAX_CARS];	/* per car object: drawn as a grey stand-in */
+static int sMpCamReseat;
+static void MpCarFailsafeTick(void);
+
+static void MpFailsafeReset(void)
+{
+	sMpWantSlot = -1;
+	sMpWantCity = -2;
+	sMpWantModel = -1;
+	sMpStandIn = 0;
+	sMpCamReseat = 0;
+	memset(sMpStandInCar, 0, sizeof(sMpStandInCar));
+}
+
+static void MpFailsafeNoteCar(int slot)
+{
+	if (slot < 0 || slot >= MAX_CAR_RESIDENT_MODELS)
+		return;
+
+	sMpWantSlot = slot;
+	sMpWantModel = residentCarModels[slot];
+	sMpWantCity = GetCarModelSourceCity(slot);
+	sMpStandIn = 0;
+}
+
 static void MpSendOwnCarState(void)
 {
 	unsigned char buf[sizeof(MP_CARSTATE) + sizeof(MP_CARSTATE_ENTRY)];
@@ -6088,6 +6147,7 @@ static void MpSendOwnCarState(void)
 	 * last frame -- adopt it BEFORE reading the pose, so this very frame already
 	 * carries the change and the peers never see the old vehicle again. */
 	MpFollowLocalCar();
+	MpCarFailsafeTick();
 
 	memset(&h, 0, sizeof(h));
 	h.frame = gMp.frame;
@@ -6139,7 +6199,16 @@ static void MpSendOwnCarState(void)
 		{
 			int slot = cp->ap.model;
 
-			if (slot >= 0 && slot < MAX_CAR_RESIDENT_MODELS && residentCarModels[slot] >= 0)
+			/* THE FAILSAFE'S BODY IS NOT THE CHOICE. While the wanted car is being
+			 * rebuilt, the local car wears the host city's car 1 so the camera has
+			 * something to follow; the session must still be told what the player
+			 * chose, or peers would see them switch to that stand-in and back. */
+			if (sMpStandIn && sMpWantModel >= 0)
+			{
+				e.model = (uint8_t)sMpWantModel;
+				e.modelCity = (uint8_t)((sMpWantCity >= 0) ? sMpWantCity : MP_CAR_CITY_SESSION);
+			}
+			else if (slot >= 0 && slot < MAX_CAR_RESIDENT_MODELS && residentCarModels[slot] >= 0)
 			{
 				int src = GetCarModelSourceCity(slot);
 
@@ -6326,11 +6395,23 @@ static void MpReleaseRemoteCar(MP_PLAYER* p)
 
 	cp = &car_data[p->carId];
 
-	if (cp->controlType == CONTROL_TYPE_PLAYER && gMpCtx != NULL)
+	if (cp->controlType == CONTROL_TYPE_PLAYER)
 	{
-		gMpCtx->jer_log(gMpCtx,
-			"[mp] player %d got out; car slot %d left standing where it was\n",
-			p->id, p->carId);
+		/* Leave OUR copy as the stopped, empty civ car the owner's own engine
+		 * made it (the local get-out path does the same). Left as
+		 * CONTROL_TYPE_PLAYER it could never be entered by anyone else here
+		 * (TannerCanEnterCar takes CIV_AI only), and it kept a player slot
+		 * the late-join seat scan skips. */
+		cp->controlType = CONTROL_TYPE_CIV_AI;
+		cp->ai.c.thrustState = CIV_AI_THRUST_STOP;
+		cp->ai.c.ctrlState = CIV_AI_CTRL_EMPTY;
+		cp->wheel_angle = 0;
+		cp->ai.padid = &gMpQuietPad;
+
+		if (gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx,
+				"[mp] player %d got out; car slot %d left standing where it was (enterable)\n",
+				p->id, p->carId);
 	}
 }
 
@@ -6493,6 +6574,170 @@ int MpResidentSlotForCar(int city, int model)
 	return -1;
 }
 
+/* The host city's own car 1 (or, failing that, its first civilian), in a resident
+ * slot that is really loaded. This is the body the reload failsafe puts under the
+ * player while the chosen car is being rebuilt. */
+static int MpHostCarOneSlot(void)
+{
+	int i;
+
+	for (i = 0; i < MAX_CAR_RESIDENT_MODELS; i++)
+		if (residentCarModels[i] == 1 && GetCarModelSourceCity(i) < 0 && JerCarSlotUsable(i))
+			return i;
+
+	for (i = 0; i < MAX_CAR_RESIDENT_MODELS; i++)
+		if (residentCarModels[i] >= 0 && GetCarModelSourceCity(i) < 0 && JerCarSlotUsable(i))
+			return i;
+
+	return -1;
+}
+
+/* Put the host city's car 1 under a car object that has no mesh, and mark it so
+ * the draw-colour hook paints the body solid grey. `fresh` says the flag was not
+ * already set, i.e. this is the transition to log. */
+static int MpCarStandIn(int carSlot)
+{
+	extern u_char defaultPlayerPalette;
+	CAR_DATA* cp;
+	int hostSlot;
+	int fresh;
+
+	if (carSlot < 0 || carSlot >= MAX_CARS)
+		return 0;
+
+	hostSlot = MpHostCarOneSlot();
+
+	if (hostSlot < 0)
+		return 0;
+
+	cp = &car_data[carSlot];
+
+	fresh = !sMpStandInCar[carSlot];
+	sMpStandInCar[carSlot] = 1;
+
+	if (cp->ap.model != hostSlot || !JerCarSlotUsable(cp->ap.model))
+	{
+		cp->ap.model = hostSlot;
+		cp->ap.carCos = &car_cosmetics[hostSlot];
+		cp->lowDetail = -1;
+		cp->ap.palette = (u_char)CarSlotClampPalette(hostSlot, (int)defaultPlayerPalette);
+		CreateDentableCar(cp);
+	}
+
+	/* The chase camera must follow a body that exists. If this is OUR car, re-seat
+	 * it on the stand-in; a camera left on the released slot is the spin. */
+	if (carSlot == player[0].playerCarId)
+	{
+		player[0].cameraCarId = cp->id;
+		player[0].cameraAngle = cp->hd.direction + 1536;
+	}
+
+	return fresh;
+}
+
+static void MpCarClearStandIn(int carSlot)
+{
+	if (carSlot >= 0 && carSlot < MAX_CARS)
+		sMpStandInCar[carSlot] = 0;
+}
+
+int MpCarIsStandIn(int carSlot)
+{
+	return (carSlot >= 0 && carSlot < MAX_CARS) ? sMpStandInCar[carSlot] : 0;
+}
+
+static void MpCarFailsafeTick(void)
+{
+	extern u_char defaultPlayerPalette;
+	MP_PLAYER* me = MpLocalPlayer();
+	CAR_DATA* cp;
+	int want, hostSlot;
+
+	if (!gMp.running || me == NULL || !me->isLocal || me->carId < 0 || me->carId >= MAX_CARS)
+		return;
+
+	cp = &car_data[me->carId];
+
+	/* THE WOUND CHECK: never let the chase camera target a car that has no body. If
+	 * the player's car or the camera's car is cleared/released, re-seat the camera on
+	 * our car this frame - a camera left on a released slot is the spin. */
+	if (player[0].playerType == PLAYER_TYPE_CAR &&
+		(player[0].cameraCarId < 0 || player[0].cameraCarId >= MAX_CARS ||
+		 car_data[player[0].cameraCarId].controlType == CONTROL_TYPE_NONE ||
+		 !JerCarSlotUsable(car_data[player[0].cameraCarId].ap.model)))
+	{
+		player[0].cameraCarId = me->carId;
+		player[0].cameraAngle = cp->hd.direction + 1536;
+
+		if (!sMpCamReseat && gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx,
+				"[mp] camera: re-seated on our car (slot %d) - its target had no vehicle\n",
+				me->carId);
+
+		sMpCamReseat = 1;
+	}
+	else
+		sMpCamReseat = 0;
+
+	/* Learn the choice from a healthy car once (a spawn or a car we got into);
+	 * a change sets it explicitly in MpAdoptCar, even when that load fails. */
+	if (!sMpStandIn && sMpWantModel < 0 &&
+		cp->ap.model >= 0 && cp->ap.model < MAX_CAR_RESIDENT_MODELS &&
+		JerCarSlotUsable(cp->ap.model))
+	{
+		sMpWantSlot = cp->ap.model;
+		sMpWantModel = residentCarModels[sMpWantSlot];
+		sMpWantCity = GetCarModelSourceCity(sMpWantSlot);
+	}
+
+	if (sMpWantModel < 0)
+		return;
+
+	want = MpResidentSlotForCar(sMpWantCity, sMpWantModel);
+
+	if (want >= 0 && want < MAX_CAR_RESIDENT_MODELS && JerCarSlotUsable(want))
+	{
+		if (sMpStandIn)
+		{
+			sMpStandIn = 0;
+			sMpWantSlot = want;
+			MpCarClearStandIn(me->carId);
+
+			cp->ap.model = want;
+			cp->ap.carCos = &car_cosmetics[want];
+			cp->lowDetail = -1;
+			cp->ap.palette = (u_char)CarSlotClampPalette(want, (int)defaultPlayerPalette);
+			CreateDentableCar(cp);
+
+			if (gMpCtx != NULL)
+				gMpCtx->jer_log(gMpCtx,
+					"[mp] car reload: %s model %d is loaded - leaving the host city's car 1 stand-in\n",
+					MpCarCityName(sMpWantCity), sMpWantModel);
+		}
+		else
+			sMpWantSlot = want;
+
+		return;
+	}
+
+	hostSlot = MpHostCarOneSlot();
+
+	if (hostSlot < 0)
+		return;
+
+	if (!sMpStandIn)
+	{
+		sMpStandIn = 1;
+
+		if (gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx,
+				"[mp] car reload: %s model %d is not loaded yet (slot %d) - standing in with the host city's car 1, solid grey (resident slot %d) until it does\n",
+				MpCarCityName(sMpWantCity), sMpWantModel, want, hostSlot);
+	}
+
+	MpCarStandIn(me->carId);
+}
+
 /* The last (city, model) we reported NOT holding for a remote player, so "this
  * machine does not have their car" is one line per CHANGE, not per snapshot --
  * a carstate arrives every frame. `Set` is 0 until we have logged one. */
@@ -6541,6 +6786,15 @@ static int MpAdoptCar(int carSlot, int city, int model, MP_PLAYER* who)
 	if (carSlot < 0 || carSlot >= MAX_CARS)
 		return 0;
 
+	if (who != NULL && who->isLocal)
+	{
+		/* Remember the choice even when this load cannot happen yet: the reload
+		 * failsafe needs to know which car to put back afterwards. */
+		sMpWantCity = city;
+		sMpWantModel = model;
+		sMpWantSlot = MpResidentSlotForCar(city, model);
+	}
+
 	if (!gMpAdoptModelInit)
 	{
 		int i;
@@ -6567,6 +6821,8 @@ static int MpAdoptCar(int carSlot, int city, int model, MP_PLAYER* who)
 	if (JerCarSlotUsable(slot))
 	{
 		int was = cp->ap.model;
+
+		MpCarClearStandIn(carSlot);
 
 		if (was == slot && gMpAdoptModel[carSlot] == model)
 		{
@@ -6689,9 +6945,16 @@ static int MpAdoptCar(int carSlot, int city, int model, MP_PLAYER* who)
 		return 1;
 	}
 
-	/* Cannot hold it: KEEP the car we have and say so ONCE per change, not every
-	 * frame -- a carstate arrives every frame, so the repetition is the noise this
-	 * avoids. Loading it is the hotload's job (carhacks/MP_ADAPTER.md). */
+	/* Cannot hold it: put the host city's car 1 under it, painted solid grey, until
+	 * the owner's model is resident. The old body was the previous model, which on a
+	 * release/reload is exactly the slot that has just lost its mesh - the spinning
+	 * camera. Say so ONCE per change, not every frame -- a carstate arrives every
+	 * frame, so the repetition is the noise this avoids. */
+	if (MpCarStandIn(carSlot) && gMpCtx != NULL && (who == NULL || !who->isLocal))
+		gMpCtx->jer_log(gMpCtx,
+			"[mp] car load: %s model %d is not loaded yet - using the host city's car 1, solid grey, on slot %d until it does\n",
+			MpCarCityName(city), model, carSlot);
+
 	if (who != NULL && gMpCtx != NULL && who->id >= 0 && who->id < MP_MAX_PLAYERS &&
 		(!sMpCarKeepSet[who->id] || sMpCarKeepCity[who->id] != city || sMpCarKeepModel[who->id] != model))
 	{
@@ -6701,13 +6964,12 @@ static int MpAdoptCar(int carSlot, int city, int model, MP_PLAYER* who)
 
 		if (slot >= 0)
 			gMpCtx->jer_log(gMpCtx,
-				"[mp] player %d drives %s model %d (slot %d here) but that mesh is not loaded; keeping slot %d\n",
-				who->id, MpCarCityName(city), model, slot, cp->ap.model);
+				"[mp] player %d drives %s model %d (slot %d here) but that mesh is not loaded; the host city's car 1 stands in on slot %d\n",
+				who->id, MpCarCityName(city), model, slot, carSlot);
 		else
 			gMpCtx->jer_log(gMpCtx,
-				"[mp] player %d drives %s model %d, which this machine does not hold (the hotload will load it); keeping slot %d (model %d)\n",
-				who->id, MpCarCityName(city), model, cp->ap.model,
-				(cp->ap.model >= 0 && cp->ap.model < MAX_CAR_RESIDENT_MODELS) ? residentCarModels[cp->ap.model] : -1);
+				"[mp] player %d drives %s model %d, which this machine does not hold (the hotload will load it); the host city's car 1 stands in on slot %d\n",
+				who->id, MpCarCityName(city), model, carSlot);
 	}
 	else if (who == NULL && gMpCtx != NULL)
 	{
@@ -6715,13 +6977,12 @@ static int MpAdoptCar(int carSlot, int city, int model, MP_PLAYER* who)
 		 * repetition to suppress -- say it every time. */
 		if (slot >= 0)
 			gMpCtx->jer_log(gMpCtx,
-				"[mp] change car (single player): %s model %d resolves to slot %d here but that mesh is not loaded; keeping slot %d\n",
-				MpCarCityName(city), model, slot, cp->ap.model);
+				"[mp] change car (single player): %s model %d resolves to slot %d here but that mesh is not loaded; the host city's car 1 stands in on slot %d\n",
+				MpCarCityName(city), model, slot, carSlot);
 		else
 			gMpCtx->jer_log(gMpCtx,
-				"[mp] change car (single player): %s model %d is not held by this machine; keeping slot %d (model %d)\n",
-				MpCarCityName(city), model, cp->ap.model,
-				(cp->ap.model >= 0 && cp->ap.model < MAX_CAR_RESIDENT_MODELS) ? residentCarModels[cp->ap.model] : -1);
+				"[mp] change car (single player): %s model %d is not held by this machine; the host city's car 1 stands in on slot %d\n",
+				MpCarCityName(city), model, carSlot);
 	}
 
 	return 0;
@@ -7391,6 +7652,43 @@ int MpSoftRestart(void)
 	return 1;
 }
 
+/* Place a car at (x,z) on the GROUND there, the way the engine's own InitCar does
+ * (civ_ai.c: MapHeight at the target minus the suspension offset). A bare
+ * InitCarPhysics with y=0 puts the car at world zero, which on a road that sits
+ * at y=2048 is 2048 units BELOW it - the car then falls through the map. That is
+ * the "respawn, then keep falling" loop: every placement repeated the drop.
+ *
+ * 0 is also MapHeight's answer for ground that is not resident, so the caller has
+ * to have made the spot real first (MpWarpStreamTo) - the same rule the warp and
+ * the join spawn already follow. Returns 0 when there is no ground to stand on. */
+static int MpPlaceOnGround(CAR_DATA* cp, int x, int z, int dir)
+{
+	LONGVECTOR4 start;
+	VECTOR probe;
+	int gy;
+
+	if (cp == NULL || cp->ap.carCos == NULL)
+		return 0;
+
+	probe.vx = x;
+	probe.vy = 0;
+	probe.vz = z;
+	probe.pad = 0;
+
+	gy = MapHeight(&probe);
+
+	if (gy <= -1000)
+		return 0;		/* the void: nothing to stand on */
+
+	start[0] = x;
+	start[1] = gy - cp->ap.carCos->wheelDisp[0].vy;
+	start[2] = z;
+	start[3] = 0;
+
+	InitCarPhysics(cp, &start, dir);
+	return 1;
+}
+
 /* IN A SESSION, DYING IS A RESPAWN, NOT A GAME OVER.
  *
  * The engine asks (JER_PAUSE_GAMEOVER) just before it arms the game-over pause - the death
@@ -7417,7 +7715,6 @@ int MpRespawnAfterDeath(void)
 {
 	MP_PLAYER* me;
 	CAR_DATA* cp;
-	LONGVECTOR4 start;
 	VECTOR probe;
 	int ground;
 	int x, z, dir;
@@ -7500,11 +7797,6 @@ int MpRespawnAfterDeath(void)
 		dir = PlayerStartInfo[0]->rotation;
 	}
 
-	start[0] = x;
-	start[1] = 0;				/* the engine resolves the ground under the car */
-	start[2] = z;
-	start[3] = 0;
-
 	/* Face ALONG THE ROAD: a wreck usually ends at an angle (or upside down
 	 * across the lanes), and respawning it that way left the driver to sort it out. */
 	{
@@ -7512,8 +7804,6 @@ int MpRespawnAfterDeath(void)
 
 		if (MpFindRespawnSpot(x, z, &fx, &fz, &fdir))
 		{
-			start[0] = fx;
-			start[2] = fz;
 			x = fx;
 			z = fz;
 			if (fdir >= 0)
@@ -7522,8 +7812,22 @@ int MpRespawnAfterDeath(void)
 	}
 	dir = MpRoadHeadingNear(x, z, dir & 0xfff);
 
-	InitCarPhysics(cp, &start, dir);
+	/* THE PLACEMENT RESOLVES THE GROUND. y=0 is not "the engine will sort it out":
+	 * a road at y=2048 left the car two thousand units below it, falling. If the
+	 * chosen spot is somehow void, fall back to the level start rather than drop
+	 * the player. */
+	if (!MpPlaceOnGround(cp, x, z, dir))
+	{
+		if (PlayerStartInfo[0] == NULL)
+			return 0;
 
+		x = PlayerStartInfo[0]->position.vx;
+		z = PlayerStartInfo[0]->position.vz;
+		dir = PlayerStartInfo[0]->rotation;
+
+		if (!MpPlaceOnGround(cp, x, z, dir))
+			return 0;
+	}
 	cp->hd.speed = 0;
 	cp->wheel_angle = 0;
 
@@ -7933,6 +8237,21 @@ static int MpFindRespawnSpot(int cx, int cz, int* outX, int* outZ, int* outDir)
 			if (!MpWarpStreamTo(x, z))
 				continue;
 
+			/* A resident region can still answer 0 for a cell that is not in the
+			 * barrel (the gather's measured note). For a DEATH respawn we can try
+			 * another spot; landing on a void would just fall again. */
+			{
+				VECTOR gp;
+
+				gp.vx = x;
+				gp.vy = 0;
+				gp.vz = z;
+				gp.pad = 0;
+
+				if (MapHeight(&gp) <= -1000)
+					continue;
+			}
+
 			*outX = x;
 			*outZ = z;
 			*outDir = dir;
@@ -8049,14 +8368,9 @@ void MpPlaceSelfTick(void)
 			continue;
 
 		{
-			LONGVECTOR4 start;
+			if (!MpPlaceOnGround(cp, x, z, (dir >= 0) ? dir : PlayerStartInfo[0]->rotation))
+				continue;
 
-			start[0] = x;
-			start[1] = 0;		/* the engine resolves the ground under the car */
-			start[2] = z;
-			start[3] = 0;
-
-			InitCarPhysics(cp, &start, (dir >= 0) ? dir : PlayerStartInfo[0]->rotation);
 			cp->hd.speed = 0;
 			player[0].cameraAngle = cp->hd.direction + 1536;
 
@@ -8226,15 +8540,19 @@ int MpWarpToPlayer(int playerId)
 	}
 
 	{
-		LONGVECTOR4 start;
 		JER_ARGS_RESET_CAR rc;
 
-		start[0] = bestX;
-		start[1] = 0;		/* the engine resolves the ground under the car */
-		start[2] = bestZ;
-		start[3] = 0;
+		if (!MpPlaceOnGround(myc, bestX, bestZ, dir))
+		{
+			MpNotify("Warp: no ground at that spot");
 
-		InitCarPhysics(myc, &start, dir);
+			if (gMpCtx != NULL)
+				gMpCtx->jer_log(gMpCtx,
+					"[mp] warp: spot %d,%d has no ground under it - not moving\n",
+					bestX, bestZ);
+
+			return 0;
+		}
 
 		/* Arrive stopped, and pointing the way the target is - not pointing AT
 		 * the target: the heading that matters is the one the driver can see out
@@ -8307,9 +8625,14 @@ int MpRespawnOnRoad(void)
 	cy = cp->hd.where.t[1];
 	cz = cp->hd.where.t[2];
 
-	found = MpFindRespawnSpot(cx, cz, &bestX, &bestZ, &bestDir);
-	if (!found)
-		found = MpFindRoadSpotNear(cx, cy, cz, -1, &bestX, &bestZ, &bestDir, &bestRing);
+	/* THE NEAREST ROAD, not the death-respawn ring.
+	 *
+	 * MpFindRespawnSpot deliberately picks a spot 12-30k units away: a DEATH
+	 * should not put you back on the road you crashed on. The pause row is the
+	 * other question ("I am wedged" / "I fell in the void"), and using the death
+	 * search here teleported the car 21k units to somewhere the ground may not
+	 * have streamed - the "Respawn, then keep falling" loop. */
+	found = MpFindRoadSpotNear(cx, cy, cz, -1, &bestX, &bestZ, &bestDir, &bestRing);
 
 	if (!found)
 	{
@@ -8342,18 +8665,24 @@ int MpRespawnOnRoad(void)
 	}
 
 	{
-		LONGVECTOR4 start;
 		JER_ARGS_RESET_CAR rc;
+		int placeDir = (bestDir >= 0) ? bestDir : MpRoadHeadingNear(bestX, bestZ, cp->hd.direction & 0xfff);
 
-		start[0] = bestX;
-		start[1] = 0;		/* the engine resolves the ground under the car */
-		start[2] = bestZ;
-		start[3] = 0;
+		/* InitCarPhysics builds an UPRIGHT orientation out of the heading, and
+		 * MpPlaceOnGround resolves the y from the road there. y=0 was the old
+		 * shortcut and it put the car below a road at y=2048: it fell, the engine
+		 * called it a death, and the respawn dropped it again. */
+		if (!MpPlaceOnGround(cp, bestX, bestZ, placeDir))
+		{
+			MpNotify("Respawn: no ground on that road");
 
-		/* InitCarPhysics builds an UPRIGHT orientation out of the heading, which is
-		 * half of what "respawn" means; the heading itself is kept, so the player
-		 * comes back facing the way they were. */
-		InitCarPhysics(cp, &start, (bestDir >= 0) ? bestDir : MpRoadHeadingNear(bestX, bestZ, cp->hd.direction & 0xfff));
+			if (gMpCtx != NULL)
+				gMpCtx->jer_log(gMpCtx,
+					"[mp] respawn: road point %d,%d has no ground under it - staying put\n",
+					bestX, bestZ);
+
+			return 0;
+		}
 
 		cp->hd.speed = 0;
 		cp->wheel_angle = 0;
@@ -8378,10 +8707,8 @@ int MpRespawnOnRoad(void)
 
 		if (gMpCtx != NULL)
 			gMpCtx->jer_log(gMpCtx,
-				"[mp] respawn: on the nearest road at %d,%d - ring %d, about %d units from "
-				"where the car was (%d,%d) - repaired and upright\n",
-				cp->hd.where.t[0], cp->hd.where.t[2], bestRing,
-				bestRing * MP_ROAD_RING_STEP, cx, cz);
+				"[mp] respawn: on the nearest road at %d,%d - ring %d, from (%d,%d) - repaired and upright\n",
+				cp->hd.where.t[0], cp->hd.where.t[2], bestRing, cx, cz);
 	}
 
 	return 1;

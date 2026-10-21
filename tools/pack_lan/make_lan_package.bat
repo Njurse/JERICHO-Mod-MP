@@ -16,7 +16,7 @@ rem d1cars bake tools and BAKE_D1_CARS.bat / .sh at the package root, which read
 rem player's OWN Driver 1 data from DRIVER\ and writes DRIVER\D1CARS\. The d1cars
 rem MODULE is linked into the exe (JERICHO_RELEASE_MODS), so nothing else is
 rem missing; carhacks offers a D1 city only once its DRIVER\D1CARS\<CITY>.LEV is
-rem on disk (chkCityAssetsPresent), so before the bake the five cities simply are
+rem on disk (chkCityAssetsPresent), so before the bake the seven cities simply are
 rem not offered - the feature degrades to absent rather than to broken.
 rem
 rem The tools are copied out of the REPO below because the dev mirror EXCLUDES

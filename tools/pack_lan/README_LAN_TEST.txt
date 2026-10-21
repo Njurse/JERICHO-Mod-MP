@@ -38,7 +38,7 @@ WHAT TO EXERCISE
    Driver 2 cities (CHICAGO, HAVANA, VEGAS, RIO). Then do it again, and again: the
    bug this fixes only showed after several changes.
 
-   (The five Driver 1 cities -- MIAMI, FRISCO, LA, NEWYORK, NEWCASTLE -- are NOT in
+   (The seven Driver 1 cities -- MIAMI, FRISCO, LA, NEWYORK, NEWCASTLE, IVIEW, TRAIN -- are NOT in
    this package. They ship as a separate Driver 1 content release; see "WHAT IS IN
    THE PACKAGE" below. Do not expect them in the Change car list here.)
 
@@ -95,7 +95,7 @@ WHAT IS IN THE PACKAGE
   DRIVER2\                 the Driver 2 data, minus the 1.4 GB of FMV
                            (both launchers pass -nofmv)
   (no DRIVER\D1CARS\)      The Driver 1 car content is NOT in this package, so the
-                           five Driver 1 cities cannot be selected here. It ships
+                           seven Driver 1 cities cannot be selected here. It ships
                            SEPARATELY, as its own release -- never inside this one.
   JERICHO\                 the loader, the four pre-included mods and their
                            config (modlist.ini is carhacks = 1, crumple = 1,

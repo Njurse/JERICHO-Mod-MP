@@ -38,7 +38,8 @@
 extern "C" {
 #endif
 
-#define MP_PROTO_VERSION	12	/* 12: MP_MAX_PLAYERS is 16, so MP_ROSTER and every
+#define MP_PROTO_VERSION	13	/* 13: Driver 1 adds IVIEW (9) and TRAIN (10); runtime bank cities move from 9+N to 11+N.
+				 * 12: MP_MAX_PLAYERS is 16, so MP_ROSTER and every
 					 * per-player wire row grew by sizeof -- an 8-player
 					 * build must REFUSE a 16-player session rather than
 					 * copy a bigger roster into its smaller buffer.

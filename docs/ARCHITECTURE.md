@@ -1222,7 +1222,7 @@ header needed beyond that one file) answered by `carhacks/mplive.c`:
 
 | event | question | answer |
 | --- | --- | --- |
-| `JER_CARQ_CITIES` | which cities can this session offer? | every car-data city (9: CHICAGO..RIO + Driver 1's five), or 0 = "nobody knows" |
+| `JER_CARQ_CITIES` | which cities can this session offer? | every car-data city (11: CHICAGO..RIO + Driver 1's seven), or 0 = "nobody knows" |
 | `JER_CARQ_SLOTS` | which slots may this city be offered in, and what model is in each? | parallel slot/model lists, or 0 = "nobody knows" (mp then keeps the engine's own table) |
 | `JER_CARQ_LOAD` | make `(city, model)` available here | `ok` |
 | `JER_CARQ_CHOSEN` | (notice) the local player now drives `(city, model)`, or the switch did not happen | none - carhacks tells the session and releases the old car's slot |

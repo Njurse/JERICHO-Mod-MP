@@ -1,9 +1,9 @@
 id = "mp"
 name = "Multiplayer"
-version = "0.12.0"
+version = "0.13.0"
 # the JERICHO interface (SDK) this mod is built against
 interface = 2
 author = "JERICHO"
-description = "Online and LAN multiplayer for up to 16 players: discovery-server browser plus LAN discovery, dedicated server support, owner-authoritative car sync (each machine drives its own car and broadcasts its state; peers adopt it verbatim), in-match chat, a host-maintained roster, and a generic JERICHO addon net bridge. Minor version tracks MP_PROTO_VERSION (12)."
+description = "Online and LAN multiplayer for up to 16 players: discovery-server browser plus LAN discovery, dedicated server support, owner-authoritative car sync (each machine drives its own car and broadcasts its state; peers adopt it verbatim), in-match chat, a host-maintained roster, and a generic JERICHO addon net bridge. Minor version tracks MP_PROTO_VERSION (13)."
 dependencies = []
 default-enabled = true
