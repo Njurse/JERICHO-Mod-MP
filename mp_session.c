@@ -6661,7 +6661,8 @@ static void MpApplyLocalPedModel(void)
 {
 	MP_PLAYER* me = MpLocalPlayer();
 	LPPEDESTRIAN ped;
-	int model, type;
+	int model, type, gen;
+	static int sLocalSkelGen = -1;
 
 	if (me == NULL || me->carId >= 0)
 		return;
@@ -6681,8 +6682,9 @@ static void MpApplyLocalPedModel(void)
 
 	model = MpPedModelEffective(gMp.config.pedModel);
 	type = MpPedTypeForModel(model);
+	gen = JerPedSkeletonGeneration();
 
-	if (ped->pedType == type)
+	if (ped->pedType == type && sLocalSkelGen == gen)
 		return;
 
 	ped->pedType = (char)type;
@@ -6693,6 +6695,7 @@ static void MpApplyLocalPedModel(void)
 	SetSkelModelPointers(type);
 
 	MpSelectLocalPalette();
+	sLocalSkelGen = gen;
 
 	if (gMpCtx != NULL)
 		gMpCtx->jer_log(gMpCtx,
@@ -6914,7 +6917,7 @@ static void MpDriveRemotePed(MP_PLAYER* p)
 {
 	JerNpc* n;
 	LPPEDESTRIAN ped;
-	int dx, dz, err;
+	int dx, dz, err, gen;
 
 	if (p == NULL || !p->active || p->isLocal)
 		return;
@@ -6948,11 +6951,13 @@ static void MpDriveRemotePed(MP_PLAYER* p)
 	if (p->pedModel == MP_PED_MODEL_JERICHO)
 		MpEnsureJerichoInstalled();
 
+	gen = JerPedSkeletonGeneration();
+
 	if (n != NULL)
 	{
 		int want = MpPedTypeForModel(p->pedModel);
 
-		if (((LPPEDESTRIAN)n)->pedType != want)
+		if (((LPPEDESTRIAN)n)->pedType != want || p->pedSkelGen != gen)
 		{
 			/* The owner changed character. Rebuild the stand-in rather than
 			 * mutating a ped whose motion/vertex state belongs to the old model:
@@ -6985,6 +6990,7 @@ static void MpDriveRemotePed(MP_PLAYER* p)
 		}
 
 		p->ped = n;
+		p->pedSkelGen = gen;
 
 		/* A stand-in is NOT a local player's ped: mark it so a padId-keyed scan (or
 		 * anything else that treats padId >= 0 as "someone's character") can never

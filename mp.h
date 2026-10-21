@@ -116,6 +116,7 @@ typedef struct MP_PLAYER
 	int   pedX, pedY, pedZ;		/* where the owner says it is */
 	int   pedHeading;
 	int   pedSpeed;
+	int   pedSkelGen;		/* skeleton generation the stand-in was built for */
 	unsigned long pedLastMs;	/* when we last heard a pose for it */
 
 	/* This player's link to the HOST, as the host reports it (MP_TAG_STATS): what
