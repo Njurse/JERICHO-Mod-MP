@@ -21,7 +21,7 @@ import struct
 import sys
 
 MAGIC = b"JMPPED\0\0"
-VERSION = 2
+VERSION = 3
 MODEL_NAMES = [
     "JERI_TORSO",
     "JERI_HEAD",
@@ -73,7 +73,40 @@ def retexture(blob, texture_set, texture_id):
         if step <= 0:
             break
         poly += step
+
+
+def parse_perms(body):
+    """Permanent texture page list: [(set, bytes), ...] in file order.
+
+    Mirrors ParseImportedTextureInfoForCity: the TP array starts at lump+8 and is
+    indexed at tpageAmount + 1, then one length-prefixed TEXINF array (8 bytes
+    each) per page, then the permanent XYPAIR list. Getting the TP stride wrong
+    is exactly the off-by-8 that made the unpack run past the lump."""
+    ti = find_lump(body[8:], 34)
+    if ti is None:
+        raise RuntimeError("no LUMP_TEXTUREINFO")
+
+    tpage_amount = struct.unpack_from("<i", ti, 0)[0]
+    ptr = 8 + (tpage_amount + 1) * 8
+
+    for _ in range(tpage_amount):
+        if ptr + 4 > len(ti):
+            raise RuntimeError("texture info: TEXINF length out of range")
+        texamount = struct.unpack_from("<i", ti, ptr)[0]
+        ptr += 4 + texamount * 8
+
+    if ptr + 4 > len(ti):
+        raise RuntimeError("texture info: permanent count out of range")
+
+    nperms = struct.unpack_from("<i", ti, ptr)[0]
+    ptr += 4
+
+    if nperms < 0 or ptr + nperms * 8 > len(ti):
+        raise RuntimeError("texture info: permanent list out of range")
+
+    return [struct.unpack_from("<ii", ti, ptr + i * 8) for i in range(nperms)]
 PAGE_SETS = (23, 25)
+LEG_PAGE_SET = 2
 SECTOR = 2048
 
 
@@ -154,8 +187,8 @@ def main():
 
     suit_set, suit_id = first_texture(blobs[0])
     print("suit texture (torso): set %d id %d" % (suit_set, suit_id))
-    for blob in blobs[6:]:
-        retexture(blob, suit_set, suit_id)
+    # The legs keep their own Tanner texture (set 2); that page is baked below,
+    # so JMPPED.LEV is fully self-contained and no host page is needed.
 
     spool = find_lump(data2[8:], 26)
     if spool is None:
@@ -195,9 +228,25 @@ def main():
         clut_rows = npalettes // 4 + 1
         clut = buf[4:4 + clut_rows * 128]
         image = buf[SECTOR:SECTOR + 64 * 256 * 2]
-        baked_pages.append((page_set, npalettes, clut, image))
+        baked_pages.append((page_set, npalettes, clut, image, 0))
         print("page  set %2d area %d page %d sector %d: %d palettes, %d clut bytes, %d image bytes"
               % (page_set, area, index, sector, npalettes, len(clut), len(image)))
+
+    # The legs keep their own Tanner texture (set 2), a PERMANENT page. Store the
+    # raw LoadTPageAndCluts blob (ncluts + CLUT rows + compressed 64x256 image) so
+    # the runtime can upload it from the archive instead of the host level.
+    page_base = table[2]
+    perm_sets = parse_perms(data1)
+    perm_off = 0
+    for s, size in perm_sets:
+        if s == LEG_PAGE_SET:
+            blob = data[page_base + perm_off:page_base + perm_off + size]
+            baked_pages.append((LEG_PAGE_SET, 0, b"", blob, 1))
+            print("page  set %2d permanent +%d: %d bytes (compressed)" % (s, perm_off, size))
+            break
+        perm_off += (size + SECTOR - 1) & -SECTOR
+    else:
+        raise RuntimeError("leg page set %d not in the permanent list" % LEG_PAGE_SET)
 
     out = bytearray(MAGIC)
     out += struct.pack("<II", VERSION, len(blobs))
@@ -205,8 +254,8 @@ def main():
         out += struct.pack("<I", len(blob))
         out += blob
     out += struct.pack("<I", len(baked_pages))
-    for page_set, npalettes, clut, image in baked_pages:
-        out += struct.pack("<IIII", page_set, npalettes, len(clut), len(image))
+    for page_set, npalettes, clut, image, flags in baked_pages:
+        out += struct.pack("<IIIII", page_set, npalettes, len(clut), len(image), flags)
         out += clut
         out += image
 
