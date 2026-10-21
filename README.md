@@ -350,6 +350,20 @@ that launches wrong on one side, a connection that drops. `--clean` (and the
 automatic cleanup) unlinks the junctions before deleting anything, so it can
 never follow one into the real game tree.
 
+The same relay can drop **whole session frames**, which is how a lost carstate or
+roster is reproduced without breaking the TCP stream:
+
+    python tools/mp_localpair.py --drop-tag JPCS --drop-tag JPRS --drop-pct 50
+    python tools/mp_localpair.py --drop-tag JPCS --drop-burst 90 --drop-gap 30
+
+`--drop-pct N` drops that percentage of matching frames; `--drop-burst N
+--drop-gap M` drops N consecutive matching frames, then passes M, and repeats
+(default `--drop-gap 0` keeps dropping after the first burst). Tags are the
+four-byte message types, e.g. `JPCS` (carstate) and `JPRS` (roster). The relay
+parses the module's framing and drops only complete frames, so the receiver sees
+a valid stream with a message missing; combine with `--lag-ms`/`--lag-jitter-ms`
+for a slow link as well.
+
 ### Watching a run, not just reading it afterwards
 
 `--vramview` opens the VRAM viewer and the console on every seat, and `--shots DIR`
@@ -385,6 +399,7 @@ them):
 | Lever | What it exercises |
 | --- | --- |
 | `MP_TEST_ONFOOT=<secs>` | get out of the car that many seconds in, so the on-foot path runs at all |
+| `MP_TEST_ENTER_LEFT=<secs>[,<playerId>]` | while on foot, enter the car another player left, through the engine's own `TannerCanEnterCar` gate. Finds the target row's `leftCarSlot1`, requires the parked `CIV_AI` body with the matching model and quiet pad, then calls `ChangePedPlayerToCar`. Logs either the gate result or `no left car for player N on this machine`. `playerId` defaults to the first non-local row with a left car. Use it with `MP_TEST_ONFOOT` on the same seat: `--seat-env client2=MP_TEST_ONFOOT=15 --seat-env client2=MP_TEST_ENTER_LEFT=25` |
 | `MP_BOT` | drives the cars AND the on-foot Tanner (see `mp_bot.c`), so a run has motion without a human. `mp_localpair.py` defaults it to `chase` (the host flees, every joiner chases); `pursuit` hunts mutually; `catmouse` is the same pair DRIVEN BY THE PATHFINDER - the mouse runs to a place it chooses (far from the cat, preferring the road, reachable) and the cat plans to where the mouse is; `off` leaves a real player's car alone |
 | `MP_TEST_PAUSECAR=<secs>[,<city>[,<model>]][;...]` | runs the pause menu's `Vehicle Options` apply path, so a mid-match vehicle change (including a cross-city one, with carhacks) is reproducible headlessly. A `;`-separated list (`30,3,1;45,1,2`) makes one change per entry, in order, each at its own time, counted in seconds from when the session starts running - enough to switch until the spare slots would run out. Also runs OUTSIDE a session (from the frame hook, since the lockstep tick it normally rides on needs a session), which is the only padless way to exercise the single-player swap: `MP_TEST_PAUSECAR=10,3` with `-level rio` switches to Rio's second car |
 | `MP_TEST_CITYCHANGE=<secs>,<city>[,<slot>]` | drives the same path to a car from **another city**, through `MpChangeCar`. `city` indexes the cities the car mods know (`MpCarQueryCities`), so it is inert unless the city list offers it - and it is the lever that proves the city list is populated |

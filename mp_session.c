@@ -31,6 +31,7 @@ extern int gBootMpLevel;	/* main.c: 1 = the small multiplayer map, 0 = the full 
 extern int gBootMpArena;	/* main.c: which multiplayer map (0/1) */
 extern int gWantNight;		/* glaunch.c: 1 = the night take-a-ride level variant */
 #include "players.h"	/* InitPlayer: a late joiner needs a car the same way the engine makes one */
+#include "ai.h"		/* TannerCanEnterCar: the gate the enter-left test lever checks */
 #include "handling.h"	/* LongQuaternion2Matrix: rebuild a car's matrix from its body */
 #include "state.h"
 #include "objcoll.h"	/* CellEmpty: the engine's own scenery test (the warp's landing check) */
@@ -3386,6 +3387,7 @@ static void MpTestCarCycleTick(void);
 static void MpTestLeaveTick(void);
 static void MpTestKickTick(void);
 static void MpTestOnFootTick(void);
+static void MpTestEnterLeftTick(void);
 static void MpTestFallOffTick(void);
 
 
@@ -4175,6 +4177,7 @@ static const char* gHeartbeatStr;
 static const char* gTestLeaveStr;
 static const char* gTestKickStr;
 static const char* gTestOnFootStr;
+static const char* gTestEnterLeftStr;
 static const char* gTestCarChangeStr;
 static const char* gTestCityChangeStr;
 static const char* gTestCarCycleStr;
@@ -4196,6 +4199,7 @@ static void MpResolveTestLevers(void)
 	gTestLeaveStr = getenv("MP_TEST_LEAVE");
 	gTestKickStr = getenv("MP_TEST_KICK");
 	gTestOnFootStr = getenv("MP_TEST_ONFOOT");
+	gTestEnterLeftStr = getenv("MP_TEST_ENTER_LEFT");
 	gTestCarChangeStr = getenv("MP_TEST_CARCHANGE");
 	gTestCityChangeStr = getenv("MP_TEST_CITYCHANGE");
 	gTestCarCycleStr = getenv("MP_TEST_CARCYCLE");
@@ -5320,6 +5324,7 @@ void MpLockstepFrame(void)
 	/* test lever: get out of the car part-way through (inert unless MP_TEST_ONFOOT),
 	 * so the on-foot path has a way to be exercised at all. */
 	MpTestOnFootTick();
+	MpTestEnterLeftTick();
 
 	/* test lever: run the pause menu's Change car path (inert unless
 	 * MP_TEST_PAUSECAR), so a mid-match vehicle change is reproducible headlessly
@@ -5600,6 +5605,138 @@ static void MpTestOnFootTick(void)
 	 * it. Mirror the engine: activate the ped, then step out. */
 	ActivatePlayerPedestrian(&car_data[me->carId], NULL, 0, NULL, TANNER_MODEL);
 	ChangeCarPlayerToPed(0);
+}
+
+/* MP_TEST_ENTER_LEFT=<secs>[,<playerId>] -- walk into the car ANOTHER player
+ * left, from a headless run.
+ *
+ * The get-out paths leave the body CIV_AI with the quiet pad, which is exactly
+ * what TannerCanEnterCar accepts; the missing half of issue #56 is whether any
+ * other machine actually holds that body. A headless run has no way to walk up
+ * and press the key, so this lever performs the same gate and reports the
+ * answer: find the target row's leftCarSlot1, check the body is the parked
+ * CIV_AI car with that model and pad, call TannerCanEnterCar, and only then
+ * call ChangePedPlayerToCar. The log line is the evidence either way.
+ *
+ * <playerId> defaults to 0xFFFF = the first non-local row with a left car. The
+ * local player must be ON FOOT; this is the "another player" path, not the
+ * owner walking back into their own car (MP_TEST_PAUSECAR covers that). */
+static void MpTestEnterLeftTick(void)
+{
+	static int done;
+	static int noted;
+	static int notedOnFoot;
+	static int notedMissing;
+	static unsigned long startMs;
+	const char* s;
+	const char* comma;
+	int secs, want = 0xFFFF, i, slot = -1, owner = -1;
+	MP_PLAYER* me;
+	unsigned long now = MpNowMs();
+
+	if (done || !gMp.running)
+		return;
+
+	s = gTestEnterLeftStr;
+
+	if (s == NULL)
+		return;
+
+	if (!noted)
+	{
+		noted = 1;
+
+		if (gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx,
+				"[mp] test: MP_TEST_ENTER_LEFT=%s armed (frame %lu)\n",
+				s, gMp.frame);
+	}
+
+	secs = atoi(s);
+	comma = strchr(s, ',');
+
+	if (comma != NULL)
+		want = atoi(comma + 1);
+
+	if (startMs == 0)
+		startMs = MpNowMs();
+
+	if ((now - startMs) < (unsigned long)(secs * 1000))
+		return;
+
+	me = MpLocalPlayer();
+
+	if (me == NULL || me->carId >= 0 || player[0].playerCarId >= 0)
+	{
+		if (!notedOnFoot)
+		{
+			notedOnFoot = 1;
+
+			if (gMpCtx != NULL)
+				gMpCtx->jer_log(gMpCtx,
+					"[mp] test: enter left car needs the local player ON FOOT (carId %d)\n",
+					me != NULL ? me->carId : -99);
+		}
+
+		return;
+	}
+
+	for (i = 0; i < MP_MAX_PLAYERS; i++)
+	{
+		const MP_PLAYER* p = &gMp.players[i];
+		int left;
+
+		if (!p->active || p->isLocal || p->leftCarSlot1 <= 0)
+			continue;
+
+		if (want != 0xFFFF && p->id != want)
+			continue;
+
+		left = p->leftCarSlot1 - 1;
+
+		if (left < 0 || left >= MAX_CARS ||
+			car_data[left].controlType != CONTROL_TYPE_CIV_AI ||
+			car_data[left].ap.carCos == NULL ||
+			car_data[left].ap.model != p->leftCarModel ||
+			car_data[left].ai.padid != &gMpQuietPad)
+			continue;
+
+		slot = left;
+		owner = p->id;
+		break;
+	}
+
+	if (slot < 0)
+	{
+		if (!notedMissing)
+		{
+			notedMissing = 1;
+
+			if (gMpCtx != NULL)
+				gMpCtx->jer_log(gMpCtx,
+					"[mp] test: enter left car - no left car for player %d on this machine\n",
+					(want == 0xFFFF) ? -1 : want);
+		}
+
+		return;
+	}
+
+	done = 1;
+
+	{
+		int can = TannerCanEnterCar(&car_data[slot], 0);
+
+		if (gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx,
+				"[mp] test: enter left car - player %d slot %d model %d control %d "
+				"quietpad %d TannerCanEnterCar=%d\n",
+				owner, slot, (int)car_data[slot].ap.model,
+				(int)car_data[slot].controlType,
+				car_data[slot].ai.padid == &gMpQuietPad ? 1 : 0, can);
+
+		if (can)
+			ChangePedPlayerToCar(0, &car_data[slot]);
+	}
 }
 
 /* MP_TEST_PAUSECAR=<secs>[,<city>,<model>][;<secs>[,<city>,<model>]...] -- run the
