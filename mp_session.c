@@ -5633,31 +5633,6 @@ static void MpTestOnFootTick(void)
 	 * NULL ped, and the next civ-AI pass (CivControl -> CheckPingOut) faults on
 	 * it. Mirror the engine: activate the ped, then step out. */
 	ActivatePlayerPedestrian(&car_data[me->carId], NULL, 0, NULL, TANNER_MODEL);
-
-	/* ActivatePlayerPedestrian creates the ped in PED_ACTION_GETOUTCAR and
-	 * installs PedGetOutCar as fpAgitatedState. ChangeCarPlayerToPed is normally
-	 * called by that animation once frame1 > 14; calling it immediately while
-	 * leaving fpAgitatedState live lets PedGetOutCar keep rewriting the ped after
-	 * it is already the on-foot player, which produces a broken ped. Mirror the
-	 * animation's completion before stepping out. */
-	{
-		LPPEDESTRIAN ped = player[0].pPed;
-
-		if (ped != NULL)
-		{
-			ped->fpAgitatedState = NULL;
-			ped->flags &= ~0x10;
-			ped->flags &= ~4;
-			ped->type = PED_ACTION_WALK;
-			SetupPedestrian(ped);
-			ped->frame1 = 0;
-			ped->speed = 0;
-			ped->velocity.vx = 0;
-			ped->velocity.vy = 0;
-			ped->velocity.vz = 0;
-		}
-	}
-
 	ChangeCarPlayerToPed(0);
 }
 
@@ -6640,6 +6615,9 @@ static int MpEnsureJerichoInstalled(void)
 
 static int MpEnsureJerichoImported(void)
 {
+	if (MpPedModelAvailable(MP_PED_MODEL_JERICHO))
+		return MpEnsureJerichoInstalled();
+
 	if (sMpJerPedImportLevel != GameLevel)
 	{
 		sMpJerPedImportLevel = GameLevel;
@@ -6650,22 +6628,15 @@ static int MpEnsureJerichoImported(void)
 	if (sMpJerPedImportFailed)
 		return 0;
 
-	/* Prefer the self-contained bake on EVERY city, including Havana. Havana's
-	 * native JERI pages are streamed area pages and are not guaranteed to be
-	 * resident when the player switches; the baked copies live in the
-	 * lower-half pool and keep the palette/CLUTs consistent. */
+	/* The baked JMPPED.LEV is self-contained and is the shipping path; the live
+	 * Havana import remains as a diagnostic fallback. */
 	if (JerPedBakedAvailable())
 	{
-		sMpJerPedInstalledLevel = -1;
-
 		if (JerPedImportBaked(GameLevel) && MpEnsureJerichoInstalled())
 			return 1;
 
 		JerPedImportReset();
 	}
-
-	if (MpPedModelAvailable(MP_PED_MODEL_JERICHO))
-		return MpEnsureJerichoInstalled();
 
 	if (!JerPedImportProbe(1) || !JerPedImportBuild(1) || !MpEnsureJerichoInstalled())
 	{
