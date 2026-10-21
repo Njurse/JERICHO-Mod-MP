@@ -38,7 +38,11 @@ LEG_NAMES = [
     "CALF_RIGHT",
     "FOOT_RIGHT",
 ]
-ALL_NAMES = MODEL_NAMES + LEG_NAMES
+HAND_NAMES = [
+    "HAND_LEFT",
+    "HAND_RIGHT",
+]
+ALL_NAMES = MODEL_NAMES + LEG_NAMES + HAND_NAMES
 POLY_SIZES = [8, 12, 16, 24, 20, 20, 28, 32, 8, 12, 16, 16,
               0, 0, 0, 0, 12, 12, 12, 16, 20, 20, 24, 24,
               0, 0, 0, 0, 0, 0, 0, 0, 8, 12, 16, 24,

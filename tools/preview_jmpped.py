@@ -70,8 +70,8 @@ def load_models(path):
     if data[:8] != MAGIC:
         raise SystemExit(f"{path}: not a JMPPED.LEV")
     version, count = struct.unpack_from("<II", data, 8)
-    if version != 3 or count != 12:
-        raise SystemExit(f"{path}: expected version 3 with 12 models, got {version}/{count}")
+    if version != 3 or count != 14:
+        raise SystemExit(f"{path}: expected version 3 with 14 models, got {version}/{count}")
     off = 16
     models = []
     for _ in range(count):
