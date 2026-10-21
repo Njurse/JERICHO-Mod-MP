@@ -491,6 +491,7 @@ typedef struct MP_COLOR
  * warps them into an unrelated car. Vehicles are matched by MODEL, in place
  * (MpAdoptRemoteCar). */
 #define MP_CARSTATE_HAS_BODY	1
+#define MP_CARSTATE_SIREN	8	/* owner has siren/lights on (police car) */
 /* The body we are in now is the SAME `car_data` slot we last got out of (this
  * machine's slot -- the peers know which body they released for us). The owner
  * sets it whenever they walk back into the car they left, or use the pause menu's
@@ -515,7 +516,7 @@ typedef struct MP_COLOR
 typedef struct MP_CARSTATE_ENTRY
 {
 	uint8_t  playerId;
-	uint8_t  flags;		/* MP_CARSTATE_HAS_BODY */
+	uint8_t  flags;		/* MP_CARSTATE_HAS_BODY | MP_CARSTATE_SIREN */
 	uint8_t  palette;	/* owner's car colour (cp->ap.palette) -- owner-authoritative */
 	uint8_t  model;		/* the VEHICLE the owner is driving (cp->ap.model);
 				 * MP_CARSTATE_NO_CAR = on foot, so the peers stop

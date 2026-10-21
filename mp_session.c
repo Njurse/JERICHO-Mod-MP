@@ -7462,6 +7462,14 @@ static void MpSendOwnCarState(void)
 		e.angVel[0] = cp->st.n.angularVelocity[0];
 		e.angVel[1] = cp->st.n.angularVelocity[1];
 		e.angVel[2] = cp->st.n.angularVelocity[2];
+
+		/* Siren / lightbar state (owner-authoritative). Traffic already does this
+		 * via MP_TRAFFIC_SIREN; player cars need the same so a remote copy draws
+		 * the light and plays the sound. The engine only auto-draws for PURSUER_AI
+		 * / roadblock / cutscene, so we must tell the peers explicitly.
+		 * TODO: replace dying<75 with the real player "siren is on" condition. */
+		if (CarHasSiren(cp->ap.model) && cp->ai.p.dying < 75)
+			e.flags |= MP_CARSTATE_SIREN;
 	}
 
 	memcpy(buf, &h, sizeof(h));
@@ -10828,6 +10836,12 @@ static void MpHandleCarState(int connIndex, const unsigned char* p, int len)
 			 * (controlType included, or the spooler parks it). */
 			cp->controlType = CONTROL_TYPE_PLAYER;
 		}
+
+		/* Apply owner's siren state so the remote car lights up. The engine
+		 * only draws the bar for PURSUER_AI / roadblock / cutscene, so we
+		 * force the same call the traffic mirror uses. */
+		if (e.flags & MP_CARSTATE_SIREN)
+			AddCopCarLight(cp);
 
 		pl->onFoot = 0;			/* driving again: the roster may seat them */
 		pl->lastStateFrame = gMp.frame;	/* the fallback gate in MpOnNetInput reads this */
