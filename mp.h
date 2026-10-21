@@ -368,7 +368,9 @@ void MpCarChangeWaitForget(void);	/* drop a pending "waiting for a spare slot" c
 void MpCarChangeWaitTick(void);		/* retry it, once a frame, from the frame hook */
 extern const char* gMpStage;		/* the last stage the frame reached (MP_WATCH) */
 void MpSelfRepairCar(void);		/* pause menu: repair the local player's car */
-int  MpWarpToPlayer(int playerId);	/* pause menu: put our car down near another player's */
+int  MpWarpToPlayer(int playerId);	/* pause menu: warp our car -- or our own
+					 * pedestrian, if we are on foot -- next to
+					 * another player (in a car or on foot) */
 int  MpRespawnOnRoad(void);		/* pause menu: back onto the nearest road, repaired */
 void MpSelfClearFelony(void);		/* pause menu: clear the local player's wanted level */
 

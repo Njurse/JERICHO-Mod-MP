@@ -3081,10 +3081,10 @@ static const JER_PAUSE_MENU mpKickMenu =
 { "Kick player", mpKickItems, MP_MENU_ITEMS(mpKickItems), "mp.kick" };
 
 /* ------------------------------------------------------------------ */
-/* Warp to Player: put this machine's car down near another player's, out of the
- * path they are committed to. The PLACEMENT is mp_session.c's -- it needs
- * InitCarPhysics, MapHeight and the spool call, which all live with the respawn
- * -- so all this file owns is the picker. */
+/* Warp to Player: put this machine's car -- or our own pedestrian when we are on
+ * foot -- down near another player's, out of the path they are committed to. The
+ * PLACEMENT is mp_session.c's -- it needs InitCarPhysics, MapHeight and the spool
+ * call, which all live with the respawn -- so all this file owns is the picker. */
 static int gWarpTarget;		/* which OTHER player the row is pointing at */
 
 static int MpWarpCount(void)

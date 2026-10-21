@@ -8903,9 +8903,13 @@ int MpRespawnAfterDeath(void)
 /* ------------------------------------------------------------------ */
 /* WARP TO PLAYER                                                      */
 /*                                                                     */
-/* Put this machine's car down near another player's: close enough to  */
-/* be useful, out of the path they are already committed to, and on    */
-/* ground a car can actually sit on.                                   */
+/* Put this machine's car (or its own on-foot pedestrian) down near      */
+/* another player's: close enough to be useful, out of the path they are  */
+/* already committed to, and on ground it can actually stand on.          */
+/*                                                                        */
+/* On foot the same search runs and the local player's own pedestrian is  */
+/* moved. The TARGET may be on foot as well: their pose arrives in        */
+/* MP_TAG_PED, so nobody needs a car to be warped to.                     */
 /*                                                                     */
 /* The spot is CHOSEN, not guessed. A fixed ring of candidate offsets  */
 /* around the target is walked in order and the first that is clear, on */
@@ -9728,12 +9732,58 @@ static const int kWarpAcross[] = { 600, -600, 900, -900, 0, 0, 900, -900 };
  * is stale (they got back in, or left). */
 #define MP_WARP_PED_FRESH_MS	5000
 
+/* Put OUR on-foot pedestrian down on the chosen spot.
+ *
+ * The engine owns the y on foot: AnimatePed rewrites position.vy from MapHeight
+ * every frame (standing height -130 for Tanner), so it is set the same way here
+ * rather than left at whatever the last frame's value was. player[0].pos is what
+ * the camera and the streamer read, and AnimatePed would only refresh it on the
+ * next sim frame -- too late for a camera that is still over the old place. */
+static int MpPlaceOwnPedAt(LPPEDESTRIAN ped, int x, int z, int dir)
+{
+	VECTOR gp;
+	int ground;
+
+	if (ped == NULL)
+		return 0;
+
+	gp.vx = x;
+	gp.vy = 0;
+	gp.vz = z;
+	gp.pad = 0;
+
+	ground = MapHeight(&gp);
+
+	ped->position.vx = x;
+	ped->position.vz = z;
+	ped->position.vy = -130 - ground;	/* pedest.c's Tanner standing height */
+	ped->dir.vy = (short)(dir & 0xFFF);
+	ped->speed = 0;
+
+	player[0].pos[0] = ped->position.vx;
+	player[0].pos[1] = -ped->position.vy;
+	player[0].pos[2] = ped->position.vz;
+	player[0].cameraAngle = (dir & 0xFFF) + 1536;
+
+	InitCamera(&player[0]);
+
+	return 1;
+}
+
+/* Warp to another player, from a car OR on foot. The spot is the same either way:
+ * beside/behind the target, on resident ground. What lands there is whatever this
+ * machine is currently controlling -- the car if we are driving, our own
+ * pedestrian if we are not. Being warped TO works on foot too: the target's pose
+ * comes from the owner's MP_TAG_PED packets (tp->pedX/Y/Z below), so a peer does
+ * not need a car to be reachable. */
 int MpWarpToPlayer(int playerId)
 {
 	MP_PLAYER* me;
 	MP_PLAYER* tp;
-	CAR_DATA* myc;
+	CAR_DATA* myc = NULL;
 	CAR_DATA* tgt;
+	LPPEDESTRIAN myped = NULL;
+	int onFoot;
 	int tx, ty, tz, dir, fx, fz, rx, rz, i;
 	int bestX = 0, bestZ = 0, bestRoad = 0, found = 0;
 
@@ -9743,9 +9793,9 @@ int MpWarpToPlayer(int playerId)
 	me = MpLocalPlayer();
 	tp = MpGetPlayer(playerId);
 
-	if (me == NULL || me->carId < 0 || me->carId >= MAX_CARS)
+	if (me == NULL)
 	{
-		MpNotify("Warp: you are on foot with no car");
+		MpNotify("Warp: no local player");
 		return 0;
 	}
 
@@ -9755,7 +9805,22 @@ int MpWarpToPlayer(int playerId)
 		return 0;
 	}
 
-	myc = &car_data[me->carId];
+	onFoot = (me->carId < 0 || me->carId >= MAX_CARS);
+
+	if (onFoot)
+	{
+		myped = MpLocalPed();
+
+		if (myped == NULL)
+		{
+			MpNotify("Warp: no on-foot character to move");
+			return 0;
+		}
+	}
+	else
+	{
+		myc = &car_data[me->carId];
+	}
 
 	if (tp->carId >= 0 && tp->carId < MAX_CARS)
 	{
@@ -9857,6 +9922,30 @@ int MpWarpToPlayer(int playerId)
 		return 0;
 	}
 
+	if (onFoot)
+	{
+		/* ON FOOT: move our own pedestrian, not a car. The same landing spot,
+		 * the same heading as the target. The pose goes out immediately rather
+		 * than waiting for the next periodic send, so the teleport is one jump on
+		 * every peer instead of a walk between the old and new positions. */
+		if (!MpPlaceOwnPedAt(myped, bestX, bestZ, dir))
+		{
+			MpNotify("Warp: no ground at that spot");
+			return 0;
+		}
+
+		MpSendOwnPedState();
+
+		if (gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx,
+				"[mp] warp (on foot): to player %d (%s) at %d,%d,%d - %d units along "
+				"their axis (negative = behind), %s\n",
+				tp->id, tp->name, myped->position.vx, -myped->position.vy,
+				myped->position.vz,
+				(int)(((long)fx * (bestX - tx) + (long)fz * (bestZ - tz)) >> 12),
+				bestRoad ? "on a road" : "off-road");
+	}
+	else
 	{
 		JER_ARGS_RESET_CAR rc;
 
