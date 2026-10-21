@@ -10704,10 +10704,16 @@ static void MpHandleCarState(int connIndex, const unsigned char* p, int len)
 		}
 
 		/* The host is the hub: pass a CLIENT's car on to the other clients, so every
-		 * machine sees every car (each sends only its own). */
-		if (MpIsHost() && connIndex >= 0)
-			MpHostRelay(connIndex, MP_TAG_CARSTATE, 0, p, len);
+		 * machine sees every car (each sends only its own).
+		 *
+		 * OUTSIDE the row loop, and after every `continue`: a NO_CAR row is the
+		 * transition a late joiner needs most (it releases the parked body and lets
+		 * the stand-in pedestrian spawn), and relaying from inside the loop skipped
+		 * exactly that row. It also relayed a multi-row frame once per row. */
 	}
+
+	if (MpIsHost() && connIndex >= 0)
+		MpHostRelay(connIndex, MP_TAG_CARSTATE, 0, p, len);
 }
 
 /* (the old client-only MpSendCarState is folded into MpSendOwnCarState above:
