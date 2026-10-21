@@ -27,7 +27,7 @@ import sys
 import threading
 import time
 
-PROTO = 14                    # mp_proto.h MP_PROTO_VERSION (14: MP_HIT carries targetFrame + tgtPos) -- the game drops any frame whose envelope version differs
+PROTO = 15                    # mp_proto.h MP_PROTO_VERSION (15: MP_CARSTATE carries leftModel/leftModelCity for a late joiner's parked car) -- the game drops any frame whose envelope version differs
 SDK = 2                       # JERICHO_SDK_VERSION
 MP_VER = "0.1.0"              # JERICHO/MODS/mp/mod.toml version -- always advertised
 NUL = bytes([0])
@@ -113,7 +113,8 @@ SESSION = struct.Struct("<4BIBBH")       # 12 bytes (gamemode,city,tod,weather,s
 INPUT = struct.Struct("<B3B")            # count, reserved[3] = 4 (the frame byte was dropped)
 PLAYER_INPUT = struct.Struct("<BHB")     # playerId, pad, spare = 4
 CARSTATE = struct.Struct("<IB3B")        # frame, count, reserved[3] = 8
-CARSTATE_ENTRY = struct.Struct("<BBBBB4h3ii3i3i")  # pid, flags, palette, model, modelCity, orient[4], x,y,z, heading, angVel[3], vel[3] = 53 (model 0xFF = on foot; modelCity 0xFF = the session city; angVel is int32; carSlot was dropped)
+CARSTATE_ENTRY = struct.Struct("<BBBBB4h3ii3i3iBB")  # pid, flags, palette, model, modelCity, orient[4], x,y,z, heading, angVel[3], vel[3], leftModel, leftModelCity = 55 (model 0xFF = on foot; modelCity 0xFF = the session city; angVel is int32; carSlot was dropped)
+CARSTATE_LEFT_CAR = 4          # mp_proto.h MP_CARSTATE_LEFT_CAR: the NO_CAR row also names the parked car
 
 # The roster (JPRS). The HOST broadcasts it before a launch and refreshes it every
 # couple of seconds; a client learns its PEERS only from it, and adopts their cars
@@ -339,7 +340,7 @@ def mode_host(args):
         elif tag == TAG["carstate"] and args.lockstep and not args.no_carstate:
             frame, count, _a, _b, _c = CARSTATE.unpack_from(payload, 0)
             if count >= 1:
-                pid, _fl, _pal, _md, _mcy, _o0, _o1, _o2, _o3, x, y, z, hd, _a0, _a1, _a2, _v0, _v1, _v2 = CARSTATE_ENTRY.unpack_from(payload, CARSTATE.size)
+                pid, _fl, _pal, _md, _mcy, _o0, _o1, _o2, _o3, x, y, z, hd, _a0, _a1, _a2, _v0, _v1, _v2, _lm, _lmc = CARSTATE_ENTRY.unpack_from(payload, CARSTATE.size)
                 last = (x, y, z, hd)
                 if not hasattr(args, "_fixed") or args._fixed is None:
                     args._fixed = (x + args.peer_dist, y, z)
@@ -351,7 +352,7 @@ def mode_host(args):
                 fx, fy, fz = args._fixed
                 # static "host" car: it must NOT follow the client's car
                 cs = CARSTATE.pack(frame, 1, 0, 0, 0)
-                cs += CARSTATE_ENTRY.pack(0, 1, 0, 0, 0xFF, 0, 0, 0, 0, fx, fy, fz, 0, 0, 0, 0, 0, 0, 0)
+                cs += CARSTATE_ENTRY.pack(0, 1, 0, 0, 0xFF, 0, 0, 0, 0, fx, fy, fz, 0, 0, 0, 0, 0, 0, 0, 0, 0)
                 send_frame(conn, TAG["carstate"], cs)
                 carstate += 1
     print(f"[mock-host] served {seen} input / {carstate} car-state frame(s); last client car {last}")
@@ -488,7 +489,7 @@ def mode_client(args):
                     if t == TAG["carstate"]:
                         _fr, _cnt, _a, _b, _c = CARSTATE.unpack_from(pl, 0)
                         for k in range(_cnt):
-                            pk, _fl, _pal, _md, _mcy, _sl, _o0, _o1, _o2, _o3, xk, yk, zk, hk, _a0, _a1, _a2, _v0, _v1, _v2 = CARSTATE_ENTRY.unpack_from(
+                            pk, _fl, _pal, _md, _mcy, _sl, _o0, _o1, _o2, _o3, xk, yk, zk, hk, _a0, _a1, _a2, _v0, _v1, _v2, _lm, _lmc = CARSTATE_ENTRY.unpack_from(
                                 pl, CARSTATE.size + k * CARSTATE_ENTRY.size)
                             if pk == 0:
                                 hx, hz, hy = xk, zk, yk
@@ -506,7 +507,7 @@ def mode_client(args):
                 for f in range(900):
                     x += dxs
                     cs = CARSTATE.pack(f, 1, 0, 0, 0)
-                    cs += CARSTATE_ENTRY.pack(pid, 1, 0, 0, 0xFF, 0xFF, 0, 0, 0, 0, x, hy, lane, 0, 0, 0, 0, 0, 0, 0)   # pid = us, at the host's ground height
+                    cs += CARSTATE_ENTRY.pack(pid, 1, 0, 0, 0xFF, 0xFF, 0, 0, 0, 0, x, hy, lane, 0, 0, 0, 0, 0, 0, 0, 0, 0)   # pid = us, at the host's ground height
                     send_frame(s, TAG["carstate"], cs)
                     lane += dzs
                     try:

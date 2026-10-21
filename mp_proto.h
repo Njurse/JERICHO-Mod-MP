@@ -38,7 +38,10 @@
 extern "C" {
 #endif
 
-#define MP_PROTO_VERSION	14	/* 14: MP_HIT carries targetFrame + tgtPos, so a contact can be
+#define MP_PROTO_VERSION	15	/* 15: MP_CARSTATE carries leftModel/leftModelCity so a late
+				 *     joiner can materialize the parked car a player left.
+				 *     MP_CARSTATE_ENTRY is 55 bytes (was 53).
+				 * 14: MP_HIT carries targetFrame + tgtPos, so a contact can be
 				 *     validated against the target's own pose timeline instead
 				 *     of being applied on arrival. MP_HIT is 32 bytes (was 16).
 				 * 13: Driver 1 adds IVIEW (9) and TRAIN (10); runtime bank cities move from 9+N to 11+N.
@@ -498,6 +501,13 @@ typedef struct MP_COLOR
  * readers, and an older sender simply never sets it, so no protocol bump. */
 #define MP_CARSTATE_SAME_BODY	2
 
+/* The NO_CAR row also describes the car the owner walked away from: leftModel /
+ * leftModelCity name it, and the row's palette, x/y/z and heading carry its
+ * colour and pose. A machine that was present when the owner got out already has
+ * that body and ignores this; a joiner that arrived afterwards uses it to build
+ * the parked CIV_AI car instead of seeing a player whose car never existed. */
+#define MP_CARSTATE_LEFT_CAR	4
+
 /* entry.model when the owner is on foot: no vehicle to drive, so the peers
  * release the car they were driving for them (it stays in the world). */
 #define MP_CARSTATE_NO_CAR	0xFF
@@ -520,6 +530,8 @@ typedef struct MP_CARSTATE_ENTRY
 				 * reaches +-1.5 MILLION), so a 16-bit field truncated
 				 * every snapshot into a different spin. */
 	int32_t  vel[3];	/* st.n.linearVelocity */
+	uint8_t  leftModel;	/* MP_CARSTATE_LEFT_CAR: the parked car's model NUMBER */
+	uint8_t  leftModelCity;	/* ...and the city that number belongs to */
 } MP_CARSTATE_ENTRY;
 
 /* ------------------------------------------------------------------ */
@@ -709,7 +721,7 @@ static_assert(sizeof(MP_SESSION) == 12, "MP_SESSION layout");
 static_assert(sizeof(MP_PLAYER_INPUT) == 4, "MP_PLAYER_INPUT layout");
 static_assert(sizeof(MP_INPUT) == 4, "MP_INPUT layout");
 static_assert(sizeof(MP_ROSTER_ENTRY) == 29, "MP_ROSTER_ENTRY layout");
-static_assert(sizeof(MP_CARSTATE_ENTRY) == 53, "MP_CARSTATE_ENTRY layout");
+static_assert(sizeof(MP_CARSTATE_ENTRY) == 55, "MP_CARSTATE_ENTRY layout");
 static_assert(sizeof(MP_HIT) == 32, "MP_HIT layout");
 static_assert(sizeof(MP_STATS_ENTRY) == 12, "MP_STATS_ENTRY layout");
 static_assert(sizeof(MP_CARSTATE) == 8, "MP_CARSTATE layout");

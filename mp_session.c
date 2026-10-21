@@ -7355,6 +7355,36 @@ static void MpSendOwnCarState(void)
 		}
 	}
 
+	/* THE CAR THEY WALKED AWAY FROM. A machine that was present for the get-out
+	 * already holds this body and ignores the extra fields; a joiner that arrived
+	 * afterwards has only the pedstate stand-in, so this is the only way it can
+	 * build the parked car. Only advertise a body still parked by us: if someone
+	 * has commandeered it, it is a player car now, not our left car. */
+	if (cp == NULL && me->leftCarSlot1 > 0)
+	{
+		int left = me->leftCarSlot1 - 1;
+
+		if (left >= 0 && left < MAX_CARS &&
+			car_data[left].controlType == CONTROL_TYPE_CIV_AI &&
+			car_data[left].ai.padid == &gMpQuietPad &&
+			car_data[left].ap.carCos != NULL &&
+			car_data[left].ap.model >= 0 && car_data[left].ap.model < MAX_CAR_RESIDENT_MODELS &&
+			residentCarModels[car_data[left].ap.model] >= 0 &&
+			JerCarSlotUsable(car_data[left].ap.model))
+		{
+			int src = GetCarModelSourceCity(car_data[left].ap.model);
+
+			e.flags |= MP_CARSTATE_LEFT_CAR;
+			e.leftModel = (uint8_t)residentCarModels[car_data[left].ap.model];
+			e.leftModelCity = (uint8_t)((src >= 0) ? src : MP_CAR_CITY_SESSION);
+			e.palette = (uint8_t)car_data[left].ap.palette;
+			e.x = car_data[left].hd.where.t[0];
+			e.y = car_data[left].hd.where.t[1];
+			e.z = car_data[left].hd.where.t[2];
+			e.heading = car_data[left].hd.direction;
+		}
+	}
+
 	if (cp != NULL)
 	{
 		/* Say it when this is the body we last got OUT of: the peers released it on
@@ -10347,6 +10377,167 @@ int MpRespawnOnRoad(void)
 	return 1;
 }
 
+/* A player is on foot and this machine has no body for the car they left: build
+ * the parked car from the NO_CAR row. A machine that was present for the get-out
+ * already has it; this exists for a joiner that arrived afterwards, which
+ * otherwise sees only the player's pedstate stand-in.
+ *
+ * The body is built through the same InitPlayer path as every other remote car,
+ * then parked exactly as the owner's own get-out parks it (CIV_AI + STOP/EMPTY +
+ * the quiet pad), so TannerCanEnterCar accepts it and the traffic AI ignores it. */
+static void MpMaterializeLeftCar(MP_PLAYER* pl, const MP_CARSTATE_ENTRY* e)
+{
+	static unsigned long lastLogMs;
+	int slot, k, resident, rot, city;
+
+	if (pl == NULL || e == NULL || !gMp.running)
+		return;
+
+	/* Already have it? A claim that still names a parked body is enough. Do not
+	 * compare the model: a re-model (the owner's Change car) is still the same
+	 * body, and building a second one would be the duplicate this avoids. */
+	if (pl->leftCarSlot1 > 0)
+	{
+		int have = pl->leftCarSlot1 - 1;
+
+		/* Someone is DRIVING it -- the local player may have just commandeered
+		 * it, and MpFollowLocalCar may not have adopted that yet. Drop the stale
+		 * claim and do not build a second body. */
+		if (have >= 0 && have < MAX_CARS && car_data[have].controlType == CONTROL_TYPE_PLAYER)
+		{
+			pl->leftCarSlot1 = 0;
+			pl->leftCarModel = -1;
+			return;
+		}
+
+		/* Someone else drives or claims it now: the claim moved with the body.
+		 * Drop our stale claim and do NOT build a second car -- this is the
+		 * commandeer case, and it is the difference between one body and two. */
+		if (MpCarSlotTakenByOther(pl, have))
+		{
+			pl->leftCarSlot1 = 0;
+			pl->leftCarModel = -1;
+			return;
+		}
+
+		if (have >= 0 && have < MAX_CARS &&
+			car_data[have].controlType == CONTROL_TYPE_CIV_AI &&
+			car_data[have].ai.padid == &gMpQuietPad &&
+			car_data[have].ap.carCos != NULL)
+		{
+			pl->leftCarModel = car_data[have].ap.model;
+			return;
+		}
+
+		if (gMpCtx != NULL && (MpNowMs() - lastLogMs) > 2000)
+		{
+			lastLogMs = MpNowMs();
+			gMpCtx->jer_log(gMpCtx,
+				"[mp] left car: player %d's claim on slot %d is not a parked body "
+				"(type %d pad %d cos %s) - rebuilding\n",
+				pl->id, have,
+				(have >= 0 && have < MAX_CARS) ? (int)car_data[have].controlType : -1,
+				(have >= 0 && have < MAX_CARS && car_data[have].ai.padid == &gMpQuietPad) ? 1 : 0,
+				(have >= 0 && have < MAX_CARS && car_data[have].ap.carCos != NULL) ? "present" : "NULL");
+		}
+
+		pl->leftCarSlot1 = 0;
+		pl->leftCarModel = -1;
+	}
+
+	if (e->leftModel == MP_CARSTATE_NO_CAR)
+		return;
+
+	city = (e->leftModelCity == MP_CAR_CITY_SESSION) ? -1 : (int)e->leftModelCity;
+	resident = MpResidentSlotForCar(city, (int)e->leftModel);
+
+	if (resident < 0 || !JerCarSlotUsable(resident))
+	{
+		if (gMpCtx != NULL && (MpNowMs() - lastLogMs) > 2000)
+		{
+			lastLogMs = MpNowMs();
+			gMpCtx->jer_log(gMpCtx,
+				"[mp] left car: player %d left %s model %d, which this machine does not hold - not built\n",
+				pl->id, MpCarCityName(city), (int)e->leftModel);
+		}
+		return;
+	}
+
+	/* The same slot rule as a join: a free PLAYER row, never slot 0 or a car
+	 * anyone drives or claims. The second pass allows a quiet-pad body only when
+	 * nothing else is free; the ownership test still rejects another row's car. */
+	slot = -1;
+	for (k = 1; k < MAX_CARS && k < MAX_PLAYERS; k++)
+	{
+		if (car_data[k].controlType == CONTROL_TYPE_CIV_AI && car_data[k].ai.padid == &gMpQuietPad)
+			continue;
+		if (MpCarSlotOwnedByPlayer(k, -1))
+			continue;
+		slot = k;
+		break;
+	}
+
+	for (k = 1; slot < 0 && k < MAX_CARS && k < MAX_PLAYERS; k++)
+	{
+		if (car_data[k].controlType == CONTROL_TYPE_CIV_AI && car_data[k].ai.padid == &gMpQuietPad &&
+			!MpCarSlotOwnedByPlayer(k, -1))
+			slot = k;
+	}
+
+	if (slot < 1 || slot >= MAX_CARS || slot >= MAX_PLAYERS)
+	{
+		if (gMpCtx != NULL && (MpNowMs() - lastLogMs) > 2000)
+		{
+			lastLogMs = MpNowMs();
+			gMpCtx->jer_log(gMpCtx,
+				"[mp] left car: no free car slot for player %d's model %d\n",
+				pl->id, (int)e->leftModel);
+		}
+		return;
+	}
+
+	rot = (int)(e->heading & 0xfff);
+	{
+		LONGVECTOR4 start;
+		char padid = (char)-slot;
+		MATRIX m;
+
+		start[0] = e->x;
+		start[1] = e->y;
+		start[2] = e->z;
+		start[3] = 0;
+
+		InitPlayer(&player[slot], &car_data[slot], CONTROL_TYPE_PLAYER, rot, &start,
+			(int)e->leftModel, (int)e->palette, &padid);
+
+		car_data[slot].ap.needsDenting = 1;
+		car_data[slot].hd.where.t[0] = e->x;
+		car_data[slot].hd.where.t[1] = e->y;
+		car_data[slot].hd.where.t[2] = e->z;
+		car_data[slot].hd.direction = rot;
+
+		_RotMatrixY(&m, (short)rot);
+		memcpy(car_data[slot].hd.where.m, m.m, sizeof(car_data[slot].hd.where.m));
+	}
+
+	car_data[slot].controlType = CONTROL_TYPE_CIV_AI;
+	car_data[slot].ai.c.thrustState = CIV_AI_THRUST_STOP;
+	car_data[slot].ai.c.ctrlState = CIV_AI_CTRL_EMPTY;
+	car_data[slot].wheel_angle = 0;
+	car_data[slot].ai.padid = &gMpQuietPad;
+	gMpOurCars[slot] = 1;
+
+	pl->leftCarSlot1 = slot + 1;
+	pl->leftCarModel = car_data[slot].ap.model;
+	pl->carId = -1;
+	pl->onFoot = 1;
+
+	if (gMpCtx != NULL)
+		gMpCtx->jer_log(gMpCtx,
+			"[mp] left car: materialized player %d's parked car (slot %d, model %d) at %d,%d\n",
+			pl->id, slot, (int)e->leftModel, (int)e->x, (int)e->z);
+}
+
 static void MpHandleCarState(int connIndex, const unsigned char* p, int len)
 {
 	MP_CARSTATE h;
@@ -10409,6 +10600,12 @@ static void MpHandleCarState(int connIndex, const unsigned char* p, int len)
 			pl->carId = -1;
 			pl->car = -1;
 			pl->onFoot = 1;
+
+			/* A joiner that arrived after the get-out has no local body for
+			 * the car they left; the NO_CAR row names it. A machine that was
+			 * present still holds the body and the helper is a no-op. */
+			if (e.flags & MP_CARSTATE_LEFT_CAR)
+				MpMaterializeLeftCar(pl, &e);
 
 			continue;
 		}
