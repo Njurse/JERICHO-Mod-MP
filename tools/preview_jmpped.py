@@ -70,8 +70,10 @@ def load_models(path):
     if data[:8] != MAGIC:
         raise SystemExit(f"{path}: not a JMPPED.LEV")
     version, count = struct.unpack_from("<II", data, 8)
-    if version != 3 or count != 14:
-        raise SystemExit(f"{path}: expected version 3 with 14 models, got {version}/{count}")
+    # v4 appends the civilian/cop model after the Jericho/leg/hand blobs; this
+    # preview only poses the first twelve, so both archives are readable.
+    if version not in (3, 4) or count not in (14, 15):
+        raise SystemExit(f"{path}: expected version 3/14 or 4/15, got {version}/{count}")
     off = 16
     models = []
     for _ in range(count):
@@ -125,7 +127,7 @@ def make_world(models):
     parts = []
     for i, m in enumerate(models):
         v = m["verts"]
-        if len(v) == 0:
+        if i not in offsets or len(v) == 0:
             continue
         v = v - (v.min(axis=0) + v.max(axis=0)) * 0.5
         parts.append((v + offsets[i], m["polys"]))
