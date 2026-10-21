@@ -39,6 +39,40 @@ LEG_NAMES = [
     "FOOT_RIGHT",
 ]
 ALL_NAMES = MODEL_NAMES + LEG_NAMES
+POLY_SIZES = [8, 12, 16, 24, 20, 20, 28, 32, 8, 12, 16, 16,
+              0, 0, 0, 0, 12, 12, 12, 16, 20, 20, 24, 24,
+              0, 0, 0, 0, 0, 0, 0, 0, 8, 12, 16, 24,
+              20, 24, 28, 32, 0, 0, 0, 0, 0, 0, 0, 0,
+              12, 12, 12, 16, 20, 20, 24, 24]
+TEXTURED = {4, 5, 6, 7, 20, 21, 22, 23}
+
+
+def first_texture(blob):
+    poly = struct.unpack_from("<i", blob, 20)[0]
+    count = struct.unpack_from("<H", blob, 14)[0]
+    for _ in range(count):
+        kind = blob[poly] & 0x1f
+        if kind in TEXTURED:
+            return blob[poly + 1], blob[poly + 2]
+        step = POLY_SIZES[kind] if kind < len(POLY_SIZES) else 0
+        if step <= 0:
+            break
+        poly += step
+    return 0, 0
+
+
+def retexture(blob, texture_set, texture_id):
+    poly = struct.unpack_from("<i", blob, 20)[0]
+    count = struct.unpack_from("<H", blob, 14)[0]
+    for _ in range(count):
+        kind = blob[poly] & 0x1f
+        if kind in TEXTURED:
+            blob[poly + 1] = texture_set
+            blob[poly + 2] = texture_id
+        step = POLY_SIZES[kind] if kind < len(POLY_SIZES) else 0
+        if step <= 0:
+            break
+        poly += step
 PAGE_SETS = (23, 25)
 SECTOR = 2048
 
@@ -117,6 +151,11 @@ def main():
             local = source_indices.index(instance)
             struct.pack_into("<h", blob, 4, local)
             print("  %s instance -> local %d" % (ALL_NAMES[i], local))
+
+    suit_set, suit_id = first_texture(blobs[0])
+    print("suit texture: set %d id %d" % (suit_set, suit_id))
+    for blob in blobs[6:]:
+        retexture(blob, suit_set, suit_id)
 
     spool = find_lump(data2[8:], 26)
     if spool is None:
