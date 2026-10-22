@@ -195,7 +195,7 @@ flushed as the socket accepts them (§10, trap 2).
 | `JPIN` | C→H, H→all | INPUT: this frame's pad set |
 | `JPCS` | each→H, H→all | CARSTATE: the sender's own car, adopted verbatim by everyone else |
 | `JPPN` / `JPPO` | both | PING / PONG (the PONG echoes the tick, so the host can compute RTT) |
-| `JPCH` | both | addon channel payload (the `jer_net.h` bridge) |
+| `JPCH` | both | addon channel payload (the `jer_net.h` bridge). The header carries `fromPlayer`, and a relay STAMPS it from the connection that sent the frame: a client has one link (to the host/server), so that header is the only record of the original sender. Delivering it as 0 made every relayed module message look like the host's. |
 | `JPLV` | both | LEAVE |
 | `JPKK` | host -> client | KICK — the host removes a player. The kicked client prints "kicked by the host", then takes the same clean-leave path a deliberate quit uses (`MpLeaveSession`), so the roster row and the car leave every machine identically. Host-only (`MpKickPlayer`); a non-zero player id only. |
 | `JPCX` | both | chat line (T to open, Enter to send, Esc to cancel; drawn in the status console — the speaker's name in their own colour, or cream when custom colour is off, and the message in a flat 240,240,240) |

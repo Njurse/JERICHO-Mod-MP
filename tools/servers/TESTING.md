@@ -67,6 +67,38 @@ python JERICHO/MODS/mp/tools/servers/rigs/test_e2e.py
 
 All three are in CI's **Checks** job and need no game assets.
 
+## Car sync through the dedicated server
+
+The dedi has **no game host**: every client is `MP_ROLE_CLIENT`, `CHK_NET_SET` /
+`CHK_NET_CARS` are never published, and the only car identity is each player's own
+`CHK_NET_PICK` advert relayed over `JPCH`. That makes the sender id in the channel header
+load-bearing, and it is now tested:
+
+```sh
+# two seats, every car cycled, per-seat assertions
+python JERICHO/MODS/mp/tools/servers/rigs/local_stack.py \
+    --clients 2 --carsync --seconds 75 --city 0 --no-master --keep
+
+# one seat picks a guest car, the other changes to another guest car
+python .../local_stack.py --clients 2 --seconds 75 --keep \
+    --seat-env c1=CHK_FORCE_CAR=3 --seat-env c2=MP_TEST_PAUSECAR=25,3,1 \
+    --require "draws exactly that" --forbid "is not loaded here"
+```
+
+`--carsync` sets `MP_TEST_CARCYCLE` on every seat and fails on `is not loaded here`,
+`no spare resident slot`, `could not be loaded`, `MISSING`, or a pick attributed to
+player 0 (`[carhacks/net] player 0 drives`). It requires a non-zero `player N drives`
+line and `draws exactly that` on each seat. `--seat-env` / `--require` / `--forbid` are
+the general forms; there is no host seat to scope to, so a bare pattern means "any seat".
+
+**Relay rule.** `MP_CHANNEL` is `[name][len][frame][reliable][fromPlayer][reserved2]`.
+The sender fills `fromPlayer`; a relay must replace it with the player id of the
+connection that sent the frame. A client receives every peer's frame over its one link
+to the host/server, so the connection cannot identify the original sender. Before this
+was fixed, `MpHandleChannel` passed `peer = 0` on every client and carhacks discarded the
+advert (`peer < 1`). `dediserver/dedi/relay.py` and the in-game host both stamp it now;
+`python .../dediserver/test_console.py` asserts a spoofed header is corrected.
+
 ## Findings
 
 ### F1 — a real client's level ends by itself on a full city (intermittent)
