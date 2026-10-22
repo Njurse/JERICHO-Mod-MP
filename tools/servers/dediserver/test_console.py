@@ -255,11 +255,23 @@ def main():
     check("the stats carry the measured ping", rows[5][2] == rtt, repr(rows[5]))
     check("a short colour frame is dropped", relay.color(server, pairs[4][0], 4, m.COLOR.pack(3)) == 0)
 
-    # -- CHANNEL: header + declared payload, to everyone (the sender too)
+    # -- CHANNEL: header + declared payload, to everyone (the sender too), with the
+    # sender STAMPED from the connection -- a relayed client's frame otherwise arrives
+    # looking like player 0's on every other client (the dedicated-server car bug).
     ch = m.CHANNEL.pack(b"jerai", 3, 7, 1, 4, 0, 0) + b"abc"
     check("a channel frame is relayed", relay.channel(server, pairs[4][0], 4, ch + b"junk"))
     check("all three got it, trailing bytes cut",
           all(got(p, 1.0) == (m.TAG["channel"], ch) for p in (4, 5, 6)))
+    spoof = m.CHANNEL.pack(b"jerai", 3, 7, 1, 6, 0, 0) + b"abc"
+    check("a channel frame claiming another sender is relayed",
+          relay.channel(server, pairs[4][0], 4, spoof))
+    stamped = []
+    for p in (4, 5, 6):
+        frame = got(p, 1.0)
+        stamped.append(frame is not None and frame[0] == m.TAG["channel"] and
+                       frame[1][m.CHANNEL_FROM_OFFSET] == 4 and
+                       frame[1][m.CHANNEL.size:] == b"abc")
+    check("the relay stamps the connection's player id, not the claim", all(stamped))
     check("a channel frame shorter than its len is dropped",
           not relay.channel(server, pairs[4][0], 4, ch[:-1]))
 

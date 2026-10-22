@@ -111,6 +111,10 @@ WELCOME = struct.Struct("<12BIBB")      # 18 bytes: 12xu8, u32 seed, u8 hostCar,
 REJECT = struct.Struct("<4B64s")         # 68 bytes
 BEACON = struct.Struct("<IHH32s6BHH")    # 50 bytes; the last u16 is `rules` (mp_proto.h renamed MP_BEACON's `spare` to it -- same offset, same size, so the wire is unchanged)
 CHANNEL = struct.Struct("<16sHIBB2B")    # 26 bytes
+# Byte offset of MP_CHANNEL.fromPlayer. A relay must stamp this with the sender's real
+# player id: once the frame leaves the sender, the header is the only record of who it
+# was, and a client has one link (to the host/server) that says nothing about it.
+CHANNEL_FROM_OFFSET = struct.calcsize("<16sHIB")  # 23 (name + len + frame + reliable)
 CHAT = struct.Struct("<B3B96s")          # 100 bytes: playerId, reserved[3], text[96]
 KICK_FLAG_REJOIN = 0x01                  # KICK reserved[0]: the server is changing city, rejoin shortly
 KICK_TEXT_LEN = 64                       # optional KICK tail: NUL-terminated text shown to the player

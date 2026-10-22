@@ -93,6 +93,9 @@ extern "C" {
 					 * JER_ERROR_WRAP (jer_system.c). */
 #define MP_NOTIFY_MS		6000	/* how long a line stays on screen (ms) */
 #define MP_CHANNEL_NAME_MAX	16
+/* The most payload a channel frame may carry. Also the bound MpBridgeAccept uses, so a
+ * receiver can build a relay copy of the header + payload on the stack. */
+#define MP_CHANNEL_MAX_PAYLOAD	1024
 
 /* ------------------------------------------------------------------ */
 /* Tags                                                                */

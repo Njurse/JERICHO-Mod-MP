@@ -3151,9 +3151,23 @@ static void MpHandleChannel(int connIndex, const unsigned char* p, int len)
 	if (len < (int)(sizeof(MP_CHANNEL) + (size_t)h.len))
 		return;
 
-	peer = MpIsHost() ? MpConnPlayerId(connIndex) : 0;
-	if (peer < 0)
-		peer = 0;
+	/* WHO SENT IT. On the host the connection is the authority: a client cannot claim
+	 * another player's id. On a CLIENT every inbound channel frame arrived over the
+	 * one link to the host/server, so the connection says nothing about the original
+	 * sender - the relayed header's fromPlayer is the only copy, and dropping it made
+	 * every peer's addon message look like player 0's. Carhacks then rejected its own
+	 * peers' car picks (peer < 1) on every dedicated-server client. */
+	peer = MpIsHost() ? MpConnPlayerId(connIndex) : (int)h.fromPlayer;
+
+	if (peer < 0 || peer >= MP_MAX_PLAYERS)
+	{
+		if (gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx,
+				"[mp] channel: dropped '%s' (%d bytes) with invalid sender id %d\n",
+				h.name, (int)h.len, peer);
+
+		return;
+	}
 
 	/* A peer picks BOTH the channel name and the payload, so the bridge vets them
 	 * before anything is relayed or delivered: a name this machine never
@@ -3172,9 +3186,25 @@ static void MpHandleChannel(int connIndex, const unsigned char* p, int len)
 	}
 
 	if (MpIsHost())
-		/* relay exactly the message -- not whatever the sender appended after it */
-		MpHostBroadcast(MP_TAG_CHANNEL, h.reliable ? MP_FLAG_RELIABLE : 0, p,
-			(int)(sizeof(MP_CHANNEL) + (size_t)h.len));
+	{
+		/* relay exactly the message -- not whatever the sender appended after it --
+		 * and STAMP the sender the connection proved. A relayed frame is re-received
+		 * by clients through the host, where fromPlayer is the only record of who
+		 * sent it; trusting the sender's own byte there would also let one client
+		 * impersonate another in the addon bridge. */
+		unsigned char relay[sizeof(MP_CHANNEL) + MP_CHANNEL_MAX_PAYLOAD];
+		MP_CHANNEL out = h;
+		int total = (int)(sizeof(MP_CHANNEL) + (size_t)h.len);
+
+		out.fromPlayer = (uint8_t)peer;
+
+		memcpy(relay, &out, sizeof(out));
+
+		if (h.len > 0)
+			memcpy(relay + sizeof(out), p + sizeof(MP_CHANNEL), (size_t)h.len);
+
+		MpHostBroadcast(MP_TAG_CHANNEL, h.reliable ? MP_FLAG_RELIABLE : 0, relay, total);
+	}
 
 	MpBridgeDeliver(h.name, peer, p + sizeof(MP_CHANNEL), (int)h.len);
 }

@@ -16,7 +16,8 @@
 #include <stdio.h>
 
 #define MP_MAX_CHANNELS		16
-#define MP_CHANNEL_MAX_PAYLOAD	1024
+/* MP_CHANNEL_MAX_PAYLOAD lives in mp_proto.h: the relay needs the same bound to copy a
+ * frame and stamp its sender, and a second definition here would be the wrong one. */
 
 typedef struct MP_CHANNEL_REG
 {
