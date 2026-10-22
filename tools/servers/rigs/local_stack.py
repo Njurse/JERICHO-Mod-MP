@@ -429,14 +429,16 @@ def main(argv=None):
         # CHK_FORCE_CAR in --seat-env still wins.
         seat_env.setdefault("all", {}).setdefault("MP_TEST_CARCYCLE", "1200")
         forbids += [
-            r"is not loaded here",
+            r"theirs is not loaded here",
             r"no spare resident slot",
             r"could not be loaded",
+            r"never built it",
             r"MISSING",
             r"\[carhacks/net\] player 0 drives",   # the lost-sender symptom
         ]
         if args.clients >= 2:
-            requires += [r"player [1-9]\d* drives", r"draws exactly that"]
+            for n in range(1, args.clients + 1):
+                requires += [f"c{n}=player [1-9]\\d* drives", f"c{n}=draws exactly that"]
 
     for seat in seat_env:
         if seat != "all" and seat not in {f"c{n + 1}" for n in range(args.clients)}:
