@@ -407,11 +407,12 @@ def mode_client(args):
 
     # The mp mod is ALWAYS advertised: it *is* the multiplayer system and the
     # game side always has it enabled (JERICHO lists every enabled module in
-    # its HELLO). --mods adds a SECOND entry so a deliberate mismatch can still
-    # be exercised; it never removes mp.
+    # its HELLO). --mods adds the extra entries a server may require -- the
+    # dedicated example asks for the core suite, so a normal e2e join declares it.
     mods = [("mp", MP_VER)]
-    if args.mods not in ("empty", "mp"):
-        mods.append((args.mods, "1.0.0"))
+    for extra in args.mods:
+        if extra not in ("empty", "mp"):
+            mods.append((extra, "1.0.0"))
     hello = build_hello(args.name, mods, args.build)
 
     if args.proto is not None:
@@ -626,7 +627,9 @@ def main():
     c.add_argument("--chat", default="", help="after WELCOME, send one MP_CHAT line")
     c.add_argument("--port", type=int, default=1318)
     c.add_argument("--timeout", type=float, default=10.0)
-    c.add_argument("--mods", default="empty", help="extra mod id to declare; 'mp' is ALWAYS included")
+    c.add_argument("--mods", action="append", default=[],
+                   help="extra mod id to declare; 'mp' is ALWAYS included. Repeat for more "
+                        "than one (the dedi's core suite, for example).")
     c.add_argument("--build", type=lambda v: int(v, 0), default=0x74cc,
                    help="game-build hash to send (default = current build; pass 0 to force a mismatch)")
     c.add_argument("--channel", default=None, help="after WELCOME, send an MP_CHANNEL payload on this channel name")
