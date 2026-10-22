@@ -243,6 +243,10 @@ MP_PLAYER* MpGetPlayerByCar(int carId);	/* NULL when carId is not a player */
  * car 1) because its real model is not loaded yet? Read by the draw-colour hook. */
 int MpCarIsStandIn(int carSlot);
 
+/* Is the stand-in body the placeholder car (a checker body) rather than the
+ * host-car-1 grey fallback? The draw-colour hook greys only the fallback. */
+int MpStandInIsPlaceholder(void);
+
 /* SP / pre-session readiness stand-in: put the local car on the host city's car 1 in
  * solid grey while its imported resident slot is not drawable, and put it back when it
  * is. In a running session the reload failsafe owns the same job; this covers the

@@ -7845,20 +7845,43 @@ static int MpHostCarOneSlot(void)
 	return -1;
 }
 
-/* Put the host city's car 1 under a car object that has no mesh, and mark it so
- * the draw-colour hook paints the body solid grey. `fresh` says the flag was not
- * already set, i.e. this is the transition to log. */
+/* Ask the car mods for a resident slot holding the stand-in body (the placeholder
+ * car). -1 = none (no bank, or no spare slot), and mp falls back to host car 1. */
+int MpCarQueryStandIn(void)
+{
+	JER_CARQ_STANDIN_ARGS a;
+
+	memset(&a, 0, sizeof(a));
+	a.slot = -1;
+	jer_fire(JER_CARQ_STANDIN, &a);
+	return a.slot;
+}
+
+static int sMpStandInModel = -1;	/* the placeholder's resident slot, -1 = host car 1 */
+
+int MpStandInIsPlaceholder(void)
+{
+	return sMpStandInModel >= 0;
+}
+
+/* Put a stand-in body under a car object that has no mesh: the placeholder when
+ * the car mods can place it, else the host city's car 1. The grey draw-colour
+ * hook only paints the car-1 fallback - the placeholder is already distinct.
+ * `fresh` says the flag was not already set, i.e. this is the transition to log. */
 static int MpCarStandIn(int carSlot)
 {
 	extern u_char defaultPlayerPalette;
 	CAR_DATA* cp;
 	int hostSlot;
 	int fresh;
+	int standIn;
 
 	if (carSlot < 0 || carSlot >= MAX_CARS)
 		return 0;
 
-	hostSlot = MpHostCarOneSlot();
+	standIn = MpCarQueryStandIn();
+	hostSlot = (standIn >= 0) ? standIn : MpHostCarOneSlot();
+	sMpStandInModel = standIn;
 
 	if (hostSlot < 0)
 		return 0;

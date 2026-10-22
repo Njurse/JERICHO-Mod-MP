@@ -1829,6 +1829,11 @@ static int MpOnCarDrawColor(void* userdata, void* args)
 
 	if (cp != NULL && MpCarIsStandIn(cp->id))
 	{
+		/* The placeholder body already reads as a stand-in; only the host-car-1
+		 * fallback is painted grey. */
+		if (MpStandInIsPlaceholder())
+			return JER_RESULT_CONTINUE;
+
 		a->flatBlack = 0;
 		a->tintR = a->tintG = a->tintB = 128;	/* solid grey */
 	}
