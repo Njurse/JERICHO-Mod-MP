@@ -5,5 +5,6 @@ version = "0.15.3"
 interface = 2
 author = "JERICHO"
 description = "Online and LAN multiplayer for up to 16 players: discovery-server browser plus LAN discovery, dedicated server support, owner-authoritative car sync (each machine drives its own car and broadcasts its state; peers adopt it verbatim), in-match chat, a host-maintained roster, and a generic JERICHO addon net bridge. Minor version tracks MP_PROTO_VERSION (15)."
+# core multiplayer suite: mandatory, first in the load order (jer_manager.c)
 dependencies = []
 default-enabled = true

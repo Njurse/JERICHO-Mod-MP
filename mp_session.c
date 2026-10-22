@@ -2987,6 +2987,23 @@ static void MpHandleWelcome(const unsigned char* p, int len)
 	gMp.weather = w.weather;
 	gMp.seed = w.seed;
 
+	/* THE JOIN IS WHERE THE CORE ORDER IS APPLIED. A client's own modlist may put
+	 * optional modules first (or have a core one off); a session needs mp, carhacks
+	 * and d1cars first, in that order. Normalise the file now - the modules already
+	 * loaded cannot be reordered in this process, so the next boot is what uses it,
+	 * and that is said plainly rather than implied. */
+	{
+		int moved = jer_manager_normalize_core(jer_root_dir());
+
+		if (gMpCtx != NULL)
+		{
+			if (moved > 0)
+				gMpCtx->jer_log(gMpCtx, "[mp] modlist: core order applied (mp, carhacks, d1cars first) - restart to use it\n");
+			else if (moved < 0)
+				gMpCtx->jer_log(gMpCtx, "[mp] modlist: could not write the core order (read-only install?)\n");
+		}
+	}
+
 	/* Enforce the host's map. Which multiplayer map (arena 0/1), and whether it is
 	 * a multiplayer map at all, are LOCAL boot flags -- -mp and -level set them --
 	 * so two machines could quietly load different maps and then disagree about
