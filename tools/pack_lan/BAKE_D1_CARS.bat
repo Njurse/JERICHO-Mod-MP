@@ -154,16 +154,8 @@ rem registers it automatically from the baked file; this cities.ini row is also
 rem written for older builds and to pin the slot. Add it idempotently if we baked it.
 if "%BETA%"=="1" (
 	echo [5/5] registering Beta Miami with the city registry ...
-	set "REG="
-	if exist "%~dp0d1city_register.py" set "REG=%~dp0d1city_register.py"
-	if not defined REG if exist "%~dp0tools\d1city_register.py" set "REG=%~dp0tools\d1city_register.py"
-	if not defined REG if exist "%~dp0..\..\..\tools\d1city_register.py" set "REG=%~dp0..\..\..\tools\d1city_register.py"
-	if defined REG if exist "%OUT%\BETAMIAMI.LEV" (
-		%PY% "%REG%" --install "%~dp0." || goto :fail
-	) else (
-		echo   ^(no d1city_register.py -- Beta Miami is baked, but add its row to
-		echo    JERICHO\CONFIG\cities.ini by hand to have the game offer it^)
-	)
+	call :register_beta
+	if errorlevel 1 goto :fail
 ) else (
 	echo [5/5] no Euro Demo 43 -- nothing to register for Beta Miami.
 )
@@ -181,6 +173,24 @@ if "%BETA%"=="1" if exist "%OUT%\BETAMIAMI.LEV" (
 	echo   ^(Put the Euro Demo 43's LEVELS and SOUND in EURO43\ and re-run for Beta Miami.^)
 )
 pause
+exit /b 0
+
+rem Called from the [5/5] step, as a LABEL so %REG% is expanded after it is set.
+rem Inside the caller's parenthesised block it was expanded when the block was
+rem parsed, still empty, and Python was handed the install folder as its script.
+:register_beta
+set "REG="
+if exist "%~dp0d1city_register.py" set "REG=%~dp0d1city_register.py"
+if not defined REG if exist "%~dp0tools\d1city_register.py" set "REG=%~dp0tools\d1city_register.py"
+if not defined REG if exist "%~dp0..\..\..\tools\d1city_register.py" set "REG=%~dp0..\..\..\tools\d1city_register.py"
+if not defined REG (
+	echo   ^(no d1city_register.py -- Beta Miami is baked, but add its row to
+	echo    JERICHO\CONFIG\cities.ini by hand to have the game offer it^)
+	exit /b 0
+)
+if not exist "%OUT%\BETAMIAMI.LEV" exit /b 0
+%PY% "%REG%" --install "%~dp0."
+if errorlevel 1 exit /b 1
 exit /b 0
 
 :fail
