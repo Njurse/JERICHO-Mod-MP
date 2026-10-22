@@ -71,7 +71,7 @@ HANDLED = (
     ("gave up", re.compile(r"gave up on a resident slot")),
 )
 
-CHANGE = re.compile(r"\[mp\] change car: we asked for (\w+) model (\d+)")
+CHANGE = re.compile(r"\[mp\] (?:change car: we asked for|test: car cycle: drove) (\w+) model (\d+)")
 STATUS = re.compile(r"car status: driving model (\d+) \(resident (-?\d+), source (\w+)\)")
 PASS = re.compile(r"car cycle PASS (\d+) done")
 STARTED = re.compile(r"car cycle: (\d+) car\(s\), a change every (\d+) ms")
