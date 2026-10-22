@@ -148,9 +148,9 @@ if [ "$BETA" = 1 ]; then
 	fi
 fi
 
-# Beta Miami is a runtime BANK, not one of the seven compile-time rows: the
-# engine only offers it when JERICHO/CONFIG/cities.ini names it. Add that row
-# (idempotently) now that its blob exists.
+# Beta Miami is a runtime BANK, not one of the seven compile-time rows. The engine
+# registers it automatically from the baked file; this cities.ini row is also
+# written for older builds and to pin the slot. Add it idempotently if we baked it.
 if [ "$BETA" = 1 ]; then
 	echo "[5/5] registering Beta Miami with the city registry ..."
 	REG=""
