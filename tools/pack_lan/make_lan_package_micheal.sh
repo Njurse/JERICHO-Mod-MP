@@ -2,7 +2,8 @@
 # Build the Micheal-shaped LAN package from the CURRENT tree.
 #
 # The same shape as tmp/make_lan_zip_micheal.sh beside it: NO DRIVER2\ (he has the
-# game data), his name in mp.ini, PACKAGE_NOTES.txt at the root, and DRIVER\D1CARS\.
+# game data), his name in mp.ini, PACKAGE_NOTES.txt at the root, and the baked
+# Driver 1 car data in JERICHO/MODS/carhacks/D1CARS\ (carhacks owns it).
 # What this one adds on top of that older script:
 #
 #   * the DEV exe staged as JERICHO.exe, not as JERICHO_dev.exe -- the launchers in
@@ -36,7 +37,7 @@ STAGE="${TMPDIR:-/tmp}/micheal_stage_$SHA"
 test -x "$SZ" || { echo "no 7-Zip"; exit 1; }
 test -f "$EXE/JERICHO_dev.exe" || { echo "no dev exe"; exit 1; }
 test -f "$REPOMODS/d1cars/mod.toml" || { echo "no d1cars module in the repo"; exit 1; }
-test -d "$EXE/DRIVER/D1CARS" || { echo "no DRIVER/D1CARS in the dev tree"; exit 1; }
+test -d "$REPOMODS/carhacks/D1CARS" || { echo "no JERICHO/MODS/carhacks/D1CARS in the repo (bake it first)"; exit 1; }
 
 rm -f "$OUT"
 rm -rf "$STAGE"
@@ -48,7 +49,7 @@ cd "$EXE"
 # The exclusions are dev leftovers that must not reach him: .git is the d1cars
 # submodule's gitlink, build.log / *.old / the modlist backup are this machine's
 # own scratch.
-"$SZ" a -tzip -mx=5 -xr'!.git' -xr'!build.log' -xr'!*.old' -xr'!modlist.ini.bak-*' "$OUT" \
+"$SZ" a -tzip -mx=5 -xr'!.git' -xr'!build.log' -xr'!*.old' -xr'!modlist.ini.bak-*' -xr'!D1CARS' "$OUT" \
     SDL2.dll OpenAL32.dll soft_oal.dll config.ini VERSION.txt JERICHO | tail -2
 cd "$STAGE"
 "$SZ" a -tzip -mx=5 "$OUT" JERICHO.exe | tail -2
@@ -64,9 +65,11 @@ rm -rf "$STAGE/JERICHO/MODS/d1cars/obj" "$STAGE/JERICHO/MODS/d1cars/lib" \
 cd "$STAGE"
 "$SZ" a -tzip -mx=5 "$OUT" 'JERICHO/MODS/d1cars' | tail -2
 
-echo "== Driver 1 car data =="
-cd "$EXE"
-"$SZ" a -tzip -mx=5 "$OUT" 'DRIVER\D1CARS' | tail -2
+echo "== Driver 1 car data (carhacks owns the baked LEVs) =="
+mkdir -p "$STAGE/JERICHO/MODS/carhacks"
+cp -r "$REPOMODS/carhacks/D1CARS" "$STAGE/JERICHO/MODS/carhacks/D1CARS"
+cd "$STAGE"
+"$SZ" a -tzip -mx=5 "$OUT" 'JERICHO/MODS/carhacks/D1CARS' | tail -2
 
 echo "== launchers + readmes =="
 cd "$PACK"
@@ -100,6 +103,6 @@ else
     echo "ok: no .git, no build.log, no stale modlist backup"
 fi
 echo "-- the exe that landed, and that d1cars' mod.toml is beside it --"
-"$SZ" l "$OUT" JERICHO.exe 'JERICHO/MODS/d1cars/mod.toml' 'DRIVER/D1CARS/*' | tail -6
+"$SZ" l "$OUT" JERICHO.exe 'JERICHO/MODS/d1cars/mod.toml' 'JERICHO/MODS/carhacks/D1CARS/*' | tail -6
 echo "-- size --"
 ls -la "$OUT"

@@ -13,11 +13,12 @@ rem
 rem DRIVER\D1CARS IS NOT SHIPPED, and that is deliberate: it is baked out of
 rem Driver 1's copyrighted data. What IS shipped is the way to make it -- the
 rem d1cars bake tools and BAKE_D1_CARS.bat / .sh at the package root, which reads the
-rem player's OWN Driver 1 data from DRIVER\ and writes DRIVER\D1CARS\. The d1cars
+rem player's OWN Driver 1 data from DRIVER\ and writes it into
+rem JERICHO\MODS\carhacks\D1CARS\ (carhacks owns the baked car data). The d1cars
 rem MODULE is linked into the exe (JERICHO_RELEASE_MODS), so nothing else is
-rem missing; carhacks offers a D1 city only once its DRIVER\D1CARS\<CITY>.LEV is
-rem on disk (chkCityAssetsPresent), so before the bake the seven cities simply are
-rem not offered - the feature degrades to absent rather than to broken.
+rem missing; carhacks offers a D1 city only once its blob is on disk
+rem (chkCityAssetsPresent), so before the bake the cities simply are not offered
+rem - the feature degrades to absent rather than to broken.
 rem
 rem The tools are copied out of the REPO below because the dev mirror EXCLUDES
 rem d1cars (premake JER_MIRROR_EXCLUDE), so bin\Release never gets them.
@@ -50,9 +51,10 @@ if exist "%ROOT%\JERICHO\MODS\d1cars\tools" (
 
 pushd "%EXEDIR%" || exit /b 1
 rem -xr! excludes are the "never ship car art or game data" rule: JERICHO\ is the
-rem mod mirror and can never carry a car-data bank (BC*.LEV/.LCF, BetterCars) or a
-rem *.sparse.bak a local bankfill left behind; DRIVER2\ is the player's own data.
-"%SEVENZ%" a -t7z -mx=5 "-xr!FMV" "-xr!BetterCars" "-xr!BC*.LEV" "-xr!BC*.LCF" "-xr!*.sparse.bak" "%OUT%" ^
+rem mod mirror and can never carry a car-data bank (BC*.LEV/.LCF, BetterCars), a
+rem *.sparse.bak a local bankfill left behind, or carhacks' baked D1CARS blobs;
+rem DRIVER2\ is the player's own data.
+"%SEVENZ%" a -t7z -mx=5 "-xr!FMV" "-xr!BetterCars" "-xr!BC*.LEV" "-xr!BC*.LCF" "-xr!*.sparse.bak" "-xr!D1CARS" "%OUT%" ^
     JERICHO.exe SDL2.dll OpenAL32.dll soft_oal.dll config.ini ^
     VERSION.txt JERICHO
 popd

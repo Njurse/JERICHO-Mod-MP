@@ -94,8 +94,9 @@ WHAT IS IN THE PACKAGE
   JERICHO.exe + DLLs   the game (this build)
   DRIVER2\                 the Driver 2 data, minus the 1.4 GB of FMV
                            (both launchers pass -nofmv)
-  (no DRIVER\D1CARS\)      The Driver 1 car content is NOT in this package, so the
-                           seven Driver 1 cities cannot be selected here. It ships
+  (no carhacks\D1CARS\)    The baked Driver 1 car content is NOT in this package (it
+                           lives under JERICHO\MODS\carhacks\D1CARS), so the Driver 1
+                           cities cannot be selected here. It ships
                            SEPARATELY, as its own release -- never inside this one.
   JERICHO\                 the loader, the four pre-included mods and their
                            config (modlist.ini is carhacks = 1, crumple = 1,

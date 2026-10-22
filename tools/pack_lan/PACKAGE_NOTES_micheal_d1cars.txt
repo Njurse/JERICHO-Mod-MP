@@ -24,7 +24,7 @@ trying.
    built on keeps its own name -- that file was not touched.
 
 3. THE DRIVER 1 CITIES ARE IN THIS COPY.
-   DRIVER\D1CARS\ -- our baked Driver 1 car content, 1.8 MB -- is included, and so
+   JERICHO\MODS\carhacks\D1CARS\ -- our baked Driver 1 car content, 1.8 MB -- is included, and so
    is the driver-1 module folder (JERICHO\MODS\d1cars\). That is what can make the
    five Driver 1 cities (MIAMI, FRISCO, LA, NEWYORK, NEWCASTLE) selectable, and
    nothing is missing from your side this time.
