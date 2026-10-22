@@ -99,6 +99,13 @@ was fixed, `MpHandleChannel` passed `peer = 0` on every client and carhacks disc
 advert (`peer < 1`). `dediserver/dedi/relay.py` and the in-game host both stamp it now;
 `python .../dediserver/test_console.py` asserts a spoofed header is corrected.
 
+**Measured 2026-10-22** (`--clients 2 --carsync --seconds 75 --city 0`, `Release_dev`,
+carhacks cycling every 1.2 s): both seats PASS; 55 and 57 `draws exactly that` lines,
+every `player N drives` line carried the real peer id (no player 0), 0
+`no spare resident slot`, 0 `could not be loaded`, 0 `MISSING`, 0 crash dumps. The
+remaining handover line is the new "loaded in slot N - this body is still adopting it",
+not a failed load.
+
 ## Findings
 
 ### F1 — a real client's level ends by itself on a full city (intermittent)
