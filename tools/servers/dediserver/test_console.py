@@ -193,6 +193,26 @@ def main():
     check("the roster lists the picked car as ready",
           picked.get(6) == (9, 1, m.ROSTER_FLAG_CAR_READY) and picked.get(4) == (0xFF, 0xFF, 0), repr(picked))
     check("a short car pick is ignored", not server.note_car_pick(pairs[6][0], b"\x01"))
+    # -- FOREIGN-CITY PICK: a bank / Driver 1 source city (BETAMIAMI = 11) must keep its
+    # city in the roster, not collapse to the session city (0xFF) -- that collapse is what
+    # "foreign cities don't sync on a dedicated server" reduced to.
+    server.note_car_pick(pairs[6][0], m.CAR_PICK.pack(9, 11))
+    rows = server.roster_bytes()
+    picked = {}
+    for i in range(m.ROSTER.unpack_from(rows, 0)[0]):
+        e = m.ROSTER_ENTRY.unpack_from(rows, m.ROSTER.size + i * m.ROSTER_ENTRY.size)
+        picked[e[0]] = (e[2], e[3], e[4])
+    check("a foreign-city pick keeps its city (BETAMIAMI = 11)",
+          picked.get(6) == (9, 11, m.ROSTER_FLAG_CAR_READY), repr(picked))
+    # -- a session pick spells "the level's own city" as 0xFF and must stay 0xFF
+    server.note_car_pick(pairs[6][0], m.CAR_PICK.pack(9, 0xFF))
+    rows = server.roster_bytes()
+    picked = {}
+    for i in range(m.ROSTER.unpack_from(rows, 0)[0]):
+        e = m.ROSTER_ENTRY.unpack_from(rows, m.ROSTER.size + i * m.ROSTER_ENTRY.size)
+        picked[e[0]] = (e[2], e[3], e[4])
+    check("a session-city pick (0xFF) stays the session city",
+          picked.get(6) == (9, 0xFF, m.ROSTER_FLAG_CAR_READY), repr(picked))
     # -- PALETTE: a pick that carries it (reserved[0], flagged by reserved[1]) is in the roster
     server.note_car_pick(pairs[6][0], bytes([9, 1, 4, 1]))
     rows = server.roster_bytes()
@@ -207,6 +227,20 @@ def main():
          for i in range(m.ROSTER.unpack_from(rows, 0)[0])]
     check("an unflagged palette byte is ignored (old clients)",
           [r[6] for r in e if r[0] == 6] == [4], repr(e))
+    # -- HEARTBEAT CORRECTION: a mid-session swap arrives as the owner's carstate, not
+    # a pick. The roster the 2s heartbeat re-sends must carry the carstate's (model,
+    # city), overriding a stale pick, so a peer that never rendered the old car (too far
+    # away) builds the correct one from the corrected roster.
+    server.note_car_pick(pairs[6][0], m.CAR_PICK.pack(9, 1))          # stale: session city 1
+    server.cars[6] = m.CARSTATE_ENTRY.pack(6, 1, 0, 9, 11,            # swapped to BETAMIAMI (11)
+                                           0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+    rows = server.roster_bytes()
+    picked = {}
+    for i in range(m.ROSTER.unpack_from(rows, 0)[0]):
+        e = m.ROSTER_ENTRY.unpack_from(rows, m.ROSTER.size + i * m.ROSTER_ENTRY.size)
+        picked[e[0]] = (e[2], e[3], e[4])
+    check("the heartbeat roster corrects a stale pick from the carstate (BETAMIAMI = 11)",
+          picked.get(6) == (9, 11, m.ROSTER_FLAG_CAR_READY), repr(picked))
     # -- LINK STATS: one row per client, rates from the bytes each way, loss unknown
     body = server.stats_bytes()
     n = m.STATS.unpack_from(body, 0)[0]

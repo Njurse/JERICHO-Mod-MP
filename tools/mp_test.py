@@ -40,6 +40,13 @@ NAME_MAX = 32                 # mp_proto.h MP_NAME_MAX (MP_BEACON.hostName / MP_
 MOD_ID_MAX = 24               # mp_proto.h MP_MOD_ID_MAX (MP_MOD_INFO.id)
 MOD_VER_MAX = 16              # mp_proto.h MP_MOD_VER_MAX (MP_MOD_INFO.version)
 
+# The engine's city ROW capacity (system.h: CITY_D2_COUNT 4 + CITY_D1_COUNT 7 +
+# CITY_CUSTOM_MAX 16). A car pick/roster modelCity is a valid cross-city source
+# for 0..CITY_COUNT-1 (0xFF = MP_CAR_CITY_SESSION, "the session's own city").
+# NOTE: this mirrors system.h, not mp_proto.h, so proto_check.py does NOT verify
+# it -- it is hand-kept beside the C header like the struct formats are.
+CITY_COUNT = 27
+
 # Session rules, packed into ONE byte (mp_proto.h MP_RULES_PACK). The beacon now
 # carries this so a browser can NAME a server's mode without joining it.
 MP_RULE_COPS = 0x1            # 1 = police cars spawn

@@ -155,7 +155,7 @@ typedef struct MP_ROSTER_ENTRY
 	uint8_t  carId;		/* that machine's local CAR_DATA slot, informational */
 	uint8_t  model;		/* car model, 0xFF = on foot */
 	uint8_t  modelCity;	/* city `model` belongs to: MP_CAR_CITY_SESSION = the
-				 * session's city, 0..3 = a cross-city import */
+				 * session's city, 0..CITY_COUNT-1 = a cross-city import */
 	uint8_t  flags;		/* MP_ROSTER_FLAG_* */
 	uint16_t ping;		/* round trip in ms, as the host measured it */
 	uint16_t palette;	/* the player's palette (was named `reserved`; it has only
@@ -522,7 +522,7 @@ typedef struct MP_CARSTATE_ENTRY
 				 * MP_CARSTATE_NO_CAR = on foot, so the peers stop
 				 * driving our old car and leave it where it was */
 	uint8_t  modelCity;	/* city `model` belongs to: MP_CAR_CITY_SESSION = the
-				 * session's city, 0..3 = a cross-city import */
+				 * session's city, 0..CITY_COUNT-1 = a cross-city import */
 	int16_t  orient[4];	/* st.n.orientation */
 	int32_t  x, y, z;	/* world units */
 	int32_t  heading;	/* hd.direction */

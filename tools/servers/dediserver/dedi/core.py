@@ -571,7 +571,7 @@ class Dedicated:
             info = self.clients.get(conn)
             if info is None:
                 return False
-            info["car"] = (model, city if city < 4 else 0xFF)
+            info["car"] = (model, city if city < m.CITY_COUNT else 0xFF)
             if len(payload) >= 4 and payload[3] == 1:
                 info["palette"] = payload[2]           # MP_CAR reserved[0], flagged by [1]
         return True
