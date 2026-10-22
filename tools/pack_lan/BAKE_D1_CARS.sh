@@ -34,6 +34,30 @@ set -eu
 HERE=$(cd -- "$(dirname -- "$0")" && pwd)
 cd "$HERE"
 
+# --from-game: the game started this (it has closed itself) -- reopen it when the
+# bake finishes. A manual run never passes the flag, so it never reopens.
+FROM_GAME=0
+GAME_EXE=""
+if [ "${1:-}" = "--from-game" ]; then FROM_GAME=1; GAME_EXE="${2:-}"; fi
+
+reopen_game() {
+	if [ "$FROM_GAME" != 1 ]; then return 0; fi
+	echo
+	echo "  Reopening JERICHO ..."
+	# Prefer the exe the game passed (works even when this script is not beside it).
+	if [ -n "$GAME_EXE" ] && [ -x "$GAME_EXE" ]; then
+		"$GAME_EXE" >/dev/null 2>&1 &
+		return 0
+	fi
+	for exe in "$HERE/JERICHO.exe" "$HERE/JERICHO_dev.exe"; do
+		if [ -f "$exe" ] && [ -x "$exe" ]; then
+			"$exe" >/dev/null 2>&1 &
+			break
+		fi
+	done
+	return 0
+}
+
 T="$HERE/JERICHO/MODS/d1cars/tools"
 # The dev tree's game folder (src_rebuild/bin/<config>) does not carry the
 # data-only d1cars module, so fall back to the repo's copy three levels up.
@@ -51,6 +75,7 @@ fail() {
 	echo
 	echo "BAKE_D1_CARS: FAILED -- $1"
 	echo "Nothing was changed in a way you cannot re-run."
+	reopen_game
 	exit 1
 }
 
@@ -96,8 +121,9 @@ if [ "$BETA" = 1 ]; then
 fi
 
 # BAKE_VERSION: bump when the bake gains something the game reads. 8 moved the
-# output into carhacks and made the EURO-43 beta read the demo's MIAMI.LEV.
-BAKE_VERSION=8
+# output into carhacks and made the EURO-43 beta read the demo's MIAMI.LEV;
+# 9 retuned the beta engine/idle loop rates, which are stamped into the bank.
+BAKE_VERSION=9
 if [ -d "$OUT" ] && [ "$(cat "$OUT/BAKE_VERSION" 2>/dev/null)" != "$BAKE_VERSION" ]; then
 	echo "Your existing $OUT is from an older bake (no D1 wheels/sounds, pre-Miami wheels, unpacked palette rows, or the old DRIVER/D1CARS location) -- rebuilding it."
 	echo
@@ -179,3 +205,4 @@ else
 	echo "  Start the game and the seven retail Driver 1 cities will be offered."
 	echo "  (Put the Euro Demo 43's LEVELS and SOUND in EURO43/ and re-run for Beta Miami.)"
 fi
+reopen_game

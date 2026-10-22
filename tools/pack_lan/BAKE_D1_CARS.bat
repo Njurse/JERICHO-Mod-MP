@@ -29,6 +29,13 @@ rem ============================================================================
 setlocal
 cd /d "%~dp0"
 
+rem --from-game: the game started this (it has closed itself) -- reopen it when the
+rem bake finishes. A manual run never passes the flag, so it never reopens.
+set "FROM_GAME="
+set "GAME_EXE="
+if /i "%~1"=="--from-game" set "FROM_GAME=1"
+if /i "%~1"=="--from-game" set "GAME_EXE=%~2"
+
 set "T=%~dp0JERICHO\MODS\d1cars\tools"
 rem The dev tree's game folder (src_rebuild\bin\<config>) does not carry the
 rem data-only d1cars module, so fall back to the repo's copy three levels up.
@@ -92,8 +99,9 @@ if exist "EURO43\LEVELS\MIAMI.LEV" (
 if "%BETA%"=="1" set "CITIES=%CITIES%,BETAMIAMI"
 
 rem BAKE_VERSION: bump when the bake gains something the game reads. 8 moved the
-rem output into carhacks and made the EURO-43 beta read the demo's MIAMI.LEV.
-set "BAKE_VERSION=8"
+rem output into carhacks and made the EURO-43 beta read the demo's MIAMI.LEV;
+rem 9 retuned the beta engine/idle loop rates, which are stamped into the bank.
+set "BAKE_VERSION=9"
 set "HAVE_VERSION="
 if exist "%OUT%\BAKE_VERSION" set /p HAVE_VERSION=<"%OUT%\BAKE_VERSION"
 if exist "%OUT%" if not "%HAVE_VERSION%"=="%BAKE_VERSION%" (
@@ -172,6 +180,7 @@ if "%BETA%"=="1" if exist "%OUT%\BETAMIAMI.LEV" (
 	echo   Start the game and the seven retail Driver 1 cities will be offered.
 	echo   ^(Put the Euro Demo 43's LEVELS and SOUND in EURO43\ and re-run for Beta Miami.^)
 )
+if "%FROM_GAME%"=="1" goto :reopen
 pause
 exit /b 0
 
@@ -196,5 +205,23 @@ exit /b 0
 :fail
 echo.
 echo BAKE_D1_CARS: FAILED -- nothing was changed in a way you cannot re-run.
+if "%FROM_GAME%"=="1" goto :reopen
 pause
 exit /b 1
+
+rem Called when the game started this bake: bring the game back up rather than
+rem leave the player on a closed install. The first exe found wins.
+:reopen
+rem Prefer the exe the game passed (works even when this script is not beside it).
+if not "%GAME_EXE%"=="" (
+	if exist "%GAME_EXE%" (
+		start "" "%GAME_EXE%"
+		exit /b 0
+	)
+)
+if exist "%~dp0JERICHO.exe" (
+	start "" "%~dp0JERICHO.exe"
+	exit /b 0
+)
+if exist "%~dp0JERICHO_dev.exe" start "" "%~dp0JERICHO_dev.exe"
+exit /b 0
