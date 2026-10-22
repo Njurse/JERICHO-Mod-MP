@@ -2902,6 +2902,7 @@ void MpSelfRepairCar(void)
 	memset(cp->ap.damage, 0, sizeof(cp->ap.damage));
 	CreateDentableCar(cp);
 	DentCar(cp);
+	CarReapplyHubcapState(cp->id);
 
 	if (gMpCtx != NULL)
 		gMpCtx->jer_log(gMpCtx, "[mp] player option: car repaired (slot %d)\n", me->carId);
@@ -9003,6 +9004,7 @@ int MpSoftRestart(void)
 	cp->totalDamage = 0;
 	memset(cp->ap.damage, 0, sizeof(cp->ap.damage));
 	CreateDentableCar(cp);
+	CarReapplyHubcapState(cp->id);
 	cp->ap.needsDenting = 0;
 
 	{
@@ -9217,6 +9219,7 @@ int MpRespawnAfterDeath(void)
 	cp->totalDamage = 0;
 	memset(cp->ap.damage, 0, sizeof(cp->ap.damage));
 	CreateDentableCar(cp);
+	CarReapplyHubcapState(cp->id);
 	cp->ap.needsDenting = 0;
 
 	/* NOT DYING ANY MORE, and NOT WANTED. Repairing the CAR is not enough: the mission's
@@ -10362,6 +10365,7 @@ int MpRespawnOnRoad(void)
 		cp->totalDamage = 0;
 		memset(cp->ap.damage, 0, sizeof(cp->ap.damage));
 		CreateDentableCar(cp);
+		CarReapplyHubcapState(cp->id);
 		cp->ap.needsDenting = 0;
 
 		/* Respawn implies repair AND a clean slate: drop the wanted level so the
