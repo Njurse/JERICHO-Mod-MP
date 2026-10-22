@@ -23,10 +23,14 @@ setlocal
 cd /d "%~dp0"
 
 set "T=%~dp0JERICHO\MODS\d1cars\tools"
+rem The dev tree's game folder (src_rebuild\bin\<config>) does not carry the
+rem data-only d1cars module, so fall back to the repo's copy three levels up.
+rem A shipped package has the tools beside the script and takes the first path.
+if not exist "%T%\bake.py" if exist "%~dp0..\..\..\JERICHO\MODS\d1cars\tools\bake.py" set "T=%~dp0..\..\..\JERICHO\MODS\d1cars\tools"
 set "LEV=DRIVER\LEVELS"
 set "D2=DRIVER2\LEVELS"
 set "OUT=DRIVER\D1CARS"
-set "CITIES=MIAMI,FRISCO,LA,NEWYORK,NEWCASTLE,IVIEW,TRAIN"
+set "CITIES=MIAMI,FRISCO,LA,NEWYORK,NEWCASTLE,IVIEW,TRAIN,BETAMIAMI"
 
 echo BAKE_D1_CARS: baking Driver 1 car data into %OUT%
 echo.
@@ -68,7 +72,7 @@ set "BAKE_VERSION=7"
 set "HAVE_VERSION="
 if exist "%OUT%\BAKE_VERSION" set /p HAVE_VERSION=<"%OUT%\BAKE_VERSION"
 if exist "%OUT%" if not "%HAVE_VERSION%"=="%BAKE_VERSION%" (
-	echo Your existing %OUT% is from an older bake ^(no D1 wheels/sounds, or pre-Miami wheels^) -- rebuilding it.
+	echo Your existing %OUT% is from an older bake ^(no D1 wheels/sounds, pre-Miami wheels, or unpacked palette rows^) -- rebuilding it.
 	echo.
 )
 
@@ -81,7 +85,7 @@ echo [1/4] reading Driver 1's car shapes ...
 rem One blob per city -- each is a complete small "level" holding that city's cars,
 rem their palette and their texture pages.
 echo [2/4] baking one blob per city ...
-for %%C in (MIAMI FRISCO LA NEWYORK NEWCASTLE IVIEW TRAIN) do (
+for %%C in (MIAMI FRISCO LA NEWYORK NEWCASTLE IVIEW TRAIN BETAMIAMI) do (
 	%PY% "%T%\bake.py" --pool "%T%\out\pool.json" --levels "%LEV%" --city %%C --out "%OUT%" || goto :fail
 )
 
@@ -91,14 +95,23 @@ echo [3/4] writing the car cosmetics ...
 %PY% "%T%\cosmetics1.py" --levels "%LEV%" --donor "%D2%" --cities "%CITIES%" --write "%OUT%" || goto :fail
 
 rem The sounds: Driver 1's engine/idle/horn, from YOUR DRIVER\SOUND\VOICES.BLK,
-rem patched into each freshly baked city.
+rem patched into each freshly baked city. BETAMIAMI uses the Euro-43 beta's own
+rem SOUND.SBK when it is present (pitched-down traffic idle + acceleration loop).
 echo [4/4] adding the car sounds ...
 if exist "DRIVER\SOUND\VOICES.BLK" (
 	for %%C in (MIAMI FRISCO LA NEWYORK NEWCASTLE IVIEW TRAIN) do (
-		%PY% "%T%\add_car_sounds.py" --lev "%OUT%\%%C.LEV" --voices "DRIVER\SOUND\VOICES.BLK" || goto :fail
+		%PY% "%T%\add_car_sounds.py" --lev "%OUT%\%%C.LEV" --voices "DRIVER\SOUND\VOICES.BLK" --city %%C || goto :fail
 	)
 ) else (
 	echo   ^(no DRIVER\SOUND\VOICES.BLK -- Driver 1 cars will use the host city's sounds^)
+)
+
+if exist "EURO43\SOUND\SOUND.SBK" (
+	%PY% "%T%\add_car_sounds.py" --lev "%OUT%\BETAMIAMI.LEV" --voices "EURO43\SOUND\SOUND.SBK" --city BETAMIAMI || goto :fail
+) else if exist "DRIVER\SOUND\VOICES.BLK" (
+	%PY% "%T%\add_car_sounds.py" --lev "%OUT%\BETAMIAMI.LEV" --voices "DRIVER\SOUND\VOICES.BLK" --city BETAMIAMI || goto :fail
+) else (
+	echo   ^(no EURO43\SOUND\SOUND.SBK or DRIVER\SOUND\VOICES.BLK -- BETAMIAMI will use the host city's sounds^)
 )
 
 >"%OUT%\BAKE_VERSION" echo %BAKE_VERSION%

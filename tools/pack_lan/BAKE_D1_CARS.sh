@@ -28,10 +28,16 @@ HERE=$(cd -- "$(dirname -- "$0")" && pwd)
 cd "$HERE"
 
 T="$HERE/JERICHO/MODS/d1cars/tools"
+# The dev tree's game folder (src_rebuild/bin/<config>) does not carry the
+# data-only d1cars module, so fall back to the repo's copy three levels up.
+# A shipped package has the tools beside the script and takes the first path.
+if [ ! -f "$T/bake.py" ] && [ -f "$HERE/../../../JERICHO/MODS/d1cars/tools/bake.py" ]; then
+	T="$HERE/../../../JERICHO/MODS/d1cars/tools"
+fi
 LEV="DRIVER/LEVELS"
 D2="DRIVER2/LEVELS"
 OUT="DRIVER/D1CARS"
-CITIES="MIAMI,FRISCO,LA,NEWYORK,NEWCASTLE,IVIEW,TRAIN"
+CITIES="MIAMI,FRISCO,LA,NEWYORK,NEWCASTLE,IVIEW,TRAIN,BETAMIAMI"
 
 fail() {
 	echo
@@ -66,7 +72,7 @@ fi
 # BAKE_VERSION: bump when the bake gains something the game reads
 BAKE_VERSION=7
 if [ -d "$OUT" ] && [ "$(cat "$OUT/BAKE_VERSION" 2>/dev/null)" != "$BAKE_VERSION" ]; then
-	echo "Your existing $OUT is from an older bake (no D1 wheels/sounds, or pre-Miami wheels) -- rebuilding it."
+	echo "Your existing $OUT is from an older bake (no D1 wheels/sounds, pre-Miami wheels, or unpacked palette rows) -- rebuilding it."
 	echo
 fi
 
@@ -79,7 +85,7 @@ echo "[1/4] reading Driver 1's car shapes ..."
 # One blob per city -- each is a complete small "level" holding that city's
 # cars, their palette and their texture pages.
 echo "[2/4] baking one blob per city ..."
-for C in MIAMI FRISCO LA NEWYORK NEWCASTLE IVIEW TRAIN; do
+for C in MIAMI FRISCO LA NEWYORK NEWCASTLE IVIEW TRAIN BETAMIAMI; do
 	"$PY" "$T/bake.py" --pool "$T/out/pool.json" --levels "$LEV" --city "$C" --out "$OUT" || fail "bake.py $C failed"
 done
 
@@ -89,14 +95,22 @@ echo "[3/4] writing the car cosmetics ..."
 "$PY" "$T/cosmetics1.py" --levels "$LEV" --donor "$D2" --cities "$CITIES" --write "$OUT" || fail "cosmetics1.py failed"
 
 # The sounds: Driver 1's engine/idle/horn, from YOUR DRIVER/SOUND/VOICES.BLK,
-# patched into each freshly baked city.
+# patched into each freshly baked city. BETAMIAMI uses the Euro-43 beta's own
+# SOUND.SBK when it is present (pitched-down traffic idle + acceleration loop).
 echo "[4/4] adding the car sounds ..."
 if [ -f "DRIVER/SOUND/VOICES.BLK" ]; then
 	for C in MIAMI FRISCO LA NEWYORK NEWCASTLE IVIEW TRAIN; do
-		"$PY" "$T/add_car_sounds.py" --lev "$OUT/$C.LEV" --voices "DRIVER/SOUND/VOICES.BLK" || fail "add_car_sounds.py $C failed"
+		"$PY" "$T/add_car_sounds.py" --lev "$OUT/$C.LEV" --voices "DRIVER/SOUND/VOICES.BLK" --city "$C" || fail "add_car_sounds.py $C failed"
 	done
 else
 	echo "  (no DRIVER/SOUND/VOICES.BLK -- Driver 1 cars will use the host city's sounds)"
+fi
+if [ -f "EURO43/SOUND/SOUND.SBK" ]; then
+	"$PY" "$T/add_car_sounds.py" --lev "$OUT/BETAMIAMI.LEV" --voices "EURO43/SOUND/SOUND.SBK" --city BETAMIAMI || fail "add_car_sounds.py BETAMIAMI failed"
+elif [ -f "DRIVER/SOUND/VOICES.BLK" ]; then
+	"$PY" "$T/add_car_sounds.py" --lev "$OUT/BETAMIAMI.LEV" --voices "DRIVER/SOUND/VOICES.BLK" --city BETAMIAMI || fail "add_car_sounds.py BETAMIAMI failed"
+else
+	echo "  (no EURO43/SOUND/SOUND.SBK or DRIVER/SOUND/VOICES.BLK -- BETAMIAMI will use the host city's sounds)"
 fi
 
 echo "$BAKE_VERSION" > "$OUT/BAKE_VERSION"
