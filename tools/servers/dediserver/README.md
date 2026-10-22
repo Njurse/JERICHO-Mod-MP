@@ -246,10 +246,17 @@ same policy the game's own host does:
 | `mod_check` | what it does |
 | --- | --- |
 | `0` (default) | admit anyone. A mismatch is not an error; set the below if it is |
-| `1` | the set of **enabled mod ids** must equal `mods` (versions ignored, because the same mod's version differs between a dev and a release build) |
+| `1` | every id in `core_mods` **must** be enabled; `mods`, when non-empty, is the exact enabled set |
 | `2` | as 1, **and** the versions in `mod_versions` must match |
 
-A server that names no `mods` matches everyone, so leaving the check on is harmless.
+The shipped example sets `mod_check: 1` and
+`core_mods: ["mp", "carhacks", "d1cars"]` — the multiplayer suite every client
+needs. That is the *minimum*: optional modules such as crumple may be enabled
+beside them, and the core suite is ordered first in the client's `modlist.ini`
+(the game rewrites the order on join; see `jer_manager_normalize_core`). Leave
+`mods` empty unless you want to forbid extras as well.
+
+A server that names neither `core_mods` nor `mods` matches everyone.
 A client that does not match is refused with `REJECT: MODS` and the text "mod list
 does not match the server", which the game shows as a toast — and the refusal is
 written so the reason actually arrives (the socket is half-closed before it is

@@ -77,7 +77,8 @@ DEFAULTS = {
     "advertise_host": "",     # public address players reach us on ("" = the address we register from); set this behind NAT
     "advertise_port": 0,      # public port players dial (0 = our session port); set this when the router REMAPS it
     "mod_check": 0,            # 0 = admit anyone, 1 = ids must match, 2 = ids AND versions
-    "mods": [],                # the ids a client must have enabled when mod_check is on
+    "core_mods": [],           # ids every client MUST have enabled (the core suite)
+    "mods": [],                # when non-empty, the exact enabled-id set (no extras)
     "mod_versions": {},        # id -> version, consulted only by mod_check 2
     "master_interval_s": 20.0, # heartbeat cadence; keep well under the master's ttl
     "master_timeout_s": 5.0,
@@ -140,21 +141,30 @@ def parse_manifest(payload):
     return rows
 
 
-def mods_match(declared, required, versions, level):
-    """The mod-check policy, exactly as the real host applies it.
+def mods_match(declared, required, versions, level, core=None):
+    """The mod-check policy, exactly as the real host applies it, plus CORE mods.
 
-    level 0 admits anyone. level 1 compares the SET OF ENABLED IDS (the host ignores
-    versions there, because the same mod's version differs between a dev and a
-    release build). level 2 compares ids AND versions. A server that names no
-    required mods matches everyone, which is what makes leaving the check on
-    harmless.
+    level 0 admits anyone. Above it:
+      * every id in `core` MUST be enabled (the multiplayer suite: mp, carhacks,
+        d1cars). Optional modules are allowed beside them;
+      * if `required` is non-empty, the enabled set must equal it exactly;
+      * level 2 also compares the versions named in `versions`.
+
+    `core` is what makes a dedicated server's preconfiguration meaningful: the
+    core suite is mandatory, and a team can add optional modules (crumple, ...)
+    without having to name every one of them. A server that names neither core
+    nor required modules still matches everyone.
     """
-    if int(level) <= 0 or not required:
+    if int(level) <= 0:
         return True
 
     have = set(mod_id for mod_id, _ver, enabled in declared if enabled)
+    need = set(core or ())
 
-    if have != set(required):
+    if need and not need <= have:
+        return False
+
+    if required and have != set(required):
         return False
 
     if int(level) >= 2:
@@ -723,13 +733,14 @@ class Dedicated:
 
         # -- and the mod list, if this server enforces one
         matched = mods_match(mods, self.cfg["mods"], self.cfg["mod_versions"],
-                             self.cfg["mod_check"])
+                             self.cfg["mod_check"], self.cfg.get("core_mods", []))
 
         if not matched:
             self.log.warning("%s: refused, mod list does not match (declared: %s; "
-                             "required: %s)"
+                             "required core: %s; required exact: %s)"
                              % (who, ", ".join(sorted(x[0] for x in mods if x[2])) or "none",
-                                ", ".join(sorted(self.cfg["mods"]))))
+                                ", ".join(sorted(self.cfg.get("core_mods", []))) or "none",
+                                ", ".join(sorted(self.cfg["mods"])) or "any"))
             self._reject(conn, 3, "mod list does not match the server")
             return
 
