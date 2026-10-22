@@ -233,7 +233,7 @@ def main():
     # away) builds the correct one from the corrected roster.
     server.note_car_pick(pairs[6][0], m.CAR_PICK.pack(9, 1))          # stale: session city 1
     server.cars[6] = m.CARSTATE_ENTRY.pack(6, 1, 0, 9, 11,            # swapped to BETAMIAMI (11)
-                                           0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+                                           0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2)
     rows = server.roster_bytes()
     picked = {}
     for i in range(m.ROSTER.unpack_from(rows, 0)[0]):

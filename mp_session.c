@@ -10,6 +10,7 @@
 #include "jer_pause_menu.h"	/* JER_PAUSE_QUIT_*: the pause menu's codes (mirror MENU_QUIT_*) */
 #include "mp.h"
 #include "jer_carquery.h"	/* the mp <-> carhacks live-car query contract */
+#include "jer_crumple.h"	/* the mp <-> crumple per-car crush multiplier contract */
 
 #include "driver2.h"
 #include "mission.h"
@@ -7382,6 +7383,58 @@ static void MpFailsafeNoteCar(int slot)
 	sMpStandIn = 0;
 }
 
+/* ------------------------------------------------------------------ */
+/* The owner's per-car body-crush multiplier.
+ *
+ * Every machine simulates every player car, so the deformation has to use the
+ * SAME multiplier on all of them or the same crash reads differently on two
+ * screens. The value is per CAR (not per player): the owner's carstate carries
+ * it in half-steps (2 = 1.0x, 20 = 10.0x), and this side hands it to crumple
+ * for the car slot that player is driving. No crumple module = the SET is
+ * unanswered and the car keeps 1.0x, which is the stock look. */
+#define MP_CRUSH_HALF_MIN	2
+#define MP_CRUSH_HALF_MAX	20
+#define MP_CRUSH_HALF_DEFAULT	2	/* 1.0x */
+
+static uint8_t MpCrushHalfFromScale(int scale)
+{
+	int half = (scale + 1024) / 2048;	/* 4096-fixed -> 0.5 steps */
+
+	if (half < MP_CRUSH_HALF_MIN)
+		half = MP_CRUSH_HALF_MIN;
+	else if (half > MP_CRUSH_HALF_MAX)
+		half = MP_CRUSH_HALF_MAX;
+
+	return (uint8_t)half;
+}
+
+static int MpCrushScaleFromHalf(uint8_t half)
+{
+	int h = (int)half;
+
+	if (h < MP_CRUSH_HALF_MIN)
+		h = MP_CRUSH_HALF_MIN;
+	else if (h > MP_CRUSH_HALF_MAX)
+		h = MP_CRUSH_HALF_MAX;
+
+	return h * 2048;	/* back to 4096 fixed point */
+}
+
+/* Tell crumple what an owner says a car's multiplier is (4096 = 1.0x). */
+static void MpSetCarCrushScale(int carId, int scale)
+{
+	JER_CRUMPLE_SCALE_ARGS a;
+
+	if (carId < 0 || carId >= MAX_CARS)
+		return;
+
+	memset(&a, 0, sizeof(a));
+	a.carId = carId;
+	a.scale = scale;
+
+	jer_fire(JER_CRUMPLE_SET_SCALE, &a);
+}
+
 static void MpSendOwnCarState(void)
 {
 	unsigned char buf[sizeof(MP_CARSTATE) + sizeof(MP_CARSTATE_ENTRY)];
@@ -7419,6 +7472,7 @@ static void MpSendOwnCarState(void)
 	memset(&e, 0, sizeof(e));
 	e.playerId = (uint8_t)me->id;
 	e.flags = MP_CARSTATE_HAS_BODY;
+	e.crushScale = MP_CRUSH_HALF_DEFAULT;
 
 	/* NO CAR (on foot): model 0xFF and NO pose. The peer must not adopt the zero
 	 * position -- that would drag the car it was driving to the origin -- it
@@ -7575,6 +7629,22 @@ static void MpSendOwnCarState(void)
 		 * wheel in ap.flags, and the peer's rebuilt body would otherwise keep all
 		 * four. The low nibble is all that is needed (0 = all present). */
 		e.hubcaps = (uint8_t)(cp->ap.flags & 0x0f);
+
+		/* ...and the body-crush multiplier. ASK crumple rather than read it here:
+		 * the value and the pause menu that edits it belong to that module, and a
+		 * session with crumple off simply answers 1.0x. Per CAR: this is the
+		 * multiplier for the car WE are driving, and every peer applies it to the
+		 * car they hold for us. */
+		{
+			JER_CRUMPLE_SCALE_ARGS crush;
+
+			memset(&crush, 0, sizeof(crush));
+			crush.carId = cp->id;
+			crush.scale = 4096;
+			jer_fire(JER_CRUMPLE_GET_SCALE, &crush);
+
+			e.crushScale = MpCrushHalfFromScale(crush.scale);
+		}
 
 		/* Siren / lightbar state (owner-authoritative). Traffic already does this
 		 * via MP_TRAFFIC_SIREN; player cars need the same so a remote copy draws
@@ -7742,6 +7812,11 @@ static void MpReleaseRemoteCar(MP_PLAYER* p)
 
 	if (p == NULL || p->carId < 0 || p->carId >= MAX_CARS)
 		return;
+
+	/* The car stops being driven by its owner here (on foot, or gone): its
+	 * body-crush multiplier goes back to the default, so a body that is later
+	 * reused cannot inherit the previous driver's setting. */
+	MpSetCarCrushScale(p->carId, 4096);
 
 	/* The body stops being ours: its sample timeline must go with it. */
 	MpPlayClear(p->id);
@@ -10998,6 +11073,11 @@ static void MpHandleCarState(int connIndex, const unsigned char* p, int len)
 		 * machine is missing here too. Only write on a change, so the per-frame
 		 * state does not re-apply the palette every tick. */
 		pl->hubcaps = (int)(e.hubcaps & 0x0f);
+
+		/* ...and the owner's body-crush multiplier for THIS car. Every machine
+		 * simulates it, so the value has to be the owner's, not ours; crumple
+		 * applies it to the slot we hold for that player. */
+		MpSetCarCrushScale(pl->carId, MpCrushScaleFromHalf(e.crushScale));
 
 		if ((cp->ap.flags & 0x0f) != pl->hubcaps)
 		{

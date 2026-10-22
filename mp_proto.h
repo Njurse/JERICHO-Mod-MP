@@ -38,7 +38,11 @@
 extern "C" {
 #endif
 
-#define MP_PROTO_VERSION	16	/* 16: MP_CARSTATE_ENTRY carries `hubcaps`, so a
+#define MP_PROTO_VERSION	17	/* 17: MP_CARSTATE_ENTRY carries `crushScale`, so the
+				 *     owner's per-car body-crush multiplier is applied
+				 *     on every machine simulating that car. 57 bytes
+				 *     (was 56).
+				 * 16: MP_CARSTATE_ENTRY carries `hubcaps`, so a
 				 *     peer's missing hubcap is drawn on the other machines
 				 *     too. 56 bytes (was 55).
 				 * 15: MP_CARSTATE carries leftModel/leftModelCity so a late
@@ -543,6 +547,10 @@ typedef struct MP_CARSTATE_ENTRY
 				 * nibble). Appearance is owner-authoritative, exactly like
 				 * the palette: LoseHubcap writes it on the owner's machine and
 				 * nothing else clears it. */
+	uint8_t  crushScale;	/* owner's body-crush multiplier in HALF steps:
+				 * 2 = 1.0x, 20 = 10.0x (0/1 read as 1.0x). Per CAR,
+				 * not per player -- mp applies it to the car this row
+				 * names, so every machine deforms that body alike. */
 } MP_CARSTATE_ENTRY;
 
 /* ------------------------------------------------------------------ */
@@ -732,7 +740,7 @@ static_assert(sizeof(MP_SESSION) == 12, "MP_SESSION layout");
 static_assert(sizeof(MP_PLAYER_INPUT) == 4, "MP_PLAYER_INPUT layout");
 static_assert(sizeof(MP_INPUT) == 4, "MP_INPUT layout");
 static_assert(sizeof(MP_ROSTER_ENTRY) == 29, "MP_ROSTER_ENTRY layout");
-static_assert(sizeof(MP_CARSTATE_ENTRY) == 56, "MP_CARSTATE_ENTRY layout");
+static_assert(sizeof(MP_CARSTATE_ENTRY) == 57, "MP_CARSTATE_ENTRY layout");
 static_assert(sizeof(MP_HIT) == 32, "MP_HIT layout");
 static_assert(sizeof(MP_STATS_ENTRY) == 12, "MP_STATS_ENTRY layout");
 static_assert(sizeof(MP_CARSTATE) == 8, "MP_CARSTATE layout");

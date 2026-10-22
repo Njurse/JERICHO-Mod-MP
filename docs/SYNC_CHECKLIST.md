@@ -675,7 +675,9 @@ of the fix. **Until then, a cross-city live join can mis-slot.** Same-city joins
 **17. Player-car damage and dents are not synced.** `totalDamage`, `ap.damage[]` and
 `needsDenting` do not ride the player-carstate, so a bent car can look straight on
 another screen. Deliberate for v1 — the player carstate has no health field. (Traffic
-damage **is** synced — domain 12.)
+damage **is** synced — domain 12.) The per-car body-crush multiplier **is** carried
+(`crushScale`, in half steps), so every machine deforms a car by the same amount once
+it is dented; only the damage itself remains owner-side.
 
 **18. Traffic motion and pedestrians are not made identical.** The disjoint-band design
 means each machine drives its own traffic; a car you see need not be the same car on the
