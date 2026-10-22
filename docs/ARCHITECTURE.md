@@ -193,7 +193,7 @@ flushed as the socket accepts them (§10, trap 2).
 | `JPRS` | H→all | ROSTER: who is in the match, ascending id, host first |
 | `JPST` | H→all | START: begin the level launch |
 | `JPIN` | C→H, H→all | INPUT: this frame's pad set |
-| `JPCS` | each→H, H→all | CARSTATE: the sender's own car, adopted verbatim by everyone else |
+| `JPCS` | each→H, H→all | CARSTATE: the sender's own car, adopted verbatim by everyone else. Also carries the owner's palette and the low nibble of `ap.flags` (`hubcaps`: one bit per wheel whose hubcap is gone), so a knocked-off hubcap is missing on every machine. |
 | `JPPN` / `JPPO` | both | PING / PONG (the PONG echoes the tick, so the host can compute RTT) |
 | `JPCH` | both | addon channel payload (the `jer_net.h` bridge). The header carries `fromPlayer`, and a relay STAMPS it from the connection that sent the frame: a client has one link (to the host/server), so that header is the only record of the original sender. Delivering it as 0 made every relayed module message look like the host's. |
 | `JPLV` | both | LEAVE |

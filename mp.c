@@ -3282,21 +3282,22 @@ static int MpOptClearFelony(void* ud, int dir)
 	return JER_PAUSE_QUIT_NONE;
 }
 
-/* Reload every car: carhacks' own per-slot rebuild (the one its verifier uses),
- * over every slot; a slot that is not an import returns 0 and is left as it is. */
-int chkImportHotLoad(int slot);	/* carhacks/carimport.h */
+/* Reload every imported car: carhacks releases each imported slot's assets
+ * (pins, pool pages, palette rows, geometry and the city buffers that were their
+ * last user), re-applies the set and rebuilds every one of them. Stock/level cars
+ * are untouched. This is a full unload/reload, not another hot load over the top,
+ * so a stale asset is actually given back and read again. */
+int chkImportReloadAll(void);	/* carhacks/carimport.h */
 
 static int MpMenuReloadCars(void* ud, int dir)
 {
-	int slot, n = 0;
+	int n;
 
 	(void)ud; (void)dir;
 
-	for (slot = 0; slot < 11; slot++)	/* CHK_IMPORT_MAX_SLOTS */
-		if (chkImportHotLoad(slot) > 0)
-			n++;
+	n = chkImportReloadAll();
 
-	printInfo("[mp] Reload all cars: %d slot(s) rebuilt\n", n);
+	printInfo("[mp] Reload all cars: %d imported slot(s) rebuilt\n", n);
 	return 0;
 }
 

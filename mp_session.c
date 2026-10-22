@@ -3437,6 +3437,7 @@ static void MpSendColors(int whole);
 static void MpTestCarChangeTick(void);
 static void MpTestCityChangeTick(void);
 static void MpTestCarCycleTick(void);
+static void MpTestReloadCarsTick(void);
 static void MpTestLeaveTick(void);
 static void MpTestKickTick(void);
 static void MpTestOnFootTick(void);
@@ -5351,6 +5352,7 @@ void MpLockstepFrame(void)
 	MpTestCarChangeTick();
 	MpTestCityChangeTick();
 	MpTestCarCycleTick();
+	MpTestReloadCarsTick();
 
 	/* test lever: a synthetic traffic contact, to exercise the traffic-hit wire path
 	 * without a physical collision (inert unless MP_TEST_TRAFFIC_HIT). */
@@ -6583,6 +6585,48 @@ static void MpTestCarCycleTick(void)
 		gTestCarCycleStr = NULL;		/* asked for a number of passes and they are done */
 }
 
+/* MP_TEST_RELOADCARS=<sim frame>: run carhacks' "Reload all cars" once at that frame.
+ * A headless run cannot open the pause menu, and this is the operation that has to
+ * release and re-read every imported asset, so it needs a lever. Inert unless set. */
+static void MpTestReloadCarsTick(void)
+{
+	static int done;
+	static int at = -1;
+
+	if (done)
+		return;
+
+	if (at < 0)
+	{
+		const char* s = getenv("MP_TEST_RELOADCARS");
+
+		if (s == NULL || *s == '\0')
+		{
+			done = 1;
+			return;
+		}
+
+		at = atoi(s);
+
+		if (at < 1)
+			at = 1;
+	}
+
+	if (!gMp.running || gMp.frame < (unsigned long)at)
+		return;
+
+	done = 1;
+
+	{
+		extern int chkImportReloadAll(void);
+		int n = chkImportReloadAll();
+
+		if (gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx,
+				"[mp] test: Reload all cars -> %d imported slot(s) rebuilt (MP_TEST_RELOADCARS)\n", n);
+	}
+}
+
 
 /* A SATURATING cast to int16, for the wire fields that are still 16-bit.
  *
@@ -7388,6 +7432,22 @@ static void MpSendOwnCarState(void)
 	{
 		cp = &car_data[me->carId];
 
+		/* TEST LEVER (MP_TEST_HUBCAP=<0..15>): knock hubcaps off on this seat so the
+		 * wire path can be exercised headlessly. Inert unless set. */
+		{
+			static int testHub = -2;
+
+			if (testHub == -2)
+			{
+				const char* s = getenv("MP_TEST_HUBCAP");
+
+				testHub = (s != NULL) ? atoi(s) : -1;
+			}
+
+			if (testHub >= 0 && cp->controlType != CONTROL_TYPE_NONE)
+				cp->ap.flags = (u_char)((cp->ap.flags & ~0x0f) | (testHub & 0x0f));
+		}
+
 		/* NOT A CAR YET. WELCOME sets our row's carId to engine slot 0 before the
 		 * level exists, and the frontend/loading world has that CAR_DATA zeroed
 		 * (controlType NONE, no model). A body sent from it carried a pose of
@@ -7510,6 +7570,11 @@ static void MpSendOwnCarState(void)
 		e.angVel[0] = cp->st.n.angularVelocity[0];
 		e.angVel[1] = cp->st.n.angularVelocity[1];
 		e.angVel[2] = cp->st.n.angularVelocity[2];
+
+		/* Hubcaps are appearance the OWNER decides: LoseHubcap writes one bit per
+		 * wheel in ap.flags, and the peer's rebuilt body would otherwise keep all
+		 * four. The low nibble is all that is needed (0 = all present). */
+		e.hubcaps = (uint8_t)(cp->ap.flags & 0x0f);
 
 		/* Siren / lightbar state (owner-authoritative). Traffic already does this
 		 * via MP_TRAFFIC_SIREN; player cars need the same so a remote copy draws
@@ -8298,6 +8363,18 @@ static int MpAdoptCar(int carSlot, int city, int model, MP_PLAYER* who)
 
 		CreateDentableCar(cp);
 		gMpAdoptModel[carSlot] = model;
+
+		/* The owner is the authority for the wheel appearance too. A rebuild resets
+		 * the body, so put their lost-hubcap bits back on the fresh car. */
+		if (who != NULL && !who->isLocal)
+		{
+			CarApplyHubcapState(carSlot, who->hubcaps & 0x0f);
+
+			if (gMpCtx != NULL && who->hubcaps)
+				gMpCtx->jer_log(gMpCtx,
+					"[mp] hubcaps: player %d -> %d applied to the rebuilt car (slot %d)\n",
+					who->id, who->hubcaps & 0x0f, carSlot);
+		}
 
 		/* OUR car: rebind its engine and SIREN sounds to the new model, exactly as
 		 * getting in does (players.c ChangePedPlayerToCar -> StartPlayerCarSounds).
@@ -10916,6 +10993,27 @@ static void MpHandleCarState(int connIndex, const unsigned char* p, int len)
 		 * force the same call the traffic mirror uses. */
 		if (e.flags & MP_CARSTATE_SIREN)
 			AddCopCarLight(cp);
+
+		/* Owner-authoritative wheel appearance: a hubcap knocked off on their
+		 * machine is missing here too. Only write on a change, so the per-frame
+		 * state does not re-apply the palette every tick. */
+		pl->hubcaps = (int)(e.hubcaps & 0x0f);
+
+		if ((cp->ap.flags & 0x0f) != pl->hubcaps)
+		{
+			CarApplyHubcapState(pl->carId, pl->hubcaps);
+
+			if (gMpCtx != NULL)
+			{
+				int m = (cp->ap.model >= 0 && cp->ap.model < MAX_CAR_RESIDENT_MODELS) ? cp->ap.model : -1;
+
+				gMpCtx->jer_log(gMpCtx,
+					"[mp] hubcaps: player %d -> %d (slot %d, model %d from %s)\n",
+					pl->id, pl->hubcaps, pl->carId,
+					(m >= 0) ? residentCarModels[m] : -1,
+					(m >= 0) ? MpCarCityName(GetCarModelSourceCity(m)) : "?");
+			}
+		}
 
 		pl->onFoot = 0;			/* driving again: the roster may seat them */
 		pl->lastStateFrame = gMp.frame;	/* the fallback gate in MpOnNetInput reads this */

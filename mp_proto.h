@@ -38,7 +38,10 @@
 extern "C" {
 #endif
 
-#define MP_PROTO_VERSION	15	/* 15: MP_CARSTATE carries leftModel/leftModelCity so a late
+#define MP_PROTO_VERSION	16	/* 16: MP_CARSTATE_ENTRY carries `hubcaps`, so a
+				 *     peer's missing hubcap is drawn on the other machines
+				 *     too. 56 bytes (was 55).
+				 * 15: MP_CARSTATE carries leftModel/leftModelCity so a late
 				 *     joiner can materialize the parked car a player left.
 				 *     MP_CARSTATE_ENTRY is 55 bytes (was 53).
 				 * 14: MP_HIT carries targetFrame + tgtPos, so a contact can be
@@ -536,6 +539,10 @@ typedef struct MP_CARSTATE_ENTRY
 	int32_t  vel[3];	/* st.n.linearVelocity */
 	uint8_t  leftModel;	/* MP_CARSTATE_LEFT_CAR: the parked car's model NUMBER */
 	uint8_t  leftModelCity;	/* ...and the city that number belongs to */
+	uint8_t  hubcaps;	/* bits 0..3 = hubcap LOST on wheel 0..3 (cp->ap.flags low
+				 * nibble). Appearance is owner-authoritative, exactly like
+				 * the palette: LoseHubcap writes it on the owner's machine and
+				 * nothing else clears it. */
 } MP_CARSTATE_ENTRY;
 
 /* ------------------------------------------------------------------ */
@@ -725,7 +732,7 @@ static_assert(sizeof(MP_SESSION) == 12, "MP_SESSION layout");
 static_assert(sizeof(MP_PLAYER_INPUT) == 4, "MP_PLAYER_INPUT layout");
 static_assert(sizeof(MP_INPUT) == 4, "MP_INPUT layout");
 static_assert(sizeof(MP_ROSTER_ENTRY) == 29, "MP_ROSTER_ENTRY layout");
-static_assert(sizeof(MP_CARSTATE_ENTRY) == 55, "MP_CARSTATE_ENTRY layout");
+static_assert(sizeof(MP_CARSTATE_ENTRY) == 56, "MP_CARSTATE_ENTRY layout");
 static_assert(sizeof(MP_HIT) == 32, "MP_HIT layout");
 static_assert(sizeof(MP_STATS_ENTRY) == 12, "MP_STATS_ENTRY layout");
 static_assert(sizeof(MP_CARSTATE) == 8, "MP_CARSTATE layout");

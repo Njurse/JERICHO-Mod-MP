@@ -93,6 +93,8 @@ typedef struct MP_PLAYER
 	int  carIsSlot;			/* 'car' is a per-city frontend SLOT to resolve, not a model */
 	int  carCity;			/* the city that car number belongs to, -1 = the session's own */
 	int  palette;			/* that player's car colour (0 = default) */
+	int  hubcaps;			/* low nibble: that player's LOST hubcaps (ap.flags bits 0..3),
+					 * owner-authoritative, like the palette. Applied after a rebuild. */
 	int  isLocal;			/* 1 = this machine's own player */
 	int  hasPlayerId;		/* the HELLO carried a JPID block (host side) */
 	unsigned char playerId[MP_PLAYER_ID_LEN];	/* that block's id */
