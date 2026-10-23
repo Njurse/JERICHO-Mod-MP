@@ -96,6 +96,22 @@ def read(path):
         return f.read().decode("utf-8", "replace")
 
 
+def seat_log(run_dir):
+    """The game names its log with the build version; JERICHO.log may not exist."""
+    direct = os.path.join(run_dir, "JERICHO.log")
+
+    if os.path.exists(direct):
+        return direct
+
+    try:
+        logs = [os.path.join(run_dir, n) for n in os.listdir(run_dir)
+                if n.startswith("JERICHO") and n.endswith(".log")]
+    except OSError:
+        return direct
+
+    return max(logs, key=os.path.getmtime) if logs else direct
+
+
 def summarise(text):
     """Everything one seat's log says about the cycling."""
     cars = set()
@@ -226,7 +242,7 @@ def main():
     coverage = []
 
     for s, d in zip(seats, names):
-        info = summarise(read(os.path.join(run_root, d, "JERICHO.log")))
+        info = summarise(read(seat_log(os.path.join(run_root, d))))
         handed = ", ".join("%s x%d" % t for t in info["handled"]) or "-"
         trouble = ", ".join("%s x%d" % t for t in info["trouble"]) or "-"
 
