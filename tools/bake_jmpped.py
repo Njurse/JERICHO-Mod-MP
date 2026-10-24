@@ -3,39 +3,30 @@
 
 The six JERI_* models live in Havana's LUMP_MODELS. Their two pages (texture
 sets 23 and 25) are streamed area pages, not permanent/special pages: each is
-17 sectors, one CLUT sector followed by a 64x256 raw image. This tool writes a
-small file the runtime loader can consume on any city:
+17 sectors, one CLUT sector followed by a 64x256 raw image. Tanner's eight limbs
+come from the same model table and page 2. This tool writes the v3 archive the
+runtime loader consumes on any city:
 
-    "JMPPED\0\0" | u32 version | u32 model_count
+    "JMPPED\\0\\0" | u32 version | u32 model_count
     for each model: u32 size, raw MODEL blob (MODEL-relative offsets)
     u32 page_count
     for each page: u32 set, u32 npalettes, u32 clut_bytes, clut,
                    u32 image_bytes, raw 64x256 image, u32 flags
 
-Version 4 adds the civilian/cop pack. The engine's pedestrians are not model
-bodies: their limbs are textured billboards (`MainPed`, motion_c.c) on ONE
-texture page, with the clothing colours coming from the palette-lump entries
-for that page. The only model is the head (`PEDHEAD1`). So the pack is:
-
-    u32 ped_model_index                 # index into the model table above
-    u32 ped_page_count
-    for each page: the same page record (flags 1 = compressed permanent page)
-    u32 ped_tex_count
-    for each: u32 texture_number, u32 x, u32 y, u32 w, u32 h
-    u32 ped_palette_count
-    for each: u32 texture_number, u32 slot (1..5), 32-byte CLUT row
-
-The page and the palette entries are the ones the models/sprite tables name,
-so the runtime can pin the page, repoint the ped draw path and fill the
-clothing rows without reading the host city's pages.
+The full Tanner set is exported by jmpped_export.py for reference, but JMPPED v3
+only has slots for Tanner's eight limbs.
 
 Usage:
-    python bake_jmpped.py [HAVANA.LEV] [JMPPED.LEV] [--ped]
+    python bake_jmpped.py [HAVANA.LEV] [JMPPED.LEV] [--no-copy]
 
-Without --ped the tool writes the version 3 archive the current runtime loader
-consumes (Jericho only). --ped appends the version 4 civilian/cop section; a
-runtime that does not understand v4 refuses that archive, so --ped does not
-copy the result into DRIVER2/LEVELS automatically.
+The source baker vs the edit/rebuild path:
+    This script extracts the 14-slot base from a city. To edit the exported
+    Tanner/Jericho parts, use jmpped_export.py -> jmpped_build.py (or
+    BAKE_JMPPED), which preserve untouched bytes and do not need Havana.
+    jmpped_export.py invokes this baker with --no-copy.
+
+    --no-copy    do not copy the result into DRIVER2/LEVELS. A direct bake still
+                 updates the Release runtime copy unless this is given.
 """
 
 import os
@@ -43,8 +34,7 @@ import struct
 import sys
 
 MAGIC = b"JMPPED\0\0"
-VERSION = 4
-CPU = 14	# the index of PEDHEAD1 in the v4 model table
+VERSION = 3
 MODEL_NAMES = [
     "JERI_TORSO",
     "JERI_HEAD",
@@ -66,10 +56,6 @@ HAND_NAMES = [
     "HAND_RIGHT",
 ]
 CORE_NAMES = MODEL_NAMES + LEG_NAMES + HAND_NAMES
-PED_HEAD_MODEL = "PEDHEAD1"
-# The four body textures plus the two head sprites (the billboard head at
-# distance is LOWHEAD; HEAD1 is the palette/CLUT the PEDHEAD1 model uses).
-PED_TEXTURE_NAMES = ["CHEST1", "ARM1", "FOREARM1", "JEANS1", "LOWHEAD", "HEAD1"]
 POLY_SIZES = [8, 12, 16, 24, 20, 20, 28, 32, 8, 12, 16, 16,
               0, 0, 0, 0, 12, 12, 12, 16, 20, 20, 24, 24,
               0, 0, 0, 0, 0, 0, 0, 0, 8, 12, 16, 24,
@@ -169,66 +155,6 @@ def parse_texture_info(body):
     return pages, perms
 
 
-def find_ped_textures(body):
-    """Locate the one page all six pedestrian textures live on."""
-    pages, perms = parse_texture_info(body)
-
-    for set_index, rows in enumerate(pages):
-        found = {}
-        for texnum, name, x, y, w, h in rows:
-            if name in PED_TEXTURE_NAMES:
-                found[name] = (texnum, x, y, w, h)
-        if len(found) == len(PED_TEXTURE_NAMES):
-            return set_index, found, perms
-
-    raise RuntimeError("no texture page holds all of %s" % ", ".join(PED_TEXTURE_NAMES))
-
-
-def parse_ped_palettes(pal, page_set, texnums):
-    """The palette-lump entries for the pedestrian page.
-
-    A record is four ints (palette, texnum, tpage, clut_number); clut_number -1
-    means a 32-byte CLUT row follows, anything else refers to an earlier stored
-    row. Returns [(texnum, slot, 32-byte row)] where slot is the civ_clut slot
-    the draw reads (lump palette 0..4 -> slot 1..5).
-    """
-    if pal is None:
-        return []
-
-    ptr = 4
-    stored = []
-    out = []
-    wanted = set(texnums)
-
-    while ptr + 4 <= len(pal):
-        if struct.unpack_from("<i", pal, ptr)[0] == -1:
-            break
-        if ptr + 16 > len(pal):
-            break
-
-        palette, texnum, tpage, clut_number = struct.unpack_from("<iiii", pal, ptr)
-        ptr += 16
-
-        if clut_number == -1:
-            if ptr + 32 > len(pal):
-                break
-            row = pal[ptr:ptr + 32]
-            ptr += 32
-            stored.append(row)
-            index = len(stored) - 1
-        else:
-            index = clut_number if 0 <= clut_number < len(stored) else -1
-
-        if index < 0 or tpage != page_set or texnum not in wanted:
-            continue
-
-        slot = palette + 1
-        slot = 1 if slot < 1 else (5 if slot > 5 else slot)
-        out.append((texnum, slot, stored[index]))
-
-    return out
-
-
 def find_model_blob(models, index):
     """LUMP_MODELS is a count followed by size-prefixed blobs. Empty slots use
     a zero size and consume only their 4-byte length."""
@@ -251,13 +177,13 @@ def find_model_blob(models, index):
 def main():
     here = os.path.dirname(os.path.abspath(__file__))
     root = os.path.abspath(os.path.join(here, "..", "..", "..", ".."))
-    ped_pack = "--ped" in sys.argv[1:]
+    no_copy = "--no-copy" in sys.argv[1:]
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     src = args[0] if len(args) > 0 else os.path.join(
         root, "src_rebuild", "bin", "Release", "DRIVER2", "LEVELS", "HAVANA.LEV")
     dst = args[1] if len(args) > 1 else os.path.join(here, "JMPPED.LEV")
-    version = VERSION if ped_pack else 3
-    all_names = CORE_NAMES + ([PED_HEAD_MODEL] if ped_pack else [])
+    version = VERSION
+    all_names = CORE_NAMES
 
     data = open(src, "rb").read()
     table = struct.unpack_from("<8I", data, 8)
@@ -301,17 +227,7 @@ def main():
     # The legs keep their own Tanner texture (set 2); that page is baked below,
     # so JMPPED.LEV is fully self-contained and no host page is needed.
 
-    # The ped pack: one page carries every body billboard and the head model's
-    # texture. The clothing variants are the palette-lump entries for that page.
-    # Only the v4 archive carries it; the current loader reads v3.
-    if ped_pack:
-        ped_set, ped_texinfo, perm_sets = find_ped_textures(data1)
-        print("ped page set %d holds %s" % (ped_set, ", ".join(PED_TEXTURE_NAMES)))
-        for name in PED_TEXTURE_NAMES:
-            texnum, x, y, w, h = ped_texinfo[name]
-            print("  ped tex %-8s number %2d at %d,%d %dx%d" % (name, texnum, x, y, w, h))
-    else:
-        _, perm_sets = parse_texture_info(data1)
+    _, perm_sets = parse_texture_info(data1)
 
     spool = find_lump(data2[8:], 26)
     if spool is None:
@@ -370,36 +286,6 @@ def main():
     else:
         raise RuntimeError("leg page set %d not in the permanent list" % LEG_PAGE_SET)
 
-    ped_page = None
-    ped_npal = 0
-    ped_palettes = []
-
-    if ped_pack:
-        # The pedestrian page is permanent in every city's list; upload it through
-        # the same compressed-permanent path as the leg page.
-        perm_off = 0
-        for s, size in perm_sets:
-            if s == ped_set:
-                ped_page = data[page_base + perm_off:page_base + perm_off + size]
-                break
-            perm_off += (size + SECTOR - 1) & -SECTOR
-        if ped_page is None:
-            raise RuntimeError("ped page set %d is not in the permanent list" % ped_set)
-
-        ped_npal = struct.unpack_from("<i", ped_page, 0)[0]
-        print("page  set %2d permanent +%d: %d bytes, %d CLUTs (ped pack)"
-              % (ped_set, perm_off, len(ped_page), ped_npal))
-
-        pal = find_lump(data1[8:], 25)
-        ped_palettes = parse_ped_palettes(pal, ped_set, {v[0] for v in ped_texinfo.values()})
-        if not ped_palettes:
-            raise RuntimeError("no palette-lump entries for ped page %d" % ped_set)
-        print("ped palette: %d entries (page %d, %d texnums)"
-              % (len(ped_palettes), ped_set, len({p[0] for p in ped_palettes})))
-
-        if CPU != len(CORE_NAMES):
-            raise RuntimeError("CPU (%d) does not match the model table" % CPU)
-
     out = bytearray(MAGIC)
     out += struct.pack("<II", version, len(blobs))
     for blob in blobs:
@@ -411,38 +297,18 @@ def main():
         out += clut
         out += image
 
-    # ---- v4: the civilian/cop pack ----
-    if ped_pack:
-        out += struct.pack("<I", CPU)
-        out += struct.pack("<I", 1)
-        out += struct.pack("<IIIII", ped_set, ped_npal, 0, len(ped_page), 1)
-        out += ped_page
-
-        out += struct.pack("<I", len(PED_TEXTURE_NAMES))
-        for name in PED_TEXTURE_NAMES:
-            texnum, x, y, w, h = ped_texinfo[name]
-            out += struct.pack("<IIIII", texnum, x, y, w, h)
-
-        out += struct.pack("<I", len(ped_palettes))
-        for texnum, slot, row in ped_palettes:
-            out += struct.pack("<II", texnum, slot)
-            out += row
-
     os.makedirs(os.path.dirname(os.path.abspath(dst)), exist_ok=True)
     open(dst, "wb").write(out)
-    print("wrote %s (%d bytes, version %d%s)"
-          % (dst, len(out), version, ", civilian/cop pack" if ped_pack else ""))
+    print("wrote %s (%d bytes, version %d)" % (dst, len(out), version))
 
-    if ped_pack:
-        # Do NOT drop a v4 file on the runtime path automatically: the loader as
-        # shipped reads v3 and would refuse the archive, taking Jericho with it.
-        print("note: v4 needs a matching loader; not copied into DRIVER2/LEVELS")
-    else:
+    if not no_copy:
         release = os.path.join(root, "src_rebuild", "bin", "Release", "DRIVER2", "LEVELS", "JMPPED.LEV")
         if os.path.abspath(release) != os.path.abspath(dst):
             os.makedirs(os.path.dirname(release), exist_ok=True)
             open(release, "wb").write(out)
             print("copied to %s" % release)
+    else:
+        print("note: --no-copy; not copied into DRIVER2/LEVELS")
 
 
 if __name__ == "__main__":

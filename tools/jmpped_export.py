@@ -1,0 +1,456 @@
+#!/usr/bin/env python3
+"""jmpped_export.py - export Driver 2's Tanner and Jericho peds for editing.
+
+The source is the level's model table (HAVANA by default), not a previously
+baked JMPPED.LEV. The exporter writes one subexport per ped:
+
+    tanner/  the full Tanner model set, its page 2 texture/palette, per-part crops
+    jericho/ the six JERI_* parts, pages 23/25, per-part crops
+
+JMPPED v3 consumes six Jericho parts plus Tanner's eight limbs; the full Tanner
+parts are still exported, with `bake_slot: null` for those the archive cannot
+hold. A `base.LEV` is generated from the same level by bake_jmpped.py so the
+builder has the untouched model/page bytes to preserve.
+
+Usage:
+    python jmpped_export.py [--source HAVANA.LEV] [--out DIR]
+"""
+
+from __future__ import annotations
+
+import argparse
+import os
+import shutil
+import subprocess
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+import jmpped_common as jc
+import jmpped_source as src
+
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+REPO = os.path.abspath(os.path.join(HERE, "..", "..", "..", ".."))
+DEFAULT_SOURCE = os.path.join(REPO, "src_rebuild", "bin", "Release", "DRIVER2",
+                              "LEVELS", "HAVANA.LEV")
+DEFAULT_OUT = os.path.join(HERE, "out", "jmppeds", "v3")
+BAKE = os.path.join(HERE, "bake_jmpped.py")
+
+
+def _sha(path: str) -> str:
+    return jc.sha256_file(path)
+
+
+def _rel(path: str, root: str) -> str:
+    return os.path.relpath(path, root).replace("\\", "/")
+
+
+def _page_entry(page: jc.Page, root: str, ped: str, display_clut: int = 0) -> tuple[dict, list[tuple[int, int, int]]]:
+    indices = jc.page_indices(page)
+    cluts = jc.page_cluts(page)
+    clut = jc.clut_rgb(cluts[display_clut]) if cluts else [(0, 0, 0)] * 16
+    rgb = jc.page_rgb(indices, clut)
+    pdir = os.path.join(root, ped, "png")
+
+    png = os.path.join(pdir, "pages", "page_%d.png" % page.set)
+    idx_png = os.path.join(pdir, "pages", "page_%d_indexed.png" % page.set)
+    pal_png = os.path.join(pdir, "palettes", "page_%d.png" % page.set)
+    jc.save_rgb_png(png, jc.PAGE_W, jc.PAGE_H, rgb)
+    jc.save_indexed_png(idx_png, jc.PAGE_W, jc.PAGE_H, indices, clut)
+    if cluts:
+        jc.save_rgb_png(pal_png, jc.CLUT_ROW_ENTRIES, len(cluts),
+                        [c for row in cluts for c in jc.clut_rgb(row)])
+    else:
+        jc.save_rgb_png(pal_png, 1, 1, [(0, 0, 0)])
+
+    entry = {
+        "set": page.set,
+        "ped": ped,
+        "storage": "compressed" if page.compressed else "raw",
+        "flags": page.flags,
+        "npalettes": len(cluts),
+        "image_bytes": len(page.image),
+        "display_clut": display_clut,
+        "png": _rel(png, root),
+        "png_sha256": _sha(png),
+        "indexed_png": _rel(idx_png, root),
+        "indexed_png_sha256": _sha(idx_png),
+        "palette_png": _rel(pal_png, root),
+        "palette_png_sha256": _sha(pal_png),
+        "cluts_hex": [row.hex() for row in cluts],
+    }
+    return entry, rgb
+
+
+def _part_entry(part: dict, ped: str, root: str,
+                page_map: dict[int, tuple[jc.Page, list[tuple[int, int, int]]]]) -> dict:
+    model = part["model"]
+    name = part["name"]
+    pdir = os.path.join(root, ped)
+    raw_path = os.path.join(pdir, "obj", "raw", name + ".obj")
+    edit_path = os.path.join(pdir, "obj", "edit", name + ".obj")
+    jc.write_obj(raw_path, model, blender=False, name=name)
+    jc.write_obj(edit_path, model, blender=True, name=name)
+
+    materials: dict[tuple[int, int], dict] = {}
+    crops: dict[int, dict] = {}
+    for p in model.polys:
+        if not p.textured:
+            continue
+        key = (p.set, p.id)
+        rec = materials.setdefault(key, {"set": p.set, "id": p.id, "polys": 0,
+                                         "u": [255, 0], "v": [255, 0]})
+        rec["polys"] += 1
+        for u, v in p.uv:
+            rec["u"][0] = min(rec["u"][0], u)
+            rec["u"][1] = max(rec["u"][1], u)
+            rec["v"][0] = min(rec["v"][0], v)
+            rec["v"][1] = max(rec["v"][1], v)
+        crop = crops.setdefault(p.set, {"page_set": p.set, "u": [255, 0],
+                                        "v": [255, 0], "polys": 0})
+        crop["polys"] += 1
+        for u, v in p.uv:
+            crop["u"][0] = min(crop["u"][0], u)
+            crop["u"][1] = max(crop["u"][1], u)
+            crop["v"][0] = min(crop["v"][0], v)
+            crop["v"][1] = max(crop["v"][1], v)
+
+    crop_entries = []
+    for page_set, rec in sorted(crops.items()):
+        if page_set not in page_map:
+            raise jc.JMPPEDError("%s/%s references page %d, which the base archive "
+                                 "does not carry" % (ped, name, page_set))
+        page, page_pixels = page_map[page_set]
+        x0, x1 = rec["u"]
+        y0, y1 = rec["v"]
+        x0 = max(0, x0)
+        y0 = max(0, y0)
+        x1 = min(jc.PAGE_W - 1, x1)
+        y1 = min(jc.PAGE_H - 1, y1)
+        w, h = x1 - x0 + 1, y1 - y0 + 1
+        if w <= 0 or h <= 0:
+            continue
+        crop_pixels = [page_pixels[y * jc.PAGE_W + x]
+                       for y in range(y0, y1 + 1)
+                       for x in range(x0, x1 + 1)]
+        crop_rgb = os.path.join(pdir, "png", "parts",
+                                "%s_set%d.png" % (name, page_set))
+        jc.save_rgb_png(crop_rgb, w, h, crop_pixels)
+        page_indices = jc.page_indices(page)
+        cluts = jc.page_cluts(page)
+        clut = jc.clut_rgb(cluts[0]) if cluts else [(0, 0, 0)] * 16
+        crop_idx_pixels = [page_indices[y * jc.PAGE_W + x]
+                           for y in range(y0, y1 + 1)
+                           for x in range(x0, x1 + 1)]
+        crop_idx = os.path.join(pdir, "png", "parts",
+                                "%s_set%d_indexed.png" % (name, page_set))
+        jc.save_indexed_png(crop_idx, w, h, crop_idx_pixels, clut)
+        crop_entries.append({
+            "page_set": page_set,
+            "rect": [x0, y0, w, h],
+            "rgb": _rel(crop_rgb, root),
+            "rgb_sha256": _sha(crop_rgb),
+            "indexed": _rel(crop_idx, root),
+            "indexed_sha256": _sha(crop_idx),
+            "polys": rec["polys"],
+        })
+
+    return {
+        "name": name,
+        "bake_slot": part["bake_slot"],
+        "used_in_jmpped": part["bake_slot"] is not None,
+        "instance": model.instance_number,
+        "vertices": len(model.vertices),
+        "polys": len(model.polys),
+        "poly_kinds": sorted({p.name for p in model.polys}),
+        "page_sets": list(part["page_sets"]),
+        "obj_raw": _rel(raw_path, root),
+        "obj_raw_sha256": _sha(raw_path),
+        "obj_edit": _rel(edit_path, root),
+        "obj_edit_sha256": _sha(edit_path),
+        "materials": [materials[k] for k in sorted(materials)],
+        "crops": crop_entries,
+    }
+
+
+def _write_assembled(path: str, models: list, names: list[str],
+                     offsets: dict[int, tuple[float, float, float]],
+                     blender: bool) -> dict:
+    jc.write_assembled_obj(path, models, names, offsets, blender=blender)
+    return {"path": path, "sha256": _sha(path)}
+
+
+def _scene_entry(raw: dict, edit: dict, root: str) -> dict:
+    return {
+        "raw": _rel(raw["path"], root),
+        "raw_sha256": raw["sha256"],
+        "edit": _rel(edit["path"], root),
+        "edit_sha256": edit["sha256"],
+    }
+
+
+def _write_skeleton_obj(path: str, bones: dict, blender: bool) -> dict:
+    """Write the bind skeleton as parent->child edges.
+
+    Raw mode is engine units with +Y down; Blender mode uses the same (x, z, -y)
+    transform and 1/1024 scale as the mesh edit copy.
+    """
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    idx = 1
+    with open(path, "w", encoding="utf-8", newline="\n") as f:
+        f.write("# JMPPED bind skeleton (%s)\n" %
+                ("Blender Z-up metres" if blender else "engine units, +Y down"))
+        for i, name in enumerate(src.BONE_NAMES):
+            parent = src.BONE_PARENTS[i]
+            if parent < 0:
+                continue
+            f.write("o %s\n" % name)
+            for raw in (bones["draw"][parent], bones["draw"][i]):
+                if blender:
+                    f.write("v %.6f %.6f %.6f\n" %
+                            (raw[0] * jc.BLENDER_SCALE, raw[2] * jc.BLENDER_SCALE,
+                             -raw[1] * jc.BLENDER_SCALE))
+                else:
+                    f.write("v %d %d %d\n" % raw)
+            f.write("l %d %d\n" % (idx, idx + 1))
+            idx += 2
+    return {"path": path, "sha256": _sha(path)}
+
+
+def _bindpose(parts_by_name: dict[str, dict], bindings: dict[str, str],
+              bones: dict) -> tuple[list, list[str], dict[int, tuple[int, int, int]]]:
+    models = []
+    names = []
+    offsets: dict[int, tuple[int, int, int]] = {}
+    for i, bone in enumerate(src.BONE_NAMES):
+        model_name = bindings.get(bone)
+        if not model_name:
+            continue
+        part = parts_by_name.get(model_name)
+        if part is None:
+            continue
+        models.append(part["model"])
+        names.append(model_name)
+        offsets[len(models) - 1] = tuple(bones["draw"][i])
+    return models, names, offsets
+
+
+def export(source: str, out_root: str) -> dict:
+    if not os.path.isfile(source):
+        raise jc.JMPPEDError("source level %s does not exist; pass --source"
+                             % source)
+    os.makedirs(out_root, exist_ok=True)
+    base = os.path.join(out_root, "base.LEV")
+    cmd = [sys.executable, BAKE, source, base, "--no-copy"]
+    print("extracting Driver 2 peds from %s" % source)
+    subprocess.run(cmd, check=True)
+
+    arch = jc.read_archive(base)
+    if arch.version != jc.VERSION_V3:
+        raise jc.JMPPEDError("the source baker produced v%d, expected v3"
+                             % arch.version)
+    if len(arch.models) != 14:
+        raise jc.JMPPEDError("the source baker produced %d models, expected 14"
+                             % len(arch.models))
+    needed_pages = {2, 23, 25}
+    have_pages = {p.set for p in arch.pages}
+    if not needed_pages.issubset(have_pages):
+        raise jc.JMPPEDError("base archive is missing pages %s"
+                             % sorted(needed_pages - have_pages))
+
+    level = src.read_level(source)
+    skeleton = src.skeleton_bones(level)
+    if skeleton is None:
+        raise jc.JMPPEDError("%s has no usable LUMP_MOTIONCAPTURE bind pose"
+                             % source)
+    skel_dir = os.path.join(out_root, "skeleton")
+    skel_json = os.path.join(skel_dir, "skeleton.json")
+    skel_data = {
+        "source_level": os.path.abspath(source),
+        "motion_lump_size": skeleton["motion_size"],
+        "coordinate_system": "motion block is +Y UP; the engine draw path and "
+                             "the mesh use +Y DOWN via (x, -y, -z); the Blender "
+                             "copy uses (x, z, -y) and scale %.10f"
+                             % jc.BLENDER_SCALE,
+        "bones": [
+            {"name": name, "parent": src.BONE_PARENTS[i],
+             "motion_raw": list(skeleton["raw"][i]),
+             "engine": list(skeleton["draw"][i])}
+            for i, name in enumerate(src.BONE_NAMES)
+        ],
+        "variants": {
+            "tanner": {"bindings": src.TANNER_BINDINGS},
+            "jericho": {"bindings": src.JERICHO_BINDINGS},
+        },
+        "note": "engine positions are the motion bind pose with the engine's "
+                "Y/Z negation applied; model bindings show which source part "
+                "sits on each bone",
+    }
+    jc.save_json(skel_json, skel_data)
+    skel_raw = _write_skeleton_obj(os.path.join(skel_dir, "skeleton_raw.obj"),
+                                   skeleton, False)
+    skel_edit = _write_skeleton_obj(os.path.join(skel_dir, "skeleton_edit.obj"),
+                                    skeleton, True)
+    skel_manifest = {
+        "json": _rel(skel_json, out_root),
+        "json_sha256": _sha(skel_json),
+        "raw": _rel(skel_raw["path"], out_root),
+        "raw_sha256": skel_raw["sha256"],
+        "edit": _rel(skel_edit["path"], out_root),
+        "edit_sha256": skel_edit["sha256"],
+    }
+
+    ped_parts = {}
+    all_parts_by_name = {}
+    page_map: dict[int, tuple[jc.Page, list[tuple[int, int, int]]]] = {}
+    pages = []
+    for ped in ("tanner", "jericho"):
+        parts = src.ped_parts(level, ped)
+        src.check_level_pages(level, parts, ped)
+        ped_parts[ped] = parts
+        for part in parts:
+            all_parts_by_name[part["name"]] = part
+        for page in arch.pages:
+            if page.set not in src.PED_PAGES[ped]:
+                continue
+            entry, rgb = _page_entry(page, out_root, ped)
+            pages.append(entry)
+            page_map[page.set] = (page, rgb)
+
+    peds = {}
+    for ped, parts in ped_parts.items():
+        pdir = os.path.join(out_root, ped)
+        entries = [_part_entry(p, ped, out_root, page_map) for p in parts]
+        by_name = {p["name"]: p for p in parts}
+        if ped == "tanner":
+            asm_models = [by_name[n]["model"] for n in src.TANNER_ASSEMBLY_ORDER
+                          if n in by_name]
+            asm_names = [n for n in src.TANNER_ASSEMBLY_ORDER if n in by_name]
+            bind_parts = by_name
+            bindings = src.TANNER_BINDINGS
+        else:
+            asm_models = [by_name[n]["model"] for n in src.JERICHO_NAMES
+                          if n in by_name]
+            asm_names = [n for n in src.JERICHO_NAMES if n in by_name]
+            bind_parts = all_parts_by_name
+            bindings = src.JERICHO_BINDINGS
+        offsets = jc.part_offsets(asm_models)
+        assembled = {}
+        if asm_models:
+            assembled = _scene_entry(
+                _write_assembled(os.path.join(pdir, "obj", "assembled_raw.obj"),
+                                 asm_models, asm_names, offsets, False),
+                _write_assembled(os.path.join(pdir, "obj", "assembled_edit.obj"),
+                                 asm_models, asm_names, offsets, True),
+                out_root)
+
+        bp_models, bp_names, bp_offsets = _bindpose(bind_parts, bindings, skeleton)
+        bindpose = {}
+        if bp_models:
+            bindpose = _scene_entry(
+                _write_assembled(os.path.join(pdir, "obj", "bindpose_raw.obj"),
+                                 bp_models, bp_names, bp_offsets, False),
+                _write_assembled(os.path.join(pdir, "obj", "bindpose_edit.obj"),
+                                 bp_models, bp_names, bp_offsets, True),
+                out_root)
+
+        peds[ped] = {
+            "label": "Tanner" if ped == "tanner" else "Jericho",
+            "pages": sorted(src.PED_PAGES[ped]),
+            "parts": entries,
+            "assembled": assembled,
+            "bindpose": bindpose,
+            "skeleton": _rel(skel_json, out_root),
+        }
+        ped_json = {
+            "ped": ped,
+            "label": peds[ped]["label"],
+            "source_level": os.path.abspath(source),
+            "source_sha256": jc.sha256_file(source),
+            "pages": peds[ped]["pages"],
+            "parts": entries,
+            "assembled": assembled,
+            "bindpose": bindpose,
+            "skeleton": _rel(skel_json, out_root),
+            "note": "parts with bake_slot null are exported for reference and "
+                    "are not stored in the v3 JMPPED archive",
+        }
+        jc.save_json(os.path.join(pdir, "ped.json"), ped_json)
+
+    # Verify the source models the archive consumes are the same blobs the base
+    # archive carries, so a later edit cannot silently bake the wrong geometry.
+    slots = []
+    by_slot = {}
+    for ped, parts in ped_parts.items():
+        for part in parts:
+            slot = part["bake_slot"]
+            if slot is None:
+                continue
+            if slot in by_slot:
+                raise jc.JMPPEDError("slot %d is claimed by both %s and %s"
+                                     % (slot, by_slot[slot], (ped, part["name"])))
+            by_slot[slot] = (ped, part["name"])
+            if part["blob"] != arch.raw_models[slot]:
+                raise jc.JMPPEDError(
+                    "%s/%s does not match base slot %d; the level and the base "
+                    "archive disagree" % (ped, part["name"], slot))
+            slots.append({"slot": slot, "ped": ped, "part": part["name"]})
+    slots.sort(key=lambda s: s["slot"])
+    if [s["slot"] for s in slots] != list(range(14)):
+        raise jc.JMPPEDError("the source does not cover all 14 JMPPED v3 slots")
+
+    jmpped_dir = os.path.join(out_root, "jmpped")
+    jmpped_offsets = jc.part_offsets(arch.models)
+    ref_raw = _write_assembled(os.path.join(jmpped_dir, "assembled_raw.obj"),
+                               arch.models, arch.model_names, jmpped_offsets, False)
+    ref_edit = _write_assembled(os.path.join(jmpped_dir, "assembled_edit.obj"),
+                                arch.models, arch.model_names, jmpped_offsets, True)
+
+    manifest = {
+        "manifest_version": 2,
+        "tool": "jmpped_export.py",
+        "source_level": os.path.abspath(source),
+        "source_sha256": jc.sha256_file(source),
+        "base_archive": "base.LEV",
+        "base_archive_sha256": jc.sha256_file(base),
+        "archive_version": jc.VERSION_V3,
+        "peds": peds,
+        "pages": pages,
+        "skeleton": skel_manifest,
+        "bake": {"slots": slots},
+        "jmpped_reference": {
+            "raw": _rel(ref_raw["path"], out_root),
+            "raw_sha256": ref_raw["sha256"],
+            "edit": _rel(ref_edit["path"], out_root),
+            "edit_sha256": ref_edit["sha256"],
+            "note": "visual reference for the 14-slot v3 bake, not the edit input",
+        },
+    }
+    jc.save_json(os.path.join(out_root, "jmpped.json"), manifest)
+    return manifest
+
+
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser(description="Export Driver 2 Tanner/Jericho peds to OBJ/PNG")
+    ap.add_argument("--source", default=DEFAULT_SOURCE,
+                    help="Driver 2 level (default: Release/DRIVER2/LEVELS/HAVANA.LEV)")
+    ap.add_argument("--out", default=DEFAULT_OUT,
+                    help="workspace (default: tools/out/jmppeds/v3)")
+    args = ap.parse_args(argv)
+    try:
+        manifest = export(args.source, args.out)
+    except jc.JMPPEDError as e:
+        print("jmpped_export: %s" % e, file=sys.stderr)
+        return 1
+    print("exported Tanner + Jericho from %s -> %s" % (args.source, args.out))
+    print("  %d Tanner parts (%d baked), %d Jericho parts (%d baked)" %
+          (len(manifest["peds"]["tanner"]["parts"]),
+           sum(1 for p in manifest["peds"]["tanner"]["parts"] if p["bake_slot"] is not None),
+           len(manifest["peds"]["jericho"]["parts"]),
+           sum(1 for p in manifest["peds"]["jericho"]["parts"] if p["bake_slot"] is not None)))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -105,20 +105,21 @@ def part_offsets(models):
     x_arm = torso[0] * 0.55 + uw * 0.5
     y_arm = torso[1] * 0.18
     x_leg = torso[0] * 0.22
+    lower_y = y_arm + uh * 0.5 + lh * 0.5
 
     return {
         0: np.array([0.0, 0.0, 0.0]),
-        1: np.array([0.0, torso[1] * 0.5 + head[1] * 0.5, 0.0]),
+        1: np.array([0.0, -(torso[1] * 0.5 + head[1] * 0.5), 0.0]),
         2: np.array([-x_arm, y_arm, 0.0]),
-        3: np.array([-x_arm, y_arm - uh * 0.5 - lh * 0.5, 0.0]),
+        3: np.array([-x_arm, lower_y, 0.0]),
         4: np.array([x_arm, y_arm, 0.0]),
-        5: np.array([x_arm, y_arm - uh * 0.5 - lh * 0.5, 0.0]),
-        6: np.array([-x_leg, -torso[1] * 0.5 - th * 0.5, 0.0]),
-        7: np.array([-x_leg, -torso[1] * 0.5 - th - ch * 0.5, 0.0]),
-        8: np.array([-x_leg, -torso[1] * 0.5 - th - ch - fh * 0.5, 0.0]),
-        9: np.array([x_leg, -torso[1] * 0.5 - th * 0.5, 0.0]),
-        10: np.array([x_leg, -torso[1] * 0.5 - th - cw * 0.5, 0.0]),
-        11: np.array([x_leg, -torso[1] * 0.5 - th - cw - fh * 0.5, 0.0]),
+        5: np.array([x_arm, lower_y, 0.0]),
+        6: np.array([-x_leg, torso[1] * 0.5 + th * 0.5, 0.0]),
+        7: np.array([-x_leg, torso[1] * 0.5 + th + ch * 0.5, 0.0]),
+        8: np.array([-x_leg, torso[1] * 0.5 + th + ch + fh * 0.5, 0.0]),
+        9: np.array([x_leg, torso[1] * 0.5 + th * 0.5, 0.0]),
+        10: np.array([x_leg, torso[1] * 0.5 + th + cw * 0.5, 0.0]),
+        11: np.array([x_leg, torso[1] * 0.5 + th + cw + fh * 0.5, 0.0]),
     }
 
 

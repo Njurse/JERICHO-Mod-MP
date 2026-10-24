@@ -15,3 +15,6 @@ __pycache__/
 # Local logs and packaged output
 *.log
 out/
+
+# JMPPED export/edit workspace (jmpped_export.py / jmpped_build.py)
+tools/out/jmppeds/

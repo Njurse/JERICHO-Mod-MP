@@ -25,6 +25,89 @@ launchers they ship, and its own README explaining which to use.
 | let internet clients find a server | [`servers/masterserver/`](servers/masterserver/README.md) — a **separate project**, see [`servers/README.md`](servers/README.md) |
 | answer "is this build shippable?" in one command | **`run_gate.py`** |
 
+## Driver 2 Tanner/Jericho export — `BAKE_JMPPED`
+
+The toolkit extracts the pedestrian models from a Driver 2 level (HAVANA by
+default), not from a previously baked `JMPPED.LEV`. Tanner and Jericho are
+separate subexports, each with its own OBJ, page PNGs, palette strip and
+`ped.json`; a shared skeleton and a JMPPED bake manifest tie them together.
+It is **v3-only** for now.
+
+```sh
+BAKE_JMPPED.bat all                     # export + build + preview
+BAKE_JMPPED.bat export --source DRIVER2/LEVELS/HAVANA.LEV
+BAKE_JMPPED.bat build --copy            # copy the v3 rebuild to DRIVER2/LEVELS
+BAKE_JMPPED.bat export --out my-edit    # keep a separate workspace
+```
+
+The workspace defaults to `tools/out/jmppeds/v3` and is gitignored:
+
+```
+base.LEV                  untouched v3 archive derived from the same level
+jmpped.json               per-ped parts, slot map, pages, skeleton, hashes
+skeleton/skeleton.json    hierarchy + motion_raw and engine bind positions
+skeleton/skeleton_raw.obj engine-space bones (+Y down)
+skeleton/skeleton_edit.obj Blender Z-up bones (metres)
+tanner/obj/raw/*.obj      full Tanner set, engine units, +Y down
+tanner/obj/edit/*.obj     full Tanner set, Blender Z-up, metres
+tanner/obj/assembled_*    rough posed reference
+tanner/obj/bindpose_*     parts placed on the actual bind skeleton
+tanner/png/pages/page_2*  Tanner page, indexed companion and palette strip
+tanner/png/parts/*        per-part crops
+tanner/ped.json           the ped's own manifest
+jericho/...               six JERI_* parts, pages 23/25; bindpose also uses
+                          Tanner's limbs and hands, as the engine does
+jmpped/assembled_*        visual reference for the 14-slot v3 bake
+```
+
+**What JMPPED v3 can hold.** The archive has six Jericho slots (0..5) and
+Tanner's eight limb slots (6..13). The full Tanner set is exported for reference,
+but its torso, head, arms, neck and hips have `bake_slot: null`; editing one
+prints a warning and does not change the v3 archive. The engine's actual
+bindings are in `skeleton.json` — including the fact that `LTOE`/`RTOE` bind the
+opposite `FOOT_*` names.
+
+**Coordinates.** Engine mesh space is **+Y down**. `obj/raw` keeps that exactly;
+`obj/edit` is Blender Z-up with `(x, z, -y)` and 1/1024 scale. The motion block
+is Y-up, so `skeleton.json` records both `motion_raw` and `engine` (`x, -y, -z`);
+the skeleton OBJs and `bindpose_*` use engine space, matching the raw meshes.
+The `assembled_*` scenes use approximate part offsets and are only a visual aid;
+use `bindpose_*` for proportion and rebinding checks.
+
+**Editing the mesh.** Edit a part in either `obj/edit` or `obj/raw`, never both.
+Keep the `sSET_tID` material names (texture page and texture id) and use
+triangles/quads only. Ped models are FT3/FT4; a model with normal tables is
+refused if edited. The assembled scenes are references; the builder reads the
+per-part OBJs.
+
+**Editing textures.** Each page is 256x256 at 4bpp. `page_<set>.png` is an RGB
+view through CLUT row 0; `_indexed.png` preserves the exact 4-bit indices.
+Edit either one, not both. Palette strips are 16 pixels wide, one row per CLUT.
+Per-part crops are convenient for painting, but edit either the full page or its
+crops for a page, not both. RGB edits are quantised to the nearest CLUT entry.
+
+**Skeleton.** `skeleton.json` is the 23-bone hierarchy with parent links, raw
+motion positions, engine positions and the Tanner/Jericho model binding for each
+bone. `skeleton_raw.obj`/`skeleton_edit.obj` are edge skeletons for Blender.
+`tanner/obj/bindpose_*` and `jericho/obj/bindpose_*` place the parts on those
+bones, so a rebinding or proportion error is visible before a bake.
+
+**Rebuilding.** `build` writes `<workspace>/JMPPED.LEV` and self-checks it by
+re-reading. A no-edit rebuild is byte-identical to `base.LEV`. The v3 archive is
+copied to `DRIVER2/LEVELS` only when `--copy` is passed (`--copy-to` chooses a
+different target; `--no-copy` forces it off).
+
+**Refusals.** The builder names the ped/part and source rather than dropping
+data: both `obj/edit` and `obj/raw` changed, both RGB and indexed page forms
+changed, a full page and a crop changed together, an unknown texture page, a
+non-FT/GT model, or a face with more than four corners.
+
+**Source baker.** [`bake_jmpped.py`](bake_jmpped.py) extracts the 14-slot base
+from the level; `jmpped_export.py` invokes it with `--no-copy`. The source
+extraction and the toolkit are v3-only.
+
+
+
 Every launcher in this folder has a **Linux/macOS twin** with the same name and the
 same arguments (`.sh` for `.bat`), so nothing here is Windows-only. The two
 differences are worth knowing: a `.sh` finds the binary without the `.exe` (Release on
