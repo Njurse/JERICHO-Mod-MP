@@ -475,6 +475,18 @@ reaches the correct car.)
 **Status** — Verified headless for a single guest city. The multi-guest-city palette
 case is an accepted limit — see domain 15.
 
+**Player character (Tanner / Jericho)** — the owner's choice is the authority, like
+the palette. It rides `JPCL`, the roster and `JPPD`. On receive, a raw id outside
+the registry becomes Tanner; a valid Jericho is imported before the first stand-in
+spawn and falls back to Tanner if `JMPPED.LEV`/Havana data is missing. Verify with:
+- `[mp] character: recv <source> id %d for player %d slot %d -> <name> (id %d)`
+- `[mp] character: applied <name> (id %d, pedType %d)` (or the `unavailable ->
+  fallback` form)
+- `[mp] ped: standing in for player %d slot %d ... applied <name> (id %d, pedType
+  %d)`
+Pass: both seats draw the chosen model, a mid-match change reaches the peer, and
+removing the bake leaves both seats on Tanner with no crash.
+
 ---
 
 ### 8. Spawn placement

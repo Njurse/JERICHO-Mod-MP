@@ -1266,6 +1266,27 @@ static int MpOnFrame(void* userdata, void* args)
 		}
 	}
 
+	/* Test lever: MP_TEST_PED_MODEL=<id> selects a character through the same
+	 * MpSetPedModel the Player Options row calls, once the match is live. This
+	 * is what lets a padless two-seat run exercise the whole sync path (the
+	 * choice log, JPCL/the roster/JPPD, and the receiving stand-in). Inert
+	 * unless set. */
+	{
+		static int pedModelDone = 0;
+		const char* s = getenv("MP_TEST_PED_MODEL");
+
+		if (s != NULL && !pedModelDone && gMp.running && gMpCtx != NULL)
+		{
+			int model = atoi(s);
+			int ok;
+
+			pedModelDone = 1;
+			ok = MpSetPedModel(model);
+			gMpCtx->jer_log(gMpCtx,
+				"[mp] test: MP_TEST_PED_MODEL -> %d (accepted %d)\n", model, ok);
+		}
+	}
+
 	/* Test lever: MP_TEST_RESPAWN=<secs> fires the pause menu's Respawn --- the
 	 * nearest-road respawn, MpRespawnOnRoad --- that many seconds in, so the
 	 * repair + clear-felony side of Respawn is checkable with no pad and no menu.

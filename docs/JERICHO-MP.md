@@ -149,11 +149,15 @@ and its own special in slot 7 — which is why a ninth player does not exist and
 the assignment names a model, never a "slot 3".
 
 **Colour** rides the same per-frame car state, so the owner is the authority on its
-own car's paint. Each player's **character** (the on-foot Tanner) is the same idea:
-a player's preferred colour travels per player and their stand-in is painted with
-it. mp paints it as a *default* — a mod that sets a character's colour (factions,
-teams, whatever claims the ped) overrides it, because mp's ped hook runs first and
-only fills in what no mod coloured.
+own car's paint. Each player's **character** is the same idea: the owner chooses
+Tanner or Jericho under `Player Options`, and that choice travels in `JPCL`, the
+roster and the per-pose `JPPD`, so a late joiner and a mid-match change both
+arrive. The receiving machine validates the id, imports Jericho if it can
+(`JMPPED.LEV`, or Havana's streamed pages) and otherwise falls back to Tanner
+rather than drawing a broken skeleton. mp paints colour as a *default* — a mod
+that sets a character's colour (factions, teams, whatever claims the ped)
+overrides it, because mp's ped hook runs first and only fills in what no mod
+coloured.
 
 **Getting out** is a separate (and younger) path: the car is left standing where it
 was and a pedestrian stands in for the player. It is the least finished part of the

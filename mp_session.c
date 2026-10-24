@@ -52,6 +52,12 @@ extern int gWantNight;		/* glaunch.c: 1 = the night take-a-ride level variant */
 #include <stdlib.h>	/* getenv: the MP_TEST_JERICHO dev lever */
 #include <math.h>	/* sqrt: the deviation readout below */
 
+/* Validate a character id that arrived over the wire (defined beside the ped
+ * model helpers). Declared here because the roster reader uses it early. */
+static int MpPedModelFromWire(int id);
+static void MpLogInboundPedModel(const char* source, int playerId, int slot,
+				 int wire, int effective);
+
 /* WHICH CAR SLOTS ARE OURS.
  *
  * Sticky: once the module has put a player in a car, that slot is a module car for
@@ -1057,9 +1063,13 @@ void MpHostSendRoster(void)
 		e->palette = (uint16_t)p->palette;
 		/* Identity, not appearance: a late joiner needs the character BEFORE the
 		 * first pose, and a player in a car is not sending poses at all. Use the
-		 * config for ourselves (the registry row is fed from the wire). */
-		e->pedModel = (uint8_t)MpPedModelEffective(
-			p->isLocal ? gMp.config.pedModel : p->pedModel);
+		 * config for ourselves (the registry row is fed from the wire). Send the
+		 * OWNER'S CHOICE, not this host's effective view: a peer that has the
+		 * Havana data can draw Jericho even when this machine cannot. */
+		{
+			int choice = p->isLocal ? gMp.config.pedModel : p->pedModel;
+			e->pedModel = (uint8_t)MpPedModelFromWire(choice);
+		}
 
 		/* Whether THIS host has a car for that player yet -- the same gate the
 		 * spawn uses, and the only way a third machine can tell "their pick has
@@ -1740,10 +1750,20 @@ static void MpHandleRoster(const unsigned char* p, int len)
 		}
 		pl->palette = (int)e->palette;
 		/* The roster is the late-join snapshot: it names the character the owner
-		 * chose, so a joiner can draw the right ped before JPPD arrives. Stored as
-		 * the EFFECTIVE model for this level; the owner's choice stays in its row
-		 * for when the level changes back. */
-		pl->pedModel = MpPedModelEffective((int)e->pedModel);
+		 * chose, so a joiner can draw the right ped before JPPD arrives. Keep the
+		 * owner's choice here; the apply path resolves whether this level can
+		 * actually draw it (and imports Jericho first). */
+		{
+			int raw = (int)e->pedModel;
+			int model = MpPedModelFromWire(raw);
+
+			if (model != pl->pedModel)
+				MpLogInboundPedModel("roster", pl->id,
+					(int)(pl - gMp.players), raw,
+					MpPedModelEffective(model));
+
+			pl->pedModel = model;
+		}
 
 		/* The host has a car for them: build OUR copy of it. Without this a third
 		 * machine never gives a late joiner a car at all -- its carstate entries
@@ -6956,6 +6976,37 @@ int MpPedModelEffective(int model)
 	return model;
 }
 
+/* Validate a character id that arrived from the wire. The id space is stable
+ * (mp_proto.h), but never trust a peer's byte: an unknown id becomes Tanner.
+ *
+ * This deliberately keeps the OWNER'S CHOICE (a valid id) rather than folding it
+ * to Tanner just because this machine cannot draw it yet. A remote Jericho is
+ * resolved at apply time, where MpDriveRemotePed can import the models first;
+ * clamping here would erase the choice and the stand-in would never try. */
+static int MpPedModelFromWire(int id)
+{
+	if (id < 0 || id >= MP_PED_MODEL_COUNT)
+		return MP_PED_MODEL_TANNER;
+
+	return id;
+}
+
+/* One inbound-character log line, called only when the stored choice changes —
+ * never per JPPD frame. `wire` is what the peer asked for; `effective` is what
+ * this level can actually draw. */
+static void MpLogInboundPedModel(const char* source, int playerId, int slot,
+				 int wire, int effective)
+{
+	if (gMpCtx == NULL)
+		return;
+
+	gMpCtx->jer_log(gMpCtx,
+		"[mp] character: recv %s id %d for player %d slot %d -> %s (id %d)%s\n",
+		source, wire, playerId, slot,
+		MpPedModelName(effective), effective,
+		(wire != effective) ? " (unavailable/invalid; fallback)" : "");
+}
+
 int MpPedModelSelected(void)
 {
 	return gMp.config.pedModel;
@@ -7103,9 +7154,19 @@ static void MpApplyLocalPedModel(void)
 	ped->velocity.vz = 0;
 
 	if (gMpCtx != NULL)
-		gMpCtx->jer_log(gMpCtx,
-			"[mp] character: local player is now %s (pedType %d)\n",
-			MpPedModelName(model), type);
+	{
+		int requested = gMp.config.pedModel;
+
+		if (model != requested)
+			gMpCtx->jer_log(gMpCtx,
+				"[mp] character: applied %s (id %d, pedType %d); requested %s (id %d) unavailable -> fallback\n",
+				MpPedModelName(model), model, type,
+				MpPedModelName(requested), requested);
+		else
+			gMpCtx->jer_log(gMpCtx,
+				"[mp] character: applied %s (id %d, pedType %d)\n",
+				MpPedModelName(model), model, type);
+	}
 }
 
 /* Owner -> peers: persist the choice, apply it if we are on foot, and tell
@@ -7166,7 +7227,14 @@ int MpSetPedModel(int model)
 	}
 
 	if (gMpCtx != NULL)
-		gMpCtx->jer_log(gMpCtx, "[mp] character: chose %s\n", MpPedModelName(model));
+	{
+		int effective = MpPedModelEffective(model);
+
+		gMpCtx->jer_log(gMpCtx,
+			"[mp] character: chose %s (id %d); effective %s (id %d)\n",
+			MpPedModelName(model), model,
+			MpPedModelName(effective), effective);
+	}
 
 	return 1;
 }
@@ -7239,7 +7307,7 @@ static void MpSendOwnPedState(void)
 
 	e.playerId = (uint8_t)me->id;
 	e.flags = (uint8_t)(p->speed != 0 ? MP_PED_MOVING : 0);
-	e.pedModel = (uint8_t)MpPedModelEffective(gMp.config.pedModel);
+	e.pedModel = (uint8_t)MpPedModelFromWire(gMp.config.pedModel);
 	e.x = p->position.vx;
 	e.y = p->position.vy;
 	e.z = p->position.vz;
@@ -7302,7 +7370,17 @@ static void MpHandlePedState(int connIndex, const unsigned char* p, int len)
 		pl->pedZ = e.z;
 		pl->pedHeading = (int)(e.heading & 0xFFF);
 		pl->pedSpeed = e.speed;
-		pl->pedModel = MpPedModelEffective((int)e.pedModel);
+		{
+			int raw = (int)e.pedModel;
+			int model = MpPedModelFromWire(raw);
+
+			if (model != pl->pedModel)
+				MpLogInboundPedModel("JPPD", pl->id,
+					(int)(pl - gMp.players), raw,
+					MpPedModelEffective(model));
+
+			pl->pedModel = model;
+		}
 		pl->pedLastMs = MpNowMs();
 	}
 
@@ -7407,9 +7485,17 @@ static void MpDriveRemotePed(MP_PLAYER* p)
 		((LPPEDESTRIAN)n)->padId = -1;
 
 		if (gMpCtx != NULL)
+		{
+			int applied = MpPedModelEffective(p->pedModel);
+
 			gMpCtx->jer_log(gMpCtx,
-				"[mp] ped: standing in for player %d at %d,%d,%d heading %d speed %d\n",
-				p->id, p->pedX, p->pedY, p->pedZ, p->pedHeading, p->pedSpeed);
+				"[mp] ped: standing in for player %d slot %d at %d,%d,%d heading %d speed %d; applied %s (id %d, pedType %d)%s\n",
+				p->id, (int)(p - gMp.players), p->pedX, p->pedY, p->pedZ,
+				p->pedHeading, p->pedSpeed,
+				MpPedModelName(applied), applied,
+				((LPPEDESTRIAN)n)->pedType,
+				(applied != p->pedModel) ? " (unavailable; fallback)" : "");
+		}
 	}
 
 	ped = (LPPEDESTRIAN)n;
@@ -7627,7 +7713,7 @@ static void MpSendColors(int whole)
 				e.r = (uint8_t)gMp.config.colorR;
 				e.g = (uint8_t)gMp.config.colorG;
 				e.b = (uint8_t)gMp.config.colorB;
-				e.pedModel = (uint8_t)MpPedModelEffective(gMp.config.pedModel);
+				e.pedModel = (uint8_t)MpPedModelFromWire(gMp.config.pedModel);
 			}
 			else
 			{
@@ -7635,7 +7721,7 @@ static void MpSendColors(int whole)
 				e.r = (uint8_t)p->colorR;
 				e.g = (uint8_t)p->colorG;
 				e.b = (uint8_t)p->colorB;
-				e.pedModel = (uint8_t)MpPedModelEffective(p->pedModel);
+				e.pedModel = (uint8_t)MpPedModelFromWire(p->pedModel);
 			}
 
 			memcpy(buf + sizeof(h) + n * sizeof(e), &e, sizeof(e));
@@ -7656,7 +7742,7 @@ static void MpSendColors(int whole)
 		e.r = (uint8_t)gMp.config.colorR;
 		e.g = (uint8_t)gMp.config.colorG;
 		e.b = (uint8_t)gMp.config.colorB;
-		e.pedModel = (uint8_t)MpPedModelEffective(gMp.config.pedModel);
+		e.pedModel = (uint8_t)MpPedModelFromWire(gMp.config.pedModel);
 
 		memcpy(buf + sizeof(h), &e, sizeof(e));
 		n = 1;
@@ -7678,6 +7764,7 @@ static void MpHandleColor(int connIndex, const unsigned char* p, int len)
 {
 	MP_COLOR h;
 	int i, n, from;
+	int changed = 0;
 
 	if (len < (int)sizeof(MP_COLOR))
 		return;
@@ -7698,6 +7785,7 @@ static void MpHandleColor(int connIndex, const unsigned char* p, int len)
 	{
 		MP_COLOR_ENTRY e;
 		MP_PLAYER* pl;
+		int model;
 
 		memcpy(&e, p + sizeof(MP_COLOR) + i * sizeof(e), sizeof(e));
 
@@ -7711,18 +7799,44 @@ static void MpHandleColor(int connIndex, const unsigned char* p, int len)
 		if (pl == NULL)
 			continue;
 
+		/* The wire carries a raw byte. Keep a valid owner choice (a remote
+		 * Jericho may be imported by this machine at apply time); only an id
+		 * outside the registry becomes Tanner. The apply path decides whether
+		 * this level can actually draw it. */
+		model = MpPedModelFromWire((int)e.pedModel);
+
 		/* A colour is applied to its OWNER's character. The local player's own
 		 * colour lives in the config (that is what the menu edits); for everyone
 		 * else it is this table. */
 		if (!pl->isLocal)
 		{
+			int raw = (int)e.pedModel;
+			int modelChanged = (pl->pedModel != model);
+
+			if (modelChanged)
+				MpLogInboundPedModel("JPCL", pl->id,
+					(int)(pl - gMp.players), raw,
+					MpPedModelEffective(model));
+
+			if (pl->colorOn != (e.on ? 1 : 0) ||
+			    pl->colorR != e.r || pl->colorG != e.g || pl->colorB != e.b ||
+			    modelChanged)
+				changed = 1;
+
 			pl->colorOn = e.on ? 1 : 0;
 			pl->colorR = e.r;
 			pl->colorG = e.g;
 			pl->colorB = e.b;
-			pl->pedModel = MpPedModelEffective((int)e.pedModel);
+			pl->pedModel = model;
 		}
 	}
+
+	/* A client sends its identity to the host alone. The host owns the table and
+	 * has just updated it, so republish it now rather than making every other peer
+	 * wait for the 120-frame heartbeat: a mid-match character change should show
+	 * on the next client that has a stand-in for that player. */
+	if (changed && MpIsHost() && connIndex >= 0)
+		MpSendColors(1);
 }
 
 /* THE RELOAD FAILSAFE.

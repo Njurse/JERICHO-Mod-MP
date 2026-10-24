@@ -29,7 +29,7 @@ import time
 
 PROTO = 18                    # mp_proto.h MP_PROTO_VERSION (18: ped model id in JPCL/roster/JPPD on top of 17's crushScale) -- the game drops any frame whose envelope version differs
 SDK = 2                       # JERICHO_SDK_VERSION
-MP_VER = "0.1.0"              # JERICHO/MODS/mp/mod.toml version -- always advertised
+MP_VER = "0.16.0"             # JERICHO/MODS/mp/mod.toml version -- always advertised
 NUL = bytes([0])
 
 # Shared protocol constants, mirrored from mp_proto.h so the tools never hard-code
