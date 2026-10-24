@@ -36,9 +36,8 @@ DEFAULTS = {
     "port": 1318,
     "name": "Dedicated",
     "city": 0,                 # GameLevel the clients should load (0..3)
-    "arena": 0,                # which of the city's two multiplayer maps clients load
-                               # (0/1, the game's `-mp 0` / `-mp 1`). The dedicated
-                               # server hosts the multiplayer map, never the full city
+    "arena": 0,                # multiplayer arena index (the game's -mp 0 / -mp 1)
+    "map_mode": "mp",        # "city" for the full single-player city, "mp" for multiplayer
     "gamemode": 0,
     "max_players": 16,         # a client takes a slot 1..max_players-1 (0 is the server);
                                # 16 is the protocol's cap (MP_MAX_PLAYERS)
@@ -92,12 +91,10 @@ DEFAULTS = {
 # peers appear and leave on the timing it was written against.
 ROSTER_REFRESH_S = 2.0
 
-# The map SHAPE this server publishes: 1 = a multiplayer map, 0 = the full city.
-# It rides in MP_WELCOME.mpLevel and bit 0 of MP_SESSION.spare (mp_proto.h), and a
-# dedicated server is always a multiplayer session -- the full city was never the
-# intended mode (TESTING.md F1 measured it ending levels by itself). `arena` then
-# picks which of the city's two maps.
-MP_LEVEL = 1
+# Map shape published in MP_WELCOME.mpLevel and bit 0 of MP_SESSION.spare:
+# 0 = full city (single-player map), 1 = multiplayer map. Arena selects MP map 0/1.
+MAP_MODE_CITY = "city"
+MAP_MODE_MP = "mp"
 
 CONFIG_NAME = "dediserver.json"
 EXAMPLE_NAME = "dediserver.example.json"   # tracked; dediserver.json is the operator's, untracked
@@ -386,12 +383,19 @@ class Dedicated:
     def arena(self):
         return int(self.cfg["arena"])
 
+    @property
+    def map_mode(self):
+        return MAP_MODE_CITY if self.cfg.get("map_mode", MAP_MODE_MP) == MAP_MODE_CITY else MAP_MODE_MP
+
+    @property
+    def map_shape(self):
+        return 1 if self.map_mode == MAP_MODE_MP else 0
+
     def session_spare(self):
-        """MP_SESSION.spare: bit 0 is the map shape, bits 1.. the session rules
-        (MpHandleStart reads `(spare >> 1) & 0xff`), bit 8 the arena -- the same
-        layout an in-game host packs (mp_session.c, MpStartMatch)."""
-        return ((MP_LEVEL & 1) | ((int(self.cfg["rules"]) & 0x7F) << 1)
-                | ((self.arena & 1) << 8))
+        """MP_SESSION.spare: bit 0 is map shape, bits 1.. are rules, bit 8 is arena."""
+        arena = self.arena if self.map_shape else 0
+        return ((self.map_shape & 1) | ((int(self.cfg["rules"]) & 0x7F) << 1)
+                | ((arena & 1) << 8))
 
     # -- the plugin-facing surface (dedi/plugins.py ServerAPI calls these)
     def player_views(self):
@@ -1013,12 +1017,11 @@ class Dedicated:
         # 15 values: playerId, maxPlayers, modsEnforced, modsMatched, running,
         # subGame, mpLevel, arena, gamemode, city, timeOfDay, weather, seed,
         # hostCar, rules  (mp_proto.h MP_WELCOME, 18 bytes since v11).
-        # mpLevel was hardcoded 0 (the FULL city) while the in-game host said 1;
-        # a joining client then loaded a single-player level and sometimes ended
-        # it by itself (TESTING.md F1). A dedicated server is always a multiplayer
-        # session; `arena` says which of the city's two maps.
+        # mpLevel carries the requested map shape: 0 = full city, 1 = multiplayer.
+        # Arena only applies to multiplayer maps.
         return m.WELCOME.pack(pid, self.max_players, int(self.cfg["mod_check"]),
-                              1 if matched else 0, running, 0, MP_LEVEL, self.arena,
+                              1 if matched else 0, running, 0, self.map_shape,
+                              self.arena if self.map_shape else 0,
                               int(self.cfg["gamemode"]), self.city,
                               time_of_day_index(self.cfg), weather_index(self.cfg),
                               seed, 0xFF, int(self.cfg["rules"]) & 0xFF)
@@ -1189,6 +1192,7 @@ class Dedicated:
             "name:      %s" % self.cfg["name"],
             "session:   TCP/%d%s" % (self.port, adv),
             "city:      %d" % self.city,
+            "map mode:  %s" % ("multiplayer" if self.map_shape else "single-player city"),
             "arena:     %d (of the city's two multiplayer maps)" % self.arena,
             "gamemode:  %d" % int(self.cfg["gamemode"]),
             "rules:     %s" % rules_text(int(self.cfg["rules"])),
@@ -1561,6 +1565,11 @@ def main(argv=None):
                     "clients will load whatever it names, if the level registry has it"
                     % int(cfg["city"]))
 
+    mode = str(cfg.get("map_mode", MAP_MODE_MP)).strip().lower()
+    if mode not in (MAP_MODE_CITY, MAP_MODE_MP):
+        log.warning("map_mode %r is not city or mp; using mp" % mode)
+        mode = MAP_MODE_MP
+    cfg["map_mode"] = mode
     arena = int(cfg["arena"])
     if arena not in (0, 1):
         log.warning("arena %d is not 0 or 1 (the two multiplayer maps of a city); "
