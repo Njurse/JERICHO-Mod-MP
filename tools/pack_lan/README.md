@@ -16,8 +16,8 @@ pre-included modules (`JERICHO_RELEASE_MODS` in `premake5.lua`): carhacks, crump
 d1cars and mp. **The d1cars module ships; the Driver 1 car DATA does not.** It is
 baked out of Driver 1's copyrighted files, so the package carries the way to make it
 instead -- the bake tools plus `BAKE_D1_CARS.bat` / `BAKE_D1_CARS.sh` at the package
-root, which read the player's own Driver 1 data from `DRIVER\` and write
-`DRIVER\D1CARS\`.
+root, which read the player's own Driver 1 data from `DRIVER\` and write the baked
+blobs into `JERICHO\MODS\carhacks\D1CARS\` (carhacks owns them).
 
 That is why the packager copies `JERICHO\MODS\d1cars\tools` out of the REPO: the dev
 mirror excludes d1cars (premake `JER_MIRROR_EXCLUDE`), so `bin\Release` never has it
@@ -29,13 +29,13 @@ The rest of `DRIVER\` is out either way -- it is the Driver 1 game's own levels 
 586 MB of movies, which the car cities do not read.
 
 carhacks only offers a D1 city whose data is on disk (`chkCityAssetsPresent`, which
-tests `DRIVER\D1CARS\<CITY>.LEV`), so before a player bakes, the seven cities are simply
+tests the registered row and its level file), so before a player bakes, the cities are simply
 not offered -- the feature degrades to absent rather than to broken. A package with no
-`DRIVER\D1CARS\` and no tools would look the same as one where the player has not baked
+`JERICHO\MODS\carhacks\D1CARS\` and no tools would look the same as one where the player has not baked
 yet, which is why the packager warns rather than fails when the tools are missing.
 
 The private packager exists for the things a public release does not carry: the
-`levelhacks` and `sandbox` modules, and a dev exe. It also stages `DRIVER\D1CARS\`
+`levelhacks` and `sandbox` modules, and a dev exe. It also stages `JERICHO\MODS\carhacks\D1CARS\`
 itself, which the public one deliberately does not (below).
 
 The dev build also mirrors every module into `bin/Release_dev/JERICHO/MODS`,
@@ -66,7 +66,7 @@ A different shape on purpose, matching the earlier hand-offs:
   `DRIVER2\`, and `PACKAGE_NOTES.txt` inside says so in the first paragraph.
 * the **dev** exe, staged as `JERICHO.exe` so the launchers and readmes are the
   same files the public package ships;
-* `DRIVER\D1CARS\`, the Driver 1 car content, plus `JERICHO\MODS\d1cars`;
+* `JERICHO\MODS\carhacks\D1CARS\`, the baked Driver 1 car content, plus `JERICHO\MODS\d1cars`;
 * `JERICHO\CONFIG\modlist.ini` with six modules on (see
   `micheal_package/modlist.ini`) and `JERICHO\CONFIG\mp.ini` carrying the
   recipient's player name (see `micheal_package/mp.ini`);

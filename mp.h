@@ -99,6 +99,8 @@ typedef struct MP_PLAYER
 	int  carIsSlot;			/* 'car' is a per-city frontend SLOT to resolve, not a model */
 	int  carCity;			/* the city that car number belongs to, -1 = the session's own */
 	int  palette;			/* that player's car colour (0 = default) */
+	int  hubcaps;			/* low nibble: that player's LOST hubcaps (ap.flags bits 0..3),
+					 * owner-authoritative, like the palette. Applied after a rebuild. */
 	int  isLocal;			/* 1 = this machine's own player */
 	int  hasPlayerId;		/* the HELLO carried a JPID block (host side) */
 	unsigned char playerId[MP_PLAYER_ID_LEN];	/* that block's id */
@@ -135,7 +137,7 @@ typedef struct MP_PLAYER
 	 * spawn request and by MpSpawnLateJoiners.
 	 *
 	 * On OUR OWN row it is set by MpFollowLocalCar when we get out, so that getting
-	 * into a car again is reported as a choice (MP_CARQ_CHOSEN) - and only then. */
+	 * into a car again is reported as a choice (JER_CARQ_CHOSEN) - and only then. */
 	int   onFoot;
 
 	/* The car this player last got OUT of (slot + 1, 0 = none) and its model, so a
@@ -253,6 +255,10 @@ MP_PLAYER* MpGetPlayerByCar(int carId);	/* NULL when carId is not a player */
 /* Is this car object drawing the reload failsafe's grey stand-in (the host city's
  * car 1) because its real model is not loaded yet? Read by the draw-colour hook. */
 int MpCarIsStandIn(int carSlot);
+
+/* Is the stand-in body the placeholder car (a checker body) rather than the
+ * host-car-1 grey fallback? The draw-colour hook greys only the fallback. */
+int MpStandInIsPlaceholder(void);
 
 /* SP / pre-session readiness stand-in: put the local car on the host city's car 1 in
  * solid grey while its imported resident slot is not drawable, and put it back when it
@@ -589,11 +595,11 @@ const char* MpModeName(int gamemode);	/* MP_GAMEMODE_* -> display name */
 const char* MpCityLabel(int city);
 
 /* The live-car questions mp puts to other modules (carhacks) -- see
- * mp_carquery.h. Both are "no answer is not an error": 0 means nobody knew
+ * jer_carquery.h. Both are "no answer is not an error": 0 means nobody knew
  * better, and the caller falls back to the session's own city. */
 int MpCarQueryCities(int* out, int max);	/* out: 0..3 city indices; returns the count */
 int MpCarQueryLoad(int city, int model);	/* 1 = this machine holds it now */
-void MpCarQueryChosen(int city, int model, int changed);	/* notice: what we drive now (mp_carquery.h) */
+void MpCarQueryChosen(int city, int model, int changed);	/* notice: what we drive now (jer_carquery.h) */
 
 /* Which slots a city may be offered in, and the model in each. slots[] and models[] are
  * PARALLEL and `max` is the capacity of both. Returns the count; 0 = nobody knows. */

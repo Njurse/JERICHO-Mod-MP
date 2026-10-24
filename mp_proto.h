@@ -38,13 +38,23 @@
 extern "C" {
 #endif
 
-#define MP_PROTO_VERSION	15	/* 15: the preferred on-foot character rides with the
+#define MP_PROTO_VERSION	18	/* 18: the preferred on-foot character rides with the
 				 *     player identity: MP_COLOR_ENTRY's first spare byte
 				 *     (JPCL), a new MP_ROSTER_ENTRY byte, and
 				 *     MP_PEDSTATE_ENTRY.spare (JPPD). One id, three
 				 *     chances to learn it, so a late joiner has it
 				 *     before the first pose and a mid-match change
-				 *     reaches every peer.
+				 *     reaches every peer. MP_ROSTER_ENTRY is 30 bytes.
+				 * 17: MP_CARSTATE_ENTRY carries `crushScale`, so the
+				 *     owner's per-car body-crush multiplier is applied
+				 *     on every machine simulating that car. 57 bytes
+				 *     (was 56).
+				 * 16: MP_CARSTATE_ENTRY carries `hubcaps`, so a
+				 *     peer's missing hubcap is drawn on the other machines
+				 *     too. 56 bytes (was 55).
+				 * 15: MP_CARSTATE carries leftModel/leftModelCity so a late
+				 *     joiner can materialize the parked car a player left.
+				 *     MP_CARSTATE_ENTRY is 55 bytes (was 53).
 				 * 14: MP_HIT carries targetFrame + tgtPos, so a contact can be
 				 *     validated against the target's own pose timeline instead
 				 *     of being applied on arrival. MP_HIT is 32 bytes (was 16).
@@ -97,6 +107,9 @@ extern "C" {
 					 * JER_ERROR_WRAP (jer_system.c). */
 #define MP_NOTIFY_MS		6000	/* how long a line stays on screen (ms) */
 #define MP_CHANNEL_NAME_MAX	16
+/* The most payload a channel frame may carry. Also the bound MpBridgeAccept uses, so a
+ * receiver can build a relay copy of the header + payload on the stack. */
+#define MP_CHANNEL_MAX_PAYLOAD	1024
 
 /* ------------------------------------------------------------------ */
 /* Tags                                                                */
@@ -175,7 +188,7 @@ typedef struct MP_ROSTER_ENTRY
 	uint8_t  carId;		/* that machine's local CAR_DATA slot, informational */
 	uint8_t  model;		/* car model, 0xFF = on foot */
 	uint8_t  modelCity;	/* city `model` belongs to: MP_CAR_CITY_SESSION = the
-				 * session's city, 0..3 = a cross-city import */
+				 * session's city, 0..CITY_COUNT-1 = a cross-city import */
 	uint8_t  flags;		/* MP_ROSTER_FLAG_* */
 	uint8_t  pedModel;	/* MP_PED_MODEL_*: the character this player is using */
 	uint16_t ping;		/* round trip in ms, as the host measured it */
@@ -514,6 +527,7 @@ typedef struct MP_COLOR
  * warps them into an unrelated car. Vehicles are matched by MODEL, in place
  * (MpAdoptRemoteCar). */
 #define MP_CARSTATE_HAS_BODY	1
+#define MP_CARSTATE_SIREN	8	/* owner has siren/lights on (police car) */
 /* The body we are in now is the SAME `car_data` slot we last got out of (this
  * machine's slot -- the peers know which body they released for us). The owner
  * sets it whenever they walk back into the car they left, or use the pause menu's
@@ -524,6 +538,13 @@ typedef struct MP_COLOR
  * readers, and an older sender simply never sets it, so no protocol bump. */
 #define MP_CARSTATE_SAME_BODY	2
 
+/* The NO_CAR row also describes the car the owner walked away from: leftModel /
+ * leftModelCity name it, and the row's palette, x/y/z and heading carry its
+ * colour and pose. A machine that was present when the owner got out already has
+ * that body and ignores this; a joiner that arrived afterwards uses it to build
+ * the parked CIV_AI car instead of seeing a player whose car never existed. */
+#define MP_CARSTATE_LEFT_CAR	4
+
 /* entry.model when the owner is on foot: no vehicle to drive, so the peers
  * release the car they were driving for them (it stays in the world). */
 #define MP_CARSTATE_NO_CAR	0xFF
@@ -531,13 +552,13 @@ typedef struct MP_COLOR
 typedef struct MP_CARSTATE_ENTRY
 {
 	uint8_t  playerId;
-	uint8_t  flags;		/* MP_CARSTATE_HAS_BODY */
+	uint8_t  flags;		/* MP_CARSTATE_HAS_BODY | MP_CARSTATE_SIREN */
 	uint8_t  palette;	/* owner's car colour (cp->ap.palette) -- owner-authoritative */
 	uint8_t  model;		/* the VEHICLE the owner is driving (cp->ap.model);
 				 * MP_CARSTATE_NO_CAR = on foot, so the peers stop
 				 * driving our old car and leave it where it was */
 	uint8_t  modelCity;	/* city `model` belongs to: MP_CAR_CITY_SESSION = the
-				 * session's city, 0..3 = a cross-city import */
+				 * session's city, 0..CITY_COUNT-1 = a cross-city import */
 	int16_t  orient[4];	/* st.n.orientation */
 	int32_t  x, y, z;	/* world units */
 	int32_t  heading;	/* hd.direction */
@@ -546,6 +567,16 @@ typedef struct MP_CARSTATE_ENTRY
 				 * reaches +-1.5 MILLION), so a 16-bit field truncated
 				 * every snapshot into a different spin. */
 	int32_t  vel[3];	/* st.n.linearVelocity */
+	uint8_t  leftModel;	/* MP_CARSTATE_LEFT_CAR: the parked car's model NUMBER */
+	uint8_t  leftModelCity;	/* ...and the city that number belongs to */
+	uint8_t  hubcaps;	/* bits 0..3 = hubcap LOST on wheel 0..3 (cp->ap.flags low
+				 * nibble). Appearance is owner-authoritative, exactly like
+				 * the palette: LoseHubcap writes it on the owner's machine and
+				 * nothing else clears it. */
+	uint8_t  crushScale;	/* owner's body-crush multiplier in HALF steps:
+				 * 2 = 1.0x, 20 = 10.0x (0/1 read as 1.0x). Per CAR,
+				 * not per player -- mp applies it to the car this row
+				 * names, so every machine deforms that body alike. */
 } MP_CARSTATE_ENTRY;
 
 /* ------------------------------------------------------------------ */
@@ -735,7 +766,7 @@ static_assert(sizeof(MP_SESSION) == 12, "MP_SESSION layout");
 static_assert(sizeof(MP_PLAYER_INPUT) == 4, "MP_PLAYER_INPUT layout");
 static_assert(sizeof(MP_INPUT) == 4, "MP_INPUT layout");
 static_assert(sizeof(MP_ROSTER_ENTRY) == 30, "MP_ROSTER_ENTRY layout");
-static_assert(sizeof(MP_CARSTATE_ENTRY) == 53, "MP_CARSTATE_ENTRY layout");
+static_assert(sizeof(MP_CARSTATE_ENTRY) == 57, "MP_CARSTATE_ENTRY layout");
 static_assert(sizeof(MP_HIT) == 32, "MP_HIT layout");
 static_assert(sizeof(MP_STATS_ENTRY) == 12, "MP_STATS_ENTRY layout");
 static_assert(sizeof(MP_CARSTATE) == 8, "MP_CARSTATE layout");

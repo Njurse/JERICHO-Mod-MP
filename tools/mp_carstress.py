@@ -29,6 +29,7 @@ finished, and every sign of trouble:
   not loaded .... a peer's car this machine could not hold
   keeping slot .. a car drawn from another car's slot
   refused ....... a change the session said no to
+  siren contract  a car logged as both horn and siren, or as civilian and siren
 
 Exit code is 0 only when every seat cycled its whole list with none of the above.
 """
@@ -55,6 +56,7 @@ TROUBLE = (
     ("MISSING", re.compile(r"MISSING")),
     ("not loaded", re.compile(r"is not loaded here")),
     ("keeping slot", re.compile(r"keeping slot \d+")),
+    ("sound full", re.compile(r"sound bank \d+ is full|no car sound bank")),
     ("refused", re.compile(r"could not be built|cannot load the car", re.I)),
 )
 
@@ -71,11 +73,19 @@ HANDLED = (
     ("gave up", re.compile(r"gave up on a resident slot")),
 )
 
-CHANGE = re.compile(r"\[mp\] change car: we asked for (\w+) model (\d+)")
+CHANGE = re.compile(r"\[mp\] (?:change car: we asked for|test: car cycle: drove) (\w+) model (\d+)")
 STATUS = re.compile(r"car status: driving model (\d+) \(resident (-?\d+), source (\w+)\)")
 PASS = re.compile(r"car cycle PASS (\d+) done")
 STARTED = re.compile(r"car cycle: (\d+) car\(s\), a change every (\d+) ms")
 VERDICT = re.compile(r"\[pair\] verdict: (.*)")
+
+# Siren/horn contract (JERICHO_DIAG_SIREN logs the sample actually started).
+# A car must never be both a siren and a horn source, and an imported slot logged
+# as a civilian must never also be logged as using an imported siren.
+CIVILIAN_IMPORT = re.compile(r"gamesnd: slot (\d+) \((\w+) model (\d+)\) is a civilian import - no siren")
+IMPORTED_SIREN = re.compile(r"cross-city: slot (\d+) \((\w+) model (\d+)\) uses the imported siren")
+HORN = re.compile(r"gamesnd: horn: slot (\d+) \((\w+) model (\d+)\) sample (\d+)")
+SIREN = re.compile(r"gamesnd: siren: slot (\d+) \((\w+) model (\d+)\) sample (\d+)")
 
 
 def read(path):
@@ -84,6 +94,22 @@ def read(path):
 
     with open(path, "rb") as f:
         return f.read().decode("utf-8", "replace")
+
+
+def seat_log(run_dir):
+    """The game names its log with the build version; JERICHO.log may not exist."""
+    direct = os.path.join(run_dir, "JERICHO.log")
+
+    if os.path.exists(direct):
+        return direct
+
+    try:
+        logs = [os.path.join(run_dir, n) for n in os.listdir(run_dir)
+                if n.startswith("JERICHO") and n.endswith(".log")]
+    except OSError:
+        return direct
+
+    return max(logs, key=os.path.getmtime) if logs else direct
 
 
 def summarise(text):
@@ -114,6 +140,15 @@ def summarise(text):
 
         if hits:
             handled.append((label, hits))
+
+    civilian = set(CIVILIAN_IMPORT.findall(text))
+    imported_siren = set(IMPORTED_SIREN.findall(text))
+    horn = set(HORN.findall(text))
+    siren = set(SIREN.findall(text))
+    contract = (civilian & imported_siren) | (horn & siren)
+
+    if contract:
+        trouble.append(("siren contract", len(contract)))
 
     return {
         "changes": len(CHANGE.findall(text)),
@@ -174,7 +209,8 @@ def main():
            "--bot", a.bot]
 
     for s in seats:
-        cmd += ["--seat-env", "%s=MP_TEST_CARCYCLE=%d" % (s, a.interval_ms)]
+        cmd += ["--seat-env", "%s=MP_TEST_CARCYCLE=%d" % (s, a.interval_ms),
+                "--seat-env", "%s=JERICHO_DIAG_SIREN=1" % s]
 
     # --keep IS NOT OPTIONAL HERE. This rig summarises the seat logs AFTER the pair has
     # exited, and mp_localpair deletes its run dirs on the way out unless --keep is given.
@@ -206,7 +242,7 @@ def main():
     coverage = []
 
     for s, d in zip(seats, names):
-        info = summarise(read(os.path.join(run_root, d, "JERICHO.log")))
+        info = summarise(read(seat_log(os.path.join(run_root, d))))
         handed = ", ".join("%s x%d" % t for t in info["handled"]) or "-"
         trouble = ", ".join("%s x%d" % t for t in info["trouble"]) or "-"
 

@@ -283,7 +283,7 @@ def main():
         out = say(vs, a, "!vote havana")
         check("vote: one vote per player id", "already voted" in out[-1][1], out)
         out = say(vs, b, "!vote rio")
-        check("vote: a second city waits", "vote for HAVANA is running" in out[-1][1], out)
+        check("vote: a second city waits", "vote for HAVANA mp 0 is running" in out[-1][1], out)
         out = say(vs, adm, "!vote cancel")
         check("vote: an admin can cancel", any("cancelled" in t for _, t in out), out)
         out = say(vs, b, "!vote havana")
@@ -317,6 +317,79 @@ def main():
               saved.get("city") == 3 and saved.get("custom_key") == 42, saved)
         check("vote: everyone is told to rejoin (kick)",
               sum(1 for conn, _ in out if conn is not None) == 4, out)
+
+        # -- !vote city <city> [mp 0|1]: one of the city's two multiplayer maps
+        ms = build(tmp, city=0, arena=0, vote_duration=30, vote_cooldown=60)
+        mv = dict(ms.plugins.plugins)["vote"]
+        mclock = [900.0]
+        mv.now = lambda: mclock[0]
+        ma = join(ms, 1, "Ann")
+        mb = join(ms, 2, "Ben")
+        check("vote: mp parses as the city's two maps",
+              mv.parse_target("mp 1") == (None, 1)
+              and mv.parse_target("city rio mp 0") == (3, 0)
+              and mv.parse_target("havana mp 1") == (1, 1)
+              and mv.parse_target("havana") == (1, None),
+              [mv.parse_target(x) for x in ("mp 1", "city rio mp 0", "havana mp 1", "havana")])
+        out = say(ms, ma, "!vote mp 2")
+        check("vote: mp is 0 or 1", "mp is 0 or 1" in out[-1][1], out)
+        out = say(ms, ma, "!vote city")
+        check("vote: !vote city needs a city", "usage" in out[-1][1], out)
+        out = say(ms, ma, "!vote city chicago mp")
+        check("vote: mp needs a value", "mp needs a value" in out[-1][1], out)
+        out = say(ms, ma, "!vote city havana 1")
+        check("vote: mp must be named", "unknown option" in out[-1][1], out)
+        out = say(ms, ma, "!help vote")
+        help_text = " ".join(t for _, t in out)
+        check("vote: the help names both forms",
+              "!vote city <city> [mp 0|1]" in help_text and "!vote mp 0|1" in help_text, help_text)
+        out = say(ms, ma, "!vote havana mp 1")
+        check("vote: city + mp starts the vote",
+              any("started a vote to switch to HAVANA mp 1" in t for _, t in out)
+              and any("type !vote city havana mp 1 to agree" in t for _, t in out), out)
+        out = say(ms, ma, "!vote rio mp 1")
+        check("vote: a different city waits", "vote for HAVANA mp 1 is running" in out[-1][1], out)
+        out = say(ms, ma, "!vote havana mp 0")
+        check("vote: a different mp waits", "vote for HAVANA mp 1 is running" in out[-1][1], out)
+        out = say(ms, mb, "!vote mp 1")
+        check("vote: an mp-only line for another city waits",
+              "vote for HAVANA mp 1 is running" in out[-1][1], out)
+        out = say(ms, ma, "!vote havana mp 1")
+        check("vote: the same player cannot vote twice", "already voted" in out[-1][1], out)
+        out = say(ms, mb, "!vote city havana mp 1")
+        check("vote: a majority passes the map too",
+              any("Vote passed: switching to HAVANA mp 1" in t for _, t in out), out)
+        check("vote: the city and arena are now the session map",
+              ms.city == 1 and ms.arena == 1, (ms.city, ms.arena))
+        with open(ms.config_path) as f:
+            saved = json.load(f)
+        check("vote: the arena is saved beside the city",
+              saved.get("city") == 1 and saved.get("arena") == 1 and saved.get("custom_key") == 42,
+              saved)
+        w = m.WELCOME.unpack(ms._welcome(1, 1))
+        check("vote: a joiner is told the multiplayer map and arena", w[6] == 1 and w[7] == 1, w)
+        check("vote: the start frame carries shape, rules and arena",
+              ms.session_spare() & 1 == 1 and (ms.session_spare() >> 1) & 0x7F == ms.cfg["rules"] & 0x7F
+              and (ms.session_spare() >> 8) & 1 == 1, hex(ms.session_spare()))
+
+        # -- !vote mp 0|1 alone changes only the map, in the same city
+        mclock[0] += 61
+        out = say(ms, ma, "!vote mp 0")
+        check("vote: an mp-only vote names the current city",
+              any("started a vote to switch to HAVANA mp 0" in t for _, t in out), out)
+        out = say(ms, mb, "!vote mp 0")
+        check("vote: an mp-only vote passes on a majority",
+              any("Vote passed: switching to HAVANA mp 0" in t for _, t in out), out)
+        check("vote: only the arena changed", ms.city == 1 and ms.arena == 0, (ms.city, ms.arena))
+        with open(ms.config_path) as f:
+            saved = json.load(f)
+        check("vote: the new arena is saved", saved.get("arena") == 0 and saved.get("city") == 1, saved)
+
+        # -- the current map is refused now that it is the target
+        mclock[0] += 61
+        out = say(ms, ma, "!vote city havana mp 0")
+        check("vote: the current map is refused",
+              "already on HAVANA mp 0" in out[-1][1], out)
 
         # -- explicit list
         server2 = build(tmp, plugins=["commands", "off"])

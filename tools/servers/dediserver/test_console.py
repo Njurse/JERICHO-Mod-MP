@@ -63,7 +63,27 @@ def main():
     check("defaults: cops on, difficulty 1", fresh["rules"] == 0x5, str(fresh["rules"]))
     check("status shows the session port", "TCP/1400" in st)
     check("status shows the city", "city:      2" in st)
+    check("status shows the multiplayer map",
+          "arena:     0 (of the city's two multiplayer maps)" in st, st)
     check("status shows the player count", "players:   0/8" in st)
+
+    # -- the map the server publishes: shape 1 (a multiplayer map) and its arena
+    w = m.WELCOME.unpack(server._welcome(1, 1))
+    check("welcome says multiplayer map, arena 0", w[6] == 1 and w[7] == 0, str(w))
+    server.set_arena(1)
+    w = m.WELCOME.unpack(server._welcome(1, 1))
+    check("welcome follows the configured arena", w[6] == 1 and w[7] == 1, str(w))
+    spare = server.session_spare()
+    check("session spare: shape bit 0, rules in 1.., arena in bit 8",
+          spare & 1 == 1 and (spare >> 1) & 0x7F == server.cfg["rules"] & 0x7F
+          and (spare >> 8) & 1 == 1, hex(spare))
+    try:
+        server.set_arena(2)
+        bad = False
+    except ValueError:
+        bad = True
+    check("set_arena refuses anything but 0/1", bad)
+    server.set_arena(0)
 
     # -- list with nobody connected
     check("list says nobody is connected", server.cmd_list("") == "no players connected")
@@ -193,6 +213,26 @@ def main():
     check("the roster lists the picked car as ready",
           picked.get(6) == (9, 1, m.ROSTER_FLAG_CAR_READY) and picked.get(4) == (0xFF, 0xFF, 0), repr(picked))
     check("a short car pick is ignored", not server.note_car_pick(pairs[6][0], b"\x01"))
+    # -- FOREIGN-CITY PICK: a bank / Driver 1 source city (BETAMIAMI = 11) must keep its
+    # city in the roster, not collapse to the session city (0xFF) -- that collapse is what
+    # "foreign cities don't sync on a dedicated server" reduced to.
+    server.note_car_pick(pairs[6][0], m.CAR_PICK.pack(9, 11))
+    rows = server.roster_bytes()
+    picked = {}
+    for i in range(m.ROSTER.unpack_from(rows, 0)[0]):
+        e = m.ROSTER_ENTRY.unpack_from(rows, m.ROSTER.size + i * m.ROSTER_ENTRY.size)
+        picked[e[0]] = (e[2], e[3], e[4])
+    check("a foreign-city pick keeps its city (BETAMIAMI = 11)",
+          picked.get(6) == (9, 11, m.ROSTER_FLAG_CAR_READY), repr(picked))
+    # -- a session pick spells "the level's own city" as 0xFF and must stay 0xFF
+    server.note_car_pick(pairs[6][0], m.CAR_PICK.pack(9, 0xFF))
+    rows = server.roster_bytes()
+    picked = {}
+    for i in range(m.ROSTER.unpack_from(rows, 0)[0]):
+        e = m.ROSTER_ENTRY.unpack_from(rows, m.ROSTER.size + i * m.ROSTER_ENTRY.size)
+        picked[e[0]] = (e[2], e[3], e[4])
+    check("a session-city pick (0xFF) stays the session city",
+          picked.get(6) == (9, 0xFF, m.ROSTER_FLAG_CAR_READY), repr(picked))
     # -- PALETTE: a pick that carries it (reserved[0], flagged by reserved[1]) is in the roster
     server.note_car_pick(pairs[6][0], bytes([9, 1, 4, 1]))
     rows = server.roster_bytes()
@@ -207,6 +247,20 @@ def main():
          for i in range(m.ROSTER.unpack_from(rows, 0)[0])]
     check("an unflagged palette byte is ignored (old clients)",
           [r[7] for r in e if r[0] == 6] == [4], repr(e))
+    # -- HEARTBEAT CORRECTION: a mid-session swap arrives as the owner's carstate, not
+    # a pick. The roster the 2s heartbeat re-sends must carry the carstate's (model,
+    # city), overriding a stale pick, so a peer that never rendered the old car (too far
+    # away) builds the correct one from the corrected roster.
+    server.note_car_pick(pairs[6][0], m.CAR_PICK.pack(9, 1))          # stale: session city 1
+    server.cars[6] = m.CARSTATE_ENTRY.pack(6, 1, 0, 9, 11,            # swapped to BETAMIAMI (11)
+                                           0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2)
+    rows = server.roster_bytes()
+    picked = {}
+    for i in range(m.ROSTER.unpack_from(rows, 0)[0]):
+        e = m.ROSTER_ENTRY.unpack_from(rows, m.ROSTER.size + i * m.ROSTER_ENTRY.size)
+        picked[e[0]] = (e[2], e[3], e[4])
+    check("the heartbeat roster corrects a stale pick from the carstate (BETAMIAMI = 11)",
+          picked.get(6) == (9, 11, m.ROSTER_FLAG_CAR_READY), repr(picked))
     # -- LINK STATS: one row per client, rates from the bytes each way, loss unknown
     body = server.stats_bytes()
     n = m.STATS.unpack_from(body, 0)[0]
@@ -221,11 +275,23 @@ def main():
     check("the stats carry the measured ping", rows[5][2] == rtt, repr(rows[5]))
     check("a short colour frame is dropped", relay.color(server, pairs[4][0], 4, m.COLOR.pack(3)) == 0)
 
-    # -- CHANNEL: header + declared payload, to everyone (the sender too)
+    # -- CHANNEL: header + declared payload, to everyone (the sender too), with the
+    # sender STAMPED from the connection -- a relayed client's frame otherwise arrives
+    # looking like player 0's on every other client (the dedicated-server car bug).
     ch = m.CHANNEL.pack(b"jerai", 3, 7, 1, 4, 0, 0) + b"abc"
     check("a channel frame is relayed", relay.channel(server, pairs[4][0], 4, ch + b"junk"))
     check("all three got it, trailing bytes cut",
           all(got(p, 1.0) == (m.TAG["channel"], ch) for p in (4, 5, 6)))
+    spoof = m.CHANNEL.pack(b"jerai", 3, 7, 1, 6, 0, 0) + b"abc"
+    check("a channel frame claiming another sender is relayed",
+          relay.channel(server, pairs[4][0], 4, spoof))
+    stamped = []
+    for p in (4, 5, 6):
+        frame = got(p, 1.0)
+        stamped.append(frame is not None and frame[0] == m.TAG["channel"] and
+                       frame[1][m.CHANNEL_FROM_OFFSET] == 4 and
+                       frame[1][m.CHANNEL.size:] == b"abc")
+    check("the relay stamps the connection's player id, not the claim", all(stamped))
     check("a channel frame shorter than its len is dropped",
           not relay.channel(server, pairs[4][0], 4, ch[:-1]))
 
@@ -249,6 +315,12 @@ def main():
     check("an existing config is never overwritten", _c.ensure_config(cf, ex) is None
           and open(cf).read() == '{"name": "Mine"}')
     check("the repo ships the example", os.path.exists(os.path.join(HERE, _c.EXAMPLE_NAME)))
+    import json
+    cli = os.path.join(td, "cli.json")
+    with open(cli, "w") as f:
+        json.dump({"arena": 0}, f)
+    cli_cfg, _ = _c.build_config(["--config", cli, "--arena", "1"])
+    check("--arena overrides the config file", cli_cfg["arena"] == 1, str(cli_cfg["arena"]))
 
     # -- KICK over a real socket pair: the frame, then the connection closing
     a, b = socket.socketpair()
@@ -324,6 +396,18 @@ def main():
     check("a disabled mod does not count",
           not d.mods_match([("mp", "1", 1), ("carhacks", "1", 0)], ["mp", "carhacks"], {}, 1))
     check("a server naming no mods matches everyone", d.mods_match([], [], {}, 2))
+
+    # -- CORE mods: a mandatory subset, optional modules may ride along
+    core = ["mp", "carhacks", "d1cars"]
+    full = [("mp", "1", 1), ("carhacks", "1", 1), ("d1cars", "1", 1)]
+    check("core mods are mandatory",
+          d.mods_match(full[:2], [], {}, 1, core) is False)
+    check("optional mods may accompany the core suite",
+          d.mods_match(full + [("crumple", "1", 1)], [], {}, 1, core) is True)
+    check("an exact mods list still forbids extras",
+          d.mods_match(full + [("crumple", "1", 1)], core, {}, 1, core) is False)
+    check("the core suite alone satisfies an empty exact list",
+          d.mods_match(full, [], {}, 2, core) is True)
 
     # -- the manifest rides after the hello header, in the same frame
     hello = m.HELLO.pack(m.PROTO, m.SDK, 0, 0, b"X", 1, 0, 0, 0)

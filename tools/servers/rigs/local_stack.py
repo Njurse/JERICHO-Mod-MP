@@ -26,6 +26,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import signal
 import socket
 import subprocess
@@ -57,6 +58,39 @@ SIM_FLOOR = lp.SIM_FLOOR
 
 def log(msg):
     print(f"[stack] {msg}", flush=True)
+
+
+def check_lines(seats, requires, forbids):
+    """Evaluate [SEAT=]REGEX checks against the seat logs. Returns (missing, found).
+
+    There is no host seat in this topology: the dedicated server is not a game, so
+    every seat is c1..cN and a bare pattern means "any seat". This is the same shape
+    as mp_localpair's checks, without its host/client alias map.
+    """
+    texts = {key: lp.read_log(path) for key, path in seats.items()}
+    everything = "\n".join(texts.values())
+    missing, found = [], []
+
+    def scope(spec):
+        if "=" in spec:
+            prefix, pattern = spec.split("=", 1)
+            if prefix in texts:
+                return prefix, pattern, texts[prefix]
+            if prefix == "all":
+                return "all", pattern, everything
+        return None, spec, everything
+
+    for spec in requires:
+        where, pattern, haystack = scope(spec)
+        if not re.search(pattern, haystack):
+            missing.append((where or "any seat", pattern))
+
+    for spec in forbids:
+        where, pattern, haystack = scope(spec)
+        if re.search(pattern, haystack):
+            found.append((where or "any seat", pattern))
+
+    return missing, found
 
 
 # ------------------------------------------------------------------ processes
@@ -340,6 +374,20 @@ def parse_args(argv):
     ap.add_argument("--no-debug", action="store_true", help="run WITHOUT MP_DEBUG, like a player does")
     ap.add_argument("--keep", action="store_true", help="leave the run dirs and logs behind")
     ap.add_argument("--shots", default=None, metavar="DIR", help="photograph the seats with mpshots.py")
+    ap.add_argument("--seat-env", action="append", default=[], metavar="SEAT=KEY=VALUE",
+                    help="set an env var for one client seat (c1, c2, ... or 'all'). This is "
+                         "how each seat picks a different car, e.g. "
+                         "--seat-env c1=CHK_FORCE_CAR=3 --seat-env c2=MP_TEST_PAUSECAR=20,3,1. "
+                         "Applied after the shared client environment.")
+    ap.add_argument("--require", action="append", default=[], metavar="[SEAT=]REGEX",
+                    help="a line that must appear in a seat's log (repeatable; SEAT is c1, c2, "
+                         "... or omit for any seat). The dedi topology has no host seat.")
+    ap.add_argument("--forbid", action="append", default=[], metavar="[SEAT=]REGEX",
+                    help="a line that must NOT appear in a seat's log (repeatable)")
+    ap.add_argument("--carsync", action="store_true",
+                    help="the car-sync gate: cycle every car on every seat unless a seat's env "
+                         "says otherwise, require each seat to draw a peer's exact car, and "
+                         "forbid the import-failure lines (not loaded / no spare / MISSING)")
     ap.add_argument("--advertise-wait", type=float, default=45.0, metavar="S",
                     help="how long to wait for the listing to appear (default 45)")
     ap.add_argument("--advertise-join", action="store_true",
@@ -361,6 +409,40 @@ def parse_args(argv):
 def main(argv=None):
     args = parse_args(argv)
     proto_check.assert_ok()   # a drifted wire mirror explains a lot of nonsense; fail first
+
+    seat_env = {}
+    for spec in args.seat_env:
+        if "=" not in spec:
+            raise SystemExit(f"--seat-env wants SEAT=KEY=VALUE, got {spec!r}")
+        seat, rest = spec.split("=", 1)
+        if "=" not in rest:
+            raise SystemExit(f"--seat-env wants SEAT=KEY=VALUE, got {spec!r}")
+        key, value = rest.split("=", 1)
+        seat_env.setdefault(seat, {})[key] = value
+
+    requires = list(args.require)
+    forbids = list(args.forbid)
+
+    if args.carsync:
+        # Every seat cycles the cars the session offers, including guest cities, so the
+        # peer folds and the relayed identities are exercised. A per-seat MP_TEST_* or
+        # CHK_FORCE_CAR in --seat-env still wins.
+        seat_env.setdefault("all", {}).setdefault("MP_TEST_CARCYCLE", "1200")
+        forbids += [
+            r"theirs is not loaded here",
+            r"no spare resident slot",
+            r"could not be loaded",
+            r"never built it",
+            r"MISSING",
+            r"\[carhacks/net\] player 0 drives",   # the lost-sender symptom
+        ]
+        if args.clients >= 2:
+            for n in range(1, args.clients + 1):
+                requires += [f"c{n}=player [1-9]\\d* drives", f"c{n}=draws exactly that"]
+
+    for seat in seat_env:
+        if seat != "all" and seat not in {f"c{n + 1}" for n in range(args.clients)}:
+            raise SystemExit(f"--seat-env: unknown seat {seat!r} (c1..c{args.clients} or all)")
 
     exe = os.path.join(args.game_dir, args.exe)
     if not os.path.isfile(exe):
@@ -473,7 +555,12 @@ def main(argv=None):
                 env["MP_TEST_MANUALADDR"] = addr.replace("%s", str(args.dedi_port))
             else:
                 argv += ["-join", f"127.0.0.1:{args.dedi_port}"]
-            procs[key] = lp.launch(run_dir, args.exe, argv, env)
+
+            this_env = dict(env)
+            this_env.update(seat_env.get("all", {}))
+            this_env.update(seat_env.get(key, {}))
+
+            procs[key] = lp.launch(run_dir, args.exe, argv, this_env)
             log(f"client {key} pid {procs[key].pid} -> 127.0.0.1:{args.dedi_port}")
             seat_args += ["--seat", f"{key}={os.path.join(run_dir, 'JERICHO.log')}:{procs[key].pid}"]
             if i + 1 < len(seats):
@@ -549,6 +636,21 @@ def main(argv=None):
 
         if not accepted or not started or last < SIM_FLOOR or dump:
             failed.append(key)
+
+    # -- the per-seat line checks (dedi topology: c1..cN, no host) -----------
+    if requires or forbids:
+        missing, found = check_lines(seats, requires, forbids)
+
+        print()
+        log(f"log checks: {len(requires)} required, {len(forbids)} forbidden")
+
+        for where, pattern in missing:
+            log(f"FAIL ({where}): required line never appeared: {pattern}")
+        for where, pattern in found:
+            log(f"FAIL ({where}): forbidden line appeared: {pattern}")
+
+        if missing or found:
+            failed.append("log checks")
 
     # -- what the layers said about each other -----------------------------
     print()

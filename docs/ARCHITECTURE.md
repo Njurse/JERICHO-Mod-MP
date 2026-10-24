@@ -193,9 +193,9 @@ flushed as the socket accepts them (§10, trap 2).
 | `JPRS` | H→all | ROSTER: who is in the match, ascending id, host first |
 | `JPST` | H→all | START: begin the level launch |
 | `JPIN` | C→H, H→all | INPUT: this frame's pad set |
-| `JPCS` | each→H, H→all | CARSTATE: the sender's own car, adopted verbatim by everyone else |
+| `JPCS` | each→H, H→all | CARSTATE: the sender's own car, adopted verbatim by everyone else. Also carries the owner's palette and the low nibble of `ap.flags` (`hubcaps`: one bit per wheel whose hubcap is gone), so a knocked-off hubcap is missing on every machine. `crushScale` carries the owner's per-car body-crush multiplier in half steps (2 = 1.0x, 20 = 10.0x) — every machine simulates every car, so they must all deform that body the same way. |
 | `JPPN` / `JPPO` | both | PING / PONG (the PONG echoes the tick, so the host can compute RTT) |
-| `JPCH` | both | addon channel payload (the `jer_net.h` bridge) |
+| `JPCH` | both | addon channel payload (the `jer_net.h` bridge). The header carries `fromPlayer`, and a relay STAMPS it from the connection that sent the frame: a client has one link (to the host/server), so that header is the only record of the original sender. Delivering it as 0 made every relayed module message look like the host's. |
 | `JPLV` | both | LEAVE |
 | `JPKK` | host -> client | KICK — the host removes a player. The kicked client prints "kicked by the host", then takes the same clean-leave path a deliberate quit uses (`MpLeaveSession`), so the roster row and the car leave every machine identically. Host-only (`MpKickPlayer`); a non-zero player id only. |
 | `JPCX` | both | chat line (T to open, Enter to send, Esc to cancel; drawn in the status console — the speaker's name in their own colour, or cream when custom colour is off, and the message in a flat 240,240,240) |
@@ -369,6 +369,17 @@ arrived a round trip late, and a coarse resync (30-frame cadence, correct only p
 non-deterministic simulations cannot be reconciled that way -- the follower's view of
 a remote car wandered +/-100-900 units while driving, and no threshold fixes that.
 With adoption it is 0-2 units.
+
+**The owner also owns the siren.** `MP_CARSTATE_SIREN` (1 << 3;
+`MP_CARSTATE_SAME_BODY` already occupies 1 << 1) says the driven car is a police
+model with its lightbar on. The engine only draws a cop bar for
+`CONTROL_TYPE_PURSUER_AI`, roadblock or cutscene cars, and a remote player car is
+`CONTROL_TYPE_PLAYER`, so `MpHandleCarState` calls `AddCopCarLight` itself when
+the bit is set -- the same call the traffic mirror makes for `MP_TRAFFIC_SIREN`.
+The owner decides; the current condition is
+`CarHasSiren(cp->ap.model) && cp->ai.p.dying < 75`, with the real player siren-on
+state still a TODO. No protocol bump: an older peer ignores the unknown bit. The
+siren SOUND is unchanged.
 
 **Contacts are handed off, not simulated twice.** A machine can only move the ONE
 car it owns, so when your car touches a peer's you push yours and report it
@@ -1253,15 +1264,15 @@ A pick that still cannot be loaded is refused with a reason
 
 **Where the cities come from.** mp can only offer what this machine can actually
 hold, and a second city's car data is carhacks' business, so mp ASKS:
-`mp_carquery.h` is a four-event contract (custom JERICHO event ids, so no shared
+`jer_carquery.h` is a four-event contract (custom JERICHO event ids, so no shared
 header needed beyond that one file) answered by `carhacks/mplive.c`:
 
 | event | question | answer |
 | --- | --- | --- |
-| `MP_CARQ_CITIES` | which cities can this session offer? | every car-data city (11: CHICAGO..RIO + Driver 1's seven), or 0 = "nobody knows" |
-| `MP_CARQ_SLOTS` | which slots may this city be offered in, and what model is in each? | parallel slot/model lists, or 0 = "nobody knows" (mp then keeps the engine's own table) |
-| `MP_CARQ_LOAD` | make `(city, model)` available here | `ok` |
-| `MP_CARQ_CHOSEN` | (notice) the local player now drives `(city, model)`, or the switch did not happen | none - carhacks tells the session and releases the old car's slot |
+| `JER_CARQ_CITIES` | which cities can this session offer? | every car-data city (11: CHICAGO..RIO + Driver 1's seven), or 0 = "nobody knows" |
+| `JER_CARQ_SLOTS` | which slots may this city be offered in, and what model is in each? | parallel slot/model lists, or 0 = "nobody knows" (mp then keeps the engine's own table) |
+| `JER_CARQ_LOAD` | make `(city, model)` available here | `ok` |
+| `JER_CARQ_CHOSEN` | (notice) the local player now drives `(city, model)`, or the switch did not happen | none - carhacks tells the session and releases the old car's slot |
 
 No answer is not an error: mp falls back to the session's own city and its
 frontend roster (`CarAvailability[city][slot]` + `carNumLookup[city][slot]`,
@@ -1272,7 +1283,7 @@ frontend roster) so the pause picker and the frontend car screen cannot disagree
 and a mid-match pick imports the car whether or not the config-driven
 `cross_city_vehicles` hack is on.
 
-`MP_CARQ_LOAD` is not new machinery on carhacks' side either: it is the sequence a
+`JER_CARQ_LOAD` is not new machinery on carhacks' side either: it is the sequence a
 mid-match peer pick already goes through -- put the car in the session's canonical
 spare slot, then `chkImportHotLoad`, which reads that city in, builds the slot's
 geometry in the engine's own pool, applies its cosmetics and records its texture
@@ -1280,14 +1291,14 @@ pages. mp only swaps once `MpResidentSlotForCar` finds the car AND its mesh is
 built (`gCarCleanModelPtr`), because pointing a car at an unbuilt slot is a
 crash, not a cosmetic glitch.
 
-After the swap, `MpChangeCar` fires `MP_CARQ_CHOSEN` (`changed = 1` when our car
+After the swap, `MpChangeCar` fires `JER_CARQ_CHOSEN` (`changed = 1` when our car
 really is on the new car's slot, `0` when it is not), and `MpFollowLocalCar`
 fires it when the player gets back into a car on foot. That notice is when
 carhacks learns which car this player drives: it advertises the car
 (`chkNetAdvertisePick`, and `chkNetPublishSet` on the host) so every other
 machine loads it, and releases the old car's slot -- only once no player names
 that car and no car is still on the slot (`carhacks/MP_ADAPTER.md`, "Releasing a
-slot"). Advertising after the swap rather than in `MP_CARQ_LOAD` means nobody is
+slot"). Advertising after the swap rather than in `JER_CARQ_LOAD` means nobody is
 told about a car that never got driven. A direct car-to-car move (`CARCHANGE`,
 without leaving a car) does not fire it.
 

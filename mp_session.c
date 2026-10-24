@@ -9,7 +9,8 @@
 #include "jer_notify.h"	/* the join toast */
 #include "jer_pause_menu.h"	/* JER_PAUSE_QUIT_*: the pause menu's codes (mirror MENU_QUIT_*) */
 #include "mp.h"
-#include "mp_carquery.h"	/* the mp <-> carhacks live-car query contract */
+#include "jer_carquery.h"	/* the mp <-> carhacks live-car query contract */
+#include "jer_crumple.h"	/* the mp <-> crumple per-car crush multiplier contract */
 
 #include "driver2.h"
 #include "mission.h"
@@ -31,6 +32,7 @@ extern int gBootMpLevel;	/* main.c: 1 = the small multiplayer map, 0 = the full 
 extern int gBootMpArena;	/* main.c: which multiplayer map (0/1) */
 extern int gWantNight;		/* glaunch.c: 1 = the night take-a-ride level variant */
 #include "players.h"	/* InitPlayer: a late joiner needs a car the same way the engine makes one */
+#include "ai.h"		/* TannerCanEnterCar: the gate the enter-left test lever checks */
 #include "handling.h"	/* LongQuaternion2Matrix: rebuild a car's matrix from its body */
 #include "state.h"
 #include "objcoll.h"	/* CellEmpty: the engine's own scenery test (the warp's landing check) */
@@ -1241,6 +1243,9 @@ static int MpCarSlotOwnedByPlayer(int slot, int ignoreId)
 	return 0;
 }
 
+/* Defined near the leave path; MpSpawnLateJoiners needs it earlier. */
+static int MpCarSlotTakenByOther(const MP_PLAYER* leaver, int slot);
+
 /* The clearance a join must leave around every other player's car. A car is
  * about 1000 units long, so two cars this far apart cannot overlap, and a
  * joiner cannot materialise in somebody's braking distance. */
@@ -1647,12 +1652,14 @@ void MpSpawnLateJoiners(void)
 		/* The body exists now: the next carstate should record a FRESH pose, so a
 		 * later re-seat is not anchored to the pose this build used. */
 		p->joinedPose = 0;
-		/* The recorded "car they left" (MP_PLAYER.leftCarSlot1) is only a seat to
-		 * REUSE, never a second body: now that this player has a fresh car from the
-		 * spawn path, forget it. Otherwise a later carstate could reclaim a body
-		 * that has nothing to do with the car just built. */
-		p->leftCarSlot1 = 0;
-		p->leftCarModel = -1;
+
+		/* CARS PERSIST. A player who got out left a quiet-pad body and a
+		 * leftCarSlot1 claim. Giving them a new car does not delete that body:
+		 * it stays parked and keeps the claim (the claim is overwritten on their
+		 * next get-out). This is deliberate -- the old car is a world car another
+		 * player can walk to, not a duplicate to clean up. The ownership guards
+		 * (MpCarSlotTakenByOther and the SAME_BODY gate) keep another row from
+		 * deleting or reclaiming it. */
 		spawned++;
 
 		if (gMpCtx != NULL)
@@ -2909,6 +2916,7 @@ void MpSelfRepairCar(void)
 	memset(cp->ap.damage, 0, sizeof(cp->ap.damage));
 	CreateDentableCar(cp);
 	DentCar(cp);
+	CarReapplyHubcapState(cp->id);
 
 	if (gMpCtx != NULL)
 		gMpCtx->jer_log(gMpCtx, "[mp] player option: car repaired (slot %d)\n", me->carId);
@@ -2992,6 +3000,23 @@ static void MpHandleWelcome(const unsigned char* p, int len)
 	gMp.timeOfDay = w.timeOfDay;
 	gMp.weather = w.weather;
 	gMp.seed = w.seed;
+
+	/* THE JOIN IS WHERE THE CORE ORDER IS APPLIED. A client's own modlist may put
+	 * optional modules first (or have a core one off); a session needs mp, carhacks
+	 * and d1cars first, in that order. Normalise the file now - the modules already
+	 * loaded cannot be reordered in this process, so the next boot is what uses it,
+	 * and that is said plainly rather than implied. */
+	{
+		int moved = jer_manager_normalize_core(jer_root_dir());
+
+		if (gMpCtx != NULL)
+		{
+			if (moved > 0)
+				gMpCtx->jer_log(gMpCtx, "[mp] modlist: core order applied (mp, carhacks, d1cars first) - restart to use it\n");
+			else if (moved < 0)
+				gMpCtx->jer_log(gMpCtx, "[mp] modlist: could not write the core order (read-only install?)\n");
+		}
+	}
 
 	/* Enforce the host's map. Which multiplayer map (arena 0/1), and whether it is
 	 * a multiplayer map at all, are LOCAL boot flags -- -mp and -level set them --
@@ -3157,9 +3182,23 @@ static void MpHandleChannel(int connIndex, const unsigned char* p, int len)
 	if (len < (int)(sizeof(MP_CHANNEL) + (size_t)h.len))
 		return;
 
-	peer = MpIsHost() ? MpConnPlayerId(connIndex) : 0;
-	if (peer < 0)
-		peer = 0;
+	/* WHO SENT IT. On the host the connection is the authority: a client cannot claim
+	 * another player's id. On a CLIENT every inbound channel frame arrived over the
+	 * one link to the host/server, so the connection says nothing about the original
+	 * sender - the relayed header's fromPlayer is the only copy, and dropping it made
+	 * every peer's addon message look like player 0's. Carhacks then rejected its own
+	 * peers' car picks (peer < 1) on every dedicated-server client. */
+	peer = MpIsHost() ? MpConnPlayerId(connIndex) : (int)h.fromPlayer;
+
+	if (peer < 0 || peer >= MP_MAX_PLAYERS)
+	{
+		if (gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx,
+				"[mp] channel: dropped '%s' (%d bytes) with invalid sender id %d\n",
+				h.name, (int)h.len, peer);
+
+		return;
+	}
 
 	/* A peer picks BOTH the channel name and the payload, so the bridge vets them
 	 * before anything is relayed or delivered: a name this machine never
@@ -3178,9 +3217,25 @@ static void MpHandleChannel(int connIndex, const unsigned char* p, int len)
 	}
 
 	if (MpIsHost())
-		/* relay exactly the message -- not whatever the sender appended after it */
-		MpHostBroadcast(MP_TAG_CHANNEL, h.reliable ? MP_FLAG_RELIABLE : 0, p,
-			(int)(sizeof(MP_CHANNEL) + (size_t)h.len));
+	{
+		/* relay exactly the message -- not whatever the sender appended after it --
+		 * and STAMP the sender the connection proved. A relayed frame is re-received
+		 * by clients through the host, where fromPlayer is the only record of who
+		 * sent it; trusting the sender's own byte there would also let one client
+		 * impersonate another in the addon bridge. */
+		unsigned char relay[sizeof(MP_CHANNEL) + MP_CHANNEL_MAX_PAYLOAD];
+		MP_CHANNEL out = h;
+		int total = (int)(sizeof(MP_CHANNEL) + (size_t)h.len);
+
+		out.fromPlayer = (uint8_t)peer;
+
+		memcpy(relay, &out, sizeof(out));
+
+		if (h.len > 0)
+			memcpy(relay + sizeof(out), p + sizeof(MP_CHANNEL), (size_t)h.len);
+
+		MpHostBroadcast(MP_TAG_CHANNEL, h.reliable ? MP_FLAG_RELIABLE : 0, relay, total);
+	}
 
 	MpBridgeDeliver(h.name, peer, p + sizeof(MP_CHANNEL), (int)h.len);
 }
@@ -3396,11 +3451,13 @@ static void MpSendColors(int whole);
 static void MpTestCarChangeTick(void);
 static void MpTestCityChangeTick(void);
 static void MpTestCarCycleTick(void);
+static void MpTestReloadCarsTick(void);
 static void MpTestLeaveTick(void);
 static void MpTestKickTick(void);
 static void MpTestOnFootTick(void);
 static int MpEnsureJerichoImported(void);
 static int MpEnsureJerichoInstalled(void);
+static void MpTestEnterLeftTick(void);
 static void MpTestFallOffTick(void);
 
 
@@ -4190,6 +4247,7 @@ static const char* gHeartbeatStr;
 static const char* gTestLeaveStr;
 static const char* gTestKickStr;
 static const char* gTestOnFootStr;
+static const char* gTestEnterLeftStr;
 static const char* gTestCarChangeStr;
 static const char* gTestCityChangeStr;
 static const char* gTestCarCycleStr;
@@ -4211,6 +4269,7 @@ static void MpResolveTestLevers(void)
 	gTestLeaveStr = getenv("MP_TEST_LEAVE");
 	gTestKickStr = getenv("MP_TEST_KICK");
 	gTestOnFootStr = getenv("MP_TEST_ONFOOT");
+	gTestEnterLeftStr = getenv("MP_TEST_ENTER_LEFT");
 	gTestCarChangeStr = getenv("MP_TEST_CARCHANGE");
 	gTestCityChangeStr = getenv("MP_TEST_CITYCHANGE");
 	gTestCarCycleStr = getenv("MP_TEST_CARCYCLE");
@@ -5309,6 +5368,7 @@ void MpLockstepFrame(void)
 	MpTestCarChangeTick();
 	MpTestCityChangeTick();
 	MpTestCarCycleTick();
+	MpTestReloadCarsTick();
 
 	/* test lever: a synthetic traffic contact, to exercise the traffic-hit wire path
 	 * without a physical collision (inert unless MP_TEST_TRAFFIC_HIT). */
@@ -5335,6 +5395,7 @@ void MpLockstepFrame(void)
 	/* test lever: get out of the car part-way through (inert unless MP_TEST_ONFOOT),
 	 * so the on-foot path has a way to be exercised at all. */
 	MpTestOnFootTick();
+	MpTestEnterLeftTick();
 
 	/* test lever: import Jericho at a fixed frame, with or without a session, so
 	 * the model/page import can be exercised headlessly (inert unless
@@ -5634,6 +5695,278 @@ static void MpTestOnFootTick(void)
 	 * it. Mirror the engine: activate the ped, then step out. */
 	ActivatePlayerPedestrian(&car_data[me->carId], NULL, 0, NULL, TANNER_MODEL);
 	ChangeCarPlayerToPed(0);
+}
+
+/* Why a claimed left car cannot be entered here, or NULL when every gate the
+ * lever applies passes. The named reasons are the point: "no left car" covered
+ * a missing claim, a rejected body and a machine that never held the car, and
+ * those need different fixes. */
+static const char* MpLeftCarRejectReason(const MP_PLAYER* p, int left)
+{
+	if (left < 0 || left >= MAX_CARS)
+		return "slot out of range";
+
+	if (car_data[left].controlType != CONTROL_TYPE_CIV_AI)
+		return "controlType is not CIV_AI";
+
+	if (car_data[left].ap.carCos == NULL)
+		return "no cosmetics (carCos NULL)";
+
+	if (car_data[left].ap.model != p->leftCarModel)
+		return "model does not match the recorded leftCarModel";
+
+	if (car_data[left].ai.padid != &gMpQuietPad)
+		return "pad is not the quiet pad";
+
+	return NULL;
+}
+
+/* MP_TEST_ENTER_LEFT=<secs>[,<playerId>] -- walk into the car ANOTHER player
+ * left, from a headless run.
+ *
+ * The get-out paths leave the body CIV_AI with the quiet pad, which is exactly
+ * what TannerCanEnterCar accepts; the missing half of issue #56 is whether any
+ * other machine actually holds that body. A headless run has no way to walk up
+ * and press the key, so this lever performs the same gate and reports the
+ * answer: find the target row's leftCarSlot1, check the body is the parked
+ * CIV_AI car with that model and pad, call TannerCanEnterCar, and only then
+ * call ChangePedPlayerToCar. The log line is the evidence either way.
+ *
+ * <playerId> defaults to 0xFFFF = the first non-local row with a left car. The
+ * local player must be ON FOOT; this is the "another player" path, not the
+ * owner walking back into their own car (MP_TEST_PAUSECAR covers that).
+ *
+ * A third field, <exitSecs>, makes the lever walk back OUT that many seconds
+ * after it entered (the engine's own ActivatePlayerPedestrian +
+ * ChangeCarPlayerToPed), parking the commandeered body. That is how the
+ * commandeer-then-get-out case is exercised headlessly: the new owner's row
+ * keeps leftCarSlot1 on the body, and the original owner's return must not
+ * delete it. */
+static void MpTestEnterLeftTick(void)
+{
+	static int done;
+	static int noted;
+	static int notedOnFoot;
+	static int notedMissing;
+	static unsigned long startMs;
+	static unsigned long exitAtMs;
+	const char* s;
+	const char* comma;
+	int secs, want = 0xFFFF, exitSecs = 0, i, slot = -1, owner = -1;
+	const MP_PLAYER* seen = NULL;		/* target row, even with no claim */
+	const MP_PLAYER* claim = NULL;		/* first claimed slot that failed a gate */
+	const char* why = NULL;			/* its rejection reason */
+	int claimLeft = -1;
+	MP_PLAYER* me;
+	unsigned long now = MpNowMs();
+
+	if (!gMp.running)
+		return;
+
+	if (done)
+	{
+		if (exitAtMs != 0 && (long)(now - exitAtMs) >= 0)
+		{
+			exitAtMs = 0;
+
+			if (player[0].playerCarId >= 0 && player[0].playerCarId < MAX_CARS)
+			{
+				if (gMpCtx != NULL)
+					gMpCtx->jer_log(gMpCtx,
+						"[mp] test: enter left car - getting OUT again, parking the commandeered car\n");
+
+				ActivatePlayerPedestrian(&car_data[player[0].playerCarId], NULL, 0, NULL, TANNER_MODEL);
+				ChangeCarPlayerToPed(0);
+			}
+		}
+
+		return;
+	}
+
+	s = gTestEnterLeftStr;
+
+	if (s == NULL)
+		return;
+
+	if (!noted)
+	{
+		noted = 1;
+
+		if (gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx,
+				"[mp] test: MP_TEST_ENTER_LEFT=%s armed (frame %lu)\n",
+				s, gMp.frame);
+	}
+
+	secs = atoi(s);
+	comma = strchr(s, ',');
+
+	if (comma != NULL)
+	{
+		const char* comma2 = strchr(comma + 1, ',');
+
+		want = atoi(comma + 1);
+
+		if (comma2 != NULL)
+			exitSecs = atoi(comma2 + 1);
+	}
+
+	if (startMs == 0)
+		startMs = MpNowMs();
+
+	if ((now - startMs) < (unsigned long)(secs * 1000))
+		return;
+
+	me = MpLocalPlayer();
+
+	if (me == NULL || me->carId >= 0 || player[0].playerCarId >= 0)
+	{
+		if (!notedOnFoot)
+		{
+			notedOnFoot = 1;
+
+			if (gMpCtx != NULL)
+				gMpCtx->jer_log(gMpCtx,
+					"[mp] test: enter left car needs the local player ON FOOT (carId %d)\n",
+					me != NULL ? me->carId : -99);
+		}
+
+		return;
+	}
+
+	for (i = 0; i < MP_MAX_PLAYERS; i++)
+	{
+		const MP_PLAYER* p = &gMp.players[i];
+		int left;
+
+		if (!p->active || p->isLocal)
+			continue;
+
+		if (want != 0xFFFF && p->id != want)
+			continue;
+
+		if (seen == NULL)
+			seen = p;
+
+		if (p->leftCarSlot1 <= 0)
+			continue;
+
+		left = p->leftCarSlot1 - 1;
+
+		/* A claimed body is the only thing the lever can enter. Remember the
+		 * first one that fails so the log names WHY, instead of saying there is
+		 * no left car at all. */
+		if (MpLeftCarRejectReason(p, left) == NULL)
+		{
+			slot = left;
+			owner = p->id;
+			break;
+		}
+
+		if (claim == NULL)
+		{
+			claim = p;
+			claimLeft = left;
+			why = MpLeftCarRejectReason(p, left);
+		}
+	}
+
+	if (slot < 0)
+	{
+		if (!notedMissing)
+		{
+			notedMissing = 1;
+
+			if (gMpCtx != NULL)
+			{
+				if (want != 0xFFFF && seen == NULL)
+				{
+					gMpCtx->jer_log(gMpCtx,
+						"[mp] test: enter left car - no left car for player %d on this machine: "
+						"no active non-local roster row with that id\n",
+						want);
+				}
+				else if (claim != NULL)
+				{
+					int inRange = (claimLeft >= 0 && claimLeft < MAX_CARS);
+
+					gMpCtx->jer_log(gMpCtx,
+						"[mp] test: enter left car - no left car for player %d on this machine: "
+						"player %d active=1 local=0 carId=%d onFoot=%d leftCarSlot1=%d "
+						"slot=%d controlType=%d model=%d leftModel=%d quietpad=%d carCos=%s - rejected: %s\n",
+						claim->id, claim->id, claim->carId, claim->onFoot, claim->leftCarSlot1,
+						claimLeft,
+						inRange ? (int)car_data[claimLeft].controlType : -1,
+						inRange ? (int)car_data[claimLeft].ap.model : -1,
+						claim->leftCarModel,
+						(inRange && car_data[claimLeft].ai.padid == &gMpQuietPad) ? 1 : 0,
+						(inRange && car_data[claimLeft].ap.carCos != NULL) ? "present" : "NULL",
+						(why != NULL) ? why : "unknown");
+				}
+				else
+				{
+					const MP_PLAYER* row = seen;
+
+					gMpCtx->jer_log(gMpCtx,
+						"[mp] test: enter left car - no left car for player %d on this machine: "
+						"player %d active=%d local=0 carId=%d onFoot=%d leftCarSlot1=%d leftCarModel=%d - "
+						"no claim on this machine (it never held the body, or the NO_CAR rows arrived before a local slot was assigned)\n",
+						(row != NULL) ? row->id : ((want == 0xFFFF) ? -1 : want),
+						(row != NULL) ? row->id : -1,
+						(row != NULL) ? 1 : 0,
+						(row != NULL) ? row->carId : -99,
+						(row != NULL) ? row->onFoot : -1,
+						(row != NULL) ? row->leftCarSlot1 : -1,
+						(row != NULL) ? row->leftCarModel : -1);
+				}
+			}
+		}
+
+		return;
+	}
+
+	done = 1;
+
+	{
+		int can = TannerCanEnterCar(&car_data[slot], 0);
+
+		if (gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx,
+				"[mp] test: enter left car - player %d slot %d model %d control %d "
+				"quietpad %d TannerCanEnterCar=%d\n",
+				owner, slot, (int)car_data[slot].ap.model,
+				(int)car_data[slot].controlType,
+				car_data[slot].ai.padid == &gMpQuietPad ? 1 : 0, can);
+
+		if (can)
+		{
+			/* THE ENGINE'S GET-IN PATH PUTS THE LOCAL TANNER AWAY, and this
+			 * lever must do the same. ChangePedPlayerToCar clears
+			 * player[0].pPed first, so capture the ped before the call and
+			 * remove it after -- exactly as MpChangeCarRun's re-entry does.
+			 *
+			 * Without this the ped from the get-out stays in the pool with
+			 * padId 0, numTannerPeds never drops, and the next get-out builds
+			 * a SECOND ped for the same player. The stale one is then driven
+			 * after its player has moved on; the last time this ran, the exit
+			 * wrote a world coordinate over vsync_callback and the intr thread
+			 * called it (intrThreadMain+0x7E). */
+			LPPEDESTRIAN ped = player[0].pPed;
+
+			ChangePedPlayerToCar(0, &car_data[slot]);
+			RemovePlayerPedestrian(ped);
+
+			if (exitSecs > 0)
+			{
+				exitAtMs = now + (unsigned long)exitSecs * 1000;
+
+				if (gMpCtx != NULL)
+					gMpCtx->jer_log(gMpCtx,
+						"[mp] test: enter left car - will get OUT again in %ds, parking the commandeered car\n",
+						exitSecs);
+			}
+		}
+	}
 }
 
 /* MP_TEST_PAUSECAR=<secs>[,<city>,<model>][;<secs>[,<city>,<model>]...] -- run the
@@ -6285,6 +6618,48 @@ static void MpTestCarCycleTick(void)
 
 	if (passes > 0 && pass >= passes)
 		gTestCarCycleStr = NULL;		/* asked for a number of passes and they are done */
+}
+
+/* MP_TEST_RELOADCARS=<sim frame>: run carhacks' "Reload all cars" once at that frame.
+ * A headless run cannot open the pause menu, and this is the operation that has to
+ * release and re-read every imported asset, so it needs a lever. Inert unless set. */
+static void MpTestReloadCarsTick(void)
+{
+	static int done;
+	static int at = -1;
+
+	if (done)
+		return;
+
+	if (at < 0)
+	{
+		const char* s = getenv("MP_TEST_RELOADCARS");
+
+		if (s == NULL || *s == '\0')
+		{
+			done = 1;
+			return;
+		}
+
+		at = atoi(s);
+
+		if (at < 1)
+			at = 1;
+	}
+
+	if (!gMp.running || gMp.frame < (unsigned long)at)
+		return;
+
+	done = 1;
+
+	{
+		extern int chkImportReloadAll(void);
+		int n = chkImportReloadAll();
+
+		if (gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx,
+				"[mp] test: Reload all cars -> %d imported slot(s) rebuilt (MP_TEST_RELOADCARS)\n", n);
+	}
 }
 
 
@@ -7399,6 +7774,58 @@ static void MpFailsafeNoteCar(int slot)
 	sMpStandIn = 0;
 }
 
+/* ------------------------------------------------------------------ */
+/* The owner's per-car body-crush multiplier.
+ *
+ * Every machine simulates every player car, so the deformation has to use the
+ * SAME multiplier on all of them or the same crash reads differently on two
+ * screens. The value is per CAR (not per player): the owner's carstate carries
+ * it in half-steps (2 = 1.0x, 20 = 10.0x), and this side hands it to crumple
+ * for the car slot that player is driving. No crumple module = the SET is
+ * unanswered and the car keeps 1.0x, which is the stock look. */
+#define MP_CRUSH_HALF_MIN	2
+#define MP_CRUSH_HALF_MAX	20
+#define MP_CRUSH_HALF_DEFAULT	2	/* 1.0x */
+
+static uint8_t MpCrushHalfFromScale(int scale)
+{
+	int half = (scale + 1024) / 2048;	/* 4096-fixed -> 0.5 steps */
+
+	if (half < MP_CRUSH_HALF_MIN)
+		half = MP_CRUSH_HALF_MIN;
+	else if (half > MP_CRUSH_HALF_MAX)
+		half = MP_CRUSH_HALF_MAX;
+
+	return (uint8_t)half;
+}
+
+static int MpCrushScaleFromHalf(uint8_t half)
+{
+	int h = (int)half;
+
+	if (h < MP_CRUSH_HALF_MIN)
+		h = MP_CRUSH_HALF_MIN;
+	else if (h > MP_CRUSH_HALF_MAX)
+		h = MP_CRUSH_HALF_MAX;
+
+	return h * 2048;	/* back to 4096 fixed point */
+}
+
+/* Tell crumple what an owner says a car's multiplier is (4096 = 1.0x). */
+static void MpSetCarCrushScale(int carId, int scale)
+{
+	JER_CRUMPLE_SCALE_ARGS a;
+
+	if (carId < 0 || carId >= MAX_CARS)
+		return;
+
+	memset(&a, 0, sizeof(a));
+	a.carId = carId;
+	a.scale = scale;
+
+	jer_fire(JER_CRUMPLE_SET_SCALE, &a);
+}
+
 static void MpSendOwnCarState(void)
 {
 	unsigned char buf[sizeof(MP_CARSTATE) + sizeof(MP_CARSTATE_ENTRY)];
@@ -7436,6 +7863,7 @@ static void MpSendOwnCarState(void)
 	memset(&e, 0, sizeof(e));
 	e.playerId = (uint8_t)me->id;
 	e.flags = MP_CARSTATE_HAS_BODY;
+	e.crushScale = MP_CRUSH_HALF_DEFAULT;
 
 	/* NO CAR (on foot): model 0xFF and NO pose. The peer must not adopt the zero
 	 * position -- that would drag the car it was driving to the origin -- it
@@ -7449,6 +7877,22 @@ static void MpSendOwnCarState(void)
 	{
 		cp = &car_data[me->carId];
 
+		/* TEST LEVER (MP_TEST_HUBCAP=<0..15>): knock hubcaps off on this seat so the
+		 * wire path can be exercised headlessly. Inert unless set. */
+		{
+			static int testHub = -2;
+
+			if (testHub == -2)
+			{
+				const char* s = getenv("MP_TEST_HUBCAP");
+
+				testHub = (s != NULL) ? atoi(s) : -1;
+			}
+
+			if (testHub >= 0 && cp->controlType != CONTROL_TYPE_NONE)
+				cp->ap.flags = (u_char)((cp->ap.flags & ~0x0f) | (testHub & 0x0f));
+		}
+
 		/* NOT A CAR YET. WELCOME sets our row's carId to engine slot 0 before the
 		 * level exists, and the frontend/loading world has that CAR_DATA zeroed
 		 * (controlType NONE, no model). A body sent from it carried a pose of
@@ -7461,6 +7905,36 @@ static void MpSendOwnCarState(void)
 			!JerCarSlotUsable(cp->ap.model))
 		{
 			cp = NULL;
+		}
+	}
+
+	/* THE CAR THEY WALKED AWAY FROM. A machine that was present for the get-out
+	 * already holds this body and ignores the extra fields; a joiner that arrived
+	 * afterwards has only the pedstate stand-in, so this is the only way it can
+	 * build the parked car. Only advertise a body still parked by us: if someone
+	 * has commandeered it, it is a player car now, not our left car. */
+	if (cp == NULL && me->leftCarSlot1 > 0)
+	{
+		int left = me->leftCarSlot1 - 1;
+
+		if (left >= 0 && left < MAX_CARS &&
+			car_data[left].controlType == CONTROL_TYPE_CIV_AI &&
+			car_data[left].ai.padid == &gMpQuietPad &&
+			car_data[left].ap.carCos != NULL &&
+			car_data[left].ap.model >= 0 && car_data[left].ap.model < MAX_CAR_RESIDENT_MODELS &&
+			residentCarModels[car_data[left].ap.model] >= 0 &&
+			JerCarSlotUsable(car_data[left].ap.model))
+		{
+			int src = GetCarModelSourceCity(car_data[left].ap.model);
+
+			e.flags |= MP_CARSTATE_LEFT_CAR;
+			e.leftModel = (uint8_t)residentCarModels[car_data[left].ap.model];
+			e.leftModelCity = (uint8_t)((src >= 0) ? src : MP_CAR_CITY_SESSION);
+			e.palette = (uint8_t)car_data[left].ap.palette;
+			e.x = car_data[left].hd.where.t[0];
+			e.y = car_data[left].hd.where.t[1];
+			e.z = car_data[left].hd.where.t[2];
+			e.heading = car_data[left].hd.direction;
 		}
 	}
 
@@ -7541,6 +8015,35 @@ static void MpSendOwnCarState(void)
 		e.angVel[0] = cp->st.n.angularVelocity[0];
 		e.angVel[1] = cp->st.n.angularVelocity[1];
 		e.angVel[2] = cp->st.n.angularVelocity[2];
+
+		/* Hubcaps are appearance the OWNER decides: LoseHubcap writes one bit per
+		 * wheel in ap.flags, and the peer's rebuilt body would otherwise keep all
+		 * four. The low nibble is all that is needed (0 = all present). */
+		e.hubcaps = (uint8_t)(cp->ap.flags & 0x0f);
+
+		/* ...and the body-crush multiplier. ASK crumple rather than read it here:
+		 * the value and the pause menu that edits it belong to that module, and a
+		 * session with crumple off simply answers 1.0x. Per CAR: this is the
+		 * multiplier for the car WE are driving, and every peer applies it to the
+		 * car they hold for us. */
+		{
+			JER_CRUMPLE_SCALE_ARGS crush;
+
+			memset(&crush, 0, sizeof(crush));
+			crush.carId = cp->id;
+			crush.scale = 4096;
+			jer_fire(JER_CRUMPLE_GET_SCALE, &crush);
+
+			e.crushScale = MpCrushHalfFromScale(crush.scale);
+		}
+
+		/* Siren / lightbar state (owner-authoritative). Traffic already does this
+		 * via MP_TRAFFIC_SIREN; player cars need the same so a remote copy draws
+		 * the light and plays the sound. The engine only auto-draws for PURSUER_AI
+		 * / roadblock / cutscene, so we must tell the peers explicitly.
+		 * TODO: replace dying<75 with the real player "siren is on" condition. */
+		if (CarHasSiren(cp->ap.model) && cp->ai.p.dying < 75)
+			e.flags |= MP_CARSTATE_SIREN;
 	}
 
 	memcpy(buf, &h, sizeof(h));
@@ -7701,6 +8204,11 @@ static void MpReleaseRemoteCar(MP_PLAYER* p)
 	if (p == NULL || p->carId < 0 || p->carId >= MAX_CARS)
 		return;
 
+	/* The car stops being driven by its owner here (on foot, or gone): its
+	 * body-crush multiplier goes back to the default, so a body that is later
+	 * reused cannot inherit the previous driver's setting. */
+	MpSetCarCrushScale(p->carId, 4096);
+
 	/* The body stops being ours: its sample timeline must go with it. */
 	MpPlayClear(p->id);
 
@@ -7735,7 +8243,19 @@ static int MpCarSlotTakenByOther(const MP_PLAYER* leaver, int slot)
 	{
 		const MP_PLAYER* o = &gMp.players[i];
 
-		if (o != leaver && o->active && o->carId == slot)
+		if (o == leaver || !o->active)
+			continue;
+
+		/* DRIVING IT, OR PARKED IT AND STILL STANDING NEXT TO IT.
+		 *
+		 * carId alone missed the commandeer-then-get-out case: the new owner's
+		 * row has carId < 0 but leftCarSlot1 names this body, and the body is
+		 * CIV_AI + the quiet pad, so every other test calls it free. The original
+		 * owner's spawn then took it for an abandoned duplicate and deleted the
+		 * car its new owner could still walk back into. A left-car claim is
+		 * ownership here for the same reason MpCarSlotOwnedByPlayer treats it as
+		 * ownership when choosing a slot. */
+		if (o->carId == slot || o->leftCarSlot1 == slot + 1)
 			return 1;
 	}
 
@@ -7788,7 +8308,7 @@ const char* MpCarCityName(int city)
 	 * This was a hardcoded names[4] = CHICAGO/HAVANA/VEGAS/RIO, which is why the
 	 * pause menu city picker could not name a Driver 1 car-data city even once
 	 * carhacks started offering them: the COUNT already came from carhacks through
-	 * MP_CARQ_CITIES, and the NAMES did not, so the picker cycled to a real city
+	 * JER_CARQ_CITIES, and the NAMES did not, so the picker cycled to a real city
 	 * and displayed "the session city" instead.
 	 *
 	 * LevelNames is the engine's own registry, so it grows when the engine does -
@@ -7903,20 +8423,43 @@ static int MpHostCarOneSlot(void)
 	return -1;
 }
 
-/* Put the host city's car 1 under a car object that has no mesh, and mark it so
- * the draw-colour hook paints the body solid grey. `fresh` says the flag was not
- * already set, i.e. this is the transition to log. */
+/* Ask the car mods for a resident slot holding the stand-in body (the placeholder
+ * car). -1 = none (no bank, or no spare slot), and mp falls back to host car 1. */
+int MpCarQueryStandIn(void)
+{
+	JER_CARQ_STANDIN_ARGS a;
+
+	memset(&a, 0, sizeof(a));
+	a.slot = -1;
+	jer_fire(JER_CARQ_STANDIN, &a);
+	return a.slot;
+}
+
+static int sMpStandInModel = -1;	/* the placeholder's resident slot, -1 = host car 1 */
+
+int MpStandInIsPlaceholder(void)
+{
+	return sMpStandInModel >= 0;
+}
+
+/* Put a stand-in body under a car object that has no mesh: the placeholder when
+ * the car mods can place it, else the host city's car 1. The grey draw-colour
+ * hook only paints the car-1 fallback - the placeholder is already distinct.
+ * `fresh` says the flag was not already set, i.e. this is the transition to log. */
 static int MpCarStandIn(int carSlot)
 {
 	extern u_char defaultPlayerPalette;
 	CAR_DATA* cp;
 	int hostSlot;
 	int fresh;
+	int standIn;
 
 	if (carSlot < 0 || carSlot >= MAX_CARS)
 		return 0;
 
-	hostSlot = MpHostCarOneSlot();
+	standIn = MpCarQueryStandIn();
+	hostSlot = (standIn >= 0) ? standIn : MpHostCarOneSlot();
+	sMpStandInModel = standIn;
 
 	if (hostSlot < 0)
 		return 0;
@@ -8287,6 +8830,18 @@ static int MpAdoptCar(int carSlot, int city, int model, MP_PLAYER* who)
 		CreateDentableCar(cp);
 		gMpAdoptModel[carSlot] = model;
 
+		/* The owner is the authority for the wheel appearance too. A rebuild resets
+		 * the body, so put their lost-hubcap bits back on the fresh car. */
+		if (who != NULL && !who->isLocal)
+		{
+			CarApplyHubcapState(carSlot, who->hubcaps & 0x0f);
+
+			if (gMpCtx != NULL && who->hubcaps)
+				gMpCtx->jer_log(gMpCtx,
+					"[mp] hubcaps: player %d -> %d applied to the rebuilt car (slot %d)\n",
+					who->id, who->hubcaps & 0x0f, carSlot);
+		}
+
 		/* OUR car: rebind its engine and SIREN sounds to the new model, exactly as
 		 * getting in does (players.c ChangePedPlayerToCar -> StartPlayerCarSounds).
 		 * The siren is a looping channel (player*3+2) that is only STARTED there, and
@@ -8404,7 +8959,7 @@ static int MpAdoptRemoteCar(MP_PLAYER* p, int city, int model)
 /* ------------------------------------------------------------------ */
 /* Asking the other modules about live cars                            */
 /* ------------------------------------------------------------------ */
-/* mp_carquery.h is the contract: a custom JERICHO event, so this works whether
+/* jer_carquery.h is the contract: a custom JERICHO event, so this works whether
  * carhacks is compiled in beside us or loaded as a dll, and degrades to "nobody
  * knows" when it is not there at all. */
 
@@ -8413,7 +8968,7 @@ static int MpAdoptRemoteCar(MP_PLAYER* p, int city, int model)
  * offer the session's own city alone. */
 int MpCarQueryCities(int* out, int max)
 {
-	MP_CARQ_CITIES_ARGS a;
+	JER_CARQ_CITIES_ARGS a;
 
 	if (out == NULL || max <= 0)
 		return 0;
@@ -8422,7 +8977,7 @@ int MpCarQueryCities(int* out, int max)
 	a.cities = out;
 	a.max = max;
 
-	jer_fire(MP_CARQ_CITIES, &a);
+	jer_fire(JER_CARQ_CITIES, &a);
 
 	if (a.count < 0)
 		return 0;
@@ -8435,21 +8990,21 @@ int MpCarQueryCities(int* out, int max)
  * to the player rather than driven into a model this machine cannot render. */
 int MpCarQueryLoad(int city, int model)
 {
-	MP_CARQ_LOAD_ARGS a;
+	JER_CARQ_LOAD_ARGS a;
 
 	memset(&a, 0, sizeof(a));
 	a.city = city;
 	a.model = model;
 
-	jer_fire(MP_CARQ_LOAD, &a);
+	jer_fire(JER_CARQ_LOAD, &a);
 
 	return a.ok ? 1 : 0;
 }
 
-/* Which slots may `city` be offered in, and the model in each (mp_carquery.h). */
+/* Which slots may `city` be offered in, and the model in each (jer_carquery.h). */
 int MpCarQuerySlots(int city, int* slots, int* models, int max)
 {
-	MP_CARQ_SLOTS_ARGS a;
+	JER_CARQ_SLOTS_ARGS a;
 
 	if (slots == NULL || models == NULL || max <= 0)
 		return 0;
@@ -8460,7 +9015,7 @@ int MpCarQuerySlots(int city, int* slots, int* models, int max)
 	a.models = models;
 	a.max = max;
 
-	jer_fire(MP_CARQ_SLOTS, &a);
+	jer_fire(JER_CARQ_SLOTS, &a);
 
 	/* count stays 0 when nobody answered -- "no better answer", not an error: the caller
 	 * then keeps the list it already had. */
@@ -8513,7 +9068,7 @@ int MpCarListForCity(int city, int* slots, int* models, int max)
  * be given back (carhacks/net.c, chkNetReleaseSlotIfUnused). */
 void MpCarQueryChosen(int city, int model, int changed)
 {
-	MP_CARQ_CHOSEN_ARGS a;
+	JER_CARQ_CHOSEN_ARGS a;
 
 	if (model < 0)
 		return;
@@ -8527,7 +9082,7 @@ void MpCarQueryChosen(int city, int model, int changed)
 		gMpCtx->jer_log(gMpCtx, "[mp] car chosen: %s model %d (%s)\n",
 			MpCarCityName(city), model, changed ? "driving it now" : "the switch did not happen");
 
-	jer_fire(MP_CARQ_CHOSEN, &a);
+	jer_fire(JER_CARQ_CHOSEN, &a);
 }
 
 /* Change OUR OWN car, mid-match, from the pause menu.
@@ -8571,7 +9126,7 @@ static const char* MpChangeCarRefusal(int city, int model)
 /* ------------------------------------------------------------------ */
 /* A CHANGE CAR THAT HAD TO WAIT                                        */
 /*                                                                      */
-/* MP_CARQ_LOAD can legitimately answer "not yet". The pool is six      */
+/* JER_CARQ_LOAD can legitimately answer "not yet". The pool is six      */
 /* spare resident slots (CHK_IMPORT_SPARE_FIRST .. CHK_IMPORT_MAX_SLOTS) */
 /* and a change HOLDS its old slot until the release judges it free, so  */
 /* with several players changing at once the canonical slot can be busy  */
@@ -8850,7 +9405,7 @@ static int MpChangeCarRun(int city, int model, int isRetry)
 
 	changed = MpAdoptRemoteCar(me, city, model);
 
-	/* Report the OUTCOME (MP_CARQ_CHOSEN). "Driving it" is read off the car on the road, so
+	/* Report the OUTCOME (JER_CARQ_CHOSEN). "Driving it" is read off the car on the road, so
 	 * "already that car" counts as driving it, and the city is the one the slot's data came
 	 * from (-1 = the level's own car) - the identity the other machines must draw. */
 	{
@@ -9062,6 +9617,7 @@ int MpSoftRestart(void)
 	cp->totalDamage = 0;
 	memset(cp->ap.damage, 0, sizeof(cp->ap.damage));
 	CreateDentableCar(cp);
+	CarReapplyHubcapState(cp->id);
 	cp->ap.needsDenting = 0;
 
 	{
@@ -9276,6 +9832,7 @@ int MpRespawnAfterDeath(void)
 	cp->totalDamage = 0;
 	memset(cp->ap.damage, 0, sizeof(cp->ap.damage));
 	CreateDentableCar(cp);
+	CarReapplyHubcapState(cp->id);
 	cp->ap.needsDenting = 0;
 
 	/* NOT DYING ANY MORE, and NOT WANTED. Repairing the CAR is not enough: the mission's
@@ -10510,6 +11067,7 @@ int MpRespawnOnRoad(void)
 		cp->totalDamage = 0;
 		memset(cp->ap.damage, 0, sizeof(cp->ap.damage));
 		CreateDentableCar(cp);
+		CarReapplyHubcapState(cp->id);
 		cp->ap.needsDenting = 0;
 
 		/* Respawn implies repair AND a clean slate: drop the wanted level so the
@@ -10531,6 +11089,167 @@ int MpRespawnOnRoad(void)
 	}
 
 	return 1;
+}
+
+/* A player is on foot and this machine has no body for the car they left: build
+ * the parked car from the NO_CAR row. A machine that was present for the get-out
+ * already has it; this exists for a joiner that arrived afterwards, which
+ * otherwise sees only the player's pedstate stand-in.
+ *
+ * The body is built through the same InitPlayer path as every other remote car,
+ * then parked exactly as the owner's own get-out parks it (CIV_AI + STOP/EMPTY +
+ * the quiet pad), so TannerCanEnterCar accepts it and the traffic AI ignores it. */
+static void MpMaterializeLeftCar(MP_PLAYER* pl, const MP_CARSTATE_ENTRY* e)
+{
+	static unsigned long lastLogMs;
+	int slot, k, resident, rot, city;
+
+	if (pl == NULL || e == NULL || !gMp.running)
+		return;
+
+	/* Already have it? A claim that still names a parked body is enough. Do not
+	 * compare the model: a re-model (the owner's Change car) is still the same
+	 * body, and building a second one would be the duplicate this avoids. */
+	if (pl->leftCarSlot1 > 0)
+	{
+		int have = pl->leftCarSlot1 - 1;
+
+		/* Someone is DRIVING it -- the local player may have just commandeered
+		 * it, and MpFollowLocalCar may not have adopted that yet. Drop the stale
+		 * claim and do not build a second body. */
+		if (have >= 0 && have < MAX_CARS && car_data[have].controlType == CONTROL_TYPE_PLAYER)
+		{
+			pl->leftCarSlot1 = 0;
+			pl->leftCarModel = -1;
+			return;
+		}
+
+		/* Someone else drives or claims it now: the claim moved with the body.
+		 * Drop our stale claim and do NOT build a second car -- this is the
+		 * commandeer case, and it is the difference between one body and two. */
+		if (MpCarSlotTakenByOther(pl, have))
+		{
+			pl->leftCarSlot1 = 0;
+			pl->leftCarModel = -1;
+			return;
+		}
+
+		if (have >= 0 && have < MAX_CARS &&
+			car_data[have].controlType == CONTROL_TYPE_CIV_AI &&
+			car_data[have].ai.padid == &gMpQuietPad &&
+			car_data[have].ap.carCos != NULL)
+		{
+			pl->leftCarModel = car_data[have].ap.model;
+			return;
+		}
+
+		if (gMpCtx != NULL && (MpNowMs() - lastLogMs) > 2000)
+		{
+			lastLogMs = MpNowMs();
+			gMpCtx->jer_log(gMpCtx,
+				"[mp] left car: player %d's claim on slot %d is not a parked body "
+				"(type %d pad %d cos %s) - rebuilding\n",
+				pl->id, have,
+				(have >= 0 && have < MAX_CARS) ? (int)car_data[have].controlType : -1,
+				(have >= 0 && have < MAX_CARS && car_data[have].ai.padid == &gMpQuietPad) ? 1 : 0,
+				(have >= 0 && have < MAX_CARS && car_data[have].ap.carCos != NULL) ? "present" : "NULL");
+		}
+
+		pl->leftCarSlot1 = 0;
+		pl->leftCarModel = -1;
+	}
+
+	if (e->leftModel == MP_CARSTATE_NO_CAR)
+		return;
+
+	city = (e->leftModelCity == MP_CAR_CITY_SESSION) ? -1 : (int)e->leftModelCity;
+	resident = MpResidentSlotForCar(city, (int)e->leftModel);
+
+	if (resident < 0 || !JerCarSlotUsable(resident))
+	{
+		if (gMpCtx != NULL && (MpNowMs() - lastLogMs) > 2000)
+		{
+			lastLogMs = MpNowMs();
+			gMpCtx->jer_log(gMpCtx,
+				"[mp] left car: player %d left %s model %d, which this machine does not hold - not built\n",
+				pl->id, MpCarCityName(city), (int)e->leftModel);
+		}
+		return;
+	}
+
+	/* The same slot rule as a join: a free PLAYER row, never slot 0 or a car
+	 * anyone drives or claims. The second pass allows a quiet-pad body only when
+	 * nothing else is free; the ownership test still rejects another row's car. */
+	slot = -1;
+	for (k = 1; k < MAX_CARS && k < MAX_PLAYERS; k++)
+	{
+		if (car_data[k].controlType == CONTROL_TYPE_CIV_AI && car_data[k].ai.padid == &gMpQuietPad)
+			continue;
+		if (MpCarSlotOwnedByPlayer(k, -1))
+			continue;
+		slot = k;
+		break;
+	}
+
+	for (k = 1; slot < 0 && k < MAX_CARS && k < MAX_PLAYERS; k++)
+	{
+		if (car_data[k].controlType == CONTROL_TYPE_CIV_AI && car_data[k].ai.padid == &gMpQuietPad &&
+			!MpCarSlotOwnedByPlayer(k, -1))
+			slot = k;
+	}
+
+	if (slot < 1 || slot >= MAX_CARS || slot >= MAX_PLAYERS)
+	{
+		if (gMpCtx != NULL && (MpNowMs() - lastLogMs) > 2000)
+		{
+			lastLogMs = MpNowMs();
+			gMpCtx->jer_log(gMpCtx,
+				"[mp] left car: no free car slot for player %d's model %d\n",
+				pl->id, (int)e->leftModel);
+		}
+		return;
+	}
+
+	rot = (int)(e->heading & 0xfff);
+	{
+		LONGVECTOR4 start;
+		char padid = (char)-slot;
+		MATRIX m;
+
+		start[0] = e->x;
+		start[1] = e->y;
+		start[2] = e->z;
+		start[3] = 0;
+
+		InitPlayer(&player[slot], &car_data[slot], CONTROL_TYPE_PLAYER, rot, &start,
+			(int)e->leftModel, (int)e->palette, &padid);
+
+		car_data[slot].ap.needsDenting = 1;
+		car_data[slot].hd.where.t[0] = e->x;
+		car_data[slot].hd.where.t[1] = e->y;
+		car_data[slot].hd.where.t[2] = e->z;
+		car_data[slot].hd.direction = rot;
+
+		_RotMatrixY(&m, (short)rot);
+		memcpy(car_data[slot].hd.where.m, m.m, sizeof(car_data[slot].hd.where.m));
+	}
+
+	car_data[slot].controlType = CONTROL_TYPE_CIV_AI;
+	car_data[slot].ai.c.thrustState = CIV_AI_THRUST_STOP;
+	car_data[slot].ai.c.ctrlState = CIV_AI_CTRL_EMPTY;
+	car_data[slot].wheel_angle = 0;
+	car_data[slot].ai.padid = &gMpQuietPad;
+	gMpOurCars[slot] = 1;
+
+	pl->leftCarSlot1 = slot + 1;
+	pl->leftCarModel = car_data[slot].ap.model;
+	pl->carId = -1;
+	pl->onFoot = 1;
+
+	if (gMpCtx != NULL)
+		gMpCtx->jer_log(gMpCtx,
+			"[mp] left car: materialized player %d's parked car (slot %d, model %d) at %d,%d\n",
+			pl->id, slot, (int)e->leftModel, (int)e->x, (int)e->z);
 }
 
 static void MpHandleCarState(int connIndex, const unsigned char* p, int len)
@@ -10595,6 +11314,12 @@ static void MpHandleCarState(int connIndex, const unsigned char* p, int len)
 			pl->carId = -1;
 			pl->car = -1;
 			pl->onFoot = 1;
+
+			/* A joiner that arrived after the get-out has no local body for
+			 * the car they left; the NO_CAR row names it. A machine that was
+			 * present still holds the body and the helper is a no-op. */
+			if (e.flags & MP_CARSTATE_LEFT_CAR)
+				MpMaterializeLeftCar(pl, &e);
 
 			continue;
 		}
@@ -10671,10 +11396,12 @@ static void MpHandleCarState(int connIndex, const unsigned char* p, int len)
 			 *
 			 * The body is only ours to hand back while it is still that car and
 			 * nobody else has taken it: a cleared/recycled slot, a released mesh, a
-			 * model that changed under us, a car another player (or WE) now drive -
-			 * any of those and this falls back to the spawn path, exactly as before.
-			 * The model-change block below then re-models the body if the owner's
-			 * carstate names a different vehicle (the Change car case). */
+			 * model that changed under us, a car another player (or WE) now drive,
+			 * or ANOTHER PLAYER'S PARKED CLAIM on it (their leftCarSlot1) - any of
+			 * those and this falls back to the spawn path, exactly as before.
+			 * The claim test matters: a player who commandeered the body and then
+			 * got out has carId < 0 but still owns it through leftCarSlot1, and
+			 * MpGetPlayerByCar alone would hand it back to the original owner. */
 			if ((e.flags & MP_CARSTATE_SAME_BODY) && pl->leftCarSlot1 > 0)
 			{
 				int slot = pl->leftCarSlot1 - 1;
@@ -10682,6 +11409,7 @@ static void MpHandleCarState(int connIndex, const unsigned char* p, int len)
 				if (slot >= 0 && slot < MAX_CARS &&
 					slot != (int)player[0].playerCarId &&
 					MpGetPlayerByCar(slot) == NULL &&
+					!MpCarSlotTakenByOther(pl, slot) &&
 					car_data[slot].controlType != CONTROL_TYPE_NONE &&
 					car_data[slot].ap.carCos != NULL &&
 					car_data[slot].ap.model == pl->leftCarModel &&
@@ -10813,6 +11541,38 @@ static void MpHandleCarState(int connIndex, const unsigned char* p, int len)
 			 * non-local player car out of the world, so re-assert it
 			 * (controlType included, or the spooler parks it). */
 			cp->controlType = CONTROL_TYPE_PLAYER;
+		}
+
+		/* Apply owner's siren state so the remote car lights up. The engine
+		 * only draws the bar for PURSUER_AI / roadblock / cutscene, so we
+		 * force the same call the traffic mirror uses. */
+		if (e.flags & MP_CARSTATE_SIREN)
+			AddCopCarLight(cp);
+
+		/* Owner-authoritative wheel appearance: a hubcap knocked off on their
+		 * machine is missing here too. Only write on a change, so the per-frame
+		 * state does not re-apply the palette every tick. */
+		pl->hubcaps = (int)(e.hubcaps & 0x0f);
+
+		/* ...and the owner's body-crush multiplier for THIS car. Every machine
+		 * simulates it, so the value has to be the owner's, not ours; crumple
+		 * applies it to the slot we hold for that player. */
+		MpSetCarCrushScale(pl->carId, MpCrushScaleFromHalf(e.crushScale));
+
+		if ((cp->ap.flags & 0x0f) != pl->hubcaps)
+		{
+			CarApplyHubcapState(pl->carId, pl->hubcaps);
+
+			if (gMpCtx != NULL)
+			{
+				int m = (cp->ap.model >= 0 && cp->ap.model < MAX_CAR_RESIDENT_MODELS) ? cp->ap.model : -1;
+
+				gMpCtx->jer_log(gMpCtx,
+					"[mp] hubcaps: player %d -> %d (slot %d, model %d from %s)\n",
+					pl->id, pl->hubcaps, pl->carId,
+					(m >= 0) ? residentCarModels[m] : -1,
+					(m >= 0) ? MpCarCityName(GetCarModelSourceCity(m)) : "?");
+			}
 		}
 
 		pl->onFoot = 0;			/* driving again: the roster may seat them */
@@ -11047,10 +11807,16 @@ static void MpHandleCarState(int connIndex, const unsigned char* p, int len)
 		}
 
 		/* The host is the hub: pass a CLIENT's car on to the other clients, so every
-		 * machine sees every car (each sends only its own). */
-		if (MpIsHost() && connIndex >= 0)
-			MpHostRelay(connIndex, MP_TAG_CARSTATE, 0, p, len);
+		 * machine sees every car (each sends only its own).
+		 *
+		 * OUTSIDE the row loop, and after every `continue`: a NO_CAR row is the
+		 * transition a late joiner needs most (it releases the parked body and lets
+		 * the stand-in pedestrian spawn), and relaying from inside the loop skipped
+		 * exactly that row. It also relayed a multi-row frame once per row. */
 	}
+
+	if (MpIsHost() && connIndex >= 0)
+		MpHostRelay(connIndex, MP_TAG_CARSTATE, 0, p, len);
 }
 
 /* (the old client-only MpSendCarState is folded into MpSendOwnCarState above:

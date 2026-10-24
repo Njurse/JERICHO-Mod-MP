@@ -67,11 +67,56 @@ python JERICHO/MODS/mp/tools/servers/rigs/test_e2e.py
 
 All three are in CI's **Checks** job and need no game assets.
 
+## Car sync through the dedicated server
+
+The dedi has **no game host**: every client is `MP_ROLE_CLIENT`, `CHK_NET_SET` /
+`CHK_NET_CARS` are never published, and the only car identity is each player's own
+`CHK_NET_PICK` advert relayed over `JPCH`. That makes the sender id in the channel header
+load-bearing, and it is now tested:
+
+```sh
+# two seats, every car cycled, per-seat assertions
+python JERICHO/MODS/mp/tools/servers/rigs/local_stack.py \
+    --clients 2 --carsync --seconds 75 --city 0 --no-master --keep
+
+# one seat picks a guest car, the other changes to another guest car
+python .../local_stack.py --clients 2 --seconds 75 --keep \
+    --seat-env c1=CHK_FORCE_CAR=3 --seat-env c2=MP_TEST_PAUSECAR=25,3,1 \
+    --require "draws exactly that" --forbid "is not loaded here"
+```
+
+`--carsync` sets `MP_TEST_CARCYCLE` on every seat and fails on `is not loaded here`,
+`no spare resident slot`, `could not be loaded`, `MISSING`, or a pick attributed to
+player 0 (`[carhacks/net] player 0 drives`). It requires a non-zero `player N drives`
+line and `draws exactly that` on each seat. `--seat-env` / `--require` / `--forbid` are
+the general forms; there is no host seat to scope to, so a bare pattern means "any seat".
+
+**Relay rule.** `MP_CHANNEL` is `[name][len][frame][reliable][fromPlayer][reserved2]`.
+The sender fills `fromPlayer`; a relay must replace it with the player id of the
+connection that sent the frame. A client receives every peer's frame over its one link
+to the host/server, so the connection cannot identify the original sender. Before this
+was fixed, `MpHandleChannel` passed `peer = 0` on every client and carhacks discarded the
+advert (`peer < 1`). `dediserver/dedi/relay.py` and the in-game host both stamp it now;
+`python .../dediserver/test_console.py` asserts a spoofed header is corrected.
+
+**Measured 2026-10-22** (`--clients 2 --carsync --seconds 75 --city 0`, `Release_dev`,
+carhacks cycling every 1.2 s): both seats PASS; 55 and 57 `draws exactly that` lines,
+every `player N drives` line carried the real peer id (no player 0), 0
+`no spare resident slot`, 0 `could not be loaded`, 0 `MISSING`, 0 crash dumps. The
+remaining handover line is the new "loaded in slot N - this body is still adopting it",
+not a failed load.
+
 ## Findings
 
-### F1 — a real client's level ends by itself on a full city (intermittent)
+### F1 — a real client's level ends by itself on a full city (intermittent) — **FIXED**
 
-**The dedi's `WELCOME` reports `mpLevel=0, arena=0`**, so a joining client launches a
+**Fixed 2026-10-23.** The dedi packs `mpLevel=1` and its configured `arena` into
+`WELCOME` (and the shape and arena bits into `MP_SESSION.spare`), so a joiner loads
+the city's multiplayer map exactly as it does from an in-game host. The full-city
+condition below no longer exists; this was not re-measured. The record is kept as
+what the rig found:
+
+**The dedi's `WELCOME` reported `mpLevel=0, arena=0`**, so a joining client launched a
 **full-city** level:
 
 ```
@@ -362,7 +407,7 @@ reach my session?" are different questions with different answers in the same fi
 | # | finding | what it blocks | severity |
 | --- | --- | --- | --- |
 | **F2** | ~~no `MP_TAG_ROSTER` → no client sees any other player~~ | **FIXED** — the dedi broadcasts the roster; three clients converge on two visible peers each | done |
-| **F1** | `mpLevel=0`/`arena=0` → a full city, on which the level self-ends (3 of 6 runs) | a stable session for even one real client | **BLOCKER** (intermittent) |
+| **F1** | ~~`mpLevel=0`/`arena=0` → a full city, on which the level self-ends (3 of 6 runs)~~ | **FIXED** — the dedi publishes the multiplayer map shape and its arena (`"arena"` in `dediserver.json`); not re-measured | done |
 | **F3** | a refused client is told nothing (no half-close) | legibility of a full/refused join | worth fixing |
 | **F4** | ~~a shut session port, with nothing on screen to say so~~ | **FIXED** — the browser's `PING` shows `x` for a listed-but-unreachable server, and a join says `joining`/`join failed (reason)`; the shut port itself is the operator's firewall | done |
 | **F\*** | a bare TCP connect is logged as `bad handshake` | nothing gameplay; log noise for an external monitor | cosmetic |
@@ -410,7 +455,7 @@ step's gate is:
 | step | what it means | gate to enter it |
 | --- | --- | --- |
 | **0. This PC** *(done)* | master + dedi + real clients on loopback; the Python floor in CI | — |
-| **1. LAN — the second PC** | a real remote client over the network, and the dedi in the in-game Join browser | **F2 fixed** (the roster, measured with three clients on this PC). **F1 is open but did not reproduce** in two 45 s runs at `--city 1`: the level stayed up and both sims ran to the end. The dedi's map shape is a deliberate full city (`mpLevel=0`), so treat F1 as "watch for it" rather than "must fix first". The rig for this step already exists — `mp_agent`/`mp_remote.py` drive the second PC, and `local_stack.py --external-dedi` points clients at one dedi |
+| **1. LAN — the second PC** | a real remote client over the network, and the dedi in the in-game Join browser | **F2 fixed** (the roster, measured with three clients on this PC). **F1 fixed**: the dedi now hosts the multiplayer map (`mpLevel=1`, arena from `dediserver.json`), so the full-city condition the finding measured no longer exists — not re-measured yet. The rig for this step already exists — `mp_agent`/`mp_remote.py` drive the second PC, and `local_stack.py --external-dedi` points clients at one dedi |
 | **2. Internet discovery** | hosts register with the master and clients list remote games **from inside the game** | the C-side work in [`docs/MASTER_SERVER.md`](../../docs/MASTER_SERVER.md) (`master_url`, register/heartbeat, a remote-row array, a non-blocking HTTP fetch). The **server** half is already proven (§Discovery): registration, live player counts, the beacon, and unregister-on-stop |
 | **3. Playtesting** | real players, and then bugs and discovery issues | a session that survives step 1 and a listing that works at step 2 |
 

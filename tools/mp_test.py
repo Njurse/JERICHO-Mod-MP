@@ -27,7 +27,7 @@ import sys
 import threading
 import time
 
-PROTO = 15                    # mp_proto.h MP_PROTO_VERSION (15: ped model id in JPCL/roster/JPPD) -- the game drops any frame whose envelope version differs
+PROTO = 18                    # mp_proto.h MP_PROTO_VERSION (18: ped model id in JPCL/roster/JPPD on top of 17's crushScale) -- the game drops any frame whose envelope version differs
 SDK = 2                       # JERICHO_SDK_VERSION
 MP_VER = "0.1.0"              # JERICHO/MODS/mp/mod.toml version -- always advertised
 NUL = bytes([0])
@@ -39,6 +39,13 @@ MAX_PLAYERS = 16              # mp_proto.h MP_MAX_PLAYERS
 NAME_MAX = 32                 # mp_proto.h MP_NAME_MAX (MP_BEACON.hostName / MP_HELLO.playerName)
 MOD_ID_MAX = 24               # mp_proto.h MP_MOD_ID_MAX (MP_MOD_INFO.id)
 MOD_VER_MAX = 16              # mp_proto.h MP_MOD_VER_MAX (MP_MOD_INFO.version)
+
+# The engine's city ROW capacity (system.h: CITY_D2_COUNT 4 + CITY_D1_COUNT 7 +
+# CITY_CUSTOM_MAX 16). A car pick/roster modelCity is a valid cross-city source
+# for 0..CITY_COUNT-1 (0xFF = MP_CAR_CITY_SESSION, "the session's own city").
+# NOTE: this mirrors system.h, not mp_proto.h, so proto_check.py does NOT verify
+# it -- it is hand-kept beside the C header like the struct formats are.
+CITY_COUNT = 27
 
 # Session rules, packed into ONE byte (mp_proto.h MP_RULES_PACK). The beacon now
 # carries this so a browser can NAME a server's mode without joining it.
@@ -82,12 +89,10 @@ PED_MODEL_JERICHO = 1
 PED_MODEL_COP = 2
 PED_MODEL_CIVILIAN = 3
 # MP_HIT: targetId, flags (MP_HIT_F_TRAFFIC = targetId is a car_data slot), 2 reserved,
-# int32 impulse[3]. MP_COLOR: count + 3 reserved, then 8-byte rows
+# int32 impulse[3], uint32 targetFrame, int32 tgtPos[3] (32 bytes since proto 14).
+# MP_COLOR: count + 3 reserved, then 8-byte rows
 # (playerId, on, r, g, b, pedModel, 2 spare). (MP_CHANNEL is CHANNEL, below.)
-# MP_HIT: targetId, flags (MP_HIT_F_TRAFFIC = targetId is a car_data slot), 2 reserved,
-# impulse[3], the target's carstate frame, and the sender's view of the target car
-# at that frame (tgtPos[3]). 32 bytes since protocol 14.
-HIT = struct.Struct("<BB2xiiiIiii")
+HIT = struct.Struct("<BB2xiiiI3i")
 HIT_F_TRAFFIC = 0x01
 # MP_STATS (count + 3 reserved) + 12-byte MP_STATS_ENTRY rows: playerId, lossPct
 # (0xFF = unknown), pingMs, rxBps, txBps -- each player's link to the hub.
@@ -113,6 +118,10 @@ WELCOME = struct.Struct("<12BIBB")      # 18 bytes: 12xu8, u32 seed, u8 hostCar,
 REJECT = struct.Struct("<4B64s")         # 68 bytes
 BEACON = struct.Struct("<IHH32s6BHH")    # 50 bytes; the last u16 is `rules` (mp_proto.h renamed MP_BEACON's `spare` to it -- same offset, same size, so the wire is unchanged)
 CHANNEL = struct.Struct("<16sHIBB2B")    # 26 bytes
+# Byte offset of MP_CHANNEL.fromPlayer. A relay must stamp this with the sender's real
+# player id: once the frame leaves the sender, the header is the only record of who it
+# was, and a client has one link (to the host/server) that says nothing about it.
+CHANNEL_FROM_OFFSET = struct.calcsize("<16sHIB")  # 23 (name + len + frame + reliable)
 CHAT = struct.Struct("<B3B96s")          # 100 bytes: playerId, reserved[3], text[96]
 KICK_FLAG_REJOIN = 0x01                  # KICK reserved[0]: the server is changing city, rejoin shortly
 KICK_TEXT_LEN = 64                       # optional KICK tail: NUL-terminated text shown to the player
@@ -122,7 +131,8 @@ SESSION = struct.Struct("<4BIBBH")       # 12 bytes (gamemode,city,tod,weather,s
 INPUT = struct.Struct("<B3B")            # count, reserved[3] = 4 (the frame byte was dropped)
 PLAYER_INPUT = struct.Struct("<BHB")     # playerId, pad, spare = 4
 CARSTATE = struct.Struct("<IB3B")        # frame, count, reserved[3] = 8
-CARSTATE_ENTRY = struct.Struct("<BBBBB4h3ii3i3i")  # pid, flags, palette, model, modelCity, orient[4], x,y,z, heading, angVel[3], vel[3] = 53 (model 0xFF = on foot; modelCity 0xFF = the session city; angVel is int32; carSlot was dropped)
+CARSTATE_ENTRY = struct.Struct("<BBBBB4h3ii3i3iBBBB")  # pid, flags, palette, model, modelCity, orient[4], x,y,z, heading, angVel[3], vel[3], leftModel, leftModelCity, hubcaps, crushScale = 57 (model 0xFF = on foot; modelCity 0xFF = the session city; hubcaps low nibble = lost wheel hubcaps; crushScale = owner's body-crush multiplier in half steps, 2 = 1.0x, 20 = 10.0x)
+CARSTATE_LEFT_CAR = 4          # mp_proto.h MP_CARSTATE_LEFT_CAR: the NO_CAR row also names the parked car
 
 # The roster (JPRS). The HOST broadcasts it before a launch and refreshes it every
 # couple of seconds; a client learns its PEERS only from it, and adopts their cars
@@ -348,7 +358,7 @@ def mode_host(args):
         elif tag == TAG["carstate"] and args.lockstep and not args.no_carstate:
             frame, count, _a, _b, _c = CARSTATE.unpack_from(payload, 0)
             if count >= 1:
-                pid, _fl, _pal, _md, _mcy, _o0, _o1, _o2, _o3, x, y, z, hd, _a0, _a1, _a2, _v0, _v1, _v2 = CARSTATE_ENTRY.unpack_from(payload, CARSTATE.size)
+                pid, _fl, _pal, _md, _mcy, _o0, _o1, _o2, _o3, x, y, z, hd, _a0, _a1, _a2, _v0, _v1, _v2, _lm, _lmc, _hub, _crush = CARSTATE_ENTRY.unpack_from(payload, CARSTATE.size)
                 last = (x, y, z, hd)
                 if not hasattr(args, "_fixed") or args._fixed is None:
                     args._fixed = (x + args.peer_dist, y, z)
@@ -360,7 +370,7 @@ def mode_host(args):
                 fx, fy, fz = args._fixed
                 # static "host" car: it must NOT follow the client's car
                 cs = CARSTATE.pack(frame, 1, 0, 0, 0)
-                cs += CARSTATE_ENTRY.pack(0, 1, 0, 0, 0xFF, 0, 0, 0, 0, fx, fy, fz, 0, 0, 0, 0, 0, 0, 0)
+                cs += CARSTATE_ENTRY.pack(0, 1, 0, 0, 0xFF, 0, 0, 0, 0, fx, fy, fz, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2)
                 send_frame(conn, TAG["carstate"], cs)
                 carstate += 1
     print(f"[mock-host] served {seen} input / {carstate} car-state frame(s); last client car {last}")
@@ -404,11 +414,12 @@ def mode_client(args):
 
     # The mp mod is ALWAYS advertised: it *is* the multiplayer system and the
     # game side always has it enabled (JERICHO lists every enabled module in
-    # its HELLO). --mods adds a SECOND entry so a deliberate mismatch can still
-    # be exercised; it never removes mp.
+    # its HELLO). --mods adds the extra entries a server may require -- the
+    # dedicated example asks for the core suite, so a normal e2e join declares it.
     mods = [("mp", MP_VER)]
-    if args.mods not in ("empty", "mp"):
-        mods.append((args.mods, "1.0.0"))
+    for extra in args.mods:
+        if extra not in ("empty", "mp"):
+            mods.append((extra, "1.0.0"))
     hello = build_hello(args.name, mods, args.build)
 
     if args.proto is not None:
@@ -497,7 +508,7 @@ def mode_client(args):
                     if t == TAG["carstate"]:
                         _fr, _cnt, _a, _b, _c = CARSTATE.unpack_from(pl, 0)
                         for k in range(_cnt):
-                            pk, _fl, _pal, _md, _mcy, _sl, _o0, _o1, _o2, _o3, xk, yk, zk, hk, _a0, _a1, _a2, _v0, _v1, _v2 = CARSTATE_ENTRY.unpack_from(
+                            pk, _fl, _pal, _md, _mcy, _sl, _o0, _o1, _o2, _o3, xk, yk, zk, hk, _a0, _a1, _a2, _v0, _v1, _v2, _lm, _lmc, _hub, _crush = CARSTATE_ENTRY.unpack_from(
                                 pl, CARSTATE.size + k * CARSTATE_ENTRY.size)
                             if pk == 0:
                                 hx, hz, hy = xk, zk, yk
@@ -515,7 +526,7 @@ def mode_client(args):
                 for f in range(900):
                     x += dxs
                     cs = CARSTATE.pack(f, 1, 0, 0, 0)
-                    cs += CARSTATE_ENTRY.pack(pid, 1, 0, 0, 0xFF, 0xFF, 0, 0, 0, 0, x, hy, lane, 0, 0, 0, 0, 0, 0, 0)   # pid = us, at the host's ground height
+                    cs += CARSTATE_ENTRY.pack(pid, 1, 0, 0, 0xFF, 0xFF, 0, 0, 0, 0, x, hy, lane, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2)   # pid = us, at the host's ground height
                     send_frame(s, TAG["carstate"], cs)
                     lane += dzs
                     try:
@@ -623,7 +634,9 @@ def main():
     c.add_argument("--chat", default="", help="after WELCOME, send one MP_CHAT line")
     c.add_argument("--port", type=int, default=1318)
     c.add_argument("--timeout", type=float, default=10.0)
-    c.add_argument("--mods", default="empty", help="extra mod id to declare; 'mp' is ALWAYS included")
+    c.add_argument("--mods", action="append", default=[],
+                   help="extra mod id to declare; 'mp' is ALWAYS included. Repeat for more "
+                        "than one (the dedi's core suite, for example).")
     c.add_argument("--build", type=lambda v: int(v, 0), default=0x74cc,
                    help="game-build hash to send (default = current build; pass 0 to force a mismatch)")
     c.add_argument("--channel", default=None, help="after WELCOME, send an MP_CHANNEL payload on this channel name")

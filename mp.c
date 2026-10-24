@@ -1829,6 +1829,11 @@ static int MpOnCarDrawColor(void* userdata, void* args)
 
 	if (cp != NULL && MpCarIsStandIn(cp->id))
 	{
+		/* The placeholder body already reads as a stand-in; only the host-car-1
+		 * fallback is painted grey. */
+		if (MpStandInIsPlaceholder())
+			return JER_RESULT_CONTINUE;
+
 		a->flatBlack = 0;
 		a->tintR = a->tintG = a->tintB = 128;	/* solid grey */
 	}
@@ -2144,7 +2149,7 @@ static int MpColorAdjustB(void* ud, int dir) { (void)ud; return MpColorAdjust(&g
  * city alone when it is not. */
 #define MPCC_MAX_CITIES	CITY_COUNT	/* JERICHO: the engine's city ROW CAPACITY (stock nine +
 					 * 16 runtime bank slots), NOT the number of cities a
-					 * session has: carhacks answers MP_CARQ_CITIES with the
+					 * session has: carhacks answers JER_CARQ_CITIES with the
 					 * cities this install actually has (chkCityCount), and the
 					 * picker TRUNCATES to this. It was 6 when only Driver 2's
 					 * four cities could be offered, and the D1 cities past the
@@ -2223,7 +2228,7 @@ static void MpCcRebuild(void)
 
 	/* SAY WHICH CITIES THE ROW OFFERS, not just the one showing. "the picker only shows
 	 * the host city" is a report this line answers directly: it names the list the row will
-	 * cycle, so a run can tell a one-city list (nobody answered MP_CARQ_CITIES, or the car
+	 * cycle, so a run can tell a one-city list (nobody answered JER_CARQ_CITIES, or the car
 	 * mods' roster hack is off) from the full one. Logged when it changes, like the roster
 	 * line below, so a list that shrinks is as visible as one that grows. */
 	if (mpCcLoggedCities != mpCcCityCount)
@@ -3333,21 +3338,22 @@ static int MpOptClearFelony(void* ud, int dir)
 	return JER_PAUSE_QUIT_NONE;
 }
 
-/* Reload every car: carhacks' own per-slot rebuild (the one its verifier uses),
- * over every slot; a slot that is not an import returns 0 and is left as it is. */
-int chkImportHotLoad(int slot);	/* carhacks/carimport.h */
+/* Reload every imported car: carhacks releases each imported slot's assets
+ * (pins, pool pages, palette rows, geometry and the city buffers that were their
+ * last user), re-applies the set and rebuilds every one of them. Stock/level cars
+ * are untouched. This is a full unload/reload, not another hot load over the top,
+ * so a stale asset is actually given back and read again. */
+int chkImportReloadAll(void);	/* carhacks/carimport.h */
 
 static int MpMenuReloadCars(void* ud, int dir)
 {
-	int slot, n = 0;
+	int n;
 
 	(void)ud; (void)dir;
 
-	for (slot = 0; slot < 11; slot++)	/* CHK_IMPORT_MAX_SLOTS */
-		if (chkImportHotLoad(slot) > 0)
-			n++;
+	n = chkImportReloadAll();
 
-	printInfo("[mp] Reload all cars: %d slot(s) rebuilt\n", n);
+	printInfo("[mp] Reload all cars: %d imported slot(s) rebuilt\n", n);
 	return 0;
 }
 

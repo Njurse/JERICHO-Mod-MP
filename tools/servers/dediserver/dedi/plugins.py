@@ -168,6 +168,13 @@ class ServerAPI:
         a level stay in the old one until they rejoin. Returns the new city."""
         return self._s.set_city(city)
 
+    def set_arena(self, arena):
+        """Which of the city's two multiplayer maps (0/1) new joiners load (the
+        game's -mp 0 / -mp 1). The welcome and start carry it and the discovery
+        listing is refreshed. Players already in a level stay on the old map until
+        they rejoin. Returns the new arena."""
+        return self._s.set_arena(arena)
+
     def save_config(self, *keys):
         """Write these config keys back to dediserver.json (atomic, other keys kept)."""
         return self._s.save_config_keys(list(keys))

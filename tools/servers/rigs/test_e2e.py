@@ -130,7 +130,8 @@ def main():
         # -- a client can join the dedi
         r = subprocess.run(
             [sys.executable, MOCK, "client", "127.0.0.1", "--port", str(dp),
-             "--name", "E2E Tester", "--timeout", "8"],
+             "--name", "E2E Tester", "--timeout", "8",
+             "--mods", "carhacks", "--mods", "d1cars"],
             capture_output=True, text=True, timeout=30,
         )
         check("a client completes the handshake with the dedi", r.returncode == 0,

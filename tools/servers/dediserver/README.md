@@ -24,7 +24,7 @@ supervisor (or a test) can pipe commands in.
 
 | command | what it does |
 | --- | --- |
-| `status` | name, session port, city, gamemode, rules (readable), players, uptime, beacon, master |
+| `status` | name, session port, city and multiplayer map, gamemode, rules (readable), players, uptime, beacon, master |
 | `list` | connected players: id, name, address, how long connected |
 | `say <text>` | one line into every player's console, prefixed `SERVER:` |
 | `kick <id> [reason]` | drop a player — the protocol's own kick message; with a reason they see "Kicked by admin: <reason>" (cut to 63 bytes) and chat is told |
@@ -40,6 +40,8 @@ supervisor (or a test) can pipe commands in.
 --port N             TCP session port (default 1318)
 --name "..."         name shown in the browser / registered with the master
 --city N             GameLevel the clients should load (0..3)
+--arena N            which of that city's two multiplayer maps (0 or 1; the game's
+                     -mp 0 / -mp 1). Default 0
 --gamemode N
 --max-players N      slots 1..N-1 are given to clients (0 belongs to the server)
 --beacon / --no-beacon
@@ -90,6 +92,9 @@ existing file). Updates and `git pull` therefore leave your settings alone.
   "port": 1318,
   "name": "Dedicated",
   "city": 0,
+  "arena": 0,               // which of the city's two multiplayer maps (0/1;
+                            // the game's -mp 0 / -mp 1). The server hosts the
+                            // multiplayer map, never the full single-player city
   "gamemode": 0,
   "max_players": 16,        // 16 is the protocol cap (MP_MAX_PLAYERS); slot 0 is the server
   "motd": "Welcome to JERICHO - drive safe, mind the traffic.",
@@ -135,37 +140,48 @@ the other players; the reply comes back privately. `!help` lists what *you* can 
 | `!admin add\|remove <slot\|name\|uuid>`, `!admin list` | admin | manage the admins list; **saved to dediserver.json** |
 | `!motd [text\|save]` | admin | show or set the join greeting; `!motd save` writes it to the file |
 | `!say <text>` | admin | a line from the server to everyone |
-| `!vote <city>` / `!vote` / `!vote cancel` | everyone / admin to cancel | vote to switch city (see below) |
+| `!vote city <city> [mp 0\|1]`, `!vote mp 0\|1`, `!vote` / `!vote cancel` | everyone / admin to cancel | vote to switch city and/or its multiplayer map (see below) |
 
 `cops`, `difficulty`, `time`, `weather`, `motd` and `admin` also work at the server
 console. Every admin command is logged with who ran it. Joins and leaves are
 announced in chat (`"announce_joins": false` turns that off). Saving rewrites
 `dediserver.json` atomically and keeps your other keys, but not comments or layout.
 
-### Voting for a city
+### Voting for a city and its multiplayer map
 
-`!vote <city>` starts a vote (or votes yes in the one running). City is `0`-`3` or
-`chicago`, `havana`, `vegas`, `rio`. One vote per player id. It passes as soon as
-**more than half** the connected players have voted yes, or fails after 30 s; the
+`!vote city <city> [mp 0|1]` starts a vote (or votes yes in the one running). City is
+`0`-`3` or `chicago`, `havana`, `vegas`, `rio`. `mp 0` / `mp 1` picks one of that
+city's **two multiplayer maps** -- the same choice the game's own `-mp 0` / `-mp 1`
+boot flag makes (0 is the take-a-ride default). Leave `mp` out to keep the current
+map, or vote for a map change in the current city with `!vote mp 0|1` on its own.
+The old `!vote <city>` form still works. One vote per player id. It passes as soon
+as **more than half** the connected players have voted yes, or fails after 30 s; the
 next vote can start 60 s after one ends. Admins can `!vote cancel`.
 
-On a pass the city is saved to `dediserver.json`, becomes the session city and the
-discovery listing updates. **Everyone is then disconnected with the KICK's rejoin
-flag** (the game cannot change level under a running session). Current clients show
-"Server changing city - reconnecting...", rejoin the same server by themselves after
-~2.5 s (retrying for ~20 s; Esc or joining/hosting anything else cancels), load the
-new city and put their previous car back through Change car (cross-city works; if
-the car can't be used there they keep the default, and the log says why). Older
-clients just see "Kicked by vote: server switched to ... - rejoin" and rejoin by hand.
-Plugins can do the same with `kick(player, reason, rejoin=True)`.
+The dedicated server always hosts the city's multiplayer map, not the full
+single-player city (`WELCOME.mpLevel = 1`); `"arena": 0` or `1` in `dediserver.json`
+(or `--arena`) is which of the two it loads. A vote is for a whole map (city +
+arena), so while `HAVANA mp 1` is being voted a `!vote havana` is only a yes when the
+server's current arena is already 1.
+
+On a pass the city and arena are saved to `dediserver.json`, become the session map
+and the discovery listing updates. **Everyone is then disconnected with the KICK's
+rejoin flag** (the game cannot change level under a running session). Current clients
+show "Server changing city - reconnecting...", rejoin the same server by themselves
+after ~2.5 s (retrying for ~20 s; Esc or joining/hosting anything else cancels), load
+the new city and multiplayer map and put their previous car back through Change car
+(cross-city works; if the car can't be used there they keep the default, and the log
+says why). Older clients just see "Kicked by vote: server switched to ... - rejoin"
+and rejoin by hand. Plugins can do the same with `kick(player, reason, rejoin=True)`.
 
 Keys: `"vote"` (`false` turns `!vote` off), `"vote_duration"` (seconds, 30),
 `"vote_threshold"` (fraction that must be exceeded, 0.5), `"vote_cooldown"` (60).
 
-Session settings in `dediserver.json`: `"time_of_day"` (`dawn`, `day`, `dusk`,
-`night`) and `"weather"` (`clear`, `rain`, `wet`), or `--time-of-day` / `--weather`.
-Players read them (and the cops rules) as they load a level, so a change reaches a
-player the next time they join or load.
+Session settings in `dediserver.json`: `"city"` (`0`-`3`) and `"arena"` (`0`/`1`,
+the city's two multiplayer maps), `"time_of_day"` (`dawn`, `day`, `dusk`, `night`)
+and `"weather"` (`clear`, `rain`, `wet`), or `--city` / `--arena` /
+`--time-of-day` / `--weather`. Players read them (and the cops rules) as they load a
+level, so a change reaches a player the next time they join or load.
 
 ### Making yourself an admin
 
@@ -233,7 +249,9 @@ Hooks: `on_load(server)`, `on_unload()`, `on_player_join(player)`,
 second). `server` offers `players()`, `find_player(slot|name)`,
 `send_private(player, text, color)`, `broadcast(text, color)`, `kick(player, reason=None, by="admin", announce=True)` (a reason is shown to the player as "Kicked by <by>: <reason>"),
 `config_get/config_set`, `set_rules(cops=, cop_difficulty=, cop_immunity=,
-invulnerable=)`, `set_cops`, `set_difficulty`, `readvertise()`, `log`, and
+invulnerable=)`, `set_cops`, `set_difficulty`, `set_city(city)`,
+`set_arena(arena)`, `set_session(time_of_day=, weather=)`, `save_config(*keys)`,
+`readvertise()`, `log`, and
 `register_command(name, handler, admin=False, help="", console=False)` where
 `handler(caller, args)` returns the reply text. Hooks run on the server's threads:
 keep them quick and don't block.
@@ -246,10 +264,17 @@ same policy the game's own host does:
 | `mod_check` | what it does |
 | --- | --- |
 | `0` (default) | admit anyone. A mismatch is not an error; set the below if it is |
-| `1` | the set of **enabled mod ids** must equal `mods` (versions ignored, because the same mod's version differs between a dev and a release build) |
+| `1` | every id in `core_mods` **must** be enabled; `mods`, when non-empty, is the exact enabled set |
 | `2` | as 1, **and** the versions in `mod_versions` must match |
 
-A server that names no `mods` matches everyone, so leaving the check on is harmless.
+The shipped example sets `mod_check: 1` and
+`core_mods: ["mp", "carhacks", "d1cars"]` — the multiplayer suite every client
+needs. That is the *minimum*: optional modules such as crumple may be enabled
+beside them, and the core suite is ordered first in the client's `modlist.ini`
+(the game rewrites the order on join; see `jer_manager_normalize_core`). Leave
+`mods` empty unless you want to forbid extras as well.
+
+A server that names neither `core_mods` nor `mods` matches everyone.
 A client that does not match is refused with `REJECT: MODS` and the text "mod list
 does not match the server", which the game shows as a toast — and the refusal is
 written so the reason actually arrives (the socket is half-closed before it is
@@ -317,7 +342,7 @@ the master together (`docker compose up -d --build`), with `--port`, `--name`,
 Every line is timestamped and levelled. The ones that matter:
 
 ```
-[INFO] listening on TCP/1318 (city 0, up to 8 players); Ctrl-C to stop
+[INFO] listening on TCP/1318 (city 0, multiplayer map 0, up to 8 players); Ctrl-C to stop
 [INFO] player 1 'Bob' joined from 192.168.1.44:53120 (mods=2, build 0x74cc)
 [INFO] player 1 'Bob' left (0/8)
 [WARNING] player 1 'Bob' timed out (30s silent)

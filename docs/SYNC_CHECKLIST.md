@@ -291,6 +291,33 @@ still standing beside them.
 The invalidation rules the two seats must obey (match the vehicle in place; a mod car
 reaches the traffic AI only as a stopped, empty car) are in [`ARCHITECTURE.md` §15](ARCHITECTURE.md).
 
+### 6b. Commandeering another player's parked car (2026-10-21)
+
+The on-foot sibling of a car swap: one player walks into the car another left. Run the
+lever on a seat that was present for the exit (the host, or a joiner already in); a
+machine that never held the body cannot enter it.
+
+    --seat-env client1=MP_TEST_ONFOOT=25
+    --seat-env host=MP_TEST_ONFOOT=35 --seat-env host=MP_TEST_ENTER_LEFT=45,1,10
+    --seat-env client1=MP_TEST_PAUSECAR=65,3,3 --seat-env host=MP_TEST_PAUSECAR=75,3,2
+
+Pass bar: the commando logs `enter left car - player N slot S ... TannerCanEnterCar=1`
+and adopts that slot; the original owner's return gets a **different** free slot; the
+commando keeps the body and walks back into it (`change car: got back into slot S`); and
+**cars persist**: no `removed the car we left` and no
+`removed player N's abandoned car` appears for the old car, which stays parked on every
+seat. `MP_TEST_ENTER_LEFT`'s failure line names the row/slot state and the rejected
+predicate instead of a bare "no left car"; the `leftCarSlot1 == 0` branch means the
+machine never held that body (the materialization follow-up in
+[`OPEN_ISSUES.md`](OPEN_ISSUES.md)).
+
+Measured 2026-10-21, three seats: PASS, `dumps=0`, `simFrames a:3181 b:3182 c:2971`;
+the host entered player 1's body at 29875, parked it again at 37058, player 1's return
+got slot 3 at 44914, and the host walked back into its commandeered body at 52322.
+The host's old car and the peers' copies of it stayed parked. The ENTER_LEFT get-in
+must put the local Tanner away (`RemovePlayerPedestrian`); a leaked ped was what
+produced the `intrThreadMain+0x7E` / `vsync_callback` crash on the following exit.
+
 ### 6a. Why changes were refused — one real bug, and what is left
 
 The stress rig's refusals ("no spare resident slot") had **two** sources, and only one
@@ -648,7 +675,9 @@ of the fix. **Until then, a cross-city live join can mis-slot.** Same-city joins
 **17. Player-car damage and dents are not synced.** `totalDamage`, `ap.damage[]` and
 `needsDenting` do not ride the player-carstate, so a bent car can look straight on
 another screen. Deliberate for v1 — the player carstate has no health field. (Traffic
-damage **is** synced — domain 12.)
+damage **is** synced — domain 12.) The per-car body-crush multiplier **is** carried
+(`crushScale`, in half steps), so every machine deforms a car by the same amount once
+it is dented; only the damage itself remains owner-side.
 
 **18. Traffic motion and pedestrians are not made identical.** The disjoint-band design
 means each machine drives its own traffic; a car you see need not be the same car on the
@@ -768,7 +797,7 @@ own car of that number"), so picking X can hand back Y -- worse than the change 
 Candidate fixes, best fit first:
 
 1. **Retry a refused change.** A change is only *advertised* when it actually happens
-   (`MP_CARQ_CHOSEN`, after a successful build), so retrying locally until a slot frees
+   (`JER_CARQ_CHOSEN`, after a successful build), so retrying locally until a slot frees
    is invisible to the other machines and needs no wire or determinism change. It needs a
    bound, and it must not sit behind a slot that is never released.
 2. **Never silently substitute.** If a pick cannot be slotted, keep the player's CURRENT

@@ -104,11 +104,17 @@ def channel(server, conn, pid, payload):
     """JPCH: an add-on's net-bridge frame. The game host consumes nothing itself on
     the wire: it broadcasts the frame (header + declared payload, trailing bytes cut)
     to EVERY connection, the sender included (MpHandleChannel -> MpHostBroadcast).
-    Returns True when relayed."""
+
+    The sender is STAMPED from the connection, not trusted from the payload: after the
+    relay the header is the only record of who sent the frame, and a client has one link
+    (to this server) that cannot tell it. Without this every peer's carhacks pick
+    arrived looking like player 0's and was discarded. Returns True when relayed."""
     if len(payload) < m.CHANNEL.size:
         return False
     size = m.CHANNEL.size + m.CHANNEL.unpack_from(payload, 0)[1]
     if len(payload) < size:
         return False
-    server.broadcast(payload[:size], m.TAG["channel"])
+    frame = bytearray(payload[:size])
+    frame[m.CHANNEL_FROM_OFFSET] = pid & 0xFF
+    server.broadcast(bytes(frame), m.TAG["channel"])
     return True
