@@ -2602,15 +2602,10 @@ static const JER_PAUSE_MENU mpColorMenu =
 static void MpCharLabel(void* ud, char* out, int max)
 {
 	int selected = MpPedModelSelected();
-	int model = MpPedModelEffective(selected);
 
 	(void)ud;
 
-	if (model != selected)
-		snprintf(out, max, "Preferred Character: %s (requested %s unavailable)",
-			MpPedModelName(model), MpPedModelName(selected));
-	else
-		snprintf(out, max, "Preferred Character: %s", MpPedModelName(model));
+	snprintf(out, max, "Preferred Character: %s", MpPedModelName(selected));
 }
 
 static int MpCharAdjust(void* ud, int dir)

@@ -7241,37 +7241,33 @@ int MpSetPedModel(int model)
 	if (model < 0 || model >= MP_PED_MODEL_MAX)
 		return 0;
 
-	if (!MpPedModelSelectable(model))
-	{
-		MpNotify(model == MP_PED_MODEL_JERICHO
-			? "Jericho is unavailable (Havana data is not installed)"
-			: "That character is not available");
-
+	/* The picker only offers entries the archive knows. Do not bounce the choice
+	 * back just because its models are not resident yet: this function is the
+	 * retry, and the first on-foot frame imports it. */
+	if (model >= MpPedModelCount())
 		return 0;
-	}
 
 	/* An explicit pick is also a retry: a previous import failure must not keep
 	 * the archive refused for the rest of the level. */
 	sMpJerPedImportLevel = GameLevel;
 	sMpJerPedImportFailed = 0;
 
-	if (model >= MP_PED_MODEL_JERICHO && !MpPedModelAvailable(model))
+	if (gMp.running && model >= MP_PED_MODEL_JERICHO && !MpPedModelAvailable(model))
 	{
 		/* At the frontend there is no level to pin pages into. Persist the choice;
-		 * MpApplyLocalPedModel imports it on the first on-foot frame. */
-		if (gMp.running && !MpEnsureJerichoImported())
-		{
-			MpNotify("That character could not be imported - staying on the current character");
-
-			return 0;
-		}
+		 * MpApplyLocalPedModel imports it on the first on-foot frame. Keep the
+		 * choice even if this attempt is still pending, so the menu does not fight
+		 * the player back to Tanner. */
+		if (!MpEnsureJerichoImported() && gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx,
+				"[mp] character: %s (id %d) import is still pending; keeping the choice\n",
+				MpPedModelName(model), model);
 	}
 
-	if (gMp.running && model >= MP_PED_MODEL_JERICHO && !MpEnsureJerichoInstalled())
-	{
-		MpNotify("That character could not be prepared - staying on the current character");
-		return 0;
-	}
+	if (gMp.running && model >= MP_PED_MODEL_JERICHO && !MpEnsureJerichoInstalled() && gMpCtx != NULL)
+		gMpCtx->jer_log(gMpCtx,
+			"[mp] character: %s (id %d) install is still pending; keeping the choice\n",
+			MpPedModelName(model), model);
 
 	gMp.config.pedModel = model;
 	MpConfigSave();

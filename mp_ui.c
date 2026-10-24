@@ -668,15 +668,10 @@ static const JER_FE_MENU kHostSetMenu = { "mp.mode", kHostSetItems, 3, NULL, NUL
 static void LblPreferredCharacter(void* ud, char* out, int max)
 {
 	int selected = MpPedModelSelected();
-	int model = MpPedModelEffective(selected);
 
 	(void)ud;
 
-	if (model != selected)
-		snprintf(out, max, "Preferred Character: %s (requested %s unavailable)",
-			MpPedModelName(model), MpPedModelName(selected));
-	else
-		snprintf(out, max, "Preferred Character: %s", MpPedModelName(model));
+	snprintf(out, max, "Preferred Character: %s", MpPedModelName(selected));
 }
 
 static int AdjPreferredCharacter(void* ud, int dir)
