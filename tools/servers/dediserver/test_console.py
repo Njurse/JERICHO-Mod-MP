@@ -63,7 +63,27 @@ def main():
     check("defaults: cops on, difficulty 1", fresh["rules"] == 0x5, str(fresh["rules"]))
     check("status shows the session port", "TCP/1400" in st)
     check("status shows the city", "city:      2" in st)
+    check("status shows the multiplayer map",
+          "arena:     0 (of the city's two multiplayer maps)" in st, st)
     check("status shows the player count", "players:   0/8" in st)
+
+    # -- the map the server publishes: shape 1 (a multiplayer map) and its arena
+    w = m.WELCOME.unpack(server._welcome(1, 1))
+    check("welcome says multiplayer map, arena 0", w[6] == 1 and w[7] == 0, str(w))
+    server.set_arena(1)
+    w = m.WELCOME.unpack(server._welcome(1, 1))
+    check("welcome follows the configured arena", w[6] == 1 and w[7] == 1, str(w))
+    spare = server.session_spare()
+    check("session spare: shape bit 0, rules in 1.., arena in bit 8",
+          spare & 1 == 1 and (spare >> 1) & 0x7F == server.cfg["rules"] & 0x7F
+          and (spare >> 8) & 1 == 1, hex(spare))
+    try:
+        server.set_arena(2)
+        bad = False
+    except ValueError:
+        bad = True
+    check("set_arena refuses anything but 0/1", bad)
+    server.set_arena(0)
 
     # -- list with nobody connected
     check("list says nobody is connected", server.cmd_list("") == "no players connected")
@@ -295,6 +315,12 @@ def main():
     check("an existing config is never overwritten", _c.ensure_config(cf, ex) is None
           and open(cf).read() == '{"name": "Mine"}')
     check("the repo ships the example", os.path.exists(os.path.join(HERE, _c.EXAMPLE_NAME)))
+    import json
+    cli = os.path.join(td, "cli.json")
+    with open(cli, "w") as f:
+        json.dump({"arena": 0}, f)
+    cli_cfg, _ = _c.build_config(["--config", cli, "--arena", "1"])
+    check("--arena overrides the config file", cli_cfg["arena"] == 1, str(cli_cfg["arena"]))
 
     # -- KICK over a real socket pair: the frame, then the connection closing
     a, b = socket.socketpair()

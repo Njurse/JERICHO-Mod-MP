@@ -108,9 +108,15 @@ not a failed load.
 
 ## Findings
 
-### F1 — a real client's level ends by itself on a full city (intermittent)
+### F1 — a real client's level ends by itself on a full city (intermittent) — **FIXED**
 
-**The dedi's `WELCOME` reports `mpLevel=0, arena=0`**, so a joining client launches a
+**Fixed 2026-10-23.** The dedi packs `mpLevel=1` and its configured `arena` into
+`WELCOME` (and the shape and arena bits into `MP_SESSION.spare`), so a joiner loads
+the city's multiplayer map exactly as it does from an in-game host. The full-city
+condition below no longer exists; this was not re-measured. The record is kept as
+what the rig found:
+
+**The dedi's `WELCOME` reported `mpLevel=0, arena=0`**, so a joining client launched a
 **full-city** level:
 
 ```
@@ -401,7 +407,7 @@ reach my session?" are different questions with different answers in the same fi
 | # | finding | what it blocks | severity |
 | --- | --- | --- | --- |
 | **F2** | ~~no `MP_TAG_ROSTER` → no client sees any other player~~ | **FIXED** — the dedi broadcasts the roster; three clients converge on two visible peers each | done |
-| **F1** | `mpLevel=0`/`arena=0` → a full city, on which the level self-ends (3 of 6 runs) | a stable session for even one real client | **BLOCKER** (intermittent) |
+| **F1** | ~~`mpLevel=0`/`arena=0` → a full city, on which the level self-ends (3 of 6 runs)~~ | **FIXED** — the dedi publishes the multiplayer map shape and its arena (`"arena"` in `dediserver.json`); not re-measured | done |
 | **F3** | a refused client is told nothing (no half-close) | legibility of a full/refused join | worth fixing |
 | **F4** | ~~a shut session port, with nothing on screen to say so~~ | **FIXED** — the browser's `PING` shows `x` for a listed-but-unreachable server, and a join says `joining`/`join failed (reason)`; the shut port itself is the operator's firewall | done |
 | **F\*** | a bare TCP connect is logged as `bad handshake` | nothing gameplay; log noise for an external monitor | cosmetic |
@@ -449,7 +455,7 @@ step's gate is:
 | step | what it means | gate to enter it |
 | --- | --- | --- |
 | **0. This PC** *(done)* | master + dedi + real clients on loopback; the Python floor in CI | — |
-| **1. LAN — the second PC** | a real remote client over the network, and the dedi in the in-game Join browser | **F2 fixed** (the roster, measured with three clients on this PC). **F1 is open but did not reproduce** in two 45 s runs at `--city 1`: the level stayed up and both sims ran to the end. The dedi's map shape is a deliberate full city (`mpLevel=0`), so treat F1 as "watch for it" rather than "must fix first". The rig for this step already exists — `mp_agent`/`mp_remote.py` drive the second PC, and `local_stack.py --external-dedi` points clients at one dedi |
+| **1. LAN — the second PC** | a real remote client over the network, and the dedi in the in-game Join browser | **F2 fixed** (the roster, measured with three clients on this PC). **F1 fixed**: the dedi now hosts the multiplayer map (`mpLevel=1`, arena from `dediserver.json`), so the full-city condition the finding measured no longer exists — not re-measured yet. The rig for this step already exists — `mp_agent`/`mp_remote.py` drive the second PC, and `local_stack.py --external-dedi` points clients at one dedi |
 | **2. Internet discovery** | hosts register with the master and clients list remote games **from inside the game** | the C-side work in [`docs/MASTER_SERVER.md`](../../docs/MASTER_SERVER.md) (`master_url`, register/heartbeat, a remote-row array, a non-blocking HTTP fetch). The **server** half is already proven (§Discovery): registration, live player counts, the beacon, and unregister-on-stop |
 | **3. Playtesting** | real players, and then bugs and discovery issues | a session that survives step 1 and a listing that works at step 2 |
 

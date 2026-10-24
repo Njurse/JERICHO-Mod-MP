@@ -36,6 +36,9 @@ DEFAULTS = {
     "port": 1318,
     "name": "Dedicated",
     "city": 0,                 # GameLevel the clients should load (0..3)
+    "arena": 0,                # which of the city's two multiplayer maps clients load
+                               # (0/1, the game's `-mp 0` / `-mp 1`). The dedicated
+                               # server hosts the multiplayer map, never the full city
     "gamemode": 0,
     "max_players": 16,         # a client takes a slot 1..max_players-1 (0 is the server);
                                # 16 is the protocol's cap (MP_MAX_PLAYERS)
@@ -88,6 +91,13 @@ DEFAULTS = {
 # which is ~2s at 60 fps -- the same cadence a real host uses, so a client sees
 # peers appear and leave on the timing it was written against.
 ROSTER_REFRESH_S = 2.0
+
+# The map SHAPE this server publishes: 1 = a multiplayer map, 0 = the full city.
+# It rides in MP_WELCOME.mpLevel and bit 0 of MP_SESSION.spare (mp_proto.h), and a
+# dedicated server is always a multiplayer session -- the full city was never the
+# intended mode (TESTING.md F1 measured it ending levels by itself). `arena` then
+# picks which of the city's two maps.
+MP_LEVEL = 1
 
 CONFIG_NAME = "dediserver.json"
 EXAMPLE_NAME = "dediserver.example.json"   # tracked; dediserver.json is the operator's, untracked
@@ -372,6 +382,17 @@ class Dedicated:
     def city(self):
         return int(self.cfg["city"])
 
+    @property
+    def arena(self):
+        return int(self.cfg["arena"])
+
+    def session_spare(self):
+        """MP_SESSION.spare: bit 0 is the map shape, bits 1.. the session rules
+        (MpHandleStart reads `(spare >> 1) & 0xff`), bit 8 the arena -- the same
+        layout an in-game host packs (mp_session.c, MpStartMatch)."""
+        return ((MP_LEVEL & 1) | ((int(self.cfg["rules"]) & 0x7F) << 1)
+                | ((self.arena & 1) << 8))
+
     # -- the plugin-facing surface (dedi/plugins.py ServerAPI calls these)
     def player_views(self):
         with self.lock:
@@ -435,6 +456,15 @@ class Dedicated:
         self.log.info("city now %d (new joiners load it)" % city)
         self.readvertise()
         return city
+
+    def set_arena(self, arena):
+        arena = int(arena)
+        if not 0 <= arena <= 1:
+            raise ValueError("arena is 0..1")
+        self.cfg["arena"] = arena
+        self.log.info("multiplayer map now %d (new joiners load it)" % arena)
+        self.readvertise()
+        return arena
 
     def save_config_keys(self, keys):
         """Write these cfg keys back into the config file, keeping every other key
@@ -789,13 +819,12 @@ class Dedicated:
             # they simply arrive without a peer list, which is what this server did
             # before it had one at all.
             self.log.warning("could not send the roster to %s: %s" % (who, e))
-        # spare carries the session rules (bits 1..: mp_proto.h, MpHandleStart reads
-        # (spare >> 1) & 0xff) -- a 0 here, and a 0 in the welcome's rules byte,
-        # meant every client adopted "no rules": cops OFF, whatever this server's
-        # config said.
+        # spare carries the map shape (bit 0), the session rules (bits 1..: mp_proto.h,
+        # MpHandleStart reads (spare >> 1) & 0xff) and which of the city's two maps
+        # (bit 8). A 0 for the rules, and a 0 in the welcome's rules byte, meant every
+        # client adopted "no rules": cops OFF, whatever this server's config said.
         sess = m.SESSION.pack(0, self.city, time_of_day_index(self.cfg), weather_index(self.cfg),
-                              seed, max(2, self.player_count() + 1), 1,
-                              (int(self.cfg["rules"]) & 0x7F) << 1)
+                              seed, max(2, self.player_count() + 1), 1, self.session_spare())
         try:
             # running=1: a dedicated server IS a match in progress. It said 0, and
             # the client takes its "the host has STARTed" branch only when this is
@@ -984,8 +1013,12 @@ class Dedicated:
         # 15 values: playerId, maxPlayers, modsEnforced, modsMatched, running,
         # subGame, mpLevel, arena, gamemode, city, timeOfDay, weather, seed,
         # hostCar, rules  (mp_proto.h MP_WELCOME, 18 bytes since v11).
+        # mpLevel was hardcoded 0 (the FULL city) while the in-game host said 1;
+        # a joining client then loaded a single-player level and sometimes ended
+        # it by itself (TESTING.md F1). A dedicated server is always a multiplayer
+        # session; `arena` says which of the city's two maps.
         return m.WELCOME.pack(pid, self.max_players, int(self.cfg["mod_check"]),
-                              1 if matched else 0, running, 0, 0, 0,
+                              1 if matched else 0, running, 0, MP_LEVEL, self.arena,
                               int(self.cfg["gamemode"]), self.city,
                               time_of_day_index(self.cfg), weather_index(self.cfg),
                               seed, 0xFF, int(self.cfg["rules"]) & 0xFF)
@@ -1156,6 +1189,7 @@ class Dedicated:
             "name:      %s" % self.cfg["name"],
             "session:   TCP/%d%s" % (self.port, adv),
             "city:      %d" % self.city,
+            "arena:     %d (of the city's two multiplayer maps)" % self.arena,
             "gamemode:  %d" % int(self.cfg["gamemode"]),
             "rules:     %s" % rules_text(int(self.cfg["rules"])),
             "time:      %s, %s" % (TIMES_OF_DAY[time_of_day_index(self.cfg)],
@@ -1302,8 +1336,8 @@ class Dedicated:
             return 1
         srv.listen(self.max_players)
         srv.settimeout(0.5)
-        self.log.info("listening on TCP/%d (city %d, up to %d players); Ctrl-C to stop"
-                      % (self.port, self.city, self.max_players))
+        self.log.info("listening on TCP/%d (city %d, multiplayer map %d, up to %d players); Ctrl-C to stop"
+                      % (self.port, self.city, self.arena, self.max_players))
 
         threads = []
         if self.cfg["beacon"]:
@@ -1344,6 +1378,9 @@ def parse_args(argv):
     ap.add_argument("--port", type=int)
     ap.add_argument("--name")
     ap.add_argument("--city", type=int, help="GameLevel the clients load (0..3)")
+    ap.add_argument("--arena", type=int,
+                    help="which of the city's two multiplayer maps clients load (0 or 1; "
+                         "the game's -mp 0 / -mp 1)")
     ap.add_argument("--gamemode", type=int)
     ap.add_argument("--max-players", type=int)
     ap.add_argument("--beacon", dest="beacon", action="store_true", default=None)
@@ -1456,7 +1493,8 @@ def build_config(argv):
                        say=lambda msg: print("[dedi] " + msg, file=sys.stderr))
     cfg = load_config(path, DEFAULTS)
     apply_overrides(cfg, args, (
-        ("port", "port"), ("name", "name"), ("city", "city"), ("gamemode", "gamemode"),
+        ("port", "port"), ("name", "name"), ("city", "city"), ("arena", "arena"),
+        ("gamemode", "gamemode"),
         ("max_players", "max_players"), ("beacon", "beacon"), ("beacon_ms", "beacon_ms"),
         ("idle_drop_s", "idle_drop_s"), ("cops", "cops"),
         ("cop_difficulty", "cop_difficulty"), ("cop_immunity", "cop_immunity"),
@@ -1522,6 +1560,13 @@ def main(argv=None):
         log.warning("city %d is outside 0..3 (CHICAGO, HAVANA, LAS VEGAS, RIO); the "
                     "clients will load whatever it names, if the level registry has it"
                     % int(cfg["city"]))
+
+    arena = int(cfg["arena"])
+    if arena not in (0, 1):
+        log.warning("arena %d is not 0 or 1 (the two multiplayer maps of a city); "
+                    "using 0" % arena)
+        arena = 0
+    cfg["arena"] = arena
 
     for key, names, idx in (("time_of_day", TIMES_OF_DAY, time_of_day_index),
                             ("weather", WEATHERS, weather_index)):

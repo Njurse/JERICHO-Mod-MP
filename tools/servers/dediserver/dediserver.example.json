@@ -2,6 +2,7 @@
   "port": 1318,
   "name": "Dedicated",
   "city": 0,
+  "arena": 0,
   "gamemode": 0,
   "max_players": 16,
   "motd": "Welcome to JERICHO - drive safe, mind the traffic.",
