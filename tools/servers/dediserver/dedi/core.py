@@ -461,6 +461,15 @@ class Dedicated:
         self.readvertise()
         return city
 
+    def set_map_mode(self, mode):
+        mode = str(mode).strip().lower()
+        if mode not in (MAP_MODE_CITY, MAP_MODE_MP):
+            raise ValueError("map mode is city or mp")
+        self.cfg["map_mode"] = mode
+        self.log.info("map mode now %s (new joiners load it)" % mode)
+        self.readvertise()
+        return mode
+
     def set_arena(self, arena):
         arena = int(arena)
         if not 0 <= arena <= 1:
