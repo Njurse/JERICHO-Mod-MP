@@ -36,9 +36,21 @@ It is **v3-only** for now.
 ```sh
 BAKE_JMPPED.bat all                     # export + build + preview
 BAKE_JMPPED.bat export --source DRIVER2/LEVELS/HAVANA.LEV
+BAKE_JMPPED.bat split --and-build       # edit a bindpose_edit.obj, then split+bake
 BAKE_JMPPED.bat build --copy            # copy the v3 rebuild to DRIVER2/LEVELS
 BAKE_JMPPED.bat export --out my-edit    # keep a separate workspace
 ```
+
+**Whole-character editing.** `jericho/obj/bindpose_edit.obj` is the playable v3
+character (six Jericho parts plus Tanner's limbs) placed on the bind skeleton.
+Edit it as one model in Blender, then run `BAKE_JMPPED.bat split --and-build`.
+The splitter subtracts each part's bone bind offset (engine Y-down), resets the
+mesh to model-local space, writes only the groups whose geometry changed back to
+`obj/edit/<part>.obj`, and runs the builder. It remembers the combined scene's
+hash, so a second split without a new edit is a no-op. Use `--variant tanner` for
+`tanner/obj/bindpose_edit.obj`; v3 only stores the eight Tanner limbs, so the
+other Tanner parts are reference-only and the builder warns if you edit them.
+
 
 The workspace defaults to `tools/out/jmppeds/v3` and is gitignored:
 
@@ -89,13 +101,16 @@ crops for a page, not both. RGB edits are quantised to the nearest CLUT entry.
 **Skeleton.** `skeleton.json` is the 23-bone hierarchy with parent links, raw
 motion positions, engine positions and the Tanner/Jericho model binding for each
 bone. `skeleton_raw.obj`/`skeleton_edit.obj` are edge skeletons for Blender.
-`tanner/obj/bindpose_*` and `jericho/obj/bindpose_*` place the parts on those
-bones, so a rebinding or proportion error is visible before a bake.
+`jericho/obj/bindpose_edit.obj` is the whole-character edit scene; `split`
+consumes it and writes local parts. `tanner/obj/bindpose_*` is the full Tanner
+reference. The bindpose scenes place the parts on those bones, so a rebinding or
+proportion error is visible before a bake.
 
 **Rebuilding.** `build` writes `<workspace>/JMPPED.LEV` and self-checks it by
-re-reading. A no-edit rebuild is byte-identical to `base.LEV`. The v3 archive is
-copied to `DRIVER2/LEVELS` only when `--copy` is passed (`--copy-to` chooses a
-different target; `--no-copy` forces it off).
+re-reading. A no-edit rebuild is byte-identical to `base.LEV`. `split
+--and-build` first turns an edited bindpose into local per-part OBJs. The v3
+archive is copied to `DRIVER2/LEVELS` only when `--copy` is passed (`--copy-to`
+chooses a different target; `--no-copy` forces it off).
 
 **Refusals.** The builder names the ped/part and source rather than dropping
 data: both `obj/edit` and `obj/raw` changed, both RGB and indexed page forms

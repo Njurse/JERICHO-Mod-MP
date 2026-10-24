@@ -6,6 +6,7 @@ writes a per-ped OBJ/PNG workspace, rebuilds the 14-slot JMPPED v3 archive, and
 renders a preview.
 
     export   Driver 2 level -> Tanner/Jericho subexports + skeleton + jmpped.json
+    split    edited bindpose_edit.obj -> local per-part OBJs (+ optional build)
     build    edited OBJ/PNG -> JMPPED.LEV
     preview  JMPPED.LEV -> 360-degree GIF
     all      export, build, preview
@@ -27,6 +28,7 @@ DEFAULT_COPY = os.path.join(REPO, "src_rebuild", "bin", "Release", "DRIVER2",
                             "LEVELS", "JMPPED.LEV")
 EXPORT = os.path.join(HERE, "jmpped_export.py")
 BUILD = os.path.join(HERE, "jmpped_build.py")
+SPLIT = os.path.join(HERE, "jmpped_split.py")
 PREVIEW = os.path.join(HERE, "preview_jmpped.py")
 
 
@@ -49,6 +51,17 @@ def _build(args, out: str) -> int:
     return _run(cmd)
 
 
+def _split(args, out: str) -> int:
+    cmd = [sys.executable, SPLIT, "--out", out, "--variant", args.variant]
+    if args.scene:
+        cmd += ["--scene", args.scene]
+    if args.raw_parts:
+        cmd.append("--raw")
+    if args.and_build:
+        cmd.append("--and-build")
+    return _run(cmd)
+
+
 def _preview(args, out: str) -> int:
     lev = os.path.join(out, "JMPPED.LEV")
     if not os.path.isfile(lev):
@@ -62,11 +75,19 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="BAKE the Driver 2 Tanner/Jericho "
                                              "peds into JMPPED v3")
     ap.add_argument("step", nargs="?", default="all",
-                    choices=("export", "build", "preview", "all"))
+                    choices=("export", "split", "build", "preview", "all"))
     ap.add_argument("--out", default=None,
                     help="workspace (default: tools/out/jmppeds/v3)")
     ap.add_argument("--source", default=None,
                     help="Driver 2 level (default: exporter's Havana path)")
+    ap.add_argument("--variant", choices=("jericho", "tanner"), default="jericho",
+                    help="bindpose variant to split (default jericho, the v3 player)")
+    ap.add_argument("--scene", default=None,
+                    help="combined bindpose OBJ for split (default: the variant's)")
+    ap.add_argument("--raw-parts", action="store_true",
+                    help="split writes engine-space obj/raw parts instead of obj/edit")
+    ap.add_argument("--and-build", action="store_true",
+                    help="split then run the builder")
     ap.add_argument("--use", choices=("auto", "edit", "raw"), default="auto",
                     help="which OBJ copy the builder reads")
     ap.add_argument("--copy", action="store_true",
@@ -89,6 +110,10 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.step in ("export", "all"):
         rc = _export(args, out)
+        if rc:
+            return rc
+    if args.step == "split":
+        rc = _split(args, out)
         if rc:
             return rc
     if args.step in ("build", "all"):

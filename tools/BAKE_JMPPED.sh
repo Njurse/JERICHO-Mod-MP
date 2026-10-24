@@ -4,10 +4,11 @@
 # Extracts Driver 2's Tanner and Jericho peds, exports a per-ped
 # OBJ/PNG/skeleton workspace and rebuilds JMPPED v3.
 #
-# Steps:  export | build | preview | all
+# Steps:  export | split | build | preview | all
 # Examples:
 #   ./BAKE_JMPPED.sh all
 #   ./BAKE_JMPPED.sh export --source DRIVER2/LEVELS/HAVANA.LEV
+#   ./BAKE_JMPPED.sh split --and-build
 #   ./BAKE_JMPPED.sh build --copy
 set -eu
 

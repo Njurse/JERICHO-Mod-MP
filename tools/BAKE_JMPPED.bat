@@ -5,10 +5,11 @@ rem
 rem  Extracts Driver 2's Tanner and Jericho peds, exports a per-ped
 rem  OBJ/PNG/skeleton workspace and rebuilds JMPPED v3.
 rem
-rem  Steps:  export | build | preview | all
+rem  Steps:  export | split | build | preview | all
 rem  Examples:
 rem    BAKE_JMPPED.bat all
 rem    BAKE_JMPPED.bat export --source DRIVER2\LEVELS\HAVANA.LEV
+rem    BAKE_JMPPED.bat split --and-build
 rem    BAKE_JMPPED.bat build --copy
 rem ============================================================
 setlocal EnableExtensions
