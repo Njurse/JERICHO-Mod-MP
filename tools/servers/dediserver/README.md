@@ -149,36 +149,31 @@ announced in chat (`"announce_joins": false` turns that off). Saving rewrites
 
 ### Voting for a city and its multiplayer map
 
-`!vote city <city> [mp 0|1]` starts a vote (or votes yes in the one running). City is
-`0`-`3` or `chicago`, `havana`, `vegas`, `rio`. `mp 0` / `mp 1` picks one of that
-city's **two multiplayer maps** -- the same choice the game's own `-mp 0` / `-mp 1`
-boot flag makes (0 is the take-a-ride default). Leave `mp` out to keep the current
-map, or vote for a map change in the current city with `!vote mp 0|1` on its own.
-The old `!vote <city>` form still works. One vote per player id. It passes as soon
-as **more than half** the connected players have voted yes, or fails after 30 s; the
-next vote can start 60 s after one ends. Admins can `!vote cancel`.
+`!vote city <city>` starts a vote for the full single-player city map. Add `mp` to
+target that city's multiplayer map; the optional `0` or `1` selects an explicit
+arena: `!vote city <city> mp`, `!vote city <city> mp 0`, or
+`!vote city <city> mp 1`. Use `!vote mp [0|1]` to change only the multiplayer
+map in the current city. The legacy `!vote <city>` form selects the full city map.
+One vote per player id. The vote passes when the configured threshold is met, or
+fails after its duration; admins can use `!vote cancel`.
 
-The dedicated server always hosts the city's multiplayer map, not the full
-single-player city (`WELCOME.mpLevel = 1`); `"arena": 0` or `1` in `dediserver.json`
-(or `--arena`) is which of the two it loads. A vote is for a whole map (city +
-arena), so while `HAVANA mp 1` is being voted a `!vote havana` is only a yes when the
-server's current arena is already 1.
+The session's `map_mode` setting is `"city"` or `"mp"`. The server publishes the
+corresponding map shape in `WELCOME.mpLevel` and `MP_SESSION.spare`; the arena
+index applies only to multiplayer maps. On a pass, city, map mode, and arena are
+persisted and the discovery listing updates. Everyone is then disconnected with
+the KICK rejoin flag so clients reconnect into the requested map.
 
-On a pass the city and arena are saved to `dediserver.json`, become the session map
-and the discovery listing updates. **Everyone is then disconnected with the KICK's
-rejoin flag** (the game cannot change level under a running session). Current clients
-show "Server changing city - reconnecting...", rejoin the same server by themselves
-after ~2.5 s (retrying for ~20 s; Esc or joining/hosting anything else cancels), load
-the new city and multiplayer map and put their previous car back through Change car
-(cross-city works; if the car can't be used there they keep the default, and the log
-says why). Older clients just see "Kicked by vote: server switched to ... - rejoin"
-and rejoin by hand. Plugins can do the same with `kick(player, reason, rejoin=True)`.
+**Runtime validation still matters for full-city sessions:** this path changes the
+published map-shape bit to the full-city value, but the dedicated-server's game
+lifecycle has historically been tested primarily with multiplayer arenas. Confirm
+that the full city remains active and doesn't auto-end on the target game build
+before deploying it publicly.
 
 Keys: `"vote"` (`false` turns `!vote` off), `"vote_duration"` (seconds, 30),
 `"vote_threshold"` (fraction that must be exceeded, 0.5), `"vote_cooldown"` (60).
 
 Session settings in `dediserver.json`: `"city"` (`0`-`3`) and `"arena"` (`0`/`1`,
-the city's two multiplayer maps), `"time_of_day"` (`dawn`, `day`, `dusk`, `night`)
+the city's two multiplayer maps), `"map_mode"` (`"city"` or `"mp"`), `"time_of_day"` (`dawn`, `day`, `dusk`, `night`)
 and `"weather"` (`clear`, `rain`, `wet`), or `--city` / `--arena` /
 `--time-of-day` / `--weather`. Players read them (and the cops rules) as they load a
 level, so a change reaches a player the next time they join or load.
