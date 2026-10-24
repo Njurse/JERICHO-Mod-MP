@@ -140,7 +140,7 @@ the other players; the reply comes back privately. `!help` lists what *you* can 
 | `!admin add\|remove <slot\|name\|uuid>`, `!admin list` | admin | manage the admins list; **saved to dediserver.json** |
 | `!motd [text\|save]` | admin | show or set the join greeting; `!motd save` writes it to the file |
 | `!say <text>` | admin | a line from the server to everyone |
-| `!vote city <city> [mp 0\|1]`, `!vote mp 0\|1`, `!vote` / `!vote cancel` | everyone / admin to cancel | vote to switch city and/or its multiplayer map (see below) |
+| `!vote city <city>`, `!vote city <city> mp [0\|1]`, `!vote mp [0\|1]`, `!vote` / `!vote cancel` | everyone / admin to cancel | vote for the full city or its multiplayer map (see below) |
 
 `cops`, `difficulty`, `time`, `weather`, `motd` and `admin` also work at the server
 console. Every admin command is logged with who ran it. Joins and leaves are
