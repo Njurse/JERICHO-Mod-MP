@@ -452,7 +452,7 @@ void MpConfigLoad(void)
 	/* Preferred on-foot character. Keep the stored CHOICE even if this level
 	 * cannot draw it (Havana-only Jericho): the player will be back on Havana. */
 	gMp.config.pedModel = jer_config_get_int("mp", "ped_model", MP_PED_MODEL_TANNER);
-	if (gMp.config.pedModel < 0 || gMp.config.pedModel >= MP_PED_MODEL_COUNT)
+	if (gMp.config.pedModel < 0 || gMp.config.pedModel >= MP_PED_MODEL_MAX)
 		gMp.config.pedModel = MP_PED_MODEL_TANNER;
 	if (gMp.config.strictVersion < 0 || gMp.config.strictVersion > 1)
 		gMp.config.strictVersion = 0;

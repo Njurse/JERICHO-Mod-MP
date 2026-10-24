@@ -38,7 +38,12 @@
 extern "C" {
 #endif
 
-#define MP_PROTO_VERSION	18	/* 18: the preferred on-foot character rides with the
+#define MP_PROTO_VERSION	19	/* 19: dynamic on-foot characters. Id 0 is Tanner,
+				 *     1 is JMPPED entry 0, and 2.. are the archive's
+				 *     later entries; the id is the same byte in
+				 *     JPCL/roster/JPPD. The retired COP/CIVILIAN
+				 *     ids are no longer wire meanings.
+				 * 18: the preferred on-foot character rides with the
 				 *     player identity: MP_COLOR_ENTRY's first spare byte
 				 *     (JPCL), a new MP_ROSTER_ENTRY byte, and
 				 *     MP_PEDSTATE_ENTRY.spare (JPPD). One id, three
@@ -138,17 +143,16 @@ extern "C" {
 /* The on-foot character a player has chosen. Wire values are STABLE: they are
  * stored in mp.ini and compared across machines, so never renumber one.
  *
- * TANNER and JERICHO are the two SKELETON characters: they switch through
- * SetSkelModelPointers. COP and CIVILIAN are the engine's sprite-drawn
- * civilian path (DrawCiv), not a skeleton; they are listed here so the id space
- * does not change when their picker rows land. */
+ * TANNER is the engine's default. Every other id is a JMPPED archive entry:
+ * id 1 is entry 0 (the Jericho set) and id 2.. are the later entries, using the
+ * same Tanner skeleton and bind transforms. The archive's own eight-entry cap
+ * keeps the id byte small. */
 enum
 {
 	MP_PED_MODEL_TANNER = 0,	/* pmTannerModels[], the default */
-	MP_PED_MODEL_JERICHO = 1,	/* pmJerichoModels[] -- models exist only on Havana */
-	MP_PED_MODEL_COP = 2,		/* CIVILIAN + CopStand, the engine's cop look */
-	MP_PED_MODEL_CIVILIAN = 3,	/* the engine's civilian variants */
-	MP_PED_MODEL_COUNT
+	MP_PED_MODEL_JERICHO = 1,	/* JMPPED entry 0; native on Havana */
+	MP_PED_MODEL_CUSTOM_FIRST = 2,	/* JMPPED entries 1.. */
+	MP_PED_MODEL_MAX = 9		/* 1 + JER_PED_MAX_ENTRIES (8); wire byte range */
 };
 
 /* The 'JPSW' meeting-point message (MP_SPAWN) has been RETIRED: the two

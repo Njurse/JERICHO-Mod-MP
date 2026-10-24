@@ -6911,28 +6911,58 @@ static LPPEDESTRIAN MpLocalPed(void)
 /* has read its models they are NULL, and drawing one would crash.    */
 /* ------------------------------------------------------------------ */
 
+int MpPedModelCount(void)
+{
+	int entries = JerPedEntryCount();
+
+	if (entries < 1)
+		entries = 1;	/* the Jericho id is always offered */
+	if (entries > MP_PED_MODEL_MAX - 1)
+		entries = MP_PED_MODEL_MAX - 1;
+
+	return 1 + entries;
+}
+
+int MpPedModelEntry(int model)
+{
+	if (model <= MP_PED_MODEL_TANNER || model >= MP_PED_MODEL_MAX)
+		return 0;
+
+	return model - 1;
+}
+
 const char* MpPedModelName(int model)
 {
-	switch (model)
-	{
-	case MP_PED_MODEL_TANNER:	return "Tanner";
-	case MP_PED_MODEL_JERICHO:	return "Jericho";
-	case MP_PED_MODEL_COP:		return "Cop";
-	case MP_PED_MODEL_CIVILIAN:	return "Civilian";
-	default:			return "?";
-	}
+	const char* name;
+
+	if (model == MP_PED_MODEL_TANNER)
+		return "Tanner";
+
+	if (model < 0 || model >= MP_PED_MODEL_MAX)
+		return "?";
+
+	name = JerPedEntryName(model - 1);
+
+	if (name != NULL && name[0] != '\0')
+		return name;
+
+	return (model == MP_PED_MODEL_JERICHO) ? "Jericho" : "?";
 }
 
 int MpPedModelAvailable(int model)
 {
-	int i;
+	int i, entry;
 
-	switch (model)
-	{
-	case MP_PED_MODEL_TANNER:
+	if (model == MP_PED_MODEL_TANNER)
 		return 1;
 
-	case MP_PED_MODEL_JERICHO:
+	if (model < 0 || model >= MP_PED_MODEL_MAX)
+		return 0;
+
+	entry = model - 1;
+
+	if (entry == 0)
+	{
 		for (i = 0; i < 6; i++)
 		{
 			if (pmJerichoModels[0][i] == NULL)
@@ -6942,10 +6972,18 @@ int MpPedModelAvailable(int model)
 		/* Native Havana models are already resident; imported models are ready
 		 * only when their pages and palette are in place. */
 		return (GameLevel == 1) ? 1 : JerPedImportReady();
-
-	default:
-		return 0;
 	}
+
+	if (entry >= JerPedEntryCount())
+		return 0;
+
+	for (i = 0; i < 6; i++)
+	{
+		if (JerPedModelForEntry(entry, i) == NULL)
+			return 0;
+	}
+
+	return JerPedImportReady();
 }
 
 static int sMpJerPedInstalledLevel = -1;
@@ -6957,23 +6995,45 @@ int MpPedModelSelectable(int model)
 	if (model == MP_PED_MODEL_TANNER)
 		return 1;
 
-	if (model == MP_PED_MODEL_JERICHO)
-		return MpPedModelAvailable(model) || JerPedBakedAvailable() || JerPedImportProbe(1);
+	if (model < 0 || model >= MP_PED_MODEL_MAX)
+		return 0;
 
-	return 0;
+	if (model >= MpPedModelCount())
+		return 0;
+
+	if (MpPedModelAvailable(model))
+		return 1;
+
+	/* Jericho is offered before its import, because selecting it is what starts
+	 * the import. Later archive entries only appear once the count is known. */
+	return (model == MP_PED_MODEL_JERICHO) &&
+		(JerPedBakedAvailable() || JerPedImportProbe(1));
 }
 
 int MpPedModelEffective(int model)
 {
-	if (!MpPedModelAvailable(model))
+	if (model == MP_PED_MODEL_TANNER)
 		return MP_PED_MODEL_TANNER;
 
-	/* Jericho's models can be resident while its palette pairs have not been
-	 * appended yet (native Havana). Do not draw a half-installed character. */
-	if (model == MP_PED_MODEL_JERICHO && sMpJerPedInstalledLevel != GameLevel)
+	if (model < 0 || model >= MP_PED_MODEL_MAX)
 		return MP_PED_MODEL_TANNER;
 
-	return model;
+	if (MpPedModelAvailable(model))
+	{
+		/* The bank can be resident while the palette pairs/skeleton have not been
+		 * installed yet. Do not draw a half-installed character; fall back to the
+		 * baseline Jericho set when it is available, else Tanner. */
+		if (sMpJerPedInstalledLevel != GameLevel)
+			return MpPedModelAvailable(MP_PED_MODEL_JERICHO)
+				? MP_PED_MODEL_JERICHO : MP_PED_MODEL_TANNER;
+
+		return model;
+	}
+
+	if (model != MP_PED_MODEL_JERICHO && MpPedModelAvailable(MP_PED_MODEL_JERICHO))
+		return MP_PED_MODEL_JERICHO;
+
+	return MP_PED_MODEL_TANNER;
 }
 
 /* Validate a character id that arrived from the wire. The id space is stable
@@ -6985,7 +7045,7 @@ int MpPedModelEffective(int model)
  * clamping here would erase the choice and the stand-in would never try. */
 static int MpPedModelFromWire(int id)
 {
-	if (id < 0 || id >= MP_PED_MODEL_COUNT)
+	if (id < 0 || id >= MP_PED_MODEL_MAX)
 		return MP_PED_MODEL_TANNER;
 
 	return id;
@@ -7016,7 +7076,7 @@ int MpPedModelSelected(void)
  * today. */
 static int MpPedTypeForModel(int model)
 {
-	return (MpPedModelEffective(model) == MP_PED_MODEL_JERICHO) ? OTHER_MODEL : TANNER_MODEL;
+	return (MpPedModelEffective(model) == MP_PED_MODEL_TANNER) ? TANNER_MODEL : OTHER_MODEL;
 }
 
 /* Put the local player's active palette choice back on the selector. The draw
@@ -7108,7 +7168,7 @@ static void MpApplyLocalPedModel(void)
 {
 	MP_PLAYER* me = MpLocalPlayer();
 	LPPEDESTRIAN ped;
-	int model, type, gen;
+	int model, type, entry, gen;
 	static int sLocalSkelGen = -1;
 
 	if (me == NULL || me->carId >= 0)
@@ -7119,9 +7179,9 @@ static void MpApplyLocalPedModel(void)
 	if (ped == NULL)
 		return;
 
-	/* A stored Jericho that was chosen before the level loaded is imported here,
-	 * on the first frame the player actually has a pedestrian. */
-	if (gMp.config.pedModel == MP_PED_MODEL_JERICHO)
+	/* A stored archive character that was chosen before the level loaded is
+	 * imported here, on the first frame the player actually has a pedestrian. */
+	if (gMp.config.pedModel >= MP_PED_MODEL_JERICHO)
 	{
 		MpEnsureJerichoImported();
 		MpEnsureJerichoInstalled();
@@ -7129,17 +7189,19 @@ static void MpApplyLocalPedModel(void)
 
 	model = MpPedModelEffective(gMp.config.pedModel);
 	type = MpPedTypeForModel(model);
+	entry = MpPedModelEntry(model);
 	gen = JerPedSkeletonGeneration();
 
-	if (ped->pedType == type && sLocalSkelGen == gen)
+	if (ped->pedType == type && ped->pedEntry == entry && sLocalSkelGen == gen)
 		return;
 
 	ped->pedType = (char)type;
+	ped->pedEntry = (signed char)entry;
 
 	/* THE SAME PATH InitTanner AND THE MOTION CODE USE. This rebinds Skel[].pModel
 	 * and bodyShiftValue together, so the bones, the vertex lists
 	 * (cJerichoVNumbers) and the draw code stay one consistent skeleton. */
-	SetSkelModelPointers(type);
+	SetSkelModelPointersForEntry(type, entry);
 
 	MpSelectLocalPalette();
 	sLocalSkelGen = gen;
@@ -7176,7 +7238,7 @@ static void MpApplyLocalPedModel(void)
 int MpSetPedModel(int model)
 {
 	MP_PLAYER* me;
-	if (model < 0 || model >= MP_PED_MODEL_COUNT)
+	if (model < 0 || model >= MP_PED_MODEL_MAX)
 		return 0;
 
 	if (!MpPedModelSelectable(model))
@@ -7189,25 +7251,25 @@ int MpSetPedModel(int model)
 	}
 
 	/* An explicit pick is also a retry: a previous import failure must not keep
-	 * Jericho refused for the rest of the level. */
+	 * the archive refused for the rest of the level. */
 	sMpJerPedImportLevel = GameLevel;
 	sMpJerPedImportFailed = 0;
 
-	if (model == MP_PED_MODEL_JERICHO && !MpPedModelAvailable(MP_PED_MODEL_JERICHO))
+	if (model >= MP_PED_MODEL_JERICHO && !MpPedModelAvailable(model))
 	{
 		/* At the frontend there is no level to pin pages into. Persist the choice;
 		 * MpApplyLocalPedModel imports it on the first on-foot frame. */
 		if (gMp.running && !MpEnsureJerichoImported())
 		{
-			MpNotify("Jericho could not be imported - staying on the current character");
+			MpNotify("That character could not be imported - staying on the current character");
 
 			return 0;
 		}
 	}
 
-	if (gMp.running && model == MP_PED_MODEL_JERICHO && !MpEnsureJerichoInstalled())
+	if (gMp.running && model >= MP_PED_MODEL_JERICHO && !MpEnsureJerichoInstalled())
 	{
-		MpNotify("Jericho could not be prepared - staying on the current character");
+		MpNotify("That character could not be prepared - staying on the current character");
 		return 0;
 	}
 
@@ -7244,16 +7306,29 @@ int MpSetPedModel(int model)
 void MpTestJerichoImport(void)
 {
 	const char* s = getenv("MP_TEST_JERICHO");
+	int verbose = (s != NULL && s[0] != '0');
 	int ok;
 
-	if (s == NULL || s[0] == '0' || GameLevel < 0)
+	if (GameLevel < 0)
+		return;
+
+	/* The shipping v5 archive carries the selectable entries, so warm it at
+	 * level start: the picker can then list every entry before the player first
+	 * gets out. MP_TEST_JERICHO still forces the diagnostic import. */
+	if (!verbose && !JerPedBakedAvailable())
 		return;
 
 	ok = MpEnsureJerichoImported() && MpEnsureJerichoInstalled();
 
 	if (gMpCtx != NULL)
-		gMpCtx->jer_log(gMpCtx, "[mp] test: MP_TEST_JERICHO import %s (level %d)\n",
-			ok ? "succeeded" : "FAILED", GameLevel);
+	{
+		if (verbose)
+			gMpCtx->jer_log(gMpCtx, "[mp] test: MP_TEST_JERICHO import %s (level %d)\n",
+				ok ? "succeeded" : "FAILED", GameLevel);
+		else if (ok)
+			gMpCtx->jer_log(gMpCtx, "[mp] character: archive entries ready (%d)\n",
+				JerPedEntryCount());
+	}
 }
 
 /* Owner -> peers: where our on-foot player is and how fast they are moving.
@@ -7400,7 +7475,7 @@ static void MpDriveRemotePed(MP_PLAYER* p)
 {
 	JerNpc* n;
 	LPPEDESTRIAN ped;
-	int dx, dz, err, gen;
+	int dx, dz, err, gen, entry, applied;
 
 	if (p == NULL || !p->active || p->isLocal)
 		return;
@@ -7424,23 +7499,26 @@ static void MpDriveRemotePed(MP_PLAYER* p)
 		return;
 	}
 
-	/* A remote owner may have chosen Jericho. Import it here, on the machine
-	 * that has to draw the stand-in, before choosing the ped type. A failure
-	 * falls back to Tanner through MpPedModelEffective and is remembered for the
-	 * level, so a peer without Havana's data does not retry every frame. */
-	if (p->pedModel == MP_PED_MODEL_JERICHO && !MpPedModelAvailable(MP_PED_MODEL_JERICHO))
+	/* A remote owner may have chosen any archive entry. Import the archive here,
+	 * on the machine that has to draw the stand-in, before choosing the type.
+	 * A failure falls back through MpPedModelEffective and is remembered for the
+	 * level, so a peer without the archive does not retry every frame. */
+	if (p->pedModel >= MP_PED_MODEL_JERICHO && !MpPedModelAvailable(p->pedModel))
 		MpEnsureJerichoImported();
 
-	if (p->pedModel == MP_PED_MODEL_JERICHO)
+	if (p->pedModel >= MP_PED_MODEL_JERICHO)
 		MpEnsureJerichoInstalled();
 
+	applied = MpPedModelEffective(p->pedModel);
+	entry = MpPedModelEntry(applied);
 	gen = JerPedSkeletonGeneration();
 
 	if (n != NULL)
 	{
 		int want = MpPedTypeForModel(p->pedModel);
 
-		if (((LPPEDESTRIAN)n)->pedType != want || p->pedSkelGen != gen)
+		if (((LPPEDESTRIAN)n)->pedType != want ||
+			((LPPEDESTRIAN)n)->pedEntry != entry || p->pedSkelGen != gen)
 		{
 			/* The owner changed character. Rebuild the stand-in rather than
 			 * mutating a ped whose motion/vertex state belongs to the old model:
@@ -7483,11 +7561,10 @@ static void MpDriveRemotePed(MP_PLAYER* p)
 		 * it was the only one when a pooled slot could inherit the local player's
 		 * padId (which is how a remote Tanner once took the player's colour). */
 		((LPPEDESTRIAN)n)->padId = -1;
+		((LPPEDESTRIAN)n)->pedEntry = (signed char)entry;
 
 		if (gMpCtx != NULL)
 		{
-			int applied = MpPedModelEffective(p->pedModel);
-
 			gMpCtx->jer_log(gMpCtx,
 				"[mp] ped: standing in for player %d slot %d at %d,%d,%d heading %d speed %d; applied %s (id %d, pedType %d)%s\n",
 				p->id, (int)(p - gMp.players), p->pedX, p->pedY, p->pedZ,

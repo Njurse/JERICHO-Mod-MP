@@ -1,10 +1,10 @@
 id = "mp"
 name = "Multiplayer"
-version = "0.16.0"
+version = "0.17.0"
 # the JERICHO interface (SDK) this mod is built against
 interface = 2
 author = "JERICHO"
-description = "Online and LAN multiplayer for up to 16 players: discovery-server browser plus LAN discovery, dedicated server support, owner-authoritative car sync (each machine drives its own car and broadcasts its state; peers adopt it verbatim), a player-chosen on-foot character (Tanner or Jericho) synced through the host, in-match chat, a host-maintained roster, and a generic JERICHO addon net bridge. Minor version tracks MP_PROTO_VERSION (18)."
+description = "Online and LAN multiplayer for up to 16 players: discovery-server browser plus LAN discovery, dedicated server support, owner-authoritative car sync (each machine drives its own car and broadcasts its state; peers adopt it verbatim), a player-chosen on-foot character from the JMPPED archive (Tanner, Jericho and custom entries) synced through the host, in-match chat, a host-maintained roster, and a generic JERICHO addon net bridge. Minor version tracks MP_PROTO_VERSION (19)."
 # core multiplayer suite: mandatory, first in the load order (jer_manager.c)
 # No other module supplies the player character: Jericho's models and texture
 # pages are engine-owned (the checked-in JMPPED.LEV bake, or Havana's streamed

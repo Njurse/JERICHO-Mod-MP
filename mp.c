@@ -1273,6 +1273,7 @@ static int MpOnFrame(void* userdata, void* args)
 	 * unless set. */
 	{
 		static int pedModelDone = 0;
+		static unsigned long pedModelWaitMs = 0;
 		const char* s = getenv("MP_TEST_PED_MODEL");
 
 		if (s != NULL && !pedModelDone && gMp.running && gMpCtx != NULL)
@@ -1280,11 +1281,25 @@ static int MpOnFrame(void* userdata, void* args)
 			int model = atoi(s);
 			int ok;
 
+			/* The archive is warmed at level start; a client can reach the frame
+			 * hook a frame or two before that finishes. Wait for the entry to
+			 * become selectable instead of burning the one-shot on accepted 0. */
+			if (model >= MP_PED_MODEL_JERICHO && !MpPedModelSelectable(model))
+			{
+				if (pedModelWaitMs == 0)
+					pedModelWaitMs = MpNowMs();
+
+				if (MpNowMs() - pedModelWaitMs < 5000)
+					goto ped_model_done;
+			}
+
 			pedModelDone = 1;
 			ok = MpSetPedModel(model);
 			gMpCtx->jer_log(gMpCtx,
 				"[mp] test: MP_TEST_PED_MODEL -> %d (accepted %d)\n", model, ok);
+			(void)ok;
 		}
+	ped_model_done:;
 	}
 
 	/* Test lever: MP_TEST_RESPAWN=<secs> fires the pause menu's Respawn --- the
@@ -2586,13 +2601,14 @@ static const JER_PAUSE_MENU mpColorMenu =
  * Havana), so left/right never selects a broken skeleton. */
 static void MpCharLabel(void* ud, char* out, int max)
 {
-	int model = MpPedModelEffective(MpPedModelSelected());
+	int selected = MpPedModelSelected();
+	int model = MpPedModelEffective(selected);
 
 	(void)ud;
 
-	if (!MpPedModelSelectable(MP_PED_MODEL_JERICHO))
-		snprintf(out, max, "Preferred Character: %s (Jericho unavailable)",
-			MpPedModelName(model));
+	if (model != selected)
+		snprintf(out, max, "Preferred Character: %s (requested %s unavailable)",
+			MpPedModelName(model), MpPedModelName(selected));
 	else
 		snprintf(out, max, "Preferred Character: %s", MpPedModelName(model));
 }
@@ -2600,18 +2616,20 @@ static void MpCharLabel(void* ud, char* out, int max)
 static int MpCharAdjust(void* ud, int dir)
 {
 	int model = MpPedModelSelected();
-	int i;
+	int i, count;
 
 	(void)ud;
 
 	if (dir == 0)
 		return JER_PAUSE_QUIT_NONE;
 
+	count = MpPedModelCount();
+
 	/* Walk in the asked direction until a character this level can draw. With
-	 * only Tanner available (any city but Havana) the row simply stays put. */
-	for (i = 0; i < MP_PED_MODEL_COUNT; i++)
+	 * only Tanner available the row simply stays put. */
+	for (i = 0; i < count; i++)
 	{
-		model = (model + dir + MP_PED_MODEL_COUNT) % MP_PED_MODEL_COUNT;
+		model = (model + dir + count) % count;
 
 		if (MpPedModelSelectable(model))
 		{

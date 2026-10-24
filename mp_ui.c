@@ -668,16 +668,13 @@ static const JER_FE_MENU kHostSetMenu = { "mp.mode", kHostSetItems, 3, NULL, NUL
 static void LblPreferredCharacter(void* ud, char* out, int max)
 {
 	int selected = MpPedModelSelected();
-	int model = selected;
+	int model = MpPedModelEffective(selected);
 
 	(void)ud;
 
-	if (selected == MP_PED_MODEL_JERICHO && !MpPedModelSelectable(MP_PED_MODEL_JERICHO))
-		model = MpPedModelEffective(selected);
-
-	if (!MpPedModelSelectable(MP_PED_MODEL_JERICHO))
-		snprintf(out, max, "Preferred Character: %s (Jericho unavailable)",
-			MpPedModelName(model));
+	if (model != selected)
+		snprintf(out, max, "Preferred Character: %s (requested %s unavailable)",
+			MpPedModelName(model), MpPedModelName(selected));
 	else
 		snprintf(out, max, "Preferred Character: %s", MpPedModelName(model));
 }
@@ -685,16 +682,18 @@ static void LblPreferredCharacter(void* ud, char* out, int max)
 static int AdjPreferredCharacter(void* ud, int dir)
 {
 	int model = MpPedModelSelected();
-	int i;
+	int i, count;
 
 	(void)ud;
 
 	if (dir == 0)
 		return 1;
 
-	for (i = 0; i < MP_PED_MODEL_COUNT; i++)
+	count = MpPedModelCount();
+
+	for (i = 0; i < count; i++)
 	{
-		model = (model + dir + MP_PED_MODEL_COUNT) % MP_PED_MODEL_COUNT;
+		model = (model + dir + count) % count;
 
 		if (MpPedModelSelectable(model))
 		{
@@ -2270,12 +2269,12 @@ void MpUiInit(void)
 	/* resolve the real registered index of each menu (see MpResolveMenus) */
 	MpResolveMenus();
 
-	/* Preflight the frontend character row once, so the log says whether Jericho
-	 * is available even before the player opens JMP Options. This is the same
-	 * probe the row itself uses; it loads Havana's model table if needed. */
+	/* Preflight the frontend character row once, so the log says whether the
+	 * archive's entries are available even before the player opens JMP Options. */
 	if (gMpCtx != NULL)
-		gMpCtx->jer_log(gMpCtx, "[mp] frontend character: Jericho %s\n",
-			MpPedModelSelectable(MP_PED_MODEL_JERICHO) ? "selectable" : "unavailable");
+		gMpCtx->jer_log(gMpCtx, "[mp] frontend character: %d entr%s, selected %s\n",
+			MpPedModelCount() - 1, (MpPedModelCount() == 2) ? "y" : "ies",
+			MpPedModelName(MpPedModelEffective(MpPedModelSelected())));
 
 	jer_frontend_set_main_entry("mp.root");
 
