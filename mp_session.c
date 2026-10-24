@@ -7627,6 +7627,13 @@ static void MpDriveRemotePed(MP_PLAYER* p)
 	 * its legs moving. */
 	jer_npc_tick(n);
 
+	/* AnimatePed integrates the stand-in's position from its gait, and that pass
+	 * has no wall test. The owner's own ped is collision-clamped by
+	 * ProcessTannerPad, but between network corrections the stand-in can cut a
+	 * corner and walk into/through geometry. Clamp it with the same collider the
+	 * player uses, so a remote character obeys walls too. */
+	TannerCollision(ped);
+
 	/* Evidence line: the stand-in's OWN position (what AnimatePed just integrated)
 	 * next to the owner's. A walking stand-in TRACKS the owner; a stuck one stays
 	 * put and the "corrected" line above fires repeatedly. */
