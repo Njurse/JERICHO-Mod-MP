@@ -28,6 +28,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import jmpped_common as jc
 import jmpped_build
+import jmpped_entries as je
 
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -154,23 +155,23 @@ def _same_geometry(base: jc.Model, verts, polys) -> bool:
         if (int(round(a[0])), int(round(a[1])), int(round(a[2]))) != b:
             return False
     for a, b in zip(polys, base.polys):
-        if (a.kind, a.set, a.id, a.v, a.uv) != (b.kind, b.set, b.id, b.v, b.uv):
+        # The entry's page sets are remapped (e.g. 23/25/2 -> 26/27/3); the
+        # geometry is unchanged. Compare the texture id/UVs, not the set.
+        if (a.kind, a.id, a.v, a.uv) != (b.kind, b.id, b.v, b.uv):
             return False
         if not a.textured and a.color != b.color:
             return False
     return True
 
 
-def split(out_root: str, variant: str, scene: str | None, raw: bool,
+def split(out_root: str, entry_name: str, scene: str | None, raw: bool,
           and_build: bool) -> int:
     out_root = os.path.abspath(out_root)
-    manifest_path = os.path.join(out_root, "jmpped.json")
-    manifest = jc.load_json(manifest_path)
-    ped = manifest["peds"].get(variant)
-    if ped is None:
-        raise jc.JMPPEDError("manifest has no ped %r" % variant)
-    bindpose = ped.get("bindpose") or {}
-    scene_path = scene or os.path.join(out_root, bindpose.get("edit", ""))
+    manifest = je.load_manifest(out_root)
+    entry = je.entry(manifest, entry_name)
+    je.validate_entry(manifest, entry)
+    bindpose = entry["bindpose"]
+    scene_path = scene or os.path.join(out_root, bindpose["edit"])
     scene_path = os.path.abspath(scene_path)
     if not os.path.isfile(scene_path):
         raise jc.JMPPEDError("combined scene %s not found" % scene_path)
@@ -182,22 +183,19 @@ def split(out_root: str, variant: str, scene: str | None, raw: bool,
 
     skeleton = jc.load_json(os.path.join(out_root, manifest["skeleton"]["json"]))
     bones = {b["name"]: b for b in skeleton["bones"]}
+    variant = entry.get("variant", "jericho")
     bindings = skeleton["variants"][variant]["bindings"]
     bone_by_model = {model: bone for bone, model in bindings.items()}
-    parts = {}
-    for p in manifest["peds"].values():
-        for part in p["parts"]:
-            parts[part["name"]] = part
+    parts = {s["part"]: {"bake_slot": int(s["slot"]),
+                         "obj_raw": s["obj_raw"],
+                         "obj_edit": s["obj_edit"]}
+             for s in entry["slots"]}
 
     arch = jc.read_archive(os.path.join(out_root, manifest["base_archive"]))
     groups = _read_groups(scene_path)
     written = 0
     skipped = 0
     for name, group in groups.items():
-        part = parts.get(name)
-        if part is None:
-            raise jc.JMPPEDError("%s: group %r is not a Tanner/Jericho part"
-                                 % (scene_path, name))
         bone_name = bone_by_model.get(name)
         if bone_name is None:
             raise jc.JMPPEDError("%s: group %r is not bound in the %s skeleton"
@@ -206,22 +204,34 @@ def split(out_root: str, variant: str, scene: str | None, raw: bool,
         verts = [(x - offset[0], y - offset[1], z - offset[2])
                  for x, y, z in group["verts"]]
         polys = jmpped_build._polys_from_obj(group["faces"], scene_path)
-        slot = part.get("bake_slot")
-        if slot is not None and _same_geometry(arch.models[int(slot)], verts, polys):
+
+        part = parts.get(name)
+        if part is None:
+            # The bindpose carries a few reference-only bones (HIPS). They have
+            # no v3 slot, so keep them beside the entry for editing but do not
+            # pretend they bake.
+            path = os.path.join(out_root, entry["directory"], "obj",
+                                "raw" if raw else "edit", name + ".obj")
+            _write_part(path, name, verts, group["faces"], raw=raw)
+            written += 1
+            print("%-18s -> %s (reference; no v3 slot)"
+                  % (name, os.path.relpath(path, out_root)))
+            continue
+
+        slot = int(part["bake_slot"])
+        if _same_geometry(arch.models[slot], verts, polys):
             skipped += 1
             continue
         path = os.path.join(out_root, part["obj_raw" if raw else "obj_edit"])
         _write_part(path, name, verts, group["faces"], raw=raw)
         written += 1
-        print("%-18s -> %s%s" % (name, os.path.relpath(path, out_root),
-                                 " (reference; no v3 slot)"
-                                 if slot is None else ""))
+        print("%-18s -> %s" % (name, os.path.relpath(path, out_root)))
 
     # The combined scene has been consumed; remember its hash so a second split
     # without a new edit is a no-op.
     bindpose["edit_sha256"] = new_hash
-    jc.save_json(manifest_path, manifest)
-    ped_json = os.path.join(out_root, variant, "ped.json")
+    jc.save_json(os.path.join(out_root, "jmpped.json"), manifest)
+    ped_json = os.path.join(out_root, entry["directory"], "ped.json")
     if os.path.isfile(ped_json):
         pj = jc.load_json(ped_json)
         if "bindpose" in pj:
@@ -240,8 +250,8 @@ def split(out_root: str, variant: str, scene: str | None, raw: bool,
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Split an edited bindpose OBJ into the ped parts")
     ap.add_argument("--out", default=DEFAULT_OUT, help="toolkit workspace")
-    ap.add_argument("--variant", choices=("jericho", "tanner"), default="jericho",
-                    help="which bindpose to split (default jericho, the v3 player)")
+    ap.add_argument("--entry", default="Jericho",
+                    help="entry name from jmpped.json (default Jericho)")
     ap.add_argument("--scene", default=None,
                     help="combined OBJ to read (default: that ped's bindpose_edit.obj)")
     ap.add_argument("--raw", action="store_true",
@@ -250,7 +260,7 @@ def main(argv: list[str] | None = None) -> int:
                     help="run jmpped_build.py after splitting")
     args = ap.parse_args(argv)
     try:
-        return split(args.out, args.variant, args.scene, args.raw, args.and_build)
+        return split(args.out, args.entry, args.scene, args.raw, args.and_build)
     except jc.JMPPEDError as e:
         print("jmpped_split: %s" % e, file=sys.stderr)
         return 1

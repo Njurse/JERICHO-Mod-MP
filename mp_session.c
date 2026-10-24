@@ -6935,7 +6935,7 @@ int MpPedModelAvailable(int model)
 	case MP_PED_MODEL_JERICHO:
 		for (i = 0; i < 6; i++)
 		{
-			if (pmJerichoModels[i] == NULL)
+			if (pmJerichoModels[0][i] == NULL)
 				return 0;
 		}
 

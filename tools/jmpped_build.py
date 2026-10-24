@@ -234,7 +234,7 @@ def _apply_crop(state: dict, crop: dict, root: str) -> None:
 
 
 def build(out_root: str, dest: str | None, copy_to: str | None,
-          dry_run: bool, use: str) -> int:
+          dry_run: bool, use: str, entry: str | None = None) -> int:
     manifest_path = os.path.join(out_root, "jmpped.json")
     if not os.path.isfile(manifest_path):
         raise jc.JMPPEDError("%s not found; run jmpped_export.py first"
@@ -244,6 +244,9 @@ def build(out_root: str, dest: str | None, copy_to: str | None,
         raise jc.JMPPEDError("unsupported manifest version %r; re-export the "
                              "Tanner/Jericho workspace"
                              % manifest.get("manifest_version"))
+    if manifest.get("entries"):
+        import jmpped_v5
+        return jmpped_v5.build_v5(out_root, dest, copy_to, dry_run, use, entry)
     if manifest.get("archive_version") != jc.VERSION_V3:
         raise jc.JMPPEDError("this builder only writes v3 JMPPED archives")
 
@@ -386,9 +389,12 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--use", choices=("auto", "edit", "raw"), default="auto",
                     help="which OBJ copy to read (auto: whichever changed)")
     ap.add_argument("--dry-run", action="store_true", help="report without writing")
+    ap.add_argument("--entry", default=None,
+                    help="entry name to build (default: all entries)")
     args = ap.parse_args(argv)
     try:
-        return build(args.out, args.dest, args.copy_to, args.dry_run, args.use)
+        return build(args.out, args.dest, args.copy_to, args.dry_run, args.use,
+                     args.entry)
     except jc.JMPPEDError as e:
         print("jmpped_build: %s" % e, file=sys.stderr)
         return 1

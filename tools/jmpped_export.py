@@ -259,6 +259,17 @@ def export(source: str, out_root: str) -> dict:
         raise jc.JMPPEDError("base archive is missing pages %s"
                              % sorted(needed_pages - have_pages))
 
+    # Canonical v5 form of the untouched source set. A no-edit build of entry 0
+    # must reproduce this byte-for-byte.
+    v5_entry = jc.Entry("Jericho", arch.models, arch.pages,
+                        arch.raw_models, arch.raw_pages)
+    v5_arch = jc.Archive(version=jc.VERSION_V5, model_names=jc.MODEL_NAMES,
+                         models=arch.models, pages=arch.pages,
+                         raw_models=arch.raw_models, raw_pages=arch.raw_pages,
+                         entries=[v5_entry])
+    base_v5 = os.path.join(out_root, "base_v5.LEV")
+    jc.write_archive(base_v5, v5_arch)
+
     level = src.read_level(source)
     skeleton = src.skeleton_bones(level)
     if skeleton is None:
@@ -400,6 +411,64 @@ def export(source: str, out_root: str) -> dict:
     if [s["slot"] for s in slots] != list(range(14)):
         raise jc.JMPPEDError("the source does not cover all 14 JMPPED v3 slots")
 
+    # v5 authoring table. Entry 0 is the Jericho set; jmpped_add_entry.py appends
+    # later entries with their own page sets and directories. The slots list is
+    # the 14 archive slots, not just the six JERI_* source parts: the Tanner
+    # limbs are part of the playable Jericho entry.
+    part_index = {}
+    for ped_name, ped_data in peds.items():
+        for part in ped_data["parts"]:
+            part_index[(ped_name, part["name"])] = part
+
+    entry_sets = list(jc.entry_page_sets(0))
+    entry_pages = [p for p in pages if p["set"] in entry_sets]
+    entry_pages.sort(key=lambda p: entry_sets.index(p["set"]))
+    if [p["set"] for p in entry_pages] != entry_sets:
+        raise jc.JMPPEDError("entry 0 is missing pages %s"
+                             % (set(entry_sets) - {p["set"] for p in entry_pages}))
+
+    slot_descriptors = []
+    for s in slots:
+        part = part_index.get((s["ped"], s["part"]))
+        if part is None:
+            raise jc.JMPPEDError("slot %d points at missing %s/%s"
+                                 % (s["slot"], s["ped"], s["part"]))
+        slot_descriptors.append({
+            "slot": s["slot"],
+            "ped": s["ped"],
+            "part": s["part"],
+            "page_sets": part["page_sets"],
+            "obj_raw": part["obj_raw"],
+            "obj_raw_sha256": part["obj_raw_sha256"],
+            "obj_edit": part["obj_edit"],
+            "obj_edit_sha256": part["obj_edit_sha256"],
+            "materials": part["materials"],
+            "crops": part["crops"],
+        })
+
+    palette_crops = [
+        {
+            "set": p["set"],
+            "palette_png": p["palette_png"],
+            "palette_png_sha256": p["palette_png_sha256"],
+            "cluts_hex": p["cluts_hex"],
+            "display_clut": p["display_clut"],
+        }
+        for p in entry_pages
+    ]
+
+    entries = [{
+        "index": 0,
+        "name": "Jericho",
+        "directory": "jericho",
+        "source_ped": "jericho",
+        "page_sets": entry_sets,
+        "pages": entry_pages,
+        "slots": slot_descriptors,
+        "bindpose": peds["jericho"]["bindpose"],
+        "palette_crops": palette_crops,
+    }]
+
     jmpped_dir = os.path.join(out_root, "jmpped")
     jmpped_offsets = jc.part_offsets(arch.models)
     ref_raw = _write_assembled(os.path.join(jmpped_dir, "assembled_raw.obj"),
@@ -414,8 +483,11 @@ def export(source: str, out_root: str) -> dict:
         "source_sha256": jc.sha256_file(source),
         "base_archive": "base.LEV",
         "base_archive_sha256": jc.sha256_file(base),
-        "archive_version": jc.VERSION_V3,
+        "archive_version": jc.VERSION_V5,
+        "base_v5_archive": "base_v5.LEV",
+        "base_v5_archive_sha256": jc.sha256_file(base_v5),
         "peds": peds,
+        "entries": entries,
         "pages": pages,
         "skeleton": skel_manifest,
         "bake": {"slots": slots},
@@ -437,7 +509,13 @@ def main(argv: list[str] | None = None) -> int:
                     help="Driver 2 level (default: Release/DRIVER2/LEVELS/HAVANA.LEV)")
     ap.add_argument("--out", default=DEFAULT_OUT,
                     help="workspace (default: tools/out/jmppeds/v3)")
+    ap.add_argument("--entry", default="Jericho",
+                    help="source template entry (only Jericho; use add-entry for new characters)")
     args = ap.parse_args(argv)
+    if args.entry.lower() != "jericho":
+        print("jmpped_export: the source exporter creates the Jericho template; "
+              "use jmpped_add_entry.py for %r" % args.entry, file=sys.stderr)
+        return 1
     try:
         manifest = export(args.source, args.out)
     except jc.JMPPEDError as e:

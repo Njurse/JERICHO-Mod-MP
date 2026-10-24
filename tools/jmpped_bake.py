@@ -29,6 +29,7 @@ DEFAULT_COPY = os.path.join(REPO, "src_rebuild", "bin", "Release", "DRIVER2",
 EXPORT = os.path.join(HERE, "jmpped_export.py")
 BUILD = os.path.join(HERE, "jmpped_build.py")
 SPLIT = os.path.join(HERE, "jmpped_split.py")
+ADD_ENTRY = os.path.join(HERE, "jmpped_add_entry.py")
 PREVIEW = os.path.join(HERE, "preview_jmpped.py")
 
 
@@ -45,14 +46,23 @@ def _export(args, out: str) -> int:
 
 
 def _build(args, out: str) -> int:
-    cmd = [sys.executable, BUILD, "--out", out, "--use", args.use]
+    cmd = [sys.executable, BUILD, "--out", out, "--use", args.use,
+           "--entry", args.entry]
     if args.copy and not args.no_copy:
         cmd += ["--copy-to", args.copy_to or DEFAULT_COPY]
     return _run(cmd)
 
 
+def _add_entry(args, out: str) -> int:
+    cmd = [sys.executable, ADD_ENTRY, "--out", out, "--name", args.name,
+           "--from-entry", args.from_entry]
+    if args.slug:
+        cmd += ["--slug", args.slug]
+    return _run(cmd)
+
+
 def _split(args, out: str) -> int:
-    cmd = [sys.executable, SPLIT, "--out", out, "--variant", args.variant]
+    cmd = [sys.executable, SPLIT, "--out", out, "--entry", args.entry]
     if args.scene:
         cmd += ["--scene", args.scene]
     if args.raw_parts:
@@ -67,7 +77,8 @@ def _preview(args, out: str) -> int:
     if not os.path.isfile(lev):
         raise SystemExit("jmpped_bake: %s is missing; run the build step first" % lev)
     preview_out = args.preview_out or os.path.join(out, "preview_360.gif")
-    return _run([sys.executable, PREVIEW, "--lev", lev, "--out", preview_out,
+    return _run([sys.executable, PREVIEW, "--lev", lev, "--entry", args.entry,
+                 "--out", preview_out,
                  "--frames", str(args.frames), "--size", str(args.size)])
 
 
@@ -75,13 +86,19 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="BAKE the Driver 2 Tanner/Jericho "
                                              "peds into JMPPED v3")
     ap.add_argument("step", nargs="?", default="all",
-                    choices=("export", "split", "build", "preview", "all"))
+                    choices=("export", "add-entry", "split", "build", "preview", "all"))
     ap.add_argument("--out", default=None,
                     help="workspace (default: tools/out/jmppeds/v3)")
     ap.add_argument("--source", default=None,
                     help="Driver 2 level (default: exporter's Havana path)")
-    ap.add_argument("--variant", choices=("jericho", "tanner"), default="jericho",
-                    help="bindpose variant to split (default jericho, the v3 player)")
+    ap.add_argument("--name", default=None,
+                    help="add-entry display name (e.g. 'Jericho (Driv3r)')")
+    ap.add_argument("--from-entry", default="Jericho",
+                    help="add-entry source entry (default Jericho)")
+    ap.add_argument("--slug", default=None,
+                    help="add-entry directory slug (default from name)")
+    ap.add_argument("--entry", default="Jericho",
+                    help="entry name from jmpped.json (default Jericho)")
     ap.add_argument("--scene", default=None,
                     help="combined bindpose OBJ for split (default: the variant's)")
     ap.add_argument("--raw-parts", action="store_true",
@@ -110,6 +127,12 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.step in ("export", "all"):
         rc = _export(args, out)
+        if rc:
+            return rc
+    if args.step == "add-entry":
+        if not args.name:
+            raise SystemExit("jmpped_bake: add-entry requires --name")
+        rc = _add_entry(args, out)
         if rc:
             return rc
     if args.step == "split":

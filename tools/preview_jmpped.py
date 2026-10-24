@@ -65,28 +65,63 @@ def parse_model(blob):
     return {"instance": instance, "verts": verts, "polys": polys}
 
 
-def load_models(path):
+def load_models(path, entry=None):
     data = Path(path).read_bytes()
     if data[:8] != MAGIC:
         raise SystemExit(f"{path}: not a JMPPED.LEV")
     version, count = struct.unpack_from("<II", data, 8)
-    # v4 appends the civilian/cop model after the Jericho/leg/hand blobs; this
-    # preview only poses the first twelve, so both archives are readable.
-    if version not in (3, 4) or count not in (14, 15):
-        raise SystemExit(f"{path}: expected version 3/14 or 4/15, got {version}/{count}")
-    off = 16
-    models = []
-    for _ in range(count):
-        size = struct.unpack_from("<I", data, off)[0]
-        off += 4
-        models.append(parse_model(data[off:off + size]))
-        off += size
+
+    if version == 5:
+        off = 16
+        entries = []
+        for _ in range(count):
+            name_len = struct.unpack_from("<I", data, off)[0]
+            off += 4
+            name = data[off:off + name_len].decode("utf-8")
+            off += name_len
+            mcount = struct.unpack_from("<I", data, off)[0]
+            off += 4
+            models = []
+            for _m in range(mcount):
+                size = struct.unpack_from("<I", data, off)[0]
+                off += 4
+                models.append(parse_model(data[off:off + size]))
+                off += size
+            page_count = struct.unpack_from("<I", data, off)[0]
+            off += 4
+            for _p in range(page_count):
+                _, _, clut_len, image_len, _ = struct.unpack_from("<IIIII", data, off)
+                off += 20 + clut_len + image_len
+            entries.append((name, models))
+        if not entries:
+            raise SystemExit(f"{path}: v5 archive has no entries")
+        if entry is None:
+            index = 0
+        elif isinstance(entry, int):
+            index = entry
+        else:
+            index = next((i for i, (n, _m) in enumerate(entries) if n == entry), -1)
+            if index < 0:
+                raise SystemExit(f"{path}: no entry named {entry!r}")
+        if index < 0 or index >= len(entries):
+            raise SystemExit(f"{path}: entry {index} is out of range")
+        models = entries[index][1]
+    elif version in (3, 4) and count in (14, 15):
+        off = 16
+        models = []
+        for _ in range(count):
+            size = struct.unpack_from("<I", data, off)[0]
+            off += 4
+            models.append(parse_model(data[off:off + size]))
+            off += size
+    else:
+        raise SystemExit(f"{path}: expected v3/v4/v5 JMPPED, got version {version}/{count}")
+
     for m in models:
         if m["instance"] >= 0:
             parent = models[m["instance"]]
             m["verts"] = parent["verts"]
     return models
-
 
 def part_offsets(models):
     """Rough humanoid layout. The bake stores separate parts, not a posed rig."""
@@ -181,12 +216,14 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--lev", default="JERICHO/MODS/mp/tools/JMPPED.LEV")
     ap.add_argument("--out", default="tmp/jmpped_360.gif")
+    ap.add_argument("--entry", default=None,
+                    help="entry name in a v5 archive (default first entry)")
     ap.add_argument("--color", nargs=3, type=int, default=[200, 200, 50])
     ap.add_argument("--frames", type=int, default=36)
     ap.add_argument("--size", type=int, default=512)
     args = ap.parse_args()
 
-    parts = make_world(load_models(args.lev))
+    parts = make_world(load_models(args.lev, args.entry))
     frames = []
     for i in range(args.frames):
         angle = 2.0 * math.pi * i / args.frames
