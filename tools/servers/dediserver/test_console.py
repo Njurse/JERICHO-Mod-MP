@@ -73,6 +73,14 @@ def main():
     server.set_arena(1)
     w = m.WELCOME.unpack(server._welcome(1, 1))
     check("welcome follows the configured arena", w[6] == 1 and w[7] == 1, str(w))
+    server.set_map_mode("city")
+    city_welcome = m.WELCOME.unpack(server._welcome(1, 1))
+    check("welcome publishes full-city shape and no multiplayer arena",
+          city_welcome[6] == 0 and city_welcome[7] == 0, str(city_welcome))
+    city_spare = server.session_spare()
+    check("session spare publishes full-city shape",
+          city_spare & 1 == 0 and (city_spare >> 8) & 1 == 0, hex(city_spare))
+    server.set_map_mode("mp")
     spare = server.session_spare()
     check("session spare: shape bit 0, rules in 1.., arena in bit 8",
           spare & 1 == 1 and (spare >> 1) & 0x7F == server.cfg["rules"] & 0x7F
