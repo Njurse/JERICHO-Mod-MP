@@ -92,11 +92,15 @@ triangles/quads only. Ped models are FT3/FT4; a model with normal tables is
 refused if edited. The assembled scenes are references; the builder reads the
 per-part OBJs.
 
-**Editing textures.** Each page is 256x256 at 4bpp. `page_<set>.png` is an RGB
-view through CLUT row 0; `_indexed.png` preserves the exact 4-bit indices.
-Edit either one, not both. Palette strips are 16 pixels wide, one row per CLUT.
-Per-part crops are convenient for painting, but edit either the full page or its
-crops for a page, not both. RGB edits are quantised to the nearest CLUT entry.
+**Editing textures.** Each page is 256x256 at 4bpp and carries one CLUT row per
+texture id; the engine picks `civ_clut[0][texture_number][pal]`. `page_<set>.png`
+and `_indexed.png` are a single-row view (row 0), so they are not the right
+colors for every material. `page_<set>_t<id>.png` and the per-material crops
+`<part>_set<set>_t<id>.png` are rendered through that texture's CLUT; edit those
+for correct colors. `png/palettes/page_<set>.png` is the strip of all rows.
+Edit either the RGB or indexed form, not both. Full-page RGB edits quantise to
+the page's `display_clut` (row 0); on a page with more than one texture, edit the
+per-material crops instead. A full page and its crops are mutually exclusive.
 
 **Skeleton.** `skeleton.json` is the 23-bone hierarchy with parent links, raw
 motion positions, engine positions and the Tanner/Jericho model binding for each

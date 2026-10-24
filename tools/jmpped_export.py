@@ -64,6 +64,16 @@ def _page_entry(page: jc.Page, root: str, ped: str, display_clut: int = 0) -> tu
     else:
         jc.save_rgb_png(pal_png, 1, 1, [(0, 0, 0)])
 
+    # one full-page view per texture CLUT: a page has one palette row per
+    # texture id, so page_<set>.png (row 0) is only correct for t0.
+    texture_pages = []
+    for i, row in enumerate(cluts):
+        row_rgb = jc.page_rgb(indices, jc.clut_rgb(row))
+        row_png = os.path.join(pdir, "pages", "page_%d_t%d.png" % (page.set, i))
+        jc.save_rgb_png(row_png, jc.PAGE_W, jc.PAGE_H, row_rgb)
+        texture_pages.append({"texture": i, "png": _rel(row_png, root),
+                              "sha256": _sha(row_png)})
+
     entry = {
         "set": page.set,
         "ped": ped,
@@ -79,6 +89,7 @@ def _page_entry(page: jc.Page, root: str, ped: str, display_clut: int = 0) -> tu
         "palette_png": _rel(pal_png, root),
         "palette_png_sha256": _sha(pal_png),
         "cluts_hex": [row.hex() for row in cluts],
+        "texture_pages": texture_pages,
     }
     return entry, rgb
 
@@ -94,7 +105,6 @@ def _part_entry(part: dict, ped: str, root: str,
     jc.write_obj(edit_path, model, blender=True, name=name)
 
     materials: dict[tuple[int, int], dict] = {}
-    crops: dict[int, dict] = {}
     for p in model.polys:
         if not p.textured:
             continue
@@ -107,21 +117,18 @@ def _part_entry(part: dict, ped: str, root: str,
             rec["u"][1] = max(rec["u"][1], u)
             rec["v"][0] = min(rec["v"][0], v)
             rec["v"][1] = max(rec["v"][1], v)
-        crop = crops.setdefault(p.set, {"page_set": p.set, "u": [255, 0],
-                                        "v": [255, 0], "polys": 0})
-        crop["polys"] += 1
-        for u, v in p.uv:
-            crop["u"][0] = min(crop["u"][0], u)
-            crop["u"][1] = max(crop["u"][1], u)
-            crop["v"][0] = min(crop["v"][0], v)
-            crop["v"][1] = max(crop["v"][1], v)
 
     crop_entries = []
-    for page_set, rec in sorted(crops.items()):
+    for (page_set, texture), rec in sorted(materials.items()):
         if page_set not in page_map:
             raise jc.JMPPEDError("%s/%s references page %d, which the base archive "
                                  "does not carry" % (ped, name, page_set))
-        page, page_pixels = page_map[page_set]
+        page = page_map[page_set][0]
+        cluts = jc.page_cluts(page)
+        # The page holds one CLUT per texture id; using row 0 for every material
+        # is what made the exported crops look like the wrong palette.
+        row = texture if 0 <= texture < len(cluts) else 0
+        clut = jc.clut_rgb(cluts[row]) if cluts else [(0, 0, 0)] * 16
         x0, x1 = rec["u"]
         y0, y1 = rec["v"]
         x0 = max(0, x0)
@@ -131,23 +138,21 @@ def _part_entry(part: dict, ped: str, root: str,
         w, h = x1 - x0 + 1, y1 - y0 + 1
         if w <= 0 or h <= 0:
             continue
-        crop_pixels = [page_pixels[y * jc.PAGE_W + x]
-                       for y in range(y0, y1 + 1)
-                       for x in range(x0, x1 + 1)]
-        crop_rgb = os.path.join(pdir, "png", "parts",
-                                "%s_set%d.png" % (name, page_set))
-        jc.save_rgb_png(crop_rgb, w, h, crop_pixels)
         page_indices = jc.page_indices(page)
-        cluts = jc.page_cluts(page)
-        clut = jc.clut_rgb(cluts[0]) if cluts else [(0, 0, 0)] * 16
         crop_idx_pixels = [page_indices[y * jc.PAGE_W + x]
                            for y in range(y0, y1 + 1)
                            for x in range(x0, x1 + 1)]
+        crop_pixels = jc.page_rgb(crop_idx_pixels, clut)
+        crop_rgb = os.path.join(pdir, "png", "parts",
+                                "%s_set%d_t%d.png" % (name, page_set, texture))
+        jc.save_rgb_png(crop_rgb, w, h, crop_pixels)
         crop_idx = os.path.join(pdir, "png", "parts",
-                                "%s_set%d_indexed.png" % (name, page_set))
+                                "%s_set%d_t%d_indexed.png" % (name, page_set, texture))
         jc.save_indexed_png(crop_idx, w, h, crop_idx_pixels, clut)
         crop_entries.append({
             "page_set": page_set,
+            "texture": texture,
+            "display_clut": row,
             "rect": [x0, y0, w, h],
             "rgb": _rel(crop_rgb, root),
             "rgb_sha256": _sha(crop_rgb),

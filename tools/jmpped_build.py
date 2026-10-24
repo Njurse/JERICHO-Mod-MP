@@ -222,6 +222,9 @@ def _apply_crop(state: dict, crop: dict, root: str) -> None:
                                  % (rgb_path, len(pixels), 1, w, h))
         clut = (jc.clut_rgb(state["cluts"][state["display"]])
                 if state["cluts"] else [(0, 0, 0)] * 16)
+        display = int(crop.get("display_clut", state["display"]))
+        if state["cluts"] and 0 <= display < len(state["cluts"]):
+            clut = jc.clut_rgb(state["cluts"][display])
         patch = bytes(jc.nearest_clut_index(c, clut) for c in pixels)
 
     indices = bytearray(state["indices"])
