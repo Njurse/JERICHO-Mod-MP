@@ -159,6 +159,50 @@ BAKE_JMPPED.bat add-entry --name "Display Name" [--from-entry Jericho]
 6. **Preview/verify.** `preview_jmpped.py` renders a turntable GIF; the runtime
    checks use `MP_TEST_JERICHO` and a two-seat rig.
 
+### Editing a registered entry (normal texture/part workflow)
+
+For a custom entry such as `jerichod3`, the bake workspace is
+`tools/out/jmppeds/v3/` and the entry is `entries/jerichod3/`. Edit only that
+entry:
+
+- `entries/<slug>/png/parts/<part>_set<set>_t<id>.png` — the editable RGB crop
+  for one material. This is the normal texture surface.
+- `entries/<slug>/obj/edit/<part>.obj` (Blender units) or `obj/raw`
+  (engine units) — one copy per part, not both.
+- `offset`/`scale` for that part in `jmpped.json`, if needed.
+
+Then bake and copy:
+
+```sh
+JMPPED_WIZARD.bat                 # choose 1) Bake
+# or
+python JERICHO/MODS/mp/tools/jmpped_bake.py build --copy
+```
+
+That rebuilds `JMPPED.LEV` and copies it to `tools/JMPPED.LEV`,
+`Release/DRIVER2/LEVELS` and `Release_dev/DRIVER2/LEVELS`.
+
+Do **not** re-export or prime for a custom-entry texture/part edit. Export and
+prime are only for replacing source-owned assets: entry 0 (Tanner/Jericho), the
+base archives, pages, or the skeleton from the Driver 2 level. If a part still
+has a single combined crop (`<part>_set<set>.png`), convert it once with
+`JMPPED_WIZARD.bat` → 5, or:
+
+```sh
+python JERICHO/MODS/mp/tools/jmpped_crops.py --out JERICHO/MODS/mp/tools/out/jmppeds/v3 --entry "Jericho Driv3r"
+```
+
+Source refresh/prime is the other direction:
+
+```sh
+python JERICHO/MODS/mp/tools/jmpped_export.py --name current   # source workspace only
+python JERICHO/MODS/mp/tools/jmpped_prime.py --source JERICHO/MODS/mp/tools/out/jmppeds/source/current --out JERICHO/MODS/mp/tools/out/jmppeds/v3
+python JERICHO/MODS/mp/tools/jmpped_bake.py build --copy
+```
+
+Prime keeps custom entries and the existing `JMPPED.LEV`; it replaces only
+source-owned entry 0 assets.
+
 ## 6. Pages and CLUTs
 
 A page is 256×256 at 4bpp. Each page carries a CLUT table with one 16-entry row
@@ -170,6 +214,9 @@ therefore cannot be represented by one palette row for every material.
 - `png/palettes/page_<set>.png` — a strip of every CLUT row.
 - `png/parts/<part>_set<set>_t<id>.png` — the **single editable RGB crop** for
   that material. There is no `_indexed` twin; the builder paletteizes it.
+- A combined `<part>_set<set>.png` is the old one-image format and gives every
+  material in the part the same 16-colour row. Convert it with
+  `jmpped_crops.py` (wizard option 5) into one `_t<id>` crop per material.
 - Each crop records `display_clut` (its texture row). A crop with ≤16 colours is
   preserved exactly; more colours are median-cut to 16, then the row and page
   indices are written automatically.
@@ -294,10 +341,13 @@ Limits and rules:
 
 ## 10. Troubleshooting
 
-**Wrong colours.** Use the single per-material crop
+**Wrong colours.** Edit the per-material crop
 (`png/parts/<part>_set<set>_t<id>.png`). It is auto-palettized into the texture
-row recorded in `display_clut`; `palettes/page_<set>.png` shows the rows. The
-page's indexed PNG is internal/base data, not the editing surface.
+row recorded in `display_clut`; `palettes/page_<set>.png` shows the rows. A
+combined `<part>_set<set>.png` uses one row for every material in that part and
+will look wrong when the part has several texture ids — run wizard option 5 or
+`jmpped_crops.py` to split it. The page's indexed PNG is internal/base data,
+not the editing surface.
 
 **Mashed torso/legs.** `JERI_TORSO` is much longer than Tanner's `TORSO` and
 extends through the hips/thighs. Fix it with a per-part `offset`/`scale` on the

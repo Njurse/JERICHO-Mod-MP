@@ -35,6 +35,7 @@ path, add-entry and troubleshooting — is in
 [`../docs/JMPPED.md`](../docs/JMPPED.md).
 
 ```sh
+JMPPED_WIZARD.bat                       # console menu: bake, import, split, preview, source/prime
 BAKE_JMPPED.bat all                     # export + build + preview
 BAKE_JMPPED.bat export --source DRIVER2/LEVELS/HAVANA.LEV
 BAKE_JMPPED.bat split --and-build       # edit a bindpose_edit.obj, then split+bake
@@ -42,20 +43,37 @@ BAKE_JMPPED.bat build --copy            # copy the rebuild to DRIVER2/LEVELS
 BAKE_JMPPED.bat add-entry --name "Jericho (Driv3r)"
 REGISTER_JMPPED.bat out\jmppeds\v3\entries\jerichod3   # drag a completed entry folder
 BAKE_JMPPED.bat export --out my-edit    # keep a separate workspace
+python jmpped_crops.py --entry "Jericho Driv3r"        # split a combined part crop
 ```
 
 The workspace defaults to `tools/out/jmppeds/v3` (gitignored): `base.LEV`,
 `base_v5.LEV`, `jmpped.json`, `skeleton/`, `tanner/`, `jericho/`,
 `entries/<slug>/` and `jmpped/assembled_*.obj`.
 
-Edit one OBJ copy per part (`obj/edit` for Blender or `obj/raw` for engine
-units), the single per-material RGB crop, or a part's `offset`/`scale` in
-`jmpped.json`. The builder auto-palettizes a changed crop into its texture CLUT
-row. `split` turns an edited `bindpose_edit.obj` into local parts. `build` writes
+For a **custom entry** such as `jerichod3`, edit
+`entries/<slug>/png/parts/<part>_set<set>_t<id>.png` (one RGB crop per
+material) and/or one OBJ copy, then run `build --copy` or wizard option 1.
+Do not re-export or prime for a custom-entry edit. Each crop is auto-palettized
+into its own texture CLUT row; a combined `<part>_set<set>.png` is the old
+one-palette format and should be split with `jmpped_crops.py` (wizard option 5).
+
+**Source-owned** assets are entry 0 (Tanner/Jericho), `base*.LEV`, pages and the
+skeleton in `tools/out/jmppeds/source/<name>/`. Edit those only in the source
+workspace, then prime into the bake and rebuild:
+
+```sh
+python jmpped_export.py --name current
+python jmpped_prime.py --source tools/out/jmppeds/source/current --out tools/out/jmppeds/v3
+python jmpped_bake.py build --copy
+```
+
+The builder auto-palettizes a changed crop into its texture CLUT row. `split`
+turns an edited `bindpose_edit.obj` into local parts. `build` writes
 `JMPPED.LEV` and rereads it as a self-check; `--copy` places it in
-`DRIVER2/LEVELS`. v3 is one 14-slot character; use `add-entry` for v5 multi-entry
-archives. See [`../docs/JMPPED.md`](../docs/JMPPED.md) for the slot table, page
-sets, CLUT/crop rules, builder refusals and the engine load path.
+`DRIVER2/LEVELS` and both `Release`/`Release_dev` targets. v3 is one 14-slot
+character; use `add-entry` for v5 multi-entry archives. See
+[`../docs/JMPPED.md`](../docs/JMPPED.md) for the slot table, page sets,
+CLUT/crop rules, builder refusals and the engine load path.
 
 **Refusals.** The builder names the ped/part and source rather than dropping
 data: both `obj/edit` and `obj/raw` changed, both RGB and indexed page forms
