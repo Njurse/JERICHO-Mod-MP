@@ -349,9 +349,179 @@ def read_obj(path: str, *, blender: bool = False) -> tuple[list[tuple[float, flo
     return verts, faces
 
 
-# --------------------------------------------------------------------------
-# Assembled-scene part placement (mirrors preview_jmpped.py's rough pose)
-# --------------------------------------------------------------------------
+def write_part_obj(path: str, name: str, verts, faces, *,
+                   blender: bool = True) -> None:
+    """Write one split part as a deterministic Wavefront OBJ.
+
+    `verts` are engine units; `faces` are `(vertex_index, uv_or_None, material)`
+    corners with local indices. UVs are written exactly as supplied (0..1), and
+    one `vt` is written per face corner so the result is stable across runs.
+    """
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    with open(path, "w", encoding="utf-8", newline="\n") as f:
+        f.write("# JMPPED part: %s\n" % name)
+        f.write("o %s\n" % name)
+        for x, y, z in verts:
+            if blender:
+                f.write("v %.6f %.6f %.6f\n" %
+                        (x * BLENDER_SCALE, z * BLENDER_SCALE,
+                         -y * BLENDER_SCALE))
+            else:
+                f.write("v %.6f %.6f %.6f\n" % (x, y, z))
+
+        uv_ids = []
+        uv_count = 0
+        for face in faces:
+            ids = []
+            for _vi, uv, _mat in face:
+                if uv is None:
+                    ids.append(None)
+                else:
+                    uv_count += 1
+                    f.write("vt %.6f %.6f\n" % (uv[0], uv[1]))
+                    ids.append(uv_count)
+            uv_ids.append(ids)
+
+        for face, ids in zip(faces, uv_ids):
+            material = face[0][2] if face else None
+            if material is not None:
+                f.write("usemtl %s\n" % material)
+            corners = []
+            for (vi, _uv, _mat), uv_id in zip(face, ids):
+                if uv_id is None:
+                    corners.append("%d" % (vi + 1))
+                else:
+                    corners.append("%d/%d" % (vi + 1, uv_id))
+            f.write("f " + " ".join(corners) + "\n")
+
+
+def _resolve_part_group(name: str, part_names: set[str]) -> str | None:
+    """Map a Blender object/group name to one of the expected part names.
+
+    Blender writes `PART`, `PART_PART` for the object and `PART_sN_tM` for a
+    material subgroup, and appends `.001` when the object name is duplicated.
+    `off` and unknown names return None.
+    """
+    name = name.strip()
+    if not name:
+        return None
+    if "." in name:
+        head, tail = name.rsplit(".", 1)
+        if tail.isdigit():
+            name = head
+    if name in part_names:
+        return name
+    for part in sorted(part_names, key=len, reverse=True):
+        if name.startswith(part + "_") or name.startswith(part + "."):
+            return part
+    return None
+
+
+def read_combined_obj(path: str, part_names: Iterable[str], *,
+                      blender: bool = True) -> dict[str, dict]:
+    """Read a whole-character OBJ whose objects/groups are named by part.
+
+    The returned dict is keyed by the resolved part name. Vertices are engine
+    units (Blender Z-up is converted when `blender` is true), and each face is
+    a list of `(vertex_index, uv_or_None, material)` corners with local vertex
+    indices. Faces are deduplicated, and vertices are renumbered in first-use
+    order so a re-export with only whitespace/order changes is stable.
+
+    The object-level group and its material subgroups resolve to the same
+    part; the face-less `off` group is ignored. A face under a group that does
+    not resolve to one of `part_names` is refused instead of being dropped.
+    """
+    names = set(part_names)
+    verts_all: list[tuple[float, float, float]] = []
+    uvs_all: list[tuple[float, float]] = []
+    groups: dict[str, list[list[tuple[int, tuple[float, float] | None,
+                                        int | None]]]] = {}
+    current_part = None
+    current_group = None
+    material = None
+
+    with open(path, encoding="utf-8") as f:
+        for line_no, line in enumerate(f, 1):
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            p = line.split()
+            tag = p[0]
+            if tag in ("o", "g"):
+                current_group = p[1] if len(p) > 1 else ""
+                current_part = _resolve_part_group(current_group, names)
+                continue
+            if tag == "v" and len(p) >= 4:
+                x, y, z = float(p[1]), float(p[2]), float(p[3])
+                if blender:
+                    x, y, z = (x / BLENDER_SCALE, -z / BLENDER_SCALE,
+                               y / BLENDER_SCALE)
+                verts_all.append((x, y, z))
+            elif tag == "vt" and len(p) >= 3:
+                uvs_all.append((float(p[1]), float(p[2])))
+            elif tag == "usemtl" and len(p) >= 2:
+                material = p[1]
+            elif tag == "f" and len(p) >= 4:
+                toks = p[1:]
+                if "#" in toks:
+                    toks = toks[:toks.index("#")]
+                if len(toks) not in (3, 4):
+                    raise JMPPEDError(
+                        "%s:%d: face has %d corners; only triangles and quads "
+                        "are supported" % (path, line_no, len(toks)))
+                if current_part is None:
+                    raise JMPPEDError(
+                        "%s:%d: face under group %r is not one of the known "
+                        "parts (%s)" % (path, line_no, current_group,
+                                        ", ".join(sorted(names))))
+                face = []
+                for tok in toks:
+                    bits = tok.split("/")
+                    try:
+                        raw = int(bits[0])
+                    except ValueError:
+                        raise JMPPEDError("%s:%d: bad vertex index %r"
+                                          % (path, line_no, tok)) from None
+                    vi = raw - 1 if raw > 0 else len(verts_all) + raw
+                    if vi < 0 or vi >= len(verts_all):
+                        raise JMPPEDError("%s:%d: vertex index %r is out of "
+                                          "range" % (path, line_no, tok))
+                    uv = None
+                    if len(bits) > 1 and bits[1]:
+                        try:
+                            raw_uv = int(bits[1])
+                        except ValueError:
+                            raise JMPPEDError("%s:%d: bad UV index %r"
+                                              % (path, line_no, tok)) from None
+                        ti = (raw_uv - 1 if raw_uv > 0
+                              else len(uvs_all) + raw_uv)
+                        if ti < 0 or ti >= len(uvs_all):
+                            raise JMPPEDError("%s:%d: UV index %r is out of "
+                                              "range" % (path, line_no, tok))
+                        uv = uvs_all[ti]
+                    face.append((vi, uv, material))
+                groups.setdefault(current_part, []).append(face)
+
+    out: dict[str, dict] = {}
+    for part, faces in groups.items():
+        local_verts: list[tuple[float, float, float]] = []
+        vmap: dict[int, int] = {}
+        local_faces = []
+        seen = set()
+        for face in faces:
+            key = tuple((vi, uv, mat) for vi, uv, mat in face)
+            if key in seen:
+                continue
+            seen.add(key)
+            local = []
+            for vi, uv, mat in face:
+                if vi not in vmap:
+                    vmap[vi] = len(local_verts)
+                    local_verts.append(verts_all[vi])
+                local.append((vmap[vi], uv, mat))
+            local_faces.append(local)
+        out[part] = {"verts": local_verts, "faces": local_faces}
+    return out
 
 def _size(models: Sequence[Model], i: int) -> tuple[float, float, float]:
     if i >= len(models) or not models[i].vertices:

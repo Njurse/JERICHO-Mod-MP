@@ -617,8 +617,10 @@ def build_v3(project: str, manifest: dict, dest: str | None,
 
 def bake(project: str, dest: str | None = None, dry_run: bool = False,
          use: str = "auto", character: str | None = None,
-         copy: bool = False) -> int:
+         copy: bool = False, force_split: bool = False) -> int:
     project = os.path.abspath(project)
+    import jmpped_model
+    jmpped_model.split_pending(project, force=force_split)
     manifest = je.load_manifest(project)
     fmt = manifest.get("format_version")
     if fmt == jc.VERSION_V5:
@@ -641,10 +643,12 @@ def main(argv: list[str] | None = None) -> int:
                     help="character name (validated; default: all)")
     ap.add_argument("--copy", action="store_true",
                     help="copy the bake to tools/ and the runtime levels")
+    ap.add_argument("--force", action="store_true",
+                    help="re-split the combined model even if its hash matches")
     args = ap.parse_args(argv)
     try:
         return bake(args.project, args.dest, args.dry_run, args.use,
-                    args.character, args.copy)
+                    args.character, args.copy, args.force)
     except jc.JMPPEDError as e:
         print("jmpped bake: %s" % e, file=sys.stderr)
         return 1

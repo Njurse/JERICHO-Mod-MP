@@ -8,8 +8,10 @@ A character folder is the unit of import: it contains `character.json`,
 added to `project.json`, its page sets are checked for collisions, and the
 project is baked unless --no-build is passed.
 
-The combined-model split is the next authoring change; for now a folder must
-already contain the 14 prepared part files.
+The folder's `model.obj` is the combined edit surface. The import splits it
+into the 14 part caches, updates their hashes, and then bakes the character.
+Pass --scene to use another OBJ and --raw when that OBJ is already in engine
+units.
 """
 
 from __future__ import annotations
@@ -75,10 +77,6 @@ def import_character(folder: str, project: str, name: str | None = None,
                      scene: str | None = None, raw: bool = False) -> int:
     project = os.path.abspath(project)
     folder = os.path.abspath(folder)
-    if scene or raw:
-        raise jc.JMPPEDError(
-            "combined-model splitting is the next authoring change; import a "
-            "folder with prepared models/blender and models/engine part files")
     manifest = je.load_manifest(project)
     if not os.path.isdir(folder):
         raise jc.JMPPEDError("not a folder: %s" % folder)
@@ -120,19 +118,25 @@ def import_character(folder: str, project: str, name: str | None = None,
 
     data["index"] = index
     je.validate_character(manifest, data)
-    _check_files(project, data)
     if existing is None:
         manifest["characters"].append(data)
     else:
         manifest["characters"][existing] = data
     jc.save_json(os.path.join(project, "project.json"), manifest)
     jc.save_json(os.path.join(dest, "character.json"), data)
+
+    import jmpped_model
+    jmpped_model.split_character(project, data, scene=scene, raw=raw,
+                                 force=True)
+    data = _load_character(dest)
+    _check_files(project, data)
     print('imported "%s" as %s (texture pages %s)'
           % (name, dest_rel, data["texture_page_sets"]))
 
     if build:
         import jmpped_bake
-        return jmpped_bake.bake(project, use=use, copy=copy)
+        return jmpped_bake.bake(project, use="raw" if raw else use,
+                                copy=copy)
     return 0
 
 
@@ -145,13 +149,17 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--no-build", action="store_true")
     ap.add_argument("--no-copy", action="store_true")
     ap.add_argument("--use", choices=("auto", "edit", "raw"), default="auto")
+    ap.add_argument("--scene", default=None,
+                    help="combined model OBJ (default: character's model.obj)")
+    ap.add_argument("--raw", action="store_true",
+                    help="the combined model is in engine units")
     args = ap.parse_args(argv)
     import jmpped_workspace as jws
     project = args.project or jws.project_root()
     try:
         return import_character(args.folder, project, args.name,
                                 not args.no_build, not args.no_copy,
-                                args.use)
+                                args.use, scene=args.scene, raw=args.raw)
     except jc.JMPPEDError as e:
         print("jmpped import: %s" % e, file=sys.stderr)
         return 1

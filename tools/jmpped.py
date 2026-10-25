@@ -43,6 +43,8 @@ def _status(args) -> int:
     print("manifest   :", "yes" if st["manifest"] else "no")
     print("characters :", ", ".join(st["characters"])
           if st["characters"] else "none")
+    pending = st.get("model_pending") or []
+    print("models pending :", ", ".join(pending) if pending else "none")
     if st["base"]:
         print("base       :", st["base"],
               "ok" if st["base_ok"] else "MISSING/CHANGED")
@@ -80,7 +82,8 @@ def _bake(args) -> int:
     copy = args.copy and not args.no_copy
     return jmpped_bake.bake(jws.project_root(args.project), dest=args.dest,
                             dry_run=args.dry_run, use=args.use,
-                            character=args.character, copy=copy)
+                            character=args.character, copy=copy,
+                            force_split=args.force)
 
 
 def _preview(args) -> int:
@@ -149,11 +152,14 @@ def _add_build(p) -> None:
                    help="character name to bake (default: all)")
     p.add_argument("--dest", default=None,
                    help="archive output (default: out/build/JMPPED.LEV)")
+    p.add_argument("--force", action="store_true",
+                   help="re-split the combined model even if its hash matches")
 
 
 def _add_import(p, required: bool = True) -> None:
     p.add_argument("--folder", required=required,
-                   help="character folder containing character.json")
+                   help="character folder containing character.json; its "
+                        "model.obj is split automatically")
     p.add_argument("--name", default=None, help="override the character name")
     p.add_argument("--scene", default=None,
                    help="combined model OBJ (default: the character's model.obj)")

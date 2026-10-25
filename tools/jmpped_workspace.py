@@ -159,6 +159,7 @@ def status(root: str, source: str | None = None) -> dict:
         "project": os.path.isfile(project_path),
         "entries": [],
         "characters": [],
+        "model_pending": [],
         "base": None,
         "base_ok": None,
         "base_exists": None,
@@ -177,6 +178,14 @@ def status(root: str, source: str | None = None) -> dict:
     data = jc.load_json(project_path)
     out["characters"] = [c.get("name", "?") for c in data.get("characters", [])]
     out["entries"] = out["characters"]
+    try:
+        import jmpped_model
+        out["model_pending"] = [
+            c.get("name", "?") for c in data.get("characters", [])
+            if jmpped_model.model_pending(root, c, data)
+        ]
+    except (OSError, ValueError, jc.JMPPEDError):
+        out["model_pending"] = []
     src = data.get("source") or {}
     out["base"] = src.get("base")
     if out["base"]:
