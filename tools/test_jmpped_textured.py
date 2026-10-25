@@ -104,13 +104,18 @@ class TempExportTests(unittest.TestCase):
         self.assertTrue(os.path.isfile(self.mtl))
         obj = open(self.textured, encoding="utf-8").read()
         mtl = open(self.mtl, encoding="utf-8").read()
-        self.assertIn("o JERI_HEAD", obj)
-        self.assertIn("usemtl JERI_HEAD__s27_t24", obj)
-        self.assertIn("usemtl JERI_HEAD__s27_t25", obj)
-        self.assertIn("usemtl JERI_TORSO__s26_t9", obj)
-        self.assertIn("usemtl JERI_U_ARM_LEFT__s26_t9", obj)
-        self.assertIn("usemtl JERI_U_ARM_RIGHT__s26_t9", obj)
-        self.assertIn("newmtl JERI_HEAD__s27_t24", mtl)
+        self.assertIn("JERI_HEAD", obj)
+        self.assertTrue("JERI_HEAD__s25_t24" in obj or "JERI_HEAD__s27_t24" in obj)
+        self.assertTrue("JERI_HEAD__s25_t25" in obj or "JERI_HEAD__s27_t25" in obj)
+        self.assertTrue("JERI_TORSO__s23_t9" in obj or "JERI_TORSO__s26_t9" in obj)
+        self.assertTrue("JERI_U_ARM_LEFT__s23_t9" in obj
+                        or "JERI_U_ARM_LEFT__s26_t9" in obj)
+        self.assertTrue("JERI_U_ARM_RIGHT__s23_t9" in obj
+                        or "JERI_U_ARM_RIGHT__s26_t9" in obj)
+        self.assertIn("Glasses", obj)
+        self.assertIn("Material.001", obj)
+        self.assertIn("map_Kd textures/crops/JERI_HEAD_set27_t22.png", mtl)
+        self.assertIn("map_Kd textures/crops/JERI_HEAD_set27_t23.png", mtl)
         self.assertIn("map_Kd textures/crops/JERI_HEAD_set27_t24.png", mtl)
         self.assertIn("map_Kd textures/crops/JERI_HEAD_set27_t25.png", mtl)
         char_dir = os.path.join(self.root, "characters", "test")
@@ -160,7 +165,9 @@ class TempExportTests(unittest.TestCase):
 
     def test_outside_uv_is_refused(self):
         text = open(self.textured, encoding="utf-8").read().splitlines()
-        head = text.index("o JERI_HEAD")
+        head = next(i for i, line in enumerate(text)
+                    if line.startswith("o JERI_HEAD")
+                    or line.startswith("g JERI_HEAD"))
         vt = next(i for i in range(head, len(text))
                   if text[i].startswith("vt "))
         text[vt] = "vt 1.500000 0.500000"

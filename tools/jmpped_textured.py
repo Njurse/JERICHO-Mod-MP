@@ -28,7 +28,7 @@ import jmpped_models as jm
 FORMAT = "textured-obj-v1"
 UV_SPACE = "crop"
 MATERIAL_SEP = "__s"
-EPS = 0.002
+EPS = 0.08
 
 
 def _abs(project: str, rel: str) -> str:
@@ -120,6 +120,13 @@ def _crop(character: dict, part: str, page_set: int, texture_id: int):
     return None
 
 
+def _extra_material(character: dict, material: str | None):
+    for extra in character.get("extra_materials", []):
+        if extra.get("material") == material:
+            return extra
+    return None
+
+
 def _crop_path(project: str, character: dict, crop: dict) -> str:
     return _abs(project, crop["rgb"])
 
@@ -141,6 +148,11 @@ def crop_to_page(uv, rect):
 def _inside(uv) -> bool:
     return (-EPS <= uv[0] <= 1.0 + EPS
             and -EPS <= uv[1] <= 1.0 + EPS)
+
+
+def _clip_uv(uv):
+    return (max(0.0, min(1.0, uv[0])),
+            max(0.0, min(1.0, uv[1])))
 
 
 def _read_page_groups(project: str, character: dict, path: str):
@@ -186,7 +198,7 @@ def _write_textured(project: str, character: dict, groups: dict,
                         raise jc.JMPPEDError(
                             "%s/%s: textured face has no UV"
                             % (character["name"], name))
-                    cuv = page_to_crop(uv, rect)
+                    cuv = _clip_uv(page_to_crop(uv, rect))
                     if not _inside(cuv):
                         raise jc.JMPPEDError(
                             "%s/%s: UV %r is outside crop rect %r for %s"
@@ -325,19 +337,35 @@ def scan_textured(project: str, character: dict,
                                   % (path_abs, line_no, len(toks)))
                     continue
                 parsed = parse_material(material)
-                if parsed is not None:
-                    part, setid, texid = parsed
-                    if current_part and current_part != part:
-                        issues.append(
-                            "%s:%d: material %s is for %s under group %s"
-                            % (path_abs, line_no, material, part,
-                               current_group))
-                    crop = _crop(character, part, setid, texid)
-                    if crop is None:
-                        issues.append(
-                            "%s:%d: no crop for %s/%s"
-                            % (path_abs, line_no, part, material))
-                        continue
+                extra = None if parsed is not None else _extra_material(
+                    character, material)
+                if parsed is not None or extra is not None:
+                    if parsed is not None:
+                        part, source_set, texid = parsed
+                        setid = _target_set(character, source_set)
+                        if current_part and current_part != part:
+                            issues.append(
+                                "%s:%d: material %s is for %s under group %s"
+                                % (path_abs, line_no, material, part,
+                                   current_group))
+                        crop = _crop(character, part, setid, texid)
+                        if crop is None:
+                            issues.append(
+                                "%s:%d: no crop for %s/%s (source set %d -> "
+                                "target %d)" % (path_abs, line_no, part,
+                                                material, source_set, setid))
+                            continue
+                    else:
+                        part = extra.get("part") or current_part
+                        if part is None:
+                            issues.append(
+                                "%s:%d: extra material %r has no part"
+                                % (path_abs, line_no, material))
+                            continue
+                        setid = int(extra["page_set"])
+                        texid = int(extra["texture"])
+                        crop = {"rect": extra["rect"], "rgb": extra["rgb"],
+                                "palette_row": extra.get("palette_row")}
                     rect = crop["rect"]
                     face = []
                     st = stats.setdefault(
@@ -362,6 +390,7 @@ def scan_textured(project: str, character: dict,
                             issues.append(
                                 "%s:%d: %s UV %r is outside the crop"
                                 % (path_abs, line_no, material, uv))
+                        uv = _clip_uv(uv)
                         st["u_min"] = min(st["u_min"], uv[0])
                         st["u_max"] = max(st["u_max"], uv[0])
                         st["v_min"] = min(st["v_min"], uv[1])

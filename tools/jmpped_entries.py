@@ -194,6 +194,9 @@ def rewrite_paths(record: dict, old_prefix: str, new_prefix: str,
     for crop in record.get("texture_crops", []):
         if crop.get("palette_png"):
             crop["palette_png"] = rw(crop["palette_png"])
+    for extra in record.get("extra_materials", []):
+        if extra.get("rgb"):
+            extra["rgb"] = rw(extra["rgb"])
     return record
 
 
