@@ -71,28 +71,46 @@ def _extract(args) -> int:
 
 def _import(args) -> int:
     import jmpped_import
-    return jmpped_import.import_character(
+    rc = jmpped_import.import_character(
         args.folder, jws.project_root(args.project), name=args.name,
         build=not args.no_build, copy=not args.no_copy, use=args.use,
         character=args.character, scene=args.scene, raw=args.raw)
+    if rc:
+        return rc
+    if getattr(args, "preview", False):
+        return _render_preview(args)
+    return 0
 
 
 def _bake(args) -> int:
     import jmpped_bake
     copy = args.copy and not args.no_copy
-    return jmpped_bake.bake(jws.project_root(args.project), dest=args.dest,
-                            dry_run=args.dry_run, use=args.use,
-                            character=args.character, copy=copy,
-                            force_split=args.force)
+    rc = jmpped_bake.bake(jws.project_root(args.project), dest=args.dest,
+                          dry_run=args.dry_run, use=args.use,
+                          character=args.character, copy=copy,
+                          force_split=args.force)
+    if rc:
+        return rc
+    if getattr(args, "preview", False):
+        return _render_preview(args)
+    return 0
+
+
+def _render_preview(args, root=None) -> int:
+    import jmpped_preview
+    root = root or jws.project_root(getattr(args, "project", None))
+    lev = getattr(args, "lev", None) or os.path.join(
+        root, "out", "build", "JMPPED.LEV")
+    out = getattr(args, "out", None) or os.path.join(
+        root, "out", "build", "preview.gif")
+    return jmpped_preview.preview(
+        lev, out, character=getattr(args, "character", None),
+        frames=getattr(args, "frames", 36),
+        size=getattr(args, "size", 512))
 
 
 def _preview(args) -> int:
-    import jmpped_preview
-    root = jws.project_root(args.project)
-    lev = args.lev or os.path.join(root, "out", "build", "JMPPED.LEV")
-    out = args.out or os.path.join(root, "out", "build", "preview.gif")
-    return jmpped_preview.preview(lev, out, character=args.character,
-                                  frames=args.frames, size=args.size)
+    return _render_preview(args)
 
 
 def _add_character(args) -> int:
@@ -154,6 +172,8 @@ def _add_build(p) -> None:
                    help="archive output (default: out/build/JMPPED.LEV)")
     p.add_argument("--force", action="store_true",
                    help="re-split the combined model even if its hash matches")
+    p.add_argument("--preview", action="store_true",
+                   help="render out/build/preview.gif after the bake")
 
 
 def _add_import(p, required: bool = True) -> None:
@@ -222,7 +242,7 @@ def main(argv: list[str] | None = None) -> int:
     _add_project(pv)
     _add_preview(pv)
     pv.add_argument("--character", default=None,
-                    help="archive character to render (default: first)")
+                    help="archive character to render (default: last/custom)")
 
     ac = sub.add_parser("add-character",
                         help="clone a character and allocate texture pages")

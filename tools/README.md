@@ -41,6 +41,10 @@ JMPPED.bat bake --copy
 JMPPED.bat preview
 ```
 
+Preview renders the last/custom character by default; `JMPPED.bat bake --copy
+--preview` refreshes the GIF in the same command. Pass `--character "Jericho
+Driv3r"` to choose one.
+
 `CHARACTER_WIZARD.bat` is the console menu; `IMPORT_CHARACTER.bat` (or
 `import_character.sh`) imports a dragged character folder. `add-character`
 clones a character and allocates its texture pages; `sync-source` refreshes the

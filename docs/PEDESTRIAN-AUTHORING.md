@@ -193,7 +193,9 @@ JMPPED.bat preview
 3. **Bake.** `jmpped_bake.py` builds `out/build/JMPPED.LEV` and rereads it as a
    self-check. `--copy` writes `tools/JMPPED.LEV` and both runtime levels.
 4. **Preview.** `jmpped_preview.py` renders `out/build/preview.gif` from the
-   archive.
+   archive. It renders the last/custom character by default; pass
+   `--character "Jericho Driv3r"` to choose one, or use
+   `JMPPED.bat bake --copy --preview` to refresh the GIF in the same command.
 
 `JMPPED.bat status` shows the project, characters and source. `add-character`
 clones a character and allocates its page sets; `sync-source` refreshes the

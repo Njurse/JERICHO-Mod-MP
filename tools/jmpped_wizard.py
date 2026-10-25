@@ -58,7 +58,7 @@ def main() -> int:
 
     while True:
         _status()
-        print("1) Bake the project")
+        print("1) Bake and preview the project")
         print("2) Import a character folder")
         print("3) Add a character")
         print("4) Preview")
@@ -73,7 +73,7 @@ def main() -> int:
         if choice == "0":
             return 0
         if choice == "1":
-            _run(["bake", "--copy"])
+            _run(["bake", "--copy", "--preview"])
         elif choice == "2":
             folder = _ask("Character folder: ").strip('"')
             if folder:

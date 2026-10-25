@@ -96,7 +96,7 @@ def load_models(path, character=None):
         if not entries:
             raise SystemExit(f"{path}: v5 archive has no entries")
         if character is None:
-            index = 0
+            index = len(entries) - 1
         elif isinstance(character, int):
             index = character
         else:
@@ -106,6 +106,7 @@ def load_models(path, character=None):
                 raise SystemExit(f"{path}: no character named {character!r}")
         if index < 0 or index >= len(entries):
             raise SystemExit(f"{path}: character {index} is out of range")
+        selected_name = entries[index][0]
         models = entries[index][1]
     elif version in (3, 4) and count in (14, 15):
         off = 16
@@ -115,6 +116,7 @@ def load_models(path, character=None):
             off += 4
             models.append(parse_model(data[off:off + size]))
             off += size
+        selected_name = "Jericho"
     else:
         raise SystemExit(f"{path}: expected v3/v4/v5 JMPPED, got version {version}/{count}")
 
@@ -122,7 +124,7 @@ def load_models(path, character=None):
         if m["instance"] >= 0:
             parent = models[m["instance"]]
             m["verts"] = parent["verts"]
-    return models
+    return models, selected_name
 
 def part_offsets(models):
     """Rough humanoid layout. The bake stores separate parts, not a posed rig."""
@@ -215,7 +217,9 @@ def render_frame(parts, angle, colour, size=512):
 
 def preview(lev, out, character=None, frames=36, size=512,
             color=(200, 200, 50)) -> int:
-    parts = make_world(load_models(lev, character))
+    models, name = load_models(lev, character)
+    print(f"character : {name}")
+    parts = make_world(models)
     images = []
     for i in range(frames):
         angle = 2.0 * math.pi * i / frames
@@ -233,7 +237,7 @@ def main():
     ap.add_argument("--lev", default="JERICHO/MODS/mp/tools/JMPPED.LEV")
     ap.add_argument("--out", default="tmp/jmpped_360.gif")
     ap.add_argument("--character", default=None,
-                    help="character name in a v5 archive (default first)")
+                    help="character name in a v5 archive (default: last/custom)")
     ap.add_argument("--color", nargs=3, type=int, default=[200, 200, 50])
     ap.add_argument("--frames", type=int, default=36)
     ap.add_argument("--size", type=int, default=512)
