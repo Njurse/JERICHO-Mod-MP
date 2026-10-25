@@ -488,7 +488,7 @@ Pass: both seats draw the chosen model, a mid-match change reaches the peer, and
 removing the bake leaves both seats on Tanner with no crash.
 
 The archive format, slots, pages and per-entry assembly are in
-[`JMPPED.md`](JMPPED.md).
+[`PEDESTRIAN-AUTHORING.md`](PEDESTRIAN-AUTHORING.md).
 
 ---
 

@@ -13,23 +13,23 @@ the renames that matter while reading the rest of this page:
 
 | Old | New |
 | --- | --- |
-| `out/jmppeds/v3` workspace | `tools/project.json` + `characters/` + `out/` |
-| `entries/<slug>/` | `characters/<slug>/` |
-| `ped.json` | `character.json` |
-| `obj/edit` / `obj/raw` | `models/blender` / `models/engine` |
-| `bindpose_edit.obj` / `bindpose_raw.obj` | `model.obj` / `models/engine_reference.obj` |
-| `png/pages`, `png/palettes`, `png/parts` | `textures/pages`, `textures/palettes`, `textures/crops` |
-| `jmpped.json` | `project.json` |
+| `the project root` workspace | `tools/project.json` + `characters/` + `out/` |
+| `characters/<slug>/` | `characters/<slug>/` |
+| `character.json` | `character.json` |
+| `models/blender` / `models/engine` | `models/blender` / `models/engine` |
+| `model.obj` / `bindpose_raw.obj` | `model.obj` / `models/engine_reference.obj` |
+| `textures/pages`, `textures/palettes`, `textures/crops` | `textures/pages`, `textures/palettes`, `textures/crops` |
+| `project.json` | `project.json` |
 | `peds` | `source_models` |
 | `slots` | `parts` (`slot` stays the archive index) |
 | `bindpose` | `model` |
-| `variant` | `skeleton` |
+| `skeleton` | `skeleton` |
 | `source_ped` | `source_character` |
 | `directory` | `folder` |
 | `page_sets` / `palette_crops` | `texture_page_sets` / `texture_crops` |
 | `display_clut` | `palette_row` |
 | `archive_version` | `format_version` |
-| `export` / `split` / `build` / `prime` / `register` | `extract` / `import` / `bake` / `sync-source` / `import --folder` |
+| `export` / `split` / `build` / `sync-source` / `register` | `extract` / `import` / `bake` / `sync-source` / `import --folder` |
 
 `out/` is reserved for exports and generated builds; authored characters live
 in `characters/` beside it, never under `out/`.
@@ -78,10 +78,10 @@ The source is a **Driver 2 level**, not a previous `JMPPED.LEV`. By default it i
 `src_rebuild/bin/Release/DRIVER2/LEVELS/HAVANA.LEV`:
 
 ```
-jmpped_export.py
+jmpped_extract.py
   └─ bake_jmpped.py --no-copy
        reads the level's model table, writes base.LEV (v3, 14 models, 3 pages)
-  └─ writes tanner/, jericho/, skeleton/, jmpped/, jmpped.json, base_v5.LEV
+  └─ writes tanner/, jericho/, skeleton/, jmpped/, project.json, base_v5.LEV
 ```
 
 `jmpped_source.py` reads the level lumps:
@@ -101,15 +101,15 @@ The source split is:
 
 The motion block supplies the 23-bone hierarchy. `skeleton.json` stores both the
 motion-space positions (`motion_raw`, +Y up) and the engine draw positions
-(`engine`, +Y down), plus `variants.tanner.bindings` and
-`variants.jericho.bindings`.
+(`engine`, +Y down), plus `skeletons.tanner.bindings` and
+`skeletons.jericho.bindings`.
 
 ## 3. The 14-slot map
 
 Every entry has exactly these 14 model slots. Slots 0–5 are the Jericho upper
 body; slots 6–13 are Tanner's limbs and hands. The bind bone column is the
-Jericho/`OTHER_MODEL` binding; the Tanner variant binds `LTOE`/`RTOE` to the
-opposite foot names, which is why `skeleton.json` keeps both variants.
+Jericho/`OTHER_MODEL` binding; the Tanner skeleton binds `LTOE`/`RTOE` to the
+opposite foot names, which is why `skeleton.json` keeps both skeletons.
 
 | Slot | Part | Source ped | Bind bone | Entry-0 page set |
 | ---: | --- | --- | --- | ---: |
@@ -133,21 +133,21 @@ The full Tanner torso/head/arms/neck/hips are exported for reference but have
 
 ## 4. Workspace and manifests
 
-The default workspace is `tools/out/jmppeds/v3` (gitignored):
+The default workspace is `tools/the project root` (gitignored):
 
 ```
 base.LEV                 untouched v3 archive from the same level
 base_v5.LEV              v5 seed with entry 0
-jmpped.json              the manifest: pages, entries, slots, skeleton, hashes
-skeleton/skeleton.json   23 bones, motion_raw/engine positions, variant bindings
+project.json              the manifest: pages, entries, slots, skeleton, hashes
+skeleton/skeleton.json   23 bones, motion_raw/engine positions, skeleton bindings
 skeleton/skeleton_*.obj  raw/edit bone-edge views
 tanner/...               full Tanner reference subexport
 jericho/...              entry 0 parts, pages 23/25 and bindpose
-entries/<slug>/...       later v5 entries (add-entry output)
+characters/<slug>/...       later v5 entries (add-character output)
 jmpped/assembled_*.obj   rough visual reference for the 14 slots
 ```
 
-`jmpped.json` (manifest version 2) is the builder's input:
+`project.json` (manifest version 2) is the builder's input:
 
 - `source_level`, `source_sha256` — the HAVANA level used for the export
 - `base_archive`, `base_v5_archive` and their SHA-256 values
@@ -159,89 +159,47 @@ jmpped/assembled_*.obj   rough visual reference for the 14 slots
   `obj_raw`/`obj_edit` and hashes, `offset`/`scale`, `materials`, `crops`
 - `pages` — page set, storage (raw/compressed), `display_clut`, page/crop paths
   and hashes
-- `skeleton` — the hierarchy and variant bindings
+- `skeleton` — the hierarchy and skeleton bindings
 - `bake.slots` — the authoritative slot→ped/part map
 
-Each entry also has a `ped.json` mirror for humans and per-entry tooling. Hashes
+Each character also has a `character.json` mirror for humans and per-character
+tooling. Hashes
 are the change detector: a part is rebuilt when its selected OBJ copy, its page,
 a crop, or its `offset`/`scale` differs from the exported value. A transform is
 bake-time and applied to the vertices; it is not an engine runtime parameter.
 
-## 5. Assembly sequence
+## 5. Workflow
+
+One character folder is the unit of import: it is what you edit and what you
+hand back. The tool derives the 14 archive parts from that character.
 
 ```sh
-BAKE_JMPPED.bat export [--source LEVEL] [--out DIR]
-# edit obj/edit or obj/raw, png pages/crops, bindpose_edit.obj, jmpped.json
-BAKE_JMPPED.bat split [--variant jericho|tanner] [--and-build]
-BAKE_JMPPED.bat build [--use auto|edit|raw] [--entry NAME] [--copy]
-BAKE_JMPPED.bat preview [--frames N] [--size N]
-BAKE_JMPPED.bat all
-BAKE_JMPPED.bat add-entry --name "Display Name" [--from-entry Jericho]
+JMPPED.bat extract --source DRIVER2\LEVELS\HAVANA.LEV
+JMPPED.bat import --folder characters\jericho-driv3r
+JMPPED.bat bake --copy
+JMPPED.bat preview
 ```
 
-1. **Export.** `jmpped_export.py` calls `bake_jmpped.py --no-copy`, writes
-   `base.LEV`, the per-ped OBJs/PNGs, the skeleton, `base_v5.LEV` and
-   `jmpped.json`.
-2. **Edit.** Change one OBJ copy per part (`obj/edit` for Blender or `obj/raw`
-   for engine units), one texture form per page (RGB or indexed), and/or a
-   part's `offset`/`scale` in the JSON. Whole-character edits can be made in
-   `bindpose_edit.obj` and split back.
-3. **Split.** `jmpped_split.py` reads `bindpose_edit.obj`, subtracts each part's
-   bone bind offset to return to model-local space, writes only changed groups
-   to `obj/edit/<part>.obj`, records the combined-scene hash, and can run the
-   builder.
-4. **Build.** `jmpped_build.py` reads `base.LEV` (or `base_v5.LEV` through the
-   v5 path), rebuilds changed model blobs and changed pages/crops, applies
-   `v' = v*scale + offset`, writes `JMPPED.LEV`, and re-reads it as a self-check.
-   A no-edit build is deterministic; untouched slots keep the base bytes.
-5. **Copy.** `--copy` writes the archive to `DRIVER2/LEVELS`; a normal game
-   build also runs `build.py`'s `copy_mod_assets()` for the same target.
-6. **Preview/verify.** `preview_jmpped.py` renders a turntable GIF; the runtime
-   checks use `MP_TEST_JERICHO` and a two-seat rig.
+1. **Extract.** `jmpped_extract.py` reads the Driver 2 level and installs
+   `out/source/<level>/` (base archives, source models, skeleton). Custom
+   characters are kept.
+2. **Edit and import.** A character folder is `characters/<slug>/` with
+   `character.json`, `model.obj`, `models/blender/<part>.obj`,
+   `models/engine/<part>.obj` and `textures/{pages,palettes,crops}/`. Import the
+   folder; its texture page sets are allocated and checked. The combined-model
+   split is the next authoring change, so a folder must already contain the 14
+   prepared part files.
+3. **Bake.** `jmpped_bake.py` builds `out/build/JMPPED.LEV` and rereads it as a
+   self-check. `--copy` writes `tools/JMPPED.LEV` and both runtime levels.
+4. **Preview.** `jmpped_preview.py` renders `out/build/preview.gif` from the
+   archive.
 
-### Editing a registered entry (normal texture/part workflow)
+`JMPPED.bat status` shows the project, characters and source. `add-character`
+clones a character and allocates its page sets; `sync-source` refreshes the
+source-owned first character from `out/source/<level>/`.
 
-For a custom entry such as `jerichod3`, the bake workspace is
-`tools/out/jmppeds/v3/` and the entry is `entries/jerichod3/`. Edit only that
-entry:
-
-- `entries/<slug>/png/parts/<part>_set<set>_t<id>.png` — the editable RGB crop
-  for one material. This is the normal texture surface.
-- `entries/<slug>/obj/edit/<part>.obj` (Blender units) or `obj/raw`
-  (engine units) — one copy per part, not both.
-- `offset`/`scale` for that part in `jmpped.json`, if needed.
-
-Then bake and copy:
-
-```sh
-JMPPED_WIZARD.bat                 # choose 1) Bake
-# or
-python JERICHO/MODS/mp/tools/jmpped_bake.py build --copy
-```
-
-That rebuilds `JMPPED.LEV` and copies it to `tools/JMPPED.LEV`,
-`Release/DRIVER2/LEVELS` and `Release_dev/DRIVER2/LEVELS`.
-
-Do **not** re-export or prime for a custom-entry texture/part edit. Export and
-prime are only for replacing source-owned assets: entry 0 (Tanner/Jericho), the
-base archives, pages, or the skeleton from the Driver 2 level. If a part still
-has a single combined crop (`<part>_set<set>.png`), convert it once with
-`JMPPED_WIZARD.bat` → 5, or:
-
-```sh
-python JERICHO/MODS/mp/tools/jmpped_crops.py --out JERICHO/MODS/mp/tools/out/jmppeds/v3 --entry "Jericho Driv3r"
-```
-
-Source refresh/prime is the other direction:
-
-```sh
-python JERICHO/MODS/mp/tools/jmpped_export.py --name current   # source workspace only
-python JERICHO/MODS/mp/tools/jmpped_prime.py --source JERICHO/MODS/mp/tools/out/jmppeds/source/current --out JERICHO/MODS/mp/tools/out/jmppeds/v3
-python JERICHO/MODS/mp/tools/jmpped_bake.py build --copy
-```
-
-Prime keeps custom entries and the existing `JMPPED.LEV`; it replaces only
-source-owned entry 0 assets.
+The old export, split, build, prime and register verbs are retired. `build` now means
+building the game (`JERICHO/build.py`); this toolkit bakes the archive.
 
 ## 6. Pages and CLUTs
 
@@ -251,12 +209,12 @@ therefore cannot be represented by one palette row for every material.
 
 - `page_<set>_indexed.png` — the page's indexed source. It is internal/base
   data, not the normal edit surface.
-- `png/palettes/page_<set>.png` — a strip of every CLUT row.
-- `png/parts/<part>_set<set>_t<id>.png` — the **single editable RGB crop** for
+- `textures/palettes/page_<set>.png` — a strip of every CLUT row.
+- `textures/crops/<part>_set<set>_t<id>.png` — the **single editable RGB crop** for
   that material. There is no `_indexed` twin; the builder paletteizes it.
 - A combined `<part>_set<set>.png` is the old one-image format and gives every
   material in the part the same 16-colour row. Convert it with
-  `jmpped_crops.py` (wizard option 5) into one `_t<id>` crop per material.
+  `jmpped_textures.py` (wizard option 5) into one `_t<id>` crop per material.
 - Each crop records `display_clut` (its texture row). A crop with ≤16 colours is
   preserved exactly; more colours are median-cut to 16, then the row and page
   indices are written automatically.
@@ -277,7 +235,7 @@ Page sets are disjoint per entry:
 | 6 | 36 | 37 | 8 |
 | 7 | 38 | 39 | 9 |
 
-The allocation is `ENTRY_PAGE_SETS` in `jmpped_common.py`; `add-entry` remaps
+The allocation is `ENTRY_PAGE_SETS` in `jmpped_common.py`; `add-character` remaps
 every `s<set>_t<id>` material and crop to the new entry's sets.
 
 ## 7. Builder rules and refusals
@@ -292,7 +250,7 @@ data:
 - The model must match the slot's base model name and the entry must claim all
   14 slots exactly once.
 - A referenced page set must belong to that entry; unknown pages are refused.
-- Both `obj/edit` and `obj/raw` changed is ambiguous and refused; similarly a
+- Both `models/blender` and `models/engine` changed is ambiguous and refused; similarly a
   full page and one of its crops together.
 - `offset`/`scale` must be three finite numbers; a zero scale is refused.
 - A transform-only change still rebuilds the part, even when both OBJ copies
@@ -336,17 +294,17 @@ falls back to Havana's streamed pages, and otherwise to Tanner.
 ## 9. Adding a new selectable entry
 
 ```sh
-BAKE_JMPPED.bat add-entry --name "Jericho (Driv3r)"
-# or: python jmpped_add_entry.py --name "Jericho (Driv3r)"
+JMPPED.bat add-character --name "Jericho (Driv3r)"
+# or: python jmpped_add_character.py --name "Jericho (Driv3r)"
 ```
 
-`add-entry`:
+`add-character`:
 
 - copies the source entry's 14 slot OBJs, three pages, palette strips and
-  bindpose into `entries/<slug>/`
+  bindpose into `characters/<slug>/`
 - assigns the next entry page-set triplet from `ENTRY_PAGE_SETS`
 - rewrites every `s<set>_t<id>` material and crop to those sets
-- adds the entry to `jmpped.json` and writes `entries/<slug>/ped.json`
+- adds the entry to `project.json` and writes `characters/<slug>/character.json`
 
 Then edit the copied 14 parts, textures and/or bindpose, set per-part
 `offset`/`scale` where proportions need it, and run `build`. The v5 archive
@@ -355,20 +313,20 @@ the mp picker exposes it as `MP_PED_MODEL_*` id `entry index + 1`.
 
 ### Registering a completed entry folder
 
-If `entries/<slug>/` already contains `ped.json`, all 14 `obj/raw|edit` parts,
+If `characters/<slug>/` already contains `character.json`, all 14 `models/engine|edit` parts,
 the three pages/palette strips and the bindpose:
 
 ```sh
-python jmpped_register.py --folder entries/<slug>
+python jmpped_register.py --folder characters/<slug>
 # or drag the folder onto REGISTER_JMPPED.bat
 ```
 
 It validates the 14 slots, the three page sets, the page/crop/bindpose files and
 the entry index → page-set allocation, adds or replaces the entry in
-`jmpped.json`, builds the v5 archive, and copies the bake to
+`project.json`, builds the v5 archive, and copies the bake to
 `tools/JMPPED.LEV` plus the existing `Release`/`Release_dev` `DRIVER2/LEVELS`
 directories. `--no-build` registers without baking; `--no-copy` leaves the bake
-in the workspace. The folder must be inside the workspace; `add-entry` is the
+in the workspace. The folder must be inside the workspace; `add-character` is the
 way to allocate a brand-new entry and page-set triplet from an existing one.
 
 Limits and rules:
@@ -382,11 +340,11 @@ Limits and rules:
 ## 10. Troubleshooting
 
 **Wrong colours.** Edit the per-material crop
-(`png/parts/<part>_set<set>_t<id>.png`). It is auto-palettized into the texture
+(`textures/crops/<part>_set<set>_t<id>.png`). It is auto-palettized into the texture
 row recorded in `display_clut`; `palettes/page_<set>.png` shows the rows. A
 combined `<part>_set<set>.png` uses one row for every material in that part and
 will look wrong when the part has several texture ids — run wizard option 5 or
-`jmpped_crops.py` to split it. The page's indexed PNG is internal/base data,
+`jmpped_textures.py` to split it. The page's indexed PNG is internal/base data,
 not the editing surface.
 
 **Mashed torso/legs.** `JERI_TORSO` is much longer than Tanner's `TORSO` and
@@ -395,7 +353,7 @@ torso (or split the long coat), not by scaling the whole character. A uniform
 height change still needs the skeleton bind offsets plus collision/camera/seat
 offsets; the mesh transform alone does not move those.
 
-**Missing entry or page.** Check `jmpped.json` `entries`/`slots`, the entry's
+**Missing entry or page.** Check `project.json` `entries`/`slots`, the entry's
 `page_sets`, and the archive version. The engine logs the entry count, model
 count and page count it loaded; an entry id beyond `JerPedEntryCount()` falls
 back to Tanner/Jericho in mp.
@@ -408,19 +366,33 @@ has `entries`; the legacy v3 path remains for old workspaces.
 
 | Stage | Command | Writes | Engine reads |
 | --- | --- | --- | --- |
-| source extraction | `BAKE_JMPPED export` | `base.LEV`, `base_v5.LEV`, `jmpped.json`, `ped.json`, OBJ/PNG | — |
-| whole-character edit | `BAKE_JMPPED split` | `obj/edit/<part>.obj`, bindpose hash | — |
-| per-part/texture edit | edit files + `jmpped.json` | OBJ/PNG/`offset`/`scale` | — |
+| source extraction | `BAKE_JMPPED export` | `base.LEV`, `base_v5.LEV`, `project.json`, `character.json`, OBJ/PNG | — |
+| whole-character edit | `BAKE_JMPPED split` | `models/blender/<part>.obj`, bindpose hash | — |
+| per-part/texture edit | edit files + `project.json` | OBJ/PNG/`offset`/`scale` | — |
 | bake | `BAKE_JMPPED build` | `JMPPED.LEV` (v3/v5) | `JerPedImportBaked()` |
 | runtime copy | `--copy` or `JERICHO/build.py` | `bin/<config>/DRIVER2/LEVELS/JMPPED.LEV` | engine load |
 | preview | `BAKE_JMPPED preview` | `preview_360.gif` | — |
 
 ## 12. Verification
 
-- `python JERICHO/MODS/mp/tools/jmpped_common.py --selftest` — archive parse/round-trip.
-- `BAKE_JMPPED.bat all` — export, build and preview in one run.
+- `python JERICHO/MODS/mp/tools/jmpped_selftest.py --selftest` — archive parse/round-trip.
+- `JMPPED.bat rebuild-all` — export, build and preview in one run.
 - `python tools/doccheck.py` — links, docs index and counted claims.
 - `python JERICHO/build.py game mod mp` — the module build.
 - A two-seat Havana rig with `MP_TEST_PED_MODEL` — character sync/apply.
 - `MP_TEST_JERICHO` — import the archive without a session.
 - A missing `JMPPED.LEV` must leave both seats on Tanner with no crash.
+
+## 13. Glossary
+
+| Term | Meaning |
+| --- | --- |
+| **character** | one selectable archive entry; the engine API still calls it an entry |
+| **part** | one of the 14 models a character owns |
+| **slot** | the archive index 0–13 for a part |
+| **source model** | Tanner or Jericho extracted from the Driver 2 level (`out/source/<level>/source_models/`) |
+| **texture page** | a 256×256 4bpp page with one palette row per texture id |
+| **palette row** | one 16-colour CLUT row selected by a material's texture id |
+| **crop** | the editable RGB image for one material on a page |
+| **project** | the workspace described by `project.json` |
+| **bake** | write `JMPPED.LEV` from the project |

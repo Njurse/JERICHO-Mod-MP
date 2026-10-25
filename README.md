@@ -182,7 +182,7 @@ join handshake then admits or refuses clients by their enabled-mod manifest.
 | `mp_proto.h` | the wire protocol (framed, little-endian) |
 | `tools/` | launchers + harnesses, documented in `tools/README.md` |
 | `docs/ARCHITECTURE.md` | how it all works: the model, protocol, lifecycle, traps, roadmap |
-| `docs/JMPPED.md` | **how the pedestrian archive is assembled** — source lumps, the 14-slot map, manifests, pages/CLUTs, per-part offsets, add-entry, builder refusals and the engine load path |
+| `docs/PEDESTRIAN-AUTHORING.md` | **how the pedestrian authoring workspace and archive are assembled** — project.json, characters, source export, the 14-slot map, manifests, pages/CLUTs, per-part offsets, add-character, builder refusals and the engine load path |
 | `docs/CAPACITY.md` | **how many players, and where a car lives** — the 32-slot map (players / JERICHO-managed / traffic), why the traffic pool is fixed, and what each limit costs to raise |
 
 ## In game

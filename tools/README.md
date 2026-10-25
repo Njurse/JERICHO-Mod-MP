@@ -25,73 +25,40 @@ launchers they ship, and its own README explaining which to use.
 | let internet clients find a server | [`servers/masterserver/`](servers/masterserver/README.md) — a **separate project**, see [`servers/README.md`](servers/README.md) |
 | answer "is this build shippable?" in one command | **`run_gate.py`** |
 
-## Driver 2 Tanner/Jericho export — `BAKE_JMPPED`
+## Pedestrian authoring — `JMPPED`
 
-The toolkit extracts the pedestrian models from a Driver 2 level (HAVANA by
-default), writes a per-ped OBJ/PNG/skeleton workspace, and rebuilds
-`JMPPED.LEV` as a v3 single 14-slot character or a v5 multi-entry archive. The
-full assembly — source lumps, 14-slot map, manifests, pages/CLUTs, engine load
-path, add-entry and troubleshooting — is in
-[`../docs/JMPPED.md`](../docs/JMPPED.md).
-
-```sh
-JMPPED_WIZARD.bat                       # console menu: bake, import, split, preview, source/prime
-BAKE_JMPPED.bat all                     # export + build + preview
-BAKE_JMPPED.bat export --source DRIVER2/LEVELS/HAVANA.LEV
-BAKE_JMPPED.bat split --and-build       # edit a bindpose_edit.obj, then split+bake
-BAKE_JMPPED.bat build --copy            # copy the rebuild to DRIVER2/LEVELS
-BAKE_JMPPED.bat add-entry --name "Jericho (Driv3r)"
-REGISTER_JMPPED.bat out\jmppeds\v3\entries\jerichod3   # drag a completed entry folder
-BAKE_JMPPED.bat export --out my-edit    # keep a separate workspace
-python jmpped_crops.py --entry "Jericho Driv3r"        # split a combined part crop
-```
-
-The workspace defaults to `tools/out/jmppeds/v3` (gitignored): `base.LEV`,
-`base_v5.LEV`, `jmpped.json`, `skeleton/`, `tanner/`, `jericho/`,
-`entries/<slug>/` and `jmpped/assembled_*.obj`.
-
-For a **custom entry** such as `jerichod3`, edit
-`entries/<slug>/png/parts/<part>_set<set>_t<id>.png` (one RGB crop per
-material) and/or one OBJ copy, then run `build --copy` or wizard option 1.
-Do not re-export or prime for a custom-entry edit. Each crop is auto-palettized
-into its own texture CLUT row; a combined `<part>_set<set>.png` is the old
-one-palette format and should be split with `jmpped_crops.py` (wizard option 5).
-
-**Source-owned** assets are entry 0 (Tanner/Jericho), `base*.LEV`, pages and the
-skeleton in `tools/out/jmppeds/source/<name>/`. Edit those only in the source
-workspace, then prime into the bake and rebuild:
+`JMPPED.bat` (or `JMPPED.sh`) is the single entry point. The project is
+described by `project.json`; authored characters live in `characters/`, source
+exports in `out/source/<level>/`, and the bake in `out/build/`. The naming
+contract is [`NAMING.md`](NAMING.md); the full guide is
+[`../docs/PEDESTRIAN-AUTHORING.md`](../docs/PEDESTRIAN-AUTHORING.md).
 
 ```sh
-python jmpped_export.py --name current
-python jmpped_prime.py --source tools/out/jmppeds/source/current --out tools/out/jmppeds/v3
-python jmpped_bake.py build --copy
+JMPPED.bat status
+JMPPED.bat extract --source DRIVER2\LEVELS\HAVANA.LEV
+JMPPED.bat import --folder characters\jericho-driv3r
+JMPPED.bat bake --copy
+JMPPED.bat preview
 ```
 
-The builder auto-palettizes a changed crop into its texture CLUT row. `split`
-turns an edited `bindpose_edit.obj` into local parts. `build` writes
-`JMPPED.LEV` and rereads it as a self-check; `--copy` places it in
-`DRIVER2/LEVELS` and both `Release`/`Release_dev` targets. v3 is one 14-slot
-character; use `add-entry` for v5 multi-entry archives. See
-[`../docs/JMPPED.md`](../docs/JMPPED.md) for the slot table, page sets,
-CLUT/crop rules, builder refusals and the engine load path.
+`CHARACTER_WIZARD.bat` is the console menu; `IMPORT_CHARACTER.bat` (or
+`import_character.sh`) imports a dragged character folder. `add-character`
+clones a character and allocates its texture pages; `sync-source` refreshes the
+source-owned first character.
 
-**Refusals.** The builder names the ped/part and source rather than dropping
-data: both `obj/edit` and `obj/raw` changed, both RGB and indexed page forms
-changed, a full page and a crop changed together, an unknown texture page, a
-non-FT/GT model, or a face with more than four corners.
+**Editing a character.** Edit `characters/<slug>/model.obj` (the one model) or
+the per-material crops in `textures/crops/`; then run `JMPPED.bat bake`. The
+model split is the next authoring change; until then a character folder must
+contain the prepared 14 part files.
 
-**Source baker.** [`bake_jmpped.py`](bake_jmpped.py) extracts the 14-slot base
-from the level; `jmpped_export.py` invokes it with `--no-copy`. The source
-extraction and the toolkit are v3-only.
+**Refusals.** The baker names the character/part and source rather than dropping
+data: both model copies changed, both RGB and indexed page forms changed, a full
+page and a crop changed together, an unknown texture page, or a page set owned
+by another character.
 
-
-
-Every launcher in this folder has a **Linux/macOS twin** with the same name and the
-same arguments (`.sh` for `.bat`), so nothing here is Windows-only. The two
-differences are worth knowing: a `.sh` finds the binary without the `.exe` (Release on
-Linux is lowercased to `jericho`, Release_dev is `JERICHO_dev`), and it backgrounds the
-game with `nohup` and **prints the real PID**, where `start` in the `.bat` detaches
-and loses it.
+**Checks.** `python jmpped_selftest.py --selftest` checks archive round-trip;
+`python -m unittest test_jmpped_toolkit test_jmpped_migrate -v` runs the toolkit
+tests.
 
 ## The delivery gate — `run_gate.py`
 
