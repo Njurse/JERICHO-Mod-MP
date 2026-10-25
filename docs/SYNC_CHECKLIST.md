@@ -487,6 +487,9 @@ spawn and falls back to Tanner if `JMPPED.LEV`/Havana data is missing. Verify wi
 Pass: both seats draw the chosen model, a mid-match change reaches the peer, and
 removing the bake leaves both seats on Tanner with no crash.
 
+The archive format, slots, pages and per-entry assembly are in
+[`JMPPED.md`](JMPPED.md).
+
 ---
 
 ### 8. Spawn placement

@@ -159,6 +159,9 @@ that sets a character's colour (factions, teams, whatever claims the ped)
 overrides it, because mp's ped hook runs first and only fills in what no mod
 coloured.
 
+The archive assembly — the 14 slots, pages, v5 entries and how the builder
+produces `JMPPED.LEV` — is in [`JMPPED.md`](JMPPED.md).
+
 **Getting out** is a separate (and younger) path: the car is left standing where it
 was and a pedestrian stands in for the player. It is the least finished part of the
 mod.

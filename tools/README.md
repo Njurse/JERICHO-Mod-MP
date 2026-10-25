@@ -28,103 +28,32 @@ launchers they ship, and its own README explaining which to use.
 ## Driver 2 Tanner/Jericho export — `BAKE_JMPPED`
 
 The toolkit extracts the pedestrian models from a Driver 2 level (HAVANA by
-default), not from a previously baked `JMPPED.LEV`. Tanner and Jericho are
-separate subexports, each with its own OBJ, page PNGs, palette strip and
-`ped.json`; a shared skeleton and a JMPPED bake manifest tie them together.
-It is **v3-only** for now.
+default), writes a per-ped OBJ/PNG/skeleton workspace, and rebuilds
+`JMPPED.LEV` as a v3 single 14-slot character or a v5 multi-entry archive. The
+full assembly — source lumps, 14-slot map, manifests, pages/CLUTs, engine load
+path, add-entry and troubleshooting — is in
+[`../docs/JMPPED.md`](../docs/JMPPED.md).
 
 ```sh
 BAKE_JMPPED.bat all                     # export + build + preview
 BAKE_JMPPED.bat export --source DRIVER2/LEVELS/HAVANA.LEV
 BAKE_JMPPED.bat split --and-build       # edit a bindpose_edit.obj, then split+bake
-BAKE_JMPPED.bat build --copy            # copy the v3 rebuild to DRIVER2/LEVELS
+BAKE_JMPPED.bat build --copy            # copy the rebuild to DRIVER2/LEVELS
+BAKE_JMPPED.bat add-entry --name "Jericho (Driv3r)"
 BAKE_JMPPED.bat export --out my-edit    # keep a separate workspace
 ```
 
-**Whole-character editing.** `jericho/obj/bindpose_edit.obj` is the playable v3
-character (six Jericho parts plus Tanner's limbs) placed on the bind skeleton.
-Edit it as one model in Blender, then run `BAKE_JMPPED.bat split --and-build`.
-The splitter subtracts each part's bone bind offset (engine Y-down), resets the
-mesh to model-local space, writes only the groups whose geometry changed back to
-`obj/edit/<part>.obj`, and runs the builder. It remembers the combined scene's
-hash, so a second split without a new edit is a no-op. Use `--variant tanner` for
-`tanner/obj/bindpose_edit.obj`; v3 only stores the eight Tanner limbs, so the
-other Tanner parts are reference-only and the builder warns if you edit them.
+The workspace defaults to `tools/out/jmppeds/v3` (gitignored): `base.LEV`,
+`base_v5.LEV`, `jmpped.json`, `skeleton/`, `tanner/`, `jericho/`,
+`entries/<slug>/` and `jmpped/assembled_*.obj`.
 
-
-The workspace defaults to `tools/out/jmppeds/v3` and is gitignored:
-
-```
-base.LEV                  untouched v3 archive derived from the same level
-jmpped.json               per-ped parts, slot map, pages, skeleton, hashes
-skeleton/skeleton.json    hierarchy + motion_raw and engine bind positions
-skeleton/skeleton_raw.obj engine-space bones (+Y down)
-skeleton/skeleton_edit.obj Blender Z-up bones (metres)
-tanner/obj/raw/*.obj      full Tanner set, engine units, +Y down
-tanner/obj/edit/*.obj     full Tanner set, Blender Z-up, metres
-tanner/obj/assembled_*    rough posed reference
-tanner/obj/bindpose_*     parts placed on the actual bind skeleton
-tanner/png/pages/page_2*  Tanner page, indexed companion and palette strip
-tanner/png/parts/*        per-part crops
-tanner/ped.json           the ped's own manifest
-jericho/...               six JERI_* parts, pages 23/25; bindpose also uses
-                          Tanner's limbs and hands, as the engine does
-jmpped/assembled_*        visual reference for the 14-slot v3 bake
-```
-
-**What JMPPED v3 can hold.** The archive has six Jericho slots (0..5) and
-Tanner's eight limb slots (6..13). The full Tanner set is exported for reference,
-but its torso, head, arms, neck and hips have `bake_slot: null`; editing one
-prints a warning and does not change the v3 archive. The engine's actual
-bindings are in `skeleton.json` — including the fact that `LTOE`/`RTOE` bind the
-opposite `FOOT_*` names.
-
-**Coordinates.** Engine mesh space is **+Y down**. `obj/raw` keeps that exactly;
-`obj/edit` is Blender Z-up with `(x, z, -y)` and 1/1024 scale. The motion block
-is Y-up, so `skeleton.json` records both `motion_raw` and `engine` (`x, -y, -z`);
-the skeleton OBJs and `bindpose_*` use engine space, matching the raw meshes.
-The `assembled_*` scenes use approximate part offsets and are only a visual aid;
-use `bindpose_*` for proportion and rebinding checks.
-
-**Editing the mesh.** Edit a part in either `obj/edit` or `obj/raw`, never both.
-Keep the `sSET_tID` material names (texture page and texture id) and use
-triangles/quads only. Ped models are FT3/FT4; a model with normal tables is
-refused if edited. The assembled scenes are references; the builder reads the
-per-part OBJs.
-
-**Per-part offset/scale.** Each part entry in `jmpped.json`/`ped.json` also has
-`offset: [x,y,z]` and `scale: [x,y,z]` (engine units, +Y down; defaults
-`[0,0,0]`/`[1,1,1]`). The builder applies `v' = v*scale + offset` before writing
-the MODEL, so you can tune a part's height or proportion without touching the
-shared skeleton. Negative Y moves a part up. Use it to fix the long Jericho torso
-overlapping the Tanner hips/legs, or to raise/lower a single part. This is a
-bake-time parameter: edit the JSON, then run `build`. A whole-character height
-change still needs the skeleton bind offsets and collision/camera offsets, not
-just mesh offsets.
-
-**Editing textures.** Each page is 256x256 at 4bpp and carries one CLUT row per
-texture id; the engine picks `civ_clut[0][texture_number][pal]`. `page_<set>.png`
-and `_indexed.png` are a single-row view (row 0), so they are not the right
-colors for every material. `page_<set>_t<id>.png` and the per-material crops
-`<part>_set<set>_t<id>.png` are rendered through that texture's CLUT; edit those
-for correct colors. `png/palettes/page_<set>.png` is the strip of all rows.
-Edit either the RGB or indexed form, not both. Full-page RGB edits quantise to
-the page's `display_clut` (row 0); on a page with more than one texture, edit the
-per-material crops instead. A full page and its crops are mutually exclusive.
-
-**Skeleton.** `skeleton.json` is the 23-bone hierarchy with parent links, raw
-motion positions, engine positions and the Tanner/Jericho model binding for each
-bone. `skeleton_raw.obj`/`skeleton_edit.obj` are edge skeletons for Blender.
-`jericho/obj/bindpose_edit.obj` is the whole-character edit scene; `split`
-consumes it and writes local parts. `tanner/obj/bindpose_*` is the full Tanner
-reference. The bindpose scenes place the parts on those bones, so a rebinding or
-proportion error is visible before a bake.
-
-**Rebuilding.** `build` writes `<workspace>/JMPPED.LEV` and self-checks it by
-re-reading. A no-edit rebuild is byte-identical to `base.LEV`. `split
---and-build` first turns an edited bindpose into local per-part OBJs. The v3
-archive is copied to `DRIVER2/LEVELS` only when `--copy` is passed (`--copy-to`
-chooses a different target; `--no-copy` forces it off).
+Edit one OBJ copy per part (`obj/edit` for Blender or `obj/raw` for engine
+units), one texture form per page (RGB or indexed), or a part's `offset`/`scale`
+in `jmpped.json`. `split` turns an edited `bindpose_edit.obj` into local parts.
+`build` writes `JMPPED.LEV` and rereads it as a self-check; `--copy` places it in
+`DRIVER2/LEVELS`. v3 is one 14-slot character; use `add-entry` for v5 multi-entry
+archives. See [`../docs/JMPPED.md`](../docs/JMPPED.md) for the slot table, page
+sets, CLUT/crop rules, builder refusals and the engine load path.
 
 **Refusals.** The builder names the ped/part and source rather than dropping
 data: both `obj/edit` and `obj/raw` changed, both RGB and indexed page forms
