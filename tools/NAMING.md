@@ -17,6 +17,7 @@ JERICHO/MODS/mp/tools/
       models/blender/<part>.obj    internal Blender-space cache (was obj/edit)
       models/engine/<part>.obj     internal engine-space cache (was obj/raw)
       models/engine_reference.obj  generated reference (was bindpose_raw.obj)
+      models/reference/<part>.obj  reference-only groups such as HIPS (never baked)
       textures/pages/              was png/pages
       textures/palettes/           was png/palettes
       textures/crops/              was png/parts
@@ -163,8 +164,10 @@ the 14 models, and **slot** only when it means the archive index 0–13.
 - `JMPPED.LEV`, the engine's `JerPed*` API and its word **entry** keep their
   names. Authoring prose uses **character** for the selectable unit and **part**
   for one of the 14 models; **slot** is only the archive index 0–13.
-- `model.obj` is the one editable and importable model. The per-part OBJs under
-  `models/{blender,engine}` are generated caches.
+- `model.obj` is the one editable and importable model. `import` and `bake`
+  split a changed combined model automatically; the per-part OBJs under
+  `models/{blender,engine}` are generated caches, and reference-only groups are
+  written under `models/reference/`.
 - Every `*_sha256` value is a change detector, not a checksum of what is on
   disk. Migration moves the path and preserves the recorded hash, so a pending
   `model.obj` edit is still seen as pending after the move.

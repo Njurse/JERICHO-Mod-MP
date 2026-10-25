@@ -47,9 +47,11 @@ clones a character and allocates its texture pages; `sync-source` refreshes the
 source-owned first character.
 
 **Editing a character.** Edit `characters/<slug>/model.obj` (the one model) or
-the per-material crops in `textures/crops/`; then run `JMPPED.bat bake`. The
-model split is the next authoring change; until then a character folder must
-contain the prepared 14 part files.
+the per-material crops in `textures/crops/`; then run `JMPPED.bat bake`. A
+changed combined model is split into the 14 parts automatically; the
+`models/{blender,engine}` files are generated caches. Keep the 14 parts as
+separate objects/groups named after them; the Blender checklist is in the
+guide.
 
 **Refusals.** The baker names the character/part and source rather than dropping
 data: both model copies changed, both RGB and indexed page forms changed, a full

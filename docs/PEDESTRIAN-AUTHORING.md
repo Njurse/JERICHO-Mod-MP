@@ -183,12 +183,13 @@ JMPPED.bat preview
 1. **Extract.** `jmpped_extract.py` reads the Driver 2 level and installs
    `out/source/<level>/` (base archives, source models, skeleton). Custom
    characters are kept.
-2. **Edit and import.** A character folder is `characters/<slug>/` with
-   `character.json`, `model.obj`, `models/blender/<part>.obj`,
-   `models/engine/<part>.obj` and `textures/{pages,palettes,crops}/`. Import the
-   folder; its texture page sets are allocated and checked. The combined-model
-   split is the next authoring change, so a folder must already contain the 14
-   prepared part files.
+2. **Edit and bake.** A character folder is `characters/<slug>/` with
+   `character.json`, `model.obj`, the generated
+   `models/{blender,engine}/<part>.obj` caches and
+   `textures/{pages,palettes,crops}/`. Edit the whole character in `model.obj`;
+   `import` (for a new folder) or `bake` splits a changed model into the 14
+   parts automatically. The per-part files are generated; the combined model
+   wins.
 3. **Bake.** `jmpped_bake.py` builds `out/build/JMPPED.LEV` and rereads it as a
    self-check. `--copy` writes `tools/JMPPED.LEV` and both runtime levels.
 4. **Preview.** `jmpped_preview.py` renders `out/build/preview.gif` from the
@@ -200,6 +201,17 @@ source-owned first character from `out/source/<level>/`.
 
 The old export, split, build, prime and register verbs are retired. `build` now means
 building the game (`JERICHO/build.py`); this toolkit bakes the archive.
+
+### Editing the combined model in Blender
+
+`model.obj` is the whole character in its bind pose, in Blender Z-up at
+1/1024 scale. Keep the 14 parts as separate objects or groups named exactly
+after their parts (`JERI_TORSO`, `JERI_HEAD`, ... `HAND_RIGHT`); `HIPS` is an
+optional reference. Blender's `o`/`g` groups and `PART_sN_tM` material
+subgroups are both accepted. Do not join the parts into one mesh, and keep the
+materials named `s<set>_t<id>`. Run `JMPPED.bat bake --copy`; the bake splits
+the changed model, subtracts each part's bind offset and writes the caches. A
+joined mesh, a renamed part or a missing part is refused with the part named.
 
 ## 6. Pages and CLUTs
 
@@ -306,8 +318,8 @@ JMPPED.bat add-character --name "Jericho (Driv3r)"
 - rewrites every `s<set>_t<id>` material and crop to those sets
 - adds the entry to `project.json` and writes `characters/<slug>/character.json`
 
-Then edit the copied 14 parts, textures and/or bindpose, set per-part
-`offset`/`scale` where proportions need it, and run `build`. The v5 archive
+Then edit the copied `model.obj` and textures, set per-part
+`offset`/`scale` where proportions need it, and run `bake`. The v5 archive
 carries the entry name; the engine sees it as `JerPedEntryCount()`/`Name()`, and
 the mp picker exposes it as `MP_PED_MODEL_*` id `entry index + 1`.
 
@@ -366,12 +378,12 @@ has `entries`; the legacy v3 path remains for old workspaces.
 
 | Stage | Command | Writes | Engine reads |
 | --- | --- | --- | --- |
-| source extraction | `BAKE_JMPPED export` | `base.LEV`, `base_v5.LEV`, `project.json`, `character.json`, OBJ/PNG | — |
-| whole-character edit | `BAKE_JMPPED split` | `models/blender/<part>.obj`, bindpose hash | — |
+| source extraction | `JMPPED.bat extract` | `base.LEV`, `base_v5.LEV`, `project.json`, `character.json`, OBJ/PNG | — |
+| combined-model edit | `JMPPED.bat import` / `JMPPED.bat bake` | `models/blender/<part>.obj`, `models/engine/<part>.obj` | — |
 | per-part/texture edit | edit files + `project.json` | OBJ/PNG/`offset`/`scale` | — |
-| bake | `BAKE_JMPPED build` | `JMPPED.LEV` (v3/v5) | `JerPedImportBaked()` |
+| bake | `JMPPED.bat bake` | `JMPPED.LEV` (v3/v5) | `JerPedImportBaked()` |
 | runtime copy | `--copy` or `JERICHO/build.py` | `bin/<config>/DRIVER2/LEVELS/JMPPED.LEV` | engine load |
-| preview | `BAKE_JMPPED preview` | `preview_360.gif` | — |
+| preview | `JMPPED.bat preview` | `preview.gif` | — |
 
 ## 12. Verification
 
