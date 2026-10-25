@@ -26,6 +26,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import jmpped_common as jc
 import jmpped_entries as je
+import jmpped_import as ji
+import jmpped_workspace as jws
 
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -232,9 +234,52 @@ def _runtime_targets() -> list[str]:
     return targets
 
 
+def _should_import(folder: str, out_root: str, manifest: dict) -> bool:
+    """Use the external-folder importer for outside folders / manifest bundles."""
+    folder = os.path.abspath(folder)
+    rel_dir = je.rel(folder, out_root)
+    if rel_dir == ".." or rel_dir.startswith(".." + os.sep):
+        return True
+    try:
+        _, data = ji._doc(folder)
+    except jc.JMPPEDError:
+        return False
+    if isinstance(data.get("entries"), list):
+        return True
+    if data.get("parts") and not data.get("slots"):
+        return True
+    if data.get("slots"):
+        existing = any(e.get("directory") == rel_dir
+                       for e in manifest.get("entries", []))
+        return not existing
+    return False
+
+
 def register(folder: str, out_root: str, name: str | None,
              do_build: bool, do_copy: bool, use: str = "edit") -> int:
     out_root = os.path.abspath(out_root)
+    manifest = je.load_manifest(out_root)
+    if _should_import(folder, out_root, manifest):
+        imported = ji.import_folder(folder, out_root, name)
+        for entry in imported:
+            print('imported "%s" (mp character id %d)'
+                  % (entry["name"], int(entry["index"]) + 1))
+        if not do_build:
+            print("--no-build: JSON updated, archive not rebuilt")
+            return 0
+        subprocess.run([sys.executable, BUILD, "--out", out_root, "--use", use],
+                       check=True)
+        bake = os.path.join(out_root, "JMPPED.LEV")
+        _need(bake, "built JMPPED.LEV")
+        if do_copy:
+            for target in _runtime_targets():
+                os.makedirs(os.path.dirname(target), exist_ok=True)
+                shutil.copy2(bake, target)
+                print("copied -> %s" % target)
+        else:
+            print("--no-copy: bake left at %s" % bake)
+        return 0
+
     entry, index = _register(out_root, folder, name)
     print('registered entry %d "%s" -> %s (mp character id %d)'
           % (index, entry["name"], entry["directory"], index + 1))
@@ -263,8 +308,8 @@ def main(argv: list[str] | None = None) -> int:
         description="Register a completed JMPPED entry folder and bake it")
     ap.add_argument("--folder", required=True,
                     help="entry folder containing ped.json, obj/, png/")
-    ap.add_argument("--out", default=DEFAULT_OUT,
-                    help="JMPPED workspace (default: %(default)s)")
+    ap.add_argument("--out", default=None,
+                    help="JMPPED workspace (default: last used under tools/out/jmppeds)")
     ap.add_argument("--name", default=None, help="override the entry name")
     ap.add_argument("--use", choices=("auto", "edit", "raw"), default="edit",
                     help="which OBJ copy the builder reads (default: edit, "
@@ -274,8 +319,10 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--no-copy", action="store_true",
                     help="do not copy the bake to tools/ and bin/")
     args = ap.parse_args(argv)
+    out_root = jws.bake_root(args.out)
+    jws.set_bake(out_root)
     try:
-        return register(args.folder, args.out, args.name,
+        return register(args.folder, out_root, args.name,
                         not args.no_build, not args.no_copy, args.use)
     except jc.JMPPEDError as e:
         print("jmpped_register: %s" % e, file=sys.stderr)

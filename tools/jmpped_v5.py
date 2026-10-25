@@ -142,6 +142,9 @@ def build_v5(out_root: str, dest: str | None, copy_to: str | None,
             # Entry 0 can copy the base blob when untouched. Every later entry
             # must be rebuilt even when cloned unchanged: its materials name its
             # own page sets, not entry 0's.
+            set_map = {int(k): int(v) for k, v in
+                       (slot_desc.get("page_set_map") or
+                        e.get("page_set_map") or {}).items()}
             force = entry_index > 0
             if force:
                 path = raw if (use == "raw" or (raw_changed and not edit_changed)) else edit
@@ -149,7 +152,8 @@ def build_v5(out_root: str, dest: str | None, copy_to: str | None,
                 blob = jb._load_model(path, blender=blender, model=arch.models[slot],
                                       page_sets=page_sets,
                                       slot_name="%s/%s" % (e["name"], slot_desc["part"]),
-                                      offset=transform[0], scale=transform[1])
+                                      offset=transform[0], scale=transform[1],
+                                      set_map=set_map)
                 model = jc.parse_model(blob)
                 changed_models += 1
             elif edit_changed or raw_changed or transform_changed:
@@ -165,7 +169,8 @@ def build_v5(out_root: str, dest: str | None, copy_to: str | None,
                 blob = jb._load_model(path, blender=blender,
                                       model=arch.models[slot], page_sets=page_sets,
                                       slot_name="%s/%s" % (e["name"], slot_desc["part"]),
-                                      offset=transform[0], scale=transform[1])
+                                      offset=transform[0], scale=transform[1],
+                                      set_map=set_map)
                 model = jc.parse_model(blob)
                 changed_models += 1
                 print("model %-20s rebuilt from %s/%s" %

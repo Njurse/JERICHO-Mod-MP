@@ -21,6 +21,10 @@ import os
 import subprocess
 import sys
 
+import jmpped_common as jc
+import jmpped_workspace as jws
+
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.abspath(os.path.join(HERE, "..", "..", "..", ".."))
 OUT_ROOT = os.path.join(HERE, "out", "jmppeds", "v3")
@@ -42,6 +46,8 @@ def _export(args, out: str) -> int:
     cmd = [sys.executable, EXPORT, "--out", out]
     if args.source:
         cmd += ["--source", args.source]
+    if getattr(args, "reset", False):
+        cmd.append("--reset")
     return _run(cmd)
 
 
@@ -91,6 +97,10 @@ def main(argv: list[str] | None = None) -> int:
                     help="workspace (default: tools/out/jmppeds/v3)")
     ap.add_argument("--source", default=None,
                     help="Driver 2 level (default: exporter's Havana path)")
+    ap.add_argument("--source-out", default=None,
+                    help="source export workspace (default: last source under tools/out/jmppeds)")
+    ap.add_argument("--reset", action="store_true",
+                    help="explicitly allow export/all to reset the selected source workspace (backs it up)")
     ap.add_argument("--name", default=None,
                     help="add-entry display name (e.g. 'Jericho (Driv3r)')")
     ap.add_argument("--from-entry", default="Jericho",
@@ -122,11 +132,13 @@ def main(argv: list[str] | None = None) -> int:
     if args.copy and args.no_copy:
         raise SystemExit("jmpped_bake: --copy and --no-copy are mutually exclusive")
 
-    out = args.out or OUT_ROOT
+    out = args.out or jws.bake_root()
+    jws.set_bake(out)
     os.makedirs(out, exist_ok=True)
 
-    if args.step in ("export", "all"):
-        rc = _export(args, out)
+    if args.step == "export" or (args.step == "all" and args.reset):
+        source_out = args.source_out or jws.source_root()
+        rc = _export(args, source_out)
         if rc:
             return rc
     if args.step == "add-entry":

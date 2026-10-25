@@ -73,13 +73,16 @@ def _transform_is_default(transform) -> bool:
     return off == (0.0, 0.0, 0.0) and sc == (1.0, 1.0, 1.0)
 
 
-def _material(name: str | None) -> tuple[int, int, tuple[int, int, int]]:
+def _material(name: str | None, set_map=None) -> tuple[int, int, tuple[int, int, int]]:
     if name is None:
         raise jc.JMPPEDError("a face has no material; keep the exported usemtl lines")
     if name.startswith("s") and "_t" in name:
         try:
             set_s, id_s = name[1:].split("_t", 1)
-            return int(set_s), int(id_s), (0x7F, 0x7F, 0x7F)
+            setid = int(set_s)
+            if set_map:
+                setid = int(set_map.get(setid, setid))
+            return setid, int(id_s), (0x7F, 0x7F, 0x7F)
         except ValueError:
             pass
     if name.startswith("color_"):
@@ -92,7 +95,7 @@ def _material(name: str | None) -> tuple[int, int, tuple[int, int, int]]:
                          % name)
 
 
-def _polys_from_obj(faces, path: str) -> list[jc.Poly]:
+def _polys_from_obj(faces, path: str, set_map=None) -> list[jc.Poly]:
     out = []
     for fi, face in enumerate(faces):
         if len(face) not in (3, 4):
@@ -102,7 +105,7 @@ def _polys_from_obj(faces, path: str) -> list[jc.Poly]:
         if any(v < 0 for v in vs):
             raise jc.JMPPEDError("%s: face %d has an invalid vertex index"
                                  % (path, fi + 1))
-        setid, texid, color = _material(face[0][2])
+        setid, texid, color = _material(face[0][2], set_map)
         uvs = []
         for vi, uv, _mat in face:
             if uv is None:
@@ -121,7 +124,8 @@ def _polys_from_obj(faces, path: str) -> list[jc.Poly]:
 def _load_model(path: str, blender: bool, model: jc.Model,
                 page_sets: set[int], slot_name: str,
                 offset: tuple[float, float, float] = (0.0, 0.0, 0.0),
-                scale: tuple[float, float, float] = (1.0, 1.0, 1.0)) -> bytes:
+                scale: tuple[float, float, float] = (1.0, 1.0, 1.0),
+                set_map=None) -> bytes:
     if model.normals or model.point_normals:
         raise jc.JMPPEDError(
             "%s (%s): this model has normal tables; the OBJ path only rebuilds "
@@ -138,7 +142,7 @@ def _load_model(path: str, blender: bool, model: jc.Model,
              int(round(y * sy + oy)),
              int(round(z * sz + oz))) for x, y, z in verts]
     try:
-        polys = _polys_from_obj(faces, path)
+        polys = _polys_from_obj(faces, path, set_map)
     except jc.JMPPEDError as e:
         raise jc.JMPPEDError("%s: %s" % (slot_name, e)) from e
     for p in polys:
@@ -407,7 +411,9 @@ def build(out_root: str, dest: str | None, copy_to: str | None,
             blob = _load_model(path, blender=blender, model=arch.models[slot],
                                page_sets=page_sets,
                                slot_name="%s/%s" % (ped_name, entry["name"]),
-                               offset=transform[0], scale=transform[1])
+                               offset=transform[0], scale=transform[1],
+                               set_map={int(k): int(v) for k, v in
+                                        (entry.get("page_set_map") or {}).items()})
             arch.models[slot] = jc.parse_model(blob)
             arch.raw_models[slot] = blob
             changed_models += 1

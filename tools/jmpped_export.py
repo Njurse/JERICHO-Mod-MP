@@ -28,6 +28,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import jmpped_common as jc
 import jmpped_source as src
+import jmpped_workspace as jws
 
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -225,10 +226,21 @@ def _bindpose(parts_by_name: dict[str, dict], bindings: dict[str, str],
     return models, names, offsets
 
 
-def export(source: str, out_root: str) -> dict:
+def export(source: str, out_root: str, reset: bool = False) -> dict:
     if not os.path.isfile(source):
         raise jc.JMPPEDError("source level %s does not exist; pass --source"
                              % source)
+    out_root = os.path.abspath(out_root)
+    manifest_path = os.path.join(out_root, "jmpped.json")
+    if os.path.isfile(manifest_path):
+        if not reset:
+            raise jc.JMPPEDError(
+                "%s already has jmpped.json. Refusing to overwrite the "
+                "workspace; pass --reset (the contents will be backed up) "
+                "or choose another --out." % out_root)
+        backup = jws.backup_workspace(out_root, "export reset")
+        if backup:
+            print("backed up workspace -> %s" % backup)
     os.makedirs(out_root, exist_ok=True)
     base = os.path.join(out_root, "base.LEV")
     cmd = [sys.executable, BAKE, source, base, "--no-copy"]
@@ -498,8 +510,12 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Export Driver 2 Tanner/Jericho peds to OBJ/PNG")
     ap.add_argument("--source", default=DEFAULT_SOURCE,
                     help="Driver 2 level (default: Release/DRIVER2/LEVELS/HAVANA.LEV)")
-    ap.add_argument("--out", default=DEFAULT_OUT,
-                    help="workspace (default: tools/out/jmppeds/v3)")
+    ap.add_argument("--out", default=None,
+                    help="source workspace (default: last source under tools/out/jmppeds/source)")
+    ap.add_argument("--name", default=None,
+                    help="source workspace name; writes tools/out/jmppeds/source/<name>")
+    ap.add_argument("--reset", action="store_true",
+                    help="overwrite an existing source workspace after backing up its manifest/entries")
     ap.add_argument("--entry", default="Jericho",
                     help="source template entry (only Jericho; use add-entry for new characters)")
     args = ap.parse_args(argv)
@@ -507,12 +523,17 @@ def main(argv: list[str] | None = None) -> int:
         print("jmpped_export: the source exporter creates the Jericho template; "
               "use jmpped_add_entry.py for %r" % args.entry, file=sys.stderr)
         return 1
+    out = args.out
+    if not out:
+        out = (os.path.join(os.path.dirname(jws.source_root()), args.name)
+               if args.name else jws.source_root())
+    jws.set_source(out)
     try:
-        manifest = export(args.source, args.out)
+        manifest = export(args.source, out, args.reset)
     except jc.JMPPEDError as e:
         print("jmpped_export: %s" % e, file=sys.stderr)
         return 1
-    print("exported Tanner + Jericho from %s -> %s" % (args.source, args.out))
+    print("exported Tanner + Jericho from %s -> %s" % (args.source, out))
     print("  %d Tanner parts (%d baked), %d Jericho parts (%d baked)" %
           (len(manifest["peds"]["tanner"]["parts"]),
            sum(1 for p in manifest["peds"]["tanner"]["parts"] if p["bake_slot"] is not None),
