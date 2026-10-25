@@ -48,12 +48,26 @@ class SplitTests(unittest.TestCase):
                 }
             },
             "characters": [char],
-            "source_models": {},
+            "source_models": {"jericho": {"texture_page_sets": [23, 25, 2]}},
             "pages": [],
             "build": {"parts": []},
         }
         jc.save_json(os.path.join(root, "project.json"), project)
         jc.save_json(os.path.join(char_dir, "character.json"), char)
+
+        # Move one vertex so the split has a real change to report even when the
+        # copied per-part caches already match the combined model.
+        model_path = je.abs_path(root, char["model"]["path"])
+        with open(model_path, encoding="utf-8") as f:
+            lines = f.read().splitlines()
+        for i, line in enumerate(lines):
+            if line.startswith("v "):
+                fields = line.split()
+                fields[1] = "%.6f" % (float(fields[1]) + 0.001)
+                lines[i] = " ".join(fields)
+                break
+        with open(model_path, "w", encoding="utf-8", newline="\n") as f:
+            f.write("\n".join(lines) + "\n")
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -69,6 +83,10 @@ class SplitTests(unittest.TestCase):
         self.assertGreater(changed, 0)
         char = self._char()
         self.assertTrue(char["model"].get("split"))
+        self.assertEqual(
+            {int(k): int(v) for k, v in
+             (char.get("texture_page_map") or {}).items()},
+            {23: 26, 25: 27, 2: 3})
         self.assertEqual(char["model"]["sha256"],
                          jc.sha256_file(je.abs_path(self.root,
                                                     char["model"]["path"])))

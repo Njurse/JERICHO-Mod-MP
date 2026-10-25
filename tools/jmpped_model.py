@@ -89,6 +89,38 @@ def reference_names(skeleton: dict) -> list[str]:
     return sorted(set((skeleton.get("bindings") or {}).values()))
 
 
+def _source_page_sets(manifest: dict, character: dict) -> list[int]:
+    """Page sets of the character this one was cloned from.
+
+    The first choice is another character named after the source (its 23/25/2
+    set is the actual material space of the combined model); the source-model
+    block is the fallback for a project without a source character record.
+    """
+    source_name = (character.get("source_character") or "").lower()
+    own_folder = character.get("folder")
+
+    def usable(c):
+        return c.get("folder") != own_folder
+
+    for c in manifest.get("characters", []):
+        if usable(c) and str(c.get("name", "")).lower() == source_name:
+            sets = [int(s) for s in c.get("texture_page_sets", [])]
+            if len(sets) == 3:
+                return sets
+    for c in manifest.get("characters", []):
+        if usable(c) and (c.get("source_character") or "").lower() == source_name:
+            sets = [int(s) for s in c.get("texture_page_sets", [])]
+            if len(sets) == 3:
+                return sets
+    source = (manifest.get("source_models") or {}).get(
+        character.get("source_character"))
+    if source:
+        sets = [int(s) for s in source.get("texture_page_sets", [])]
+        if len(sets) == 3:
+            return sets
+    return []
+
+
 def part_obj_text(name: str, verts, faces, *, blender: bool) -> str:
     """Return the deterministic part OBJ text used by write_part_obj."""
     lines = ["# JMPPED part: %s\n" % name, "o %s\n" % name]
@@ -243,6 +275,16 @@ def split_character(project: str, character: dict, scene: str | None = None,
         _write_text(_abs(project, ref_rel),
                     part_obj_text(name, verts, groups[name]["faces"],
                                   blender=True))
+
+    if not character.get("texture_page_map"):
+        source_sets = _source_page_sets(manifest, character)
+        target_sets = [int(s) for s in
+                       character.get("texture_page_sets", [])]
+        if (len(source_sets) == 3 and len(target_sets) == 3
+                and source_sets != target_sets):
+            character["texture_page_map"] = {
+                str(source_sets[i]): target_sets[i] for i in range(3)
+            }
 
     character.setdefault("model", {})["sha256"] = jc.sha256_file(scene_abs)
     character["model"]["split"] = True
