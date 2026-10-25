@@ -50,7 +50,7 @@ class HeadMappingTests(unittest.TestCase):
                 self.assertAlmostEqual(back[1], uv[1], places=6)
 
     def _head_uvs(self, texture):
-        material = "s25_t%d" % texture
+        material = "s%d_t%d" % (jt._target_set(self.character, 25), texture)
         out = []
         for face in self.groups["JERI_HEAD"]["faces"]:
             if face[0][2] == material:
@@ -60,9 +60,10 @@ class HeadMappingTests(unittest.TestCase):
 
     def test_shared_material_maps_to_part_crops(self):
         for part in ("JERI_TORSO", "JERI_U_ARM_LEFT", "JERI_U_ARM_RIGHT"):
+            target = jt._target_set(self.character, 23)
             materials = {face[0][2] for face in self.groups[part]["faces"]}
-            self.assertIn("s23_t9", materials)
-            crop = jt._crop(self.character, part, 26, 9)
+            self.assertIn("s%d_t9" % target, materials)
+            crop = jt._crop(self.character, part, target, 9)
             self.assertIsNotNone(crop, part)
             self.assertIn("_set26_t9.png", crop["rgb"])
 

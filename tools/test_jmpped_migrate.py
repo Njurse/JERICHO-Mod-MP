@@ -117,6 +117,10 @@ class MigrationStateTests(unittest.TestCase):
     def test_model_bytes_preserved(self):
         old = {e["name"]: e for e in self.old["entries"]}
         for c in self.project["characters"]:
+            if (c.get("model", {}).get("uv_space") == "crop"
+                    or c.get("model", {}).get("format") == "textured-obj-v1"):
+                # The page-space model is generated from the textured model.
+                continue
             before = os.path.join(self.backup, "jmppeds", "v3",
                                   old[c["name"]]["bindpose"]["edit"]
                                   .replace("/", os.sep))
