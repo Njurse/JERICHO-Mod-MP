@@ -53,26 +53,14 @@ def _page_entry(page: jc.Page, root: str, ped: str, display_clut: int = 0) -> tu
     rgb = jc.page_rgb(indices, clut)
     pdir = os.path.join(root, ped, "png")
 
-    png = os.path.join(pdir, "pages", "page_%d.png" % page.set)
     idx_png = os.path.join(pdir, "pages", "page_%d_indexed.png" % page.set)
     pal_png = os.path.join(pdir, "palettes", "page_%d.png" % page.set)
-    jc.save_rgb_png(png, jc.PAGE_W, jc.PAGE_H, rgb)
     jc.save_indexed_png(idx_png, jc.PAGE_W, jc.PAGE_H, indices, clut)
     if cluts:
         jc.save_rgb_png(pal_png, jc.CLUT_ROW_ENTRIES, len(cluts),
                         [c for row in cluts for c in jc.clut_rgb(row)])
     else:
         jc.save_rgb_png(pal_png, 1, 1, [(0, 0, 0)])
-
-    # one full-page view per texture CLUT: a page has one palette row per
-    # texture id, so page_<set>.png (row 0) is only correct for t0.
-    texture_pages = []
-    for i, row in enumerate(cluts):
-        row_rgb = jc.page_rgb(indices, jc.clut_rgb(row))
-        row_png = os.path.join(pdir, "pages", "page_%d_t%d.png" % (page.set, i))
-        jc.save_rgb_png(row_png, jc.PAGE_W, jc.PAGE_H, row_rgb)
-        texture_pages.append({"texture": i, "png": _rel(row_png, root),
-                              "sha256": _sha(row_png)})
 
     entry = {
         "set": page.set,
@@ -82,14 +70,11 @@ def _page_entry(page: jc.Page, root: str, ped: str, display_clut: int = 0) -> tu
         "npalettes": len(cluts),
         "image_bytes": len(page.image),
         "display_clut": display_clut,
-        "png": _rel(png, root),
-        "png_sha256": _sha(png),
         "indexed_png": _rel(idx_png, root),
         "indexed_png_sha256": _sha(idx_png),
         "palette_png": _rel(pal_png, root),
         "palette_png_sha256": _sha(pal_png),
         "cluts_hex": [row.hex() for row in cluts],
-        "texture_pages": texture_pages,
     }
     return entry, rgb
 
@@ -146,9 +131,6 @@ def _part_entry(part: dict, ped: str, root: str,
         crop_rgb = os.path.join(pdir, "png", "parts",
                                 "%s_set%d_t%d.png" % (name, page_set, texture))
         jc.save_rgb_png(crop_rgb, w, h, crop_pixels)
-        crop_idx = os.path.join(pdir, "png", "parts",
-                                "%s_set%d_t%d_indexed.png" % (name, page_set, texture))
-        jc.save_indexed_png(crop_idx, w, h, crop_idx_pixels, clut)
         crop_entries.append({
             "page_set": page_set,
             "texture": texture,
@@ -156,8 +138,6 @@ def _part_entry(part: dict, ped: str, root: str,
             "rect": [x0, y0, w, h],
             "rgb": _rel(crop_rgb, root),
             "rgb_sha256": _sha(crop_rgb),
-            "indexed": _rel(crop_idx, root),
-            "indexed_sha256": _sha(crop_idx),
             "polys": rec["polys"],
         })
 

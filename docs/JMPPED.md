@@ -165,17 +165,17 @@ A page is 256×256 at 4bpp. Each page carries a CLUT table with one 16-entry row
 per texture id; the engine selects `civ_clut[0][texture_number][pal]`. The page
 therefore cannot be represented by one palette row for every material.
 
-- `page_<set>.png` / `_indexed.png` — the whole page through row 0.
-- `page_<set>_t<id>.png` — the page through texture `id`'s CLUT row.
-- `png/palettes/page_<set>.png` — a strip of every row.
-- `png/parts/<part>_set<set>_t<id>.png` — the per-material crop in its own
-  texture CLUT; `_indexed.png` preserves the indices.
-- Each crop records `display_clut`; the builder quantises an edited RGB crop
-  with that row, not row 0.
+- `page_<set>_indexed.png` — the page's indexed source. It is internal/base
+  data, not the normal edit surface.
+- `png/palettes/page_<set>.png` — a strip of every CLUT row.
+- `png/parts/<part>_set<set>_t<id>.png` — the **single editable RGB crop** for
+  that material. There is no `_indexed` twin; the builder paletteizes it.
+- Each crop records `display_clut` (its texture row). A crop with ≤16 colours is
+  preserved exactly; more colours are median-cut to 16, then the row and page
+  indices are written automatically.
 
-Edit either the RGB or indexed form, not both. Edit either the full page or its
-crops, not both. Full-page RGB edits quantise to the page's `display_clut`; for
-multi-texture pages use the per-material crops.
+Edit the per-material crop. Do not edit the indexed page or palette strip unless
+you are repairing page-level data; the crop is the one image the baker expects.
 
 Page sets are disjoint per entry:
 
@@ -294,9 +294,10 @@ Limits and rules:
 
 ## 10. Troubleshooting
 
-**Wrong colours.** The full page is a row-0 view. Use the per-material crop or
-`page_<set>_t<id>.png` for the texture's own CLUT; `palettes/page_<set>.png`
-shows all rows. If an edited crop shifts colours, check its `display_clut`.
+**Wrong colours.** Use the single per-material crop
+(`png/parts/<part>_set<set>_t<id>.png`). It is auto-palettized into the texture
+row recorded in `display_clut`; `palettes/page_<set>.png` shows the rows. The
+page's indexed PNG is internal/base data, not the editing surface.
 
 **Mashed torso/legs.** `JERI_TORSO` is much longer than Tanner's `TORSO` and
 extends through the hips/thighs. Fix it with a per-part `offset`/`scale` on the

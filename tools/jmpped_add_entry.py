@@ -36,21 +36,27 @@ def _copy_page(p: dict, out_root: str, entry_dir: str, slug: str,
                mapping: dict[int, int]) -> dict:
     old = int(p["set"])
     new = mapping[old]
-    src_png = je.abs_path(out_root, p["png"])
+    src_png = je.abs_path(out_root, p["png"]) if p.get("png") else None
     src_idx = je.abs_path(out_root, p["indexed_png"])
     src_pal = je.abs_path(out_root, p["palette_png"])
     dst_png = os.path.join(entry_dir, "png", "pages", "page_%d.png" % new)
     dst_idx = os.path.join(entry_dir, "png", "pages", "page_%d_indexed.png" % new)
     dst_pal = os.path.join(entry_dir, "png", "palettes", "page_%d.png" % new)
-    je.copy_file(src_png, dst_png)
+    if src_png:
+        je.copy_file(src_png, dst_png)
     je.copy_file(src_idx, dst_idx)
     je.copy_file(src_pal, dst_pal)
 
     q = dict(p)
     q["set"] = new
     q["ped"] = slug
-    q["png"] = je.rel(dst_png, out_root)
-    q["png_sha256"] = _hash(dst_png)
+    if src_png:
+        q["png"] = je.rel(dst_png, out_root)
+        q["png_sha256"] = _hash(dst_png)
+    else:
+        q.pop("png", None)
+        q.pop("png_sha256", None)
+        q.pop("texture_pages", None)
     q["indexed_png"] = je.rel(dst_idx, out_root)
     q["indexed_png_sha256"] = _hash(dst_idx)
     q["palette_png"] = je.rel(dst_pal, out_root)
@@ -73,19 +79,24 @@ def _copy_slot(slot: dict, out_root: str, entry_dir: str,
         old = int(crop["page_set"])
         new = mapping[old]
         src_rgb = je.abs_path(out_root, crop["rgb"])
-        src_idx = je.abs_path(out_root, crop["indexed"])
+        src_idx = (je.abs_path(out_root, crop["indexed"])
+                   if crop.get("indexed") else None)
         dst_rgb = os.path.join(entry_dir, "png", "parts",
                                "%s_set%d.png" % (part, new))
         dst_idx = os.path.join(entry_dir, "png", "parts",
                                "%s_set%d_indexed.png" % (part, new))
         je.copy_file(src_rgb, dst_rgb)
-        je.copy_file(src_idx, dst_idx)
         q = dict(crop)
         q["page_set"] = new
         q["rgb"] = je.rel(dst_rgb, out_root)
         q["rgb_sha256"] = _hash(dst_rgb)
-        q["indexed"] = je.rel(dst_idx, out_root)
-        q["indexed_sha256"] = _hash(dst_idx)
+        if src_idx:
+            je.copy_file(src_idx, dst_idx)
+            q["indexed"] = je.rel(dst_idx, out_root)
+            q["indexed_sha256"] = _hash(dst_idx)
+        else:
+            q.pop("indexed", None)
+            q.pop("indexed_sha256", None)
         crops.append(q)
 
     q = dict(slot)

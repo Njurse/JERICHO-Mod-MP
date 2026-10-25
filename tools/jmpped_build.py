@@ -201,16 +201,16 @@ def _page_state(arch: jc.Archive, entry: dict, root: str) -> dict:
     if display < 0 or display >= len(cluts):
         display = 0
 
-    png = _abs(root, entry["png"])
+    png = _abs(root, entry["png"]) if entry.get("png") else None
     idx = _abs(root, entry["indexed_png"])
     pal = _abs(root, entry["palette_png"])
-    page_changed = _changed(png, entry["png_sha256"])
+    page_changed = _changed(png, entry.get("png_sha256", "")) if png else False
     idx_changed = _changed(idx, entry["indexed_png_sha256"])
     pal_changed = _changed(pal, entry["palette_png_sha256"])
     if page_changed and idx_changed:
         raise jc.JMPPEDError(
             "%s: both the RGB and indexed page changed; edit one of them"
-            % os.path.dirname(png))
+            % os.path.dirname(png or idx))
 
     if pal_changed:
         cluts = _load_clut_strip(pal, len(cluts))
@@ -232,12 +232,46 @@ def _page_state(arch: jc.Archive, entry: dict, root: str) -> dict:
     }
 
 
-def _apply_crop(state: dict, crop: dict, root: str) -> None:
+def _paletteize_crop(pixels, width: int, height: int):
+    """Return (16 RGB entries, 4-bit indices) for one edited crop.
+
+    <=16 colours are preserved exactly; more colours are median-cut to 16. The
+    resulting row is what the builder writes into the page's CLUT table.
+    """
+    from PIL import Image
+
+    if len(pixels) != width * height:
+        raise jc.JMPPEDError("crop has %d pixels, expected %d"
+                             % (len(pixels), width * height))
+
+    exact = list(dict.fromkeys(pixels))
+    if len(exact) <= 16:
+        colors = exact + [(0, 0, 0)] * (16 - len(exact))
+        index = {c: i for i, c in enumerate(exact)}
+        return colors, bytes(index[p] for p in pixels)
+
+    data = bytes(c for p in pixels for c in p)
+    img = Image.frombytes("RGB", (width, height), data)
+    try:
+        q = img.quantize(colors=16, method=Image.Quantize.MEDIANCUT,
+                         dither=Image.Dither.NONE)
+    except AttributeError:
+        q = img.quantize(colors=16)
+    pal = q.getpalette()[:48]
+    colors = [(pal[i], pal[i + 1], pal[i + 2]) for i in range(0, 48, 3)]
+    colors += [(0, 0, 0)] * (16 - len(colors))
+    return colors, bytes(q.getdata())
+
+
+def _apply_crop(state: dict, crop: dict, root: str,
+                texture_ids=()) -> None:
     x, y, w, h = _check_page_rect(crop["rect"], crop.get("rgb", "crop"))
     rgb_path = _abs(root, crop["rgb"])
-    idx_path = _abs(root, crop["indexed"])
-    rgb_changed = _changed(rgb_path, crop["rgb_sha256"])
-    idx_changed = _changed(idx_path, crop["indexed_sha256"])
+    idx_rel = crop.get("indexed")
+    idx_path = _abs(root, idx_rel) if idx_rel else None
+    rgb_changed = _changed(rgb_path, crop.get("rgb_sha256", ""))
+    idx_changed = (_changed(idx_path, crop.get("indexed_sha256", ""))
+                   if idx_path else False)
     if rgb_changed and idx_changed:
         raise jc.JMPPEDError("%s: both the RGB and indexed crop changed; edit one"
                              % os.path.dirname(rgb_path))
@@ -254,15 +288,29 @@ def _apply_crop(state: dict, crop: dict, root: str) -> None:
         patch = _load_indexed(idx_path, w, h)
     else:
         _, _, pixels = jc.load_png_rgb(rgb_path)
-        if len(pixels) != w * h:
-            raise jc.JMPPEDError("%s is %dx%d, expected %dx%d"
-                                 % (rgb_path, len(pixels), 1, w, h))
-        clut = (jc.clut_rgb(state["cluts"][state["display"]])
-                if state["cluts"] else [(0, 0, 0)] * 16)
-        display = int(crop.get("display_clut", state["display"]))
-        if state["cluts"] and 0 <= display < len(state["cluts"]):
-            clut = jc.clut_rgb(state["cluts"][display])
-        patch = bytes(jc.nearest_clut_index(c, clut) for c in pixels)
+        colors, patch = _paletteize_crop(pixels, w, h)
+
+        # The crop's own texture id, or every texture the part uses on this
+        # page (the old combined-crop format). The generated 16-colour row is
+        # written to each target row so the model's CLUT lookup finds it.
+        rows = []
+        if crop.get("display_clut") is not None:
+            rows = [int(crop["display_clut"])]
+        elif crop.get("texture") is not None:
+            rows = [int(crop["texture"])]
+        elif texture_ids:
+            rows = sorted({int(t) for t in texture_ids})
+        else:
+            rows = [int(state["display"])]
+        if not state["cluts"]:
+            raise jc.JMPPEDError("%s: page has no CLUT table" % rgb_path)
+        for row in rows:
+            if row < 0 or row >= len(state["cluts"]):
+                raise jc.JMPPEDError(
+                    "%s: texture row %d is outside the page's %d CLUT rows"
+                    % (rgb_path, row, len(state["cluts"])))
+            state["cluts"][row] = jc.rgb_to_clut(colors)
+            state["cluts_touched"] = True
 
     indices = bytearray(state["indices"])
     for row in range(h):
@@ -389,7 +437,9 @@ def build(out_root: str, dest: str | None, copy_to: str | None,
                                      "manifest does not carry"
                                      % (entry["name"], page_set))
             before = states[page_set]["touched"]
-            _apply_crop(states[page_set], crop, out_root)
+            texture_ids = sorted({int(m["id"]) for m in entry.get("materials", [])
+                                  if int(m["set"]) == page_set})
+            _apply_crop(states[page_set], crop, out_root, texture_ids)
             if states[page_set]["touched"] and not before:
                 changed_crops += 1
 

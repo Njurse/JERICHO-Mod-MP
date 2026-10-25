@@ -37,16 +37,16 @@ def _entry_page_state(entry: dict, arch: jc.Archive, root: str) -> dict:
     if display < 0 or display >= len(cluts):
         display = 0
 
-    png = jb._abs(root, entry["png"])
+    png = jb._abs(root, entry["png"]) if entry.get("png") else None
     idx = jb._abs(root, entry["indexed_png"])
     pal = jb._abs(root, entry["palette_png"])
-    page_changed = jb._changed(png, entry["png_sha256"])
+    page_changed = jb._changed(png, entry.get("png_sha256", "")) if png else False
     idx_changed = jb._changed(idx, entry["indexed_png_sha256"])
     pal_changed = jb._changed(pal, entry["palette_png_sha256"])
     if page_changed and idx_changed:
         raise jc.JMPPEDError(
             "%s: both the RGB and indexed page changed; edit one of them"
-            % os.path.dirname(png))
+            % os.path.dirname(png or idx))
     if not os.path.isfile(idx):
         raise jc.JMPPEDError("%s: indexed page is missing" % idx)
 
@@ -200,7 +200,10 @@ def build_v5(out_root: str, dest: str | None, copy_to: str | None,
                         "%s/%s: crop references page set %d, which the entry does "
                         "not carry" % (e["name"], slot_desc["part"], page_set))
                 before = states[page_set]["touched"]
-                jb._apply_crop(states[page_set], crop, out_root)
+                texture_ids = sorted({int(m["id"])
+                                      for m in slot_desc.get("materials", [])
+                                      if int(m["set"]) == page_set})
+                jb._apply_crop(states[page_set], crop, out_root, texture_ids)
                 if states[page_set]["touched"] and not before:
                     changed_crops += 1
 

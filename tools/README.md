@@ -49,9 +49,10 @@ The workspace defaults to `tools/out/jmppeds/v3` (gitignored): `base.LEV`,
 `entries/<slug>/` and `jmpped/assembled_*.obj`.
 
 Edit one OBJ copy per part (`obj/edit` for Blender or `obj/raw` for engine
-units), one texture form per page (RGB or indexed), or a part's `offset`/`scale`
-in `jmpped.json`. `split` turns an edited `bindpose_edit.obj` into local parts.
-`build` writes `JMPPED.LEV` and rereads it as a self-check; `--copy` places it in
+units), the single per-material RGB crop, or a part's `offset`/`scale` in
+`jmpped.json`. The builder auto-palettizes a changed crop into its texture CLUT
+row. `split` turns an edited `bindpose_edit.obj` into local parts. `build` writes
+`JMPPED.LEV` and rereads it as a self-check; `--copy` places it in
 `DRIVER2/LEVELS`. v3 is one 14-slot character; use `add-entry` for v5 multi-entry
 archives. See [`../docs/JMPPED.md`](../docs/JMPPED.md) for the slot table, page
 sets, CLUT/crop rules, builder refusals and the engine load path.
