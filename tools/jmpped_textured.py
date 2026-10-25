@@ -88,7 +88,19 @@ def _parse_page_material(name: str | None):
             return int(set_s), int(id_s)
         except ValueError:
             return None
+    parsed = parse_material(name)
+    if parsed is not None:
+        _part, set_s, id_s = parsed
+        return set_s, id_s
     return None
+
+
+def _has_part_material(groups: dict) -> bool:
+    for group in groups.values():
+        for face in group.get("faces", []):
+            if face and parse_material(face[0][2]):
+                return True
+    return False
 
 
 def _target_set(character: dict, source_set: int) -> int:
@@ -191,8 +203,11 @@ def _write_textured(project: str, character: dict, groups: dict,
                 except ValueError:
                     materials[mname] = ("color", (200, 200, 200))
             else:
-                raise jc.JMPPEDError("%s/%s: unrecognised material %r"
-                                     % (character["name"], name, material))
+                mname = "color_127_127_127"
+                uvs = [uv for _vi, uv, _mat in face]
+                materials.setdefault(mname, ("color", (127, 127, 127)))
+                print("warning: %s/%s: %r has no page material; using flat grey"
+                      % (character["name"], name, material))
 
             ids = []
             for uv in uvs:
@@ -525,6 +540,11 @@ def export_textured(project: str, character_name: str | None = None) -> int:
 
     backup = _backup(project, character, page_abs, char_dir)
     groups = _read_page_groups(project, character, page_abs)
+    if _has_part_material(groups):
+        raise jc.JMPPEDError(
+            "model.obj contains per-part materials; it is the localized/textured "
+            "model, not the page-space model. Restore the page-space model or use "
+            "model_textured.obj directly.")
     _write_textured(project, character, groups, textured_abs, mtl_abs)
 
     model["path"] = _rel(project, textured_abs)

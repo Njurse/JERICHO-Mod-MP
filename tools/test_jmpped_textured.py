@@ -58,6 +58,14 @@ class HeadMappingTests(unittest.TestCase):
         self.assertTrue(out, material)
         return out
 
+    def test_part_materials_mark_a_localized_model(self):
+        localized = {"JERI_HEAD": {"faces": [[
+            (0, (0.0, 0.0), "JERI_HEAD__s27_t24")]]}}
+        page_space = {"JERI_HEAD": {"faces": [[
+            (0, (0.0, 0.0), "s25_t24")]]}}
+        self.assertTrue(jt._has_part_material(localized))
+        self.assertFalse(jt._has_part_material(page_space))
+
     def test_shared_material_maps_to_part_crops(self):
         for part in ("JERI_TORSO", "JERI_U_ARM_LEFT", "JERI_U_ARM_RIGHT"):
             target = jt._target_set(self.character, 23)
