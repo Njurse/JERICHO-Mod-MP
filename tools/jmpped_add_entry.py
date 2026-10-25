@@ -90,6 +90,8 @@ def _copy_slot(slot: dict, out_root: str, entry_dir: str,
 
     q = dict(slot)
     q["page_sets"] = [mapping[int(s)] for s in slot.get("page_sets", [])]
+    q["offset"] = list(slot.get("offset", [0, 0, 0]))
+    q["scale"] = list(slot.get("scale", [1, 1, 1]))
     q["obj_raw"] = je.rel(dst_raw, out_root)
     q["obj_raw_sha256"] = _hash(dst_raw)
     q["obj_edit"] = je.rel(dst_edit, out_root)

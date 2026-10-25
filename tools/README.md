@@ -92,6 +92,16 @@ triangles/quads only. Ped models are FT3/FT4; a model with normal tables is
 refused if edited. The assembled scenes are references; the builder reads the
 per-part OBJs.
 
+**Per-part offset/scale.** Each part entry in `jmpped.json`/`ped.json` also has
+`offset: [x,y,z]` and `scale: [x,y,z]` (engine units, +Y down; defaults
+`[0,0,0]`/`[1,1,1]`). The builder applies `v' = v*scale + offset` before writing
+the MODEL, so you can tune a part's height or proportion without touching the
+shared skeleton. Negative Y moves a part up. Use it to fix the long Jericho torso
+overlapping the Tanner hips/legs, or to raise/lower a single part. This is a
+bake-time parameter: edit the JSON, then run `build`. A whole-character height
+change still needs the skeleton bind offsets and collision/camera offsets, not
+just mesh offsets.
+
 **Editing textures.** Each page is 256x256 at 4bpp and carries one CLUT row per
 texture id; the engine picks `civ_clut[0][texture_number][pal]`. `page_<set>.png`
 and `_indexed.png` are a single-row view (row 0), so they are not the right

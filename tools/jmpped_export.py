@@ -174,6 +174,10 @@ def _part_entry(part: dict, ped: str, root: str,
         "obj_raw_sha256": _sha(raw_path),
         "obj_edit": _rel(edit_path, root),
         "obj_edit_sha256": _sha(edit_path),
+        # Bake-time part transform. Engine units, +Y down: a negative Y offset
+        # moves the part up. The builder applies v' = v * scale + offset.
+        "offset": [0, 0, 0],
+        "scale": [1, 1, 1],
         "materials": [materials[k] for k in sorted(materials)],
         "crops": crop_entries,
     }
@@ -447,6 +451,8 @@ def export(source: str, out_root: str) -> dict:
             "obj_raw_sha256": part["obj_raw_sha256"],
             "obj_edit": part["obj_edit"],
             "obj_edit_sha256": part["obj_edit_sha256"],
+            "offset": list(part.get("offset", [0, 0, 0])),
+            "scale": list(part.get("scale", [1, 1, 1])),
             "materials": part["materials"],
             "crops": part["crops"],
         })

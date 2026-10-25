@@ -21,6 +21,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import math
 import os
 import shutil
 import sys
@@ -40,6 +41,36 @@ def _changed(path: str, expected: str) -> bool:
 
 def _abs(root: str, rel: str) -> str:
     return os.path.join(root, rel.replace("/", os.sep))
+
+
+def _part_transform(entry: dict, label: str) -> tuple[tuple[float, float, float],
+                                                      tuple[float, float, float]]:
+    """Read a bake-time part transform.
+
+    offset is engine units with +Y down (negative Y moves the part up); scale is
+    unitless. Defaults are 0/1, so older manifests keep working.
+    """
+    off = entry.get("offset", [0, 0, 0])
+    sc = entry.get("scale", [1, 1, 1])
+    try:
+        if len(off) != 3 or len(sc) != 3:
+            raise ValueError
+        off = tuple(float(v) for v in off)
+        sc = tuple(float(v) for v in sc)
+    except (TypeError, ValueError):
+        raise jc.JMPPEDError("%s: offset/scale must each be three numbers" % label)
+
+    if not all(math.isfinite(v) for v in off + sc):
+        raise jc.JMPPEDError("%s: offset/scale contains a non-finite number" % label)
+    if any(v == 0 for v in sc):
+        raise jc.JMPPEDError("%s: scale must not contain zero" % label)
+
+    return off, sc
+
+
+def _transform_is_default(transform) -> bool:
+    off, sc = transform
+    return off == (0.0, 0.0, 0.0) and sc == (1.0, 1.0, 1.0)
 
 
 def _material(name: str | None) -> tuple[int, int, tuple[int, int, int]]:
@@ -88,7 +119,9 @@ def _polys_from_obj(faces, path: str) -> list[jc.Poly]:
 
 
 def _load_model(path: str, blender: bool, model: jc.Model,
-                page_sets: set[int], slot_name: str) -> bytes:
+                page_sets: set[int], slot_name: str,
+                offset: tuple[float, float, float] = (0.0, 0.0, 0.0),
+                scale: tuple[float, float, float] = (1.0, 1.0, 1.0)) -> bytes:
     if model.normals or model.point_normals:
         raise jc.JMPPEDError(
             "%s (%s): this model has normal tables; the OBJ path only rebuilds "
@@ -99,7 +132,11 @@ def _load_model(path: str, blender: bool, model: jc.Model,
             "%s (%s): the original model uses a poly kind this toolkit cannot "
             "rebuild; leave the slot untouched" % (slot_name, path))
     verts, faces = jc.read_obj(path, blender=blender)
-    ints = [(int(round(x)), int(round(y)), int(round(z))) for x, y, z in verts]
+    ox, oy, oz = offset
+    sx, sy, sz = scale
+    ints = [(int(round(x * sx + ox)),
+             int(round(y * sy + oy)),
+             int(round(z * sz + oz))) for x, y, z in verts]
     try:
         polys = _polys_from_obj(faces, path)
     except jc.JMPPEDError as e:
@@ -276,9 +313,12 @@ def build(out_root: str, dest: str | None, copy_to: str | None,
             raw = _abs(out_root, entry["obj_raw"])
             edit_changed = _changed(edit, entry["obj_edit_sha256"])
             raw_changed = _changed(raw, entry["obj_raw_sha256"])
+            transform = _part_transform(
+                entry, "%s/%s" % (ped_name, entry["name"]))
+            transform_changed = not _transform_is_default(transform)
 
             if slot is None:
-                if edit_changed or raw_changed:
+                if edit_changed or raw_changed or transform_changed:
                     print("%s/%s is exported for reference but is not part of "
                           "the 14-slot v3 archive; edit ignored"
                           % (ped_name, entry["name"]))
@@ -304,12 +344,22 @@ def build(out_root: str, dest: str | None, copy_to: str | None,
                 raise jc.JMPPEDError(
                     "%s/%s: both obj/edit and obj/raw changed; edit one of them"
                     % (ped_name, entry["name"]))
-            if not (edit_changed or raw_changed):
+            if not (edit_changed or raw_changed or transform_changed):
                 continue
-            path = edit if edit_changed else raw
-            blob = _load_model(path, blender=edit_changed, model=arch.models[slot],
+            if edit_changed:
+                path = edit
+                blender = True
+            elif raw_changed:
+                path = raw
+                blender = False
+            else:
+                # Only the JSON transform changed; both OBJ copies are untouched.
+                path = edit
+                blender = True
+            blob = _load_model(path, blender=blender, model=arch.models[slot],
                                page_sets=page_sets,
-                               slot_name="%s/%s" % (ped_name, entry["name"]))
+                               slot_name="%s/%s" % (ped_name, entry["name"]),
+                               offset=transform[0], scale=transform[1])
             arch.models[slot] = jc.parse_model(blob)
             arch.raw_models[slot] = blob
             changed_models += 1

@@ -127,6 +127,9 @@ def build_v5(out_root: str, dest: str | None, copy_to: str | None,
             raw = jb._abs(out_root, slot_desc["obj_raw"])
             edit_changed = jb._changed(edit, slot_desc["obj_edit_sha256"])
             raw_changed = jb._changed(raw, slot_desc["obj_raw_sha256"])
+            transform = jb._part_transform(
+                slot_desc, "%s/%s" % (e["name"], slot_desc["part"]))
+            transform_changed = not jb._transform_is_default(transform)
             if use == "edit":
                 edit_changed = True
             elif use == "raw":
@@ -145,14 +148,24 @@ def build_v5(out_root: str, dest: str | None, copy_to: str | None,
                 blender = path == edit
                 blob = jb._load_model(path, blender=blender, model=arch.models[slot],
                                       page_sets=page_sets,
-                                      slot_name="%s/%s" % (e["name"], slot_desc["part"]))
+                                      slot_name="%s/%s" % (e["name"], slot_desc["part"]),
+                                      offset=transform[0], scale=transform[1])
                 model = jc.parse_model(blob)
                 changed_models += 1
-            elif edit_changed or raw_changed:
-                path = edit if edit_changed else raw
-                blob = jb._load_model(path, blender=edit_changed,
+            elif edit_changed or raw_changed or transform_changed:
+                if edit_changed:
+                    path = edit
+                    blender = True
+                elif raw_changed:
+                    path = raw
+                    blender = False
+                else:
+                    path = edit
+                    blender = True
+                blob = jb._load_model(path, blender=blender,
                                       model=arch.models[slot], page_sets=page_sets,
-                                      slot_name="%s/%s" % (e["name"], slot_desc["part"]))
+                                      slot_name="%s/%s" % (e["name"], slot_desc["part"]),
+                                      offset=transform[0], scale=transform[1])
                 model = jc.parse_model(blob)
                 changed_models += 1
                 print("model %-20s rebuilt from %s/%s" %
