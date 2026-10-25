@@ -23,6 +23,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -226,7 +227,7 @@ def _bindpose(parts_by_name: dict[str, dict], bindings: dict[str, str],
     return models, names, offsets
 
 
-def export(source: str, out_root: str, reset: bool = False) -> dict:
+def _legacy_export(source: str, out_root: str, reset: bool = False) -> dict:
     if not os.path.isfile(source):
         raise jc.JMPPEDError("source level %s does not exist; pass --source"
                              % source)
@@ -506,40 +507,107 @@ def export(source: str, out_root: str, reset: bool = False) -> dict:
     return manifest
 
 
+def _level_slug(source: str) -> str:
+    name = os.path.splitext(os.path.basename(source.replace("\\", "/")))[0]
+    return name.strip().lower() or "level"
+
+
+def _install_dir(src: str, dst: str) -> None:
+    if not os.path.isdir(src):
+        return
+    if os.path.exists(dst):
+        shutil.rmtree(dst)
+    os.makedirs(os.path.dirname(dst), exist_ok=True)
+    shutil.copytree(src, dst)
+
+
+def extract(source: str | None, project: str, reset: bool = False,
+            level: str | None = None) -> int:
+    """Extract a Driver 2 level and install it as the project's source export.
+
+    The source extractor still writes the old workspace shape internally; it is
+    staged under .state/ and immediately migrated, so the installed tree is the
+    new layout. Custom characters are kept; only the source character, the
+    source export and the build output are replaced.
+    """
+    source = os.path.abspath(source or DEFAULT_SOURCE)
+    if not os.path.isfile(source):
+        raise jc.JMPPEDError("source level %s does not exist" % source)
+    project = os.path.abspath(project)
+    level = level or _level_slug(source)
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    stage = os.path.join(project, ".state", "extract-%s" % stamp)
+    old_out = os.path.join(stage, "out", "jmppeds", "v3")
+    os.makedirs(old_out, exist_ok=True)
+    try:
+        _legacy_export(source, old_out, reset=True)
+        import jmpped_migrate
+        jmpped_migrate.migrate(stage, apply=True, level=level)
+        new_project = jc.load_json(os.path.join(stage, "project.json"))
+        old_path = os.path.join(project, "project.json")
+        old_project = jc.load_json(old_path) if os.path.isfile(old_path) else None
+        new_chars = new_project["characters"]
+        if not new_chars:
+            raise jc.JMPPEDError("extract produced no characters")
+        source_char = new_chars[0]
+        keep = []
+        if old_project:
+            source_sets = {int(s) for s in source_char["texture_page_sets"]}
+            for c in old_project.get("characters", []):
+                if c.get("name") == source_char["name"]:
+                    continue
+                overlap = source_sets & {int(s) for s in
+                                         c.get("texture_page_sets", [])}
+                if overlap:
+                    raise jc.JMPPEDError(
+                        "custom character %r owns texture pages %s, which the "
+                        "source character needs; move it first"
+                        % (c.get("name"), sorted(overlap)))
+                keep.append(c)
+        new_project["characters"] = [source_char] + keep
+        new_project["tool"] = "jmpped.py"
+        new_project.pop("migrated_from", None)
+
+        jws.backup_workspace(project, "extract")
+        _install_dir(os.path.join(stage, "out", "source", level),
+                     os.path.join(project, "out", "source", level))
+        _install_dir(os.path.join(stage, "out", "build"),
+                     os.path.join(project, "out", "build"))
+        slug = os.path.basename(source_char["folder"].rstrip("/"))
+        _install_dir(os.path.join(stage, "characters", slug),
+                     os.path.join(project, "characters", slug))
+        jc.save_json(os.path.join(project, "project.json"), new_project)
+        jc.save_json(os.path.join(project, source_char["folder"],
+                                  "character.json"), source_char)
+        jws.set_project(project)
+        jws.set_source(os.path.join(project, "out", "source", level))
+        print("extracted %s -> %s (%d character(s) kept)"
+              % (source, os.path.join(project, "out", "source", level),
+                 len(new_project["characters"])))
+        return 0
+    finally:
+        if os.path.isdir(stage):
+            shutil.rmtree(stage)
+
+
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description="Export Driver 2 Tanner/Jericho peds to OBJ/PNG")
+    ap = argparse.ArgumentParser(
+        description="Extract Driver 2 peds into out/source/<level>")
     ap.add_argument("--source", default=DEFAULT_SOURCE,
                     help="Driver 2 level (default: Release/DRIVER2/LEVELS/HAVANA.LEV)")
-    ap.add_argument("--out", default=None,
-                    help="source workspace (default: last source under tools/out/jmppeds/source)")
-    ap.add_argument("--name", default=None,
-                    help="source workspace name; writes tools/out/jmppeds/source/<name>")
+    ap.add_argument("--project", default=None,
+                    help="project root (default: last-used)")
+    ap.add_argument("--level", default=None,
+                    help="source export name (default: the level filename)")
     ap.add_argument("--reset", action="store_true",
-                    help="overwrite an existing source workspace after backing up its manifest/entries")
-    ap.add_argument("--entry", default="Jericho",
-                    help="source template entry (only Jericho; use add-entry for new characters)")
+                    help="replace an existing source export (custom characters are kept)")
     args = ap.parse_args(argv)
-    if args.entry.lower() != "jericho":
-        print("jmpped_export: the source exporter creates the Jericho template; "
-              "use jmpped_add_entry.py for %r" % args.entry, file=sys.stderr)
-        return 1
-    out = args.out
-    if not out:
-        out = (os.path.join(os.path.dirname(jws.source_root()), args.name)
-               if args.name else jws.source_root())
-    jws.set_source(out)
+    project = args.project or jws.project_root()
     try:
-        manifest = export(args.source, out, args.reset)
+        return extract(args.source, project, args.reset, args.level)
     except jc.JMPPEDError as e:
-        print("jmpped_export: %s" % e, file=sys.stderr)
+        print("jmpped extract: %s" % e, file=sys.stderr)
         return 1
-    print("exported Tanner + Jericho from %s -> %s" % (args.source, out))
-    print("  %d Tanner parts (%d baked), %d Jericho parts (%d baked)" %
-          (len(manifest["peds"]["tanner"]["parts"]),
-           sum(1 for p in manifest["peds"]["tanner"]["parts"] if p["bake_slot"] is not None),
-           len(manifest["peds"]["jericho"]["parts"]),
-           sum(1 for p in manifest["peds"]["jericho"]["parts"] if p["bake_slot"] is not None)))
-    return 0
 
 
 if __name__ == "__main__":

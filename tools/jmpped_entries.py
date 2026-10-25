@@ -122,6 +122,78 @@ def validate_entry(manifest: dict, e: dict) -> None:
     validate_character(manifest, e)
 
 
+def map_page_sets(record: dict, mapping: dict[int, int]) -> dict:
+    """Rewrite every texture page-set id in a character record."""
+    def m(value):
+        return int(mapping.get(int(value), int(value)))
+
+    record["texture_page_sets"] = [m(s) for s in
+                                   record.get("texture_page_sets", [])]
+    for page in record.get("pages", []):
+        page["page_set"] = m(page["page_set"])
+    for part in record.get("parts", []):
+        for material in part.get("materials", []):
+            material["page_set"] = m(material["page_set"])
+        for crop in part.get("crops", []):
+            crop["page_set"] = m(crop["page_set"])
+    for crop in record.get("texture_crops", []):
+        crop["page_set"] = m(crop["page_set"])
+    page_map = {str(k): int(v) for k, v in
+                (record.get("texture_page_map") or {}).items()}
+    for old, new in mapping.items():
+        page_map[str(int(old))] = int(new)
+    record["texture_page_map"] = page_map
+    return record
+
+
+def rewrite_paths(record: dict, old_prefix: str, new_prefix: str,
+                  old_abs: str | None = None, prefix_relative: bool = False) -> dict:
+    """Move a character record from one folder to another, in place."""
+    old = old_prefix.rstrip("/") + "/"
+    new = new_prefix.rstrip("/") + "/"
+
+    def rw(path):
+        if not path:
+            return path
+        p = path.replace("\\", "/")
+        if p.startswith(old):
+            return new + p[len(old):]
+        if old_abs and os.path.isabs(p):
+            try:
+                rel = os.path.relpath(p, old_abs).replace("\\", "/")
+            except ValueError:
+                return path
+            if not rel.startswith(".."):
+                return new + rel
+        if prefix_relative and not os.path.isabs(p) and not p.startswith(".."):
+            return new + p
+        return path
+
+    record["folder"] = new_prefix
+    for key in ("model", "engine_reference"):
+        rec = record.get(key)
+        if rec and rec.get("path"):
+            rec["path"] = rw(rec["path"])
+    for page in record.get("pages", []):
+        for key in ("png", "indexed_png", "palette_png"):
+            if page.get(key):
+                page[key] = rw(page[key])
+        for crop in page.get("texture_pages", []):
+            if crop.get("png"):
+                crop["png"] = rw(crop["png"])
+    for part in record.get("parts", []):
+        for key in ("obj_raw", "obj_edit"):
+            if part.get(key):
+                part[key] = rw(part[key])
+        for crop in part.get("crops", []):
+            if crop.get("rgb"):
+                crop["rgb"] = rw(crop["rgb"])
+    for crop in record.get("texture_crops", []):
+        if crop.get("palette_png"):
+            crop["palette_png"] = rw(crop["palette_png"])
+    return record
+
+
 def material_map(source_character: dict, target_sets) -> dict[int, int]:
     old = [int(s) for s in source_character["texture_page_sets"]]
     if len(old) != 3:
