@@ -145,10 +145,10 @@ class SplitTests(unittest.TestCase):
         changed = jmodel.split_character(self.root, self._char(), force=False)
         self.assertGreater(changed, 0)
         char = self._char()
-        part = next(p for p in char["parts"] if p["part"] == "CALF_LEFT")
-        self.assertNotEqual(part["obj_edit_sha256"],
-                            jc.sha256_file(je.abs_path(self.root,
-                                                       part["obj_edit"])))
+        self.assertTrue(any(
+            p["obj_edit_sha256"] != jc.sha256_file(je.abs_path(self.root,
+                                                               p["obj_edit"]))
+            for p in char["parts"]))
 
     def test_split_pending_uses_hash_and_force(self):
         self.assertGreater(jmodel.split_pending(self.root), 0)

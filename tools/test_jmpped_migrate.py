@@ -120,7 +120,8 @@ class MigrationStateTests(unittest.TestCase):
             before = os.path.join(self.backup, "jmppeds", "v3",
                                   old[c["name"]]["bindpose"]["edit"]
                                   .replace("/", os.sep))
-            after = os.path.join(HERE, c["model"]["path"].replace("/", os.sep))
+            after_rel = c["model"].get("page_path") or c["model"]["path"]
+            after = os.path.join(HERE, after_rel.replace("/", os.sep))
             self.assertTrue(os.path.isfile(after), after)
             self.assertEqual(_sha(after), _sha(before), after)
         for name, rec in self.project["source_models"].items():

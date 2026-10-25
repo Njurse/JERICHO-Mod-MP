@@ -50,12 +50,13 @@ Driv3r"` to choose one.
 clones a character and allocates its texture pages; `sync-source` refreshes the
 source-owned first character.
 
-**Editing a character.** Edit `characters/<slug>/model.obj` (the one model) or
-the per-material crops in `textures/crops/`; then run `JMPPED.bat bake`. A
-changed combined model is split into the 14 parts automatically; the
-`models/{blender,engine}` files are generated caches. Keep the 14 parts as
-separate objects/groups named after them; the Blender checklist is in the
-guide.
+**Editing a character.** Edit `characters/<slug>/model_textured.obj` (the one
+textured model) and paint the per-material crop PNGs in place; then run
+`JMPPED.bat bake --copy`. The textured model is split into the 14 parts
+automatically; `model.obj` and `models/{blender,engine}` are generated caches.
+Per-part materials are `PART__s<set>_t<id>`, mapped by `model_textured.mtl` to
+`textures/crops/...`. If a texture is wrong, start with that MTL and run
+`JMPPED.bat textured --check --character "<name>"`.
 
 **Refusals.** The baker names the character/part and source rather than dropping
 data: both model copies changed, both RGB and indexed page forms changed, a full

@@ -215,6 +215,14 @@ materials named `s<set>_t<id>`. Run `JMPPED.bat bake --copy`; the bake splits
 the changed model, subtracts each part's bind offset and writes the caches. A
 joined mesh, a renamed part or a missing part is refused with the part named.
 
+## 5b. Textured model (Blender)
+
+`model_textured.obj` is the canonical edit model. It has one object per part and per-part materials `PART__s<set>_t<id>`; each `map_Kd` points at `textures/crops/<part>_set<set>_t<id>.png`. UVs are 0..1 inside that crop. `model.obj` is generated page space for the splitter; do not edit it.
+
+Open `characters/<slug>/model_textured.obj` in Blender, edit UVs and paint the crop PNGs in place, then run `JMPPED.bat bake --copy`. The splitter converts crop UVs back to page UVs and the baker rebuilds the page/CLUT. Run `JMPPED.bat textured --check --character "<name>"` to report every material, crop, rect, image size, palette row and UV bounds.
+
+**If a texture is wrong, start here.** Check `model_textured.mtl` first: material `PART__s<set>_t<id>` must map to the right crop, crop size must equal its `rect`, and UVs must stay 0..1. Then check `character.json` crop rects and `texture_page_map`, and run `textured --check`.
+
 ## 6. Pages and CLUTs
 
 A page is 256×256 at 4bpp. Each page carries a CLUT table with one 16-entry row

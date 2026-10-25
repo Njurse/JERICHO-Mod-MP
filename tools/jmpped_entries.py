@@ -174,6 +174,9 @@ def rewrite_paths(record: dict, old_prefix: str, new_prefix: str,
         rec = record.get(key)
         if rec and rec.get("path"):
             rec["path"] = rw(rec["path"])
+        for field in ("page_path", "mtl"):
+            if rec and rec.get(field):
+                rec[field] = rw(rec[field])
     for page in record.get("pages", []):
         for key in ("png", "indexed_png", "palette_png"):
             if page.get(key):

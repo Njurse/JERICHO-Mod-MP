@@ -113,6 +113,14 @@ def _preview(args) -> int:
     return _render_preview(args)
 
 
+def _textured(args) -> int:
+    import jmpped_textured
+    project = jws.project_root(args.project)
+    if args.check:
+        return jmpped_textured.check_uvs(project, args.character)
+    return jmpped_textured.export_textured(project, args.character)
+
+
 def _add_character(args) -> int:
     import jmpped_add_character
     return jmpped_add_character.add_character(
@@ -244,6 +252,14 @@ def main(argv: list[str] | None = None) -> int:
     pv.add_argument("--character", default=None,
                     help="archive character to render (default: last/custom)")
 
+    tx = sub.add_parser("textured",
+                        help="write or check the per-part textured model")
+    _add_project(tx)
+    tx.add_argument("--character", default=None,
+                    help="character name (default: last/custom)")
+    tx.add_argument("--check", action="store_true",
+                    help="report UV/crop alignment instead of exporting")
+
     ac = sub.add_parser("add-character",
                         help="clone a character and allocate texture pages")
     _add_project(ac)
@@ -285,6 +301,7 @@ def main(argv: list[str] | None = None) -> int:
         "import": _import,
         "bake": _bake,
         "preview": _preview,
+        "textured": _textured,
         "add-character": _add_character,
         "sync-source": _sync_source,
         "rebuild-all": _rebuild_all,

@@ -18,6 +18,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import jmpped_core as jc
 import jmpped_entries as je
 import jmpped_models as jm
+import jmpped_textured as jt
 
 
 def _abs(project: str, rel: str) -> str:
@@ -203,24 +204,41 @@ def split_character(project: str, character: dict, scene: str | None = None,
     if not force and not model_pending(project, character, manifest):
         return 0
 
-    model_rel = (character.get("model") or {}).get("path")
+    model = character.get("model") or {}
+    model_rel = model.get("path")
     if not model_rel:
         raise jc.JMPPEDError("character %r has no model.obj path"
                              % character.get("name", "?"))
     model_abs = _abs(project, model_rel)
+    page_rel = model.get("page_path")
+    page_abs = _abs(project, page_rel) if page_rel else None
+    textured_character = (model.get("format") == jt.FORMAT
+                          or model.get("uv_space") == jt.UV_SPACE)
     scene_rel = scene or model_rel
     scene_abs = (scene_rel if os.path.isabs(scene_rel)
                  else _abs(project, scene_rel))
     if not os.path.isfile(scene_abs):
         raise jc.JMPPEDError("combined model is missing: %s" % scene_abs)
     if os.path.abspath(scene_abs) != os.path.abspath(model_abs):
-        shutil.copy2(scene_abs, model_abs)
-        scene_abs = model_abs
+        if not (textured_character and page_abs
+                and os.path.abspath(scene_abs) == os.path.abspath(page_abs)):
+            shutil.copy2(scene_abs, model_abs)
+            scene_abs = model_abs
+    use_textured = textured_character and not (
+        page_abs and os.path.abspath(scene_abs) == os.path.abspath(page_abs))
+    if use_textured and raw:
+        raise jc.JMPPEDError(
+            "%s: the textured model is Blender-space; --raw is for page models"
+            % character.get("name", "?"))
 
     data = skeleton_for(project, character, manifest)
     parts = part_names(character)
     names = set(parts) | set(data["bindings"].values())
-    groups = jm.read_combined_obj(scene_abs, names, blender=not raw)
+    if use_textured:
+        groups = jt.read_textured(project, character, scene_abs)
+        jt.write_page_model(project, character, groups)
+    else:
+        groups = jm.read_combined_obj(scene_abs, names, blender=not raw)
     missing = sorted(set(parts) - set(groups))
     if missing:
         raise jc.JMPPEDError(
@@ -286,7 +304,11 @@ def split_character(project: str, character: dict, scene: str | None = None,
                 str(source_sets[i]): target_sets[i] for i in range(3)
             }
 
-    character.setdefault("model", {})["sha256"] = jc.sha256_file(scene_abs)
+    canonical_rel = (character.get("model") or {}).get("path")
+    canonical_abs = _abs(project, canonical_rel) if canonical_rel else scene_abs
+    character.setdefault("model", {})["sha256"] = jc.sha256_file(canonical_abs)
+    if page_abs:
+        character["model"]["page_sha256"] = jc.sha256_file(page_abs)
     character["model"]["split"] = True
     index = next((i for i, c in enumerate(manifest.get("characters", []))
                   if c.get("name") == character.get("name")
