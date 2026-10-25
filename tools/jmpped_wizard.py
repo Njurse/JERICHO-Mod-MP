@@ -62,11 +62,12 @@ def main() -> int:
         print("2) Import a character folder")
         print("3) Add a character")
         print("4) Preview")
-        print("5) Split per-material texture crops")
-        print("6) Extract a Driver 2 level")
+        print("5) Split per-material texture crops (crop images only)")
+        print("6) Extract a Driver 2 level (source export; not a character export)")
         print("7) Sync source-owned assets")
         print("8) Change project/source path")
         print("9) Show status")
+        print("10) Rebuild the textured model (model_textured.obj/.mtl)")
         print("0) Quit")
         choice = _ask("Choice: ")
 
@@ -107,6 +108,10 @@ def main() -> int:
                 print("No change.")
         elif choice == "9":
             _status()
+        elif choice == "10":
+            name = _ask("Character name (blank = last/custom): ")
+            args = ["textured", "--character", name] if name else ["textured"]
+            _run(args)
         else:
             print("Unknown choice.")
 

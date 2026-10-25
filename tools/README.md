@@ -58,6 +58,8 @@ Per-part materials are `PART__s<set>_t<id>`, mapped by `model_textured.mtl` to
 `textures/crops/...`. If a texture is wrong, start with that MTL and run
 `JMPPED.bat textured --check --character "<name>"`.
 
+The wizard's **Extract a Driver 2 level** option is source-only; it does not create a custom character's `model_textured.obj`. Use **Rebuild the textured model** (wizard option 10) or `JMPPED.bat textured --character "<name>"` after extracting.
+
 **Refusals.** The baker names the character/part and source rather than dropping
 data: both model copies changed, both RGB and indexed page forms changed, a full
 page and a crop changed together, an unknown texture page, or a page set owned

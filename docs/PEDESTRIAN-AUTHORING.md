@@ -221,6 +221,8 @@ joined mesh, a renamed part or a missing part is refused with the part named.
 
 Open `characters/<slug>/model_textured.obj` in Blender, edit UVs and paint the crop PNGs in place, then run `JMPPED.bat bake --copy`. The splitter converts crop UVs back to page UVs and the baker rebuilds the page/CLUT. Run `JMPPED.bat textured --check --character "<name>"` to report every material, crop, rect, image size, palette row and UV bounds.
 
+The wizard's **Extract a Driver 2 level** option is source-only: it refreshes `out/source/<level>` and the source template, not a custom character's `model_textured.obj`. After an extract, use **Rebuild the textured model** (wizard option 10) or `JMPPED.bat textured --character "<name>"`; then bake. Extraction refuses to replace a folder containing a different `character.json`, a `model_textured.obj`, or a `source.json`.
+
 **If a texture is wrong, start here.** Check `model_textured.mtl` first: material `PART__s<set>_t<id>` must map to the right crop, crop size must equal its `rect`, and UVs must stay 0..1. Then check `character.json` crop rects and `texture_page_map`, and run `textured --check`.
 
 ## 6. Pages and CLUTs

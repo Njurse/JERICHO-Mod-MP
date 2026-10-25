@@ -515,10 +515,43 @@ def _level_slug(source: str) -> str:
     return name.strip().lower() or "level"
 
 
-def _install_dir(src: str, dst: str) -> None:
+def _skeleton_variant(stage: str, project: dict, character: dict) -> str:
+    """Pick the source character's skeleton variant from the staged skeleton."""
+    rel = ((project.get("source") or {}).get("skeleton") or {}).get("json")
+    if rel:
+        path = rel if os.path.isabs(rel) else os.path.join(
+            stage, rel.replace("/", os.sep))
+        if os.path.isfile(path):
+            data = jc.load_json(path)
+            variants = sorted((data.get("variants") or {}).keys())
+            if "jericho" in variants:
+                return "jericho"
+            if variants:
+                return variants[0]
+    return character.get("skeleton") or "jericho"
+
+
+def _install_dir(src: str, dst: str, protect_name: str | None = None) -> None:
     if not os.path.isdir(src):
         return
     if os.path.exists(dst):
+        if protect_name:
+            char_path = os.path.join(dst, "character.json")
+            if os.path.isfile(char_path):
+                existing = jc.load_json(char_path)
+                if existing.get("name") != protect_name:
+                    raise jc.JMPPEDError(
+                        "refusing to replace character folder %s (it contains "
+                        "%r); move it first or extract under a different name"
+                        % (dst, existing.get("name")))
+            elif os.path.isfile(os.path.join(dst, "model_textured.obj")):
+                raise jc.JMPPEDError(
+                    "refusing to replace custom character folder %s; move it "
+                    "first" % dst)
+            elif os.path.isfile(os.path.join(dst, "source.json")):
+                raise jc.JMPPEDError(
+                    "refusing to replace folder %s: it looks like a source "
+                    "model, not the source character" % dst)
         shutil.rmtree(dst)
     os.makedirs(os.path.dirname(dst), exist_ok=True)
     shutil.copytree(src, dst)
@@ -553,6 +586,9 @@ def extract(source: str | None, project: str, reset: bool = False,
         if not new_chars:
             raise jc.JMPPEDError("extract produced no characters")
         source_char = new_chars[0]
+        if not source_char.get("skeleton"):
+            source_char["skeleton"] = _skeleton_variant(stage, new_project,
+                                                       source_char)
         keep = []
         if old_project:
             source_sets = {int(s) for s in source_char["texture_page_sets"]}
@@ -578,7 +614,8 @@ def extract(source: str | None, project: str, reset: bool = False,
                      os.path.join(project, "out", "build"))
         slug = os.path.basename(source_char["folder"].rstrip("/"))
         _install_dir(os.path.join(stage, "characters", slug),
-                     os.path.join(project, "characters", slug))
+                     os.path.join(project, "characters", slug),
+                     protect_name=source_char.get("name"))
         jc.save_json(os.path.join(project, "project.json"), new_project)
         jc.save_json(os.path.join(project, source_char["folder"],
                                   "character.json"), source_char)
