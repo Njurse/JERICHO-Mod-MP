@@ -78,6 +78,12 @@ def _add_entry() -> None:
                                   "--out", jws.bake_root()])
 
 
+def _split_crops() -> None:
+    entry = _ask("Entry name (default Jericho Driv3r): ") or "Jericho Driv3r"
+    _run(_py("jmpped_crops.py") + ["--out", jws.bake_root(),
+                                   "--entry", entry])
+
+
 def _refresh_source() -> None:
     print("\nRefreshing writes the SOURCE workspace only; the primed bake stays put.")
     if _ask("Type REFRESH to export from the Driver 2 level: ") != "REFRESH":
@@ -121,11 +127,12 @@ def main() -> int:
         print("2) Import/register a character folder")
         print("3) Add a new entry")
         print("4) Split a bindpose")
-        print("5) Preview")
-        print("6) Refresh source export (does not touch the bake)")
-        print("7) Prime bake from source")
-        print("8) Change bake/source workspace")
-        print("9) Show status")
+        print("5) Split part textures into per-material crops")
+        print("6) Preview")
+        print("7) Refresh source export (does not touch the bake)")
+        print("8) Prime bake from source")
+        print("9) Change bake/source workspace")
+        print("10) Show status")
         print("0) Quit")
         choice = _ask("Choice: ")
 
@@ -143,14 +150,16 @@ def main() -> int:
             _run(_py("jmpped_split.py") + ["--variant", variant,
                                            "--out", jws.bake_root()])
         elif choice == "5":
-            _run(_py("jmpped_bake.py") + ["preview", "--out", jws.bake_root()])
+            _split_crops()
         elif choice == "6":
-            _refresh_source()
+            _run(_py("jmpped_bake.py") + ["preview", "--out", jws.bake_root()])
         elif choice == "7":
-            _prime()
+            _refresh_source()
         elif choice == "8":
-            _change_workspace()
+            _prime()
         elif choice == "9":
+            _change_workspace()
+        elif choice == "10":
             _print_status()
         else:
             print("Unknown choice.")
