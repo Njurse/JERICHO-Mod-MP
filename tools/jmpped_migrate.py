@@ -603,11 +603,13 @@ def migrate(root: str, apply: bool, keep_old: bool = False,
                os.path.join(root, "characters", "jericho"))
     _restructure(os.path.join(root, "characters", "jericho"))
 
-    # Imported/authored characters
+    # Imported/authored characters. A fresh source export has no custom
+    # entries, so only move one when the staged workspace actually has it.
     os.makedirs(os.path.join(root, "characters"), exist_ok=True)
-    _move(os.path.join(old_work, "entries", "jerichod3"),
-          os.path.join(root, "characters", "jerichod3"))
-    _restructure(os.path.join(root, "characters", "jerichod3"))
+    custom_old = os.path.join(old_work, "entries", "jerichod3")
+    if os.path.isdir(custom_old):
+        _move(custom_old, os.path.join(root, "characters", "jerichod3"))
+        _restructure(os.path.join(root, "characters", "jerichod3"))
 
     # Entry 0 also uses Tanner's page set 2 and Tanner limbs. Copy every
     # source-owned file an entry references into that character folder, so a
