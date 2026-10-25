@@ -17,7 +17,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-import jmpped_common as jc
+import jmpped_core as jc
 import jmpped_entries as je
 
 

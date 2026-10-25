@@ -22,7 +22,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
 import extract_level_peds as bj
-import jmpped_common as jc
+import jmpped_core as jc
+import jmpped_models as jm
 
 TANNER_NAMES = [
     "TORSO", "HEAD", "U_ARM_RIGHT", "L_ARM_RIGHT", "HAND_RIGHT",
@@ -162,7 +163,7 @@ def ped_parts(level: Level, ped: str) -> list[dict]:
                 continue
             raise jc.JMPPEDError("%s: model %s is missing from %s"
                                  % (ped, name, level.path))
-        model = jc.parse_model(blob)
+        model = jm.parse_model(blob)
         page_sets = {p.set for p in model.polys if p.textured}
         out.append({
             "name": name,

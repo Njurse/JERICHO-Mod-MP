@@ -27,7 +27,10 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-import jmpped_common as jc
+import jmpped_core as jc
+import jmpped_archive as ja
+import jmpped_models as jm
+import jmpped_images as ji
 import jmpped_level as src
 import jmpped_workspace as jws
 
@@ -48,21 +51,21 @@ def _rel(path: str, root: str) -> str:
     return os.path.relpath(path, root).replace("\\", "/")
 
 
-def _page_entry(page: jc.Page, root: str, ped: str, display_clut: int = 0) -> tuple[dict, list[tuple[int, int, int]]]:
-    indices = jc.page_indices(page)
-    cluts = jc.page_cluts(page)
-    clut = jc.clut_rgb(cluts[display_clut]) if cluts else [(0, 0, 0)] * 16
-    rgb = jc.page_rgb(indices, clut)
+def _page_entry(page: ja.Page, root: str, ped: str, display_clut: int = 0) -> tuple[dict, list[tuple[int, int, int]]]:
+    indices = ji.page_indices(page)
+    cluts = ji.page_cluts(page)
+    clut = ji.clut_rgb(cluts[display_clut]) if cluts else [(0, 0, 0)] * 16
+    rgb = ji.page_rgb(indices, clut)
     pdir = os.path.join(root, ped, "png")
 
     idx_png = os.path.join(pdir, "pages", "page_%d_indexed.png" % page.set)
     pal_png = os.path.join(pdir, "palettes", "page_%d.png" % page.set)
-    jc.save_indexed_png(idx_png, jc.PAGE_W, jc.PAGE_H, indices, clut)
+    ji.save_indexed_png(idx_png, jc.PAGE_W, jc.PAGE_H, indices, clut)
     if cluts:
-        jc.save_rgb_png(pal_png, jc.CLUT_ROW_ENTRIES, len(cluts),
-                        [c for row in cluts for c in jc.clut_rgb(row)])
+        ji.save_rgb_png(pal_png, jc.CLUT_ROW_ENTRIES, len(cluts),
+                        [c for row in cluts for c in ji.clut_rgb(row)])
     else:
-        jc.save_rgb_png(pal_png, 1, 1, [(0, 0, 0)])
+        ji.save_rgb_png(pal_png, 1, 1, [(0, 0, 0)])
 
     entry = {
         "set": page.set,
@@ -82,14 +85,14 @@ def _page_entry(page: jc.Page, root: str, ped: str, display_clut: int = 0) -> tu
 
 
 def _part_entry(part: dict, ped: str, root: str,
-                page_map: dict[int, tuple[jc.Page, list[tuple[int, int, int]]]]) -> dict:
+                page_map: dict[int, tuple[ja.Page, list[tuple[int, int, int]]]]) -> dict:
     model = part["model"]
     name = part["name"]
     pdir = os.path.join(root, ped)
     raw_path = os.path.join(pdir, "obj", "raw", name + ".obj")
     edit_path = os.path.join(pdir, "obj", "edit", name + ".obj")
-    jc.write_obj(raw_path, model, blender=False, name=name)
-    jc.write_obj(edit_path, model, blender=True, name=name)
+    jm.write_obj(raw_path, model, blender=False, name=name)
+    jm.write_obj(edit_path, model, blender=True, name=name)
 
     materials: dict[tuple[int, int], dict] = {}
     for p in model.polys:
@@ -111,11 +114,11 @@ def _part_entry(part: dict, ped: str, root: str,
             raise jc.JMPPEDError("%s/%s references page %d, which the base archive "
                                  "does not carry" % (ped, name, page_set))
         page = page_map[page_set][0]
-        cluts = jc.page_cluts(page)
+        cluts = ji.page_cluts(page)
         # The page holds one CLUT per texture id; using row 0 for every material
         # is what made the exported crops look like the wrong palette.
         row = texture if 0 <= texture < len(cluts) else 0
-        clut = jc.clut_rgb(cluts[row]) if cluts else [(0, 0, 0)] * 16
+        clut = ji.clut_rgb(cluts[row]) if cluts else [(0, 0, 0)] * 16
         x0, x1 = rec["u"]
         y0, y1 = rec["v"]
         x0 = max(0, x0)
@@ -125,14 +128,14 @@ def _part_entry(part: dict, ped: str, root: str,
         w, h = x1 - x0 + 1, y1 - y0 + 1
         if w <= 0 or h <= 0:
             continue
-        page_indices = jc.page_indices(page)
+        page_indices = ji.page_indices(page)
         crop_idx_pixels = [page_indices[y * jc.PAGE_W + x]
                            for y in range(y0, y1 + 1)
                            for x in range(x0, x1 + 1)]
-        crop_pixels = jc.page_rgb(crop_idx_pixels, clut)
+        crop_pixels = ji.page_rgb(crop_idx_pixels, clut)
         crop_rgb = os.path.join(pdir, "png", "parts",
                                 "%s_set%d_t%d.png" % (name, page_set, texture))
-        jc.save_rgb_png(crop_rgb, w, h, crop_pixels)
+        ji.save_rgb_png(crop_rgb, w, h, crop_pixels)
         crop_entries.append({
             "page_set": page_set,
             "texture": texture,
@@ -168,7 +171,7 @@ def _part_entry(part: dict, ped: str, root: str,
 def _write_assembled(path: str, models: list, names: list[str],
                      offsets: dict[int, tuple[float, float, float]],
                      blender: bool) -> dict:
-    jc.write_assembled_obj(path, models, names, offsets, blender=blender)
+    jm.write_assembled_obj(path, models, names, offsets, blender=blender)
     return {"path": path, "sha256": _sha(path)}
 
 
@@ -248,7 +251,7 @@ def _legacy_export(source: str, out_root: str, reset: bool = False) -> dict:
     print("extracting Driver 2 peds from %s" % source)
     subprocess.run(cmd, check=True)
 
-    arch = jc.read_archive(base)
+    arch = ja.read_archive(base)
     if arch.version != jc.VERSION_V3:
         raise jc.JMPPEDError("the source baker produced v%d, expected v3"
                              % arch.version)
@@ -263,14 +266,14 @@ def _legacy_export(source: str, out_root: str, reset: bool = False) -> dict:
 
     # Canonical v5 form of the untouched source set. A no-edit build of entry 0
     # must reproduce this byte-for-byte.
-    v5_entry = jc.Entry("Jericho", arch.models, arch.pages,
+    v5_entry = ja.Entry("Jericho", arch.models, arch.pages,
                         arch.raw_models, arch.raw_pages)
-    v5_arch = jc.Archive(version=jc.VERSION_V5, model_names=jc.MODEL_NAMES,
+    v5_arch = ja.Archive(version=jc.VERSION_V5, model_names=jc.MODEL_NAMES,
                          models=arch.models, pages=arch.pages,
                          raw_models=arch.raw_models, raw_pages=arch.raw_pages,
                          entries=[v5_entry])
     base_v5 = os.path.join(out_root, "base_v5.LEV")
-    jc.write_archive(base_v5, v5_arch)
+    ja.write_archive(base_v5, v5_arch)
 
     level = src.read_level(source)
     skeleton = src.skeleton_bones(level)
@@ -316,7 +319,7 @@ def _legacy_export(source: str, out_root: str, reset: bool = False) -> dict:
 
     ped_parts = {}
     all_parts_by_name = {}
-    page_map: dict[int, tuple[jc.Page, list[tuple[int, int, int]]]] = {}
+    page_map: dict[int, tuple[ja.Page, list[tuple[int, int, int]]]] = {}
     pages = []
     for ped in ("tanner", "jericho"):
         parts = src.ped_parts(level, ped)
@@ -348,7 +351,7 @@ def _legacy_export(source: str, out_root: str, reset: bool = False) -> dict:
             asm_names = [n for n in src.JERICHO_NAMES if n in by_name]
             bind_parts = all_parts_by_name
             bindings = src.JERICHO_BINDINGS
-        offsets = jc.part_offsets(asm_models)
+        offsets = jm.part_offsets(asm_models)
         assembled = {}
         if asm_models:
             assembled = _scene_entry(
@@ -474,7 +477,7 @@ def _legacy_export(source: str, out_root: str, reset: bool = False) -> dict:
     }]
 
     jmpped_dir = os.path.join(out_root, "jmpped")
-    jmpped_offsets = jc.part_offsets(arch.models)
+    jmpped_offsets = jm.part_offsets(arch.models)
     ref_raw = _write_assembled(os.path.join(jmpped_dir, "assembled_raw.obj"),
                                arch.models, arch.model_names, jmpped_offsets, False)
     ref_edit = _write_assembled(os.path.join(jmpped_dir, "assembled_edit.obj"),

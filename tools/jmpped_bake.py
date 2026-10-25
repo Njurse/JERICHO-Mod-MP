@@ -21,7 +21,10 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-import jmpped_common as jc
+import jmpped_core as jc
+import jmpped_archive as ja
+import jmpped_models as jm
+import jmpped_images as ji
 import jmpped_entries as je
 
 
@@ -101,14 +104,14 @@ def _polys_from_obj(faces, path: str, set_map=None) -> list:
             u = int(round(uv[0] * 255.0))
             v = int(round((1.0 - uv[1]) * 255.0))
             uvs.append((max(0, min(255, u)), max(0, min(255, v))))
-        out.append(jc.Poly(kind=jc.POLY_FT3 if len(vs) == 3 else jc.POLY_FT4,
+        out.append(jm.Poly(kind=jc.POLY_FT3 if len(vs) == 3 else jc.POLY_FT4,
                            set=setid, id=texid, v=vs, uv=uvs, color=color))
     if not out:
         raise jc.JMPPEDError("%s has no faces" % path)
     return out
 
 
-def _load_model(path: str, blender: bool, model: jc.Model,
+def _load_model(path: str, blender: bool, model: jm.Model,
                 page_sets: set[int], label: str,
                 offset=(0.0, 0.0, 0.0), scale=(1.0, 1.0, 1.0),
                 set_map=None) -> bytes:
@@ -121,7 +124,7 @@ def _load_model(path: str, blender: bool, model: jc.Model,
         raise jc.JMPPEDError(
             "%s (%s): the original model uses a poly kind this toolkit cannot "
             "rebuild; leave the part untouched" % (label, path))
-    verts, faces = jc.read_obj(path, blender=blender)
+    verts, faces = jm.read_obj(path, blender=blender)
     ox, oy, oz = offset
     sx, sy, sz = scale
     ints = [(int(round(x * sx + ox)),
@@ -137,7 +140,7 @@ def _load_model(path: str, blender: bool, model: jc.Model,
                 "%s: a poly references texture page %d, which this character "
                 "does not carry (pages: %s)"
                 % (label, p.set, ", ".join(str(s) for s in sorted(page_sets))))
-    return jc.build_model_blob(model, ints, polys)
+    return jm.build_model_blob(model, ints, polys)
 
 
 def _check_page_rect(rect, path: str):
@@ -151,16 +154,16 @@ def _check_page_rect(rect, path: str):
 
 
 def _load_page_rgb(path: str, cluts: list[bytes], palette_row: int) -> bytes:
-    w, h, pixels = jc.load_png_rgb(path)
+    w, h, pixels = ji.load_png_rgb(path)
     if w != jc.PAGE_W or h != jc.PAGE_H:
         raise jc.JMPPEDError("%s is %dx%d, expected %dx%d"
                              % (path, w, h, jc.PAGE_W, jc.PAGE_H))
-    clut = jc.clut_rgb(cluts[palette_row]) if cluts else [(0, 0, 0)] * 16
-    return bytes(jc.nearest_clut_index(c, clut) for c in pixels)
+    clut = ji.clut_rgb(cluts[palette_row]) if cluts else [(0, 0, 0)] * 16
+    return bytes(ji.nearest_clut_index(c, clut) for c in pixels)
 
 
 def _load_indexed(path: str, width: int, height: int) -> bytes:
-    w, h, indices = jc.load_png_indices(path)
+    w, h, indices = ji.load_png_indices(path)
     if w != width or h != height:
         raise jc.JMPPEDError("%s is %dx%d, expected %dx%d"
                              % (path, w, h, width, height))
@@ -168,11 +171,11 @@ def _load_indexed(path: str, width: int, height: int) -> bytes:
 
 
 def _load_clut_strip(path: str, count: int) -> list[bytes]:
-    w, h, pixels = jc.load_png_rgb(path)
+    w, h, pixels = ji.load_png_rgb(path)
     if w != jc.CLUT_ROW_ENTRIES or h != count:
         raise jc.JMPPEDError("%s is %dx%d, expected %dx%d (one row per palette)"
                              % (path, w, h, jc.CLUT_ROW_ENTRIES, count))
-    return [jc.rgb_to_clut(pixels[y * w:(y + 1) * w]) for y in range(h)]
+    return [ji.rgb_to_clut(pixels[y * w:(y + 1) * w]) for y in range(h)]
 
 
 def _paletteize_crop(pixels, width: int, height: int):
@@ -222,7 +225,7 @@ def _apply_crop(state: dict, crop: dict, root: str, texture_ids=()) -> None:
     if idx_changed:
         patch = _load_indexed(idx_path, w, h)
     else:
-        _, _, pixels = jc.load_png_rgb(rgb_path)
+        _, _, pixels = ji.load_png_rgb(rgb_path)
         colors, patch = _paletteize_crop(pixels, w, h)
         rows = []
         if crop.get("palette_row") is not None:
@@ -240,7 +243,7 @@ def _apply_crop(state: dict, crop: dict, root: str, texture_ids=()) -> None:
                 raise jc.JMPPEDError(
                     "%s: texture row %d is outside the page's %d palette rows"
                     % (rgb_path, row, len(state["cluts"])))
-            state["cluts"][row] = jc.rgb_to_clut(colors)
+            state["cluts"][row] = ji.rgb_to_clut(colors)
             state["cluts_touched"] = True
 
     indices = bytearray(state["indices"])
@@ -252,14 +255,14 @@ def _apply_crop(state: dict, crop: dict, root: str, texture_ids=()) -> None:
     state["touched"] = True
 
 
-def _page_state(arch: jc.Archive, page: dict, root: str) -> dict:
+def _page_state(arch: ja.Archive, page: dict, root: str) -> dict:
     page_set = int(page["page_set"])
     index = next((i for i, p in enumerate(arch.pages) if p.set == page_set), None)
     if index is None:
         raise jc.JMPPEDError("page set %d is not in the base archive" % page_set)
     base = arch.pages[index]
-    indices = jc.page_indices(base)
-    cluts = jc.page_cluts(base)
+    indices = ji.page_indices(base)
+    cluts = ji.page_cluts(base)
     display = int(page.get("palette_row", 0))
     if display < 0 or display >= len(cluts):
         display = 0
@@ -293,7 +296,7 @@ def _page_state(arch: jc.Archive, page: dict, root: str) -> dict:
     }
 
 
-def _entry_page_state(page: dict, arch: jc.Archive, root: str) -> dict:
+def _entry_page_state(page: dict, arch: ja.Archive, root: str) -> dict:
     setid = int(page["page_set"])
     base_index = next((i for i, p in enumerate(arch.pages) if p.set == setid), None)
     base_page = arch.pages[base_index] if base_index is not None else None
@@ -301,10 +304,10 @@ def _entry_page_state(page: dict, arch: jc.Archive, root: str) -> dict:
     if page.get("palette_rows_hex"):
         cluts = [bytes.fromhex(h) for h in page["palette_rows_hex"]]
     elif base_page is not None:
-        cluts = jc.page_cluts(base_page)
+        cluts = ji.page_cluts(base_page)
     else:
         cluts = []
-    indices = jc.page_indices(base_page) if base_page is not None else None
+    indices = ji.page_indices(base_page) if base_page is not None else None
     display = int(page.get("palette_row", 0))
     if display < 0 or display >= len(cluts):
         display = 0
@@ -366,12 +369,12 @@ def _copy_runtime(project: str, archive: str) -> None:
         print("copied -> %s" % target)
 
 
-def _build_character(project: str, arch: jc.Archive, character: dict,
+def _build_character(project: str, arch: ja.Archive, character: dict,
                      index: int, use: str):
     je.validate_character({}, character)
     page_sets = {int(s) for s in character["texture_page_sets"]}
     used_slots: set[int] = set()
-    models: list[jc.Model] = []
+    models: list[jm.Model] = []
     raw_models: list[bytes] = []
     changed = 0
 
@@ -421,7 +424,7 @@ def _build_character(project: str, arch: jc.Archive, character: dict,
                                "%s/%s" % (character["name"], part["part"]),
                                transform[0], transform[1],
                                _set_map(part, character))
-            model = jc.parse_model(blob)
+            model = jm.parse_model(blob)
             changed += 1
             print("model %-20s rebuilt from %s/%s" %
                   (arch.model_names[slot], character["name"],
@@ -467,7 +470,7 @@ def build_v5(project: str, manifest: dict, dest: str | None,
         raise jc.JMPPEDError("base archive %s is missing" % base_path)
     if jc.sha256_file(base_path) != manifest["source"]["base_sha256"]:
         raise jc.JMPPEDError("base archive hash does not match project.json")
-    arch = jc.read_archive(base_path)
+    arch = ja.read_archive(base_path)
     if arch.version != jc.VERSION_V3 or len(arch.models) != 14:
         raise jc.JMPPEDError("base archive is v%d with %d models; expected v3/14"
                              % (arch.version, len(arch.models)))
@@ -502,22 +505,22 @@ def build_v5(project: str, manifest: dict, dest: str | None,
         for page in c["pages"]:
             st = states[int(page["page_set"])]
             if st["touched"] or st["index"] is None:
-                pages.append(jc.make_raw_page(st["set"], st["indices"],
+                pages.append(ji.make_raw_page(st["set"], st["indices"],
                                               st["cluts"]))
                 raw_pages.append(b"")
                 changed_pages += 1
             else:
                 pages.append(st["page"])
                 raw_pages.append(st["raw"] or b"")
-        out_entries.append(jc.Entry(c["name"], models, pages, raw_models,
+        out_entries.append(ja.Entry(c["name"], models, pages, raw_models,
                                     raw_pages))
 
-    arch5 = jc.Archive(version=jc.VERSION_V5, model_names=jc.MODEL_NAMES,
+    arch5 = ja.Archive(version=jc.VERSION_V5, model_names=jc.MODEL_NAMES,
                        models=out_entries[0].models, pages=out_entries[0].pages,
                        raw_models=out_entries[0].raw_models,
                        raw_pages=out_entries[0].raw_pages,
                        entries=out_entries)
-    data = jc.archive_bytes(arch5)
+    data = ja.archive_bytes(arch5)
 
     expected = None
     base_v5 = manifest["source"].get("base_v5")
@@ -541,11 +544,11 @@ def build_v5(project: str, manifest: dict, dest: str | None,
            "%d model(s), %d page(s), %d crop(s) changed" %
            (changed_models, changed_pages, changed_crops)))
 
-    check = jc.read_archive(dest)
+    check = ja.read_archive(dest)
     if check.version != jc.VERSION_V5 or len(check.entries) != len(out_entries):
         raise jc.JMPPEDError("self-check failed: reread archive is v%d/%d "
                              "characters" % (check.version, len(check.entries)))
-    if jc.archive_bytes(check) != data:
+    if ja.archive_bytes(check) != data:
         raise jc.JMPPEDError("self-check failed: reread archive does not "
                              "re-serialize")
     if copy:
@@ -564,7 +567,7 @@ def build_v3(project: str, manifest: dict, dest: str | None,
         raise jc.JMPPEDError("base archive %s is missing" % base_path)
     if jc.sha256_file(base_path) != manifest["source"]["base_sha256"]:
         raise jc.JMPPEDError("base archive hash does not match project.json")
-    arch = jc.read_archive(base_path)
+    arch = ja.read_archive(base_path)
     if arch.version != jc.VERSION_V3 or len(arch.models) != 14:
         raise jc.JMPPEDError("base archive is v%d with %d models; expected v3/14"
                              % (arch.version, len(arch.models)))
@@ -580,13 +583,13 @@ def build_v3(project: str, manifest: dict, dest: str | None,
     for st in states.values():
         if not st["touched"]:
             continue
-        arch.pages[st["index"]] = jc.make_raw_page(st["set"], st["indices"],
+        arch.pages[st["index"]] = ji.make_raw_page(st["set"], st["indices"],
                                                    st["cluts"])
         arch.raw_pages[st["index"]] = b""
         changed_pages += 1
         print("page set %3d rebuilt as a raw page" % st["set"])
 
-    data = jc.archive_bytes(arch)
+    data = ja.archive_bytes(arch)
     original = open(base_path, "rb").read()
     if dry_run:
         print("dry run: %d model(s), %d page(s); %d bytes" %
@@ -600,11 +603,11 @@ def build_v3(project: str, manifest: dict, dest: str | None,
           (dest, len(data), "byte-identical to base" if data == original else
            "%d model(s), %d page(s), %d crop(s) changed" %
            (changed_models, changed_pages, changed_crops)))
-    check = jc.read_archive(dest)
+    check = ja.read_archive(dest)
     if check.version != jc.VERSION_V3 or len(check.models) != 14:
         raise jc.JMPPEDError("self-check failed: reread archive is v%d/%d models"
                              % (check.version, len(check.models)))
-    if jc.archive_bytes(check) != data:
+    if ja.archive_bytes(check) != data:
         raise jc.JMPPEDError("self-check failed: reread archive does not "
                              "re-serialize")
     if copy:

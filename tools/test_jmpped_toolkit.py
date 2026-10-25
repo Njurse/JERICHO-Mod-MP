@@ -16,7 +16,9 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-import jmpped_common as jc
+import jmpped_core as jc
+import jmpped_archive as ja
+import jmpped_models as jm
 import jmpped_bake as jb
 import jmpped_entries as je
 
@@ -28,11 +30,11 @@ SOURCE_BASE = os.path.join(HERE, "out", "source", "havana", "base.LEV")
 class ArchiveV5Tests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.base = jc.read_archive(BASE)
+        cls.base = ja.read_archive(BASE)
         cls.entry = cls.base.entries[0]
 
     def _archive(self, entries):
-        return jc.Archive(version=jc.VERSION_V5,
+        return ja.Archive(version=jc.VERSION_V5,
                           model_names=jc.MODEL_NAMES,
                           models=entries[0].models,
                           pages=entries[0].pages,
@@ -42,13 +44,13 @@ class ArchiveV5Tests(unittest.TestCase):
 
     def _second_entry(self, name="Driv3r"):
         sets = jc.entry_page_sets(1)
-        pages = [jc.Page(sets[i], p.npalettes, p.clut, p.image, p.flags)
+        pages = [ja.Page(sets[i], p.npalettes, p.clut, p.image, p.flags)
                  for i, p in enumerate(self.entry.pages)]
-        return jc.Entry(name, list(self.entry.models), pages,
+        return ja.Entry(name, list(self.entry.models), pages,
                         list(self.entry.raw_models))
 
     def test_v3_base_reads_as_jericho_entry(self):
-        base = jc.read_archive(SOURCE_BASE)
+        base = ja.read_archive(SOURCE_BASE)
         self.assertEqual(base.version, jc.VERSION_V3)
         self.assertEqual(len(base.entries), 1)
         self.assertEqual(base.entries[0].name, "Jericho")
@@ -56,20 +58,20 @@ class ArchiveV5Tests(unittest.TestCase):
         self.assertEqual([p.set for p in base.entries[0].pages], [23, 25, 2])
 
     def test_v5_one_entry_round_trip(self):
-        data = jc.archive_bytes(self._archive([self.entry]))
-        again = jc.parse_archive(data)
+        data = ja.archive_bytes(self._archive([self.entry]))
+        again = ja.parse_archive(data)
         self.assertEqual(again.version, jc.VERSION_V5)
         self.assertEqual(len(again.entries), 1)
         self.assertEqual(again.entries[0].name, "Jericho")
         self.assertEqual(again.entries[0].models[0].blob,
                          self.base.entries[0].models[0].blob)
         self.assertEqual([p.set for p in again.entries[0].pages], [23, 25, 2])
-        self.assertEqual(jc.archive_bytes(again), data)
+        self.assertEqual(ja.archive_bytes(again), data)
 
     def test_v5_two_entries_preserve_untouched_entry(self):
         second = self._second_entry()
-        data = jc.archive_bytes(self._archive([self.entry, second]))
-        again = jc.parse_archive(data)
+        data = ja.archive_bytes(self._archive([self.entry, second]))
+        again = ja.parse_archive(data)
 
         self.assertEqual([e.name for e in again.entries], ["Jericho", "Driv3r"])
         self.assertEqual([p.set for p in again.entries[0].pages], [23, 25, 2])
@@ -79,19 +81,19 @@ class ArchiveV5Tests(unittest.TestCase):
                              self.base.entries[0].models[i].blob)
             self.assertEqual(again.entries[1].models[i].blob,
                              self.base.entries[0].models[i].blob)
-        self.assertEqual(jc.archive_bytes(again), data)
+        self.assertEqual(ja.archive_bytes(again), data)
 
     def test_duplicate_page_set_is_refused(self):
-        second = jc.Entry("Driv3r", list(self.entry.models), list(self.entry.pages),
+        second = ja.Entry("Driv3r", list(self.entry.models), list(self.entry.pages),
                           list(self.entry.raw_models))
         with self.assertRaises(jc.JMPPEDError):
-            jc.archive_bytes(self._archive([self.entry, second]))
+            ja.archive_bytes(self._archive([self.entry, second]))
 
     def test_missing_slot_is_refused(self):
-        short = jc.Entry("Short", list(self.entry.models[:-1]),
+        short = ja.Entry("Short", list(self.entry.models[:-1]),
                          list(self.entry.pages), list(self.entry.raw_models[:-1]))
         with self.assertRaises(jc.JMPPEDError):
-            jc.archive_bytes(self._archive([short]))
+            ja.archive_bytes(self._archive([short]))
 
 
 class ToolkitHelpers(unittest.TestCase):
@@ -113,7 +115,7 @@ class ToolkitHelpers(unittest.TestCase):
 class RefusalTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.base = jc.read_archive(BASE)
+        cls.base = ja.read_archive(BASE)
         cls.entry = cls.base.entries[0]
 
     def _entry_dict(self):
@@ -149,7 +151,7 @@ class RefusalTests(unittest.TestCase):
         model = copy.deepcopy(self.base.models[0])
         model.normals = []
         model.point_normals = []
-        model.polys = [jc.Poly(kind=jc.POLY_GT4, set=23, id=1,
+        model.polys = [jm.Poly(kind=jc.POLY_GT4, set=23, id=1,
                                v=[0, 1, 2, 3], uv=[(0, 0)] * 4)]
         with self.assertRaises(jc.JMPPEDError):
             jb._load_model("unused.obj", False, model, {23, 25, 2}, "TEST")

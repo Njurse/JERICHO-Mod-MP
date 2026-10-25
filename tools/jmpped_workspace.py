@@ -19,7 +19,7 @@ import os
 import shutil
 import time
 
-import jmpped_common as jc
+import jmpped_core as jc
 
 
 HERE = os.path.dirname(os.path.abspath(__file__))

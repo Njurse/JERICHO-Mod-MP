@@ -12,7 +12,7 @@ import os
 import re
 import shutil
 
-import jmpped_common as jc
+import jmpped_core as jc
 
 
 def rel(path: str, root: str) -> str:

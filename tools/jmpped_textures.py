@@ -17,12 +17,14 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-import jmpped_common as jc
+import jmpped_core as jc
+import jmpped_archive as ja
+import jmpped_images as ji
 import jmpped_entries as je
 import jmpped_bake as jb
 
 
-def _split_character(project: str, arch: jc.Archive, character: dict) -> int:
+def _split_character(project: str, arch: ja.Archive, character: dict) -> int:
     folder = os.path.join(project, character["folder"].replace("/", os.sep))
     crops_dir = os.path.join(folder, "textures", "crops")
     os.makedirs(crops_dir, exist_ok=True)
@@ -54,7 +56,7 @@ def _split_character(project: str, arch: jc.Archive, character: dict) -> int:
                     "%s/%s: texture %d is outside page %d's %d palette rows"
                     % (character["name"], part["part"], texture, page_set,
                        len(state["cluts"])))
-            clut = jc.clut_rgb(state["cluts"][texture])
+            clut = ji.clut_rgb(state["cluts"][texture])
             x0, x1 = (int(v) for v in m["u"])
             y0, y1 = (int(v) for v in m["v"])
             x0, y0 = max(0, x0), max(0, y0)
@@ -68,7 +70,7 @@ def _split_character(project: str, arch: jc.Archive, character: dict) -> int:
                       for x in range(x0, x1 + 1)]
             path = os.path.join(crops_dir, "%s_set%d_t%d.png"
                                 % (part["part"], page_set, texture))
-            jc.save_rgb_png(path, w, h, pixels)
+            ji.save_rgb_png(path, w, h, pixels)
             new_crops.append({
                 "page_set": page_set,
                 "texture": texture,
@@ -90,7 +92,7 @@ def split_textures(project: str, character_name: str | None = None) -> int:
     project = os.path.abspath(project)
     manifest = je.load_manifest(project)
     base = je.abs_path(project, manifest["source"]["base"])
-    arch = jc.read_archive(base)
+    arch = ja.read_archive(base)
     targets = ([je.character(manifest, character_name)] if character_name
                else manifest["characters"])
     changed = 0

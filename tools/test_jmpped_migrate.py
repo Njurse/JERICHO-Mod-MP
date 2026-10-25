@@ -19,7 +19,7 @@ import unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
-import jmpped_common as jc
+import jmpped_core as jc
 import jmpped_entries as je
 import jmpped_workspace as jws
 
