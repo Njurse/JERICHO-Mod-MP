@@ -132,7 +132,8 @@ def main() -> int:
         if choice == "0":
             return 0
         if choice == "1":
-            _run(_py("jmpped_bake.py") + ["build", "--out", jws.bake_root()])
+            _run(_py("jmpped_bake.py") + ["build", "--out", jws.bake_root(),
+                                          "--copy"])
         elif choice == "2":
             _register()
         elif choice == "3":

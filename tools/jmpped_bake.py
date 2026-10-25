@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import shutil
 import subprocess
 import sys
 
@@ -51,12 +52,31 @@ def _export(args, out: str) -> int:
     return _run(cmd)
 
 
+def _runtime_targets() -> list[str]:
+    targets = [os.path.join(HERE, "JMPPED.LEV")]
+    for config in ("Release", "Release_dev"):
+        levels = os.path.join(REPO, "src_rebuild", "bin", config,
+                              "DRIVER2", "LEVELS")
+        if os.path.isdir(os.path.dirname(os.path.dirname(levels))):
+            targets.append(os.path.join(levels, "JMPPED.LEV"))
+    return targets
+
+
 def _build(args, out: str) -> int:
     cmd = [sys.executable, BUILD, "--out", out, "--use", args.use,
            "--entry", args.entry]
+    targets = []
     if args.copy and not args.no_copy:
-        cmd += ["--copy-to", args.copy_to or DEFAULT_COPY]
-    return _run(cmd)
+        targets = ([args.copy_to] if args.copy_to else _runtime_targets())
+        cmd += ["--copy-to", targets[0]]
+    rc = _run(cmd)
+    if rc == 0 and targets:
+        bake = os.path.join(out, "JMPPED.LEV")
+        for target in targets[1:]:
+            os.makedirs(os.path.dirname(target), exist_ok=True)
+            shutil.copy2(bake, target)
+            print("copied -> %s" % target)
+    return rc
 
 
 def _add_entry(args, out: str) -> int:
