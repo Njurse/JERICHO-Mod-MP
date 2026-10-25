@@ -21,7 +21,7 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
-import bake_jmpped as bj
+import extract_level_peds as bj
 import jmpped_common as jc
 
 TANNER_NAMES = [

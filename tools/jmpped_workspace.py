@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
-"""jmpped_workspace.py - bake/source workspace paths, last-used state and backups.
+"""jmpped_workspace.py - project/source paths, last-used state and backups.
 
-The primed bake workspace holds `jmpped.json`, `entries/` and the archive being
-edited. A source export holds the untouched Driver 2 extraction. They are
-separate so refreshing the source cannot wipe the primed entries.
+The authoring layout is:
 
-State lives under tools/out/jmppeds/:
-    last_workspace.txt   selected primed bake workspace
-    last_source.txt      selected source export workspace
-    backups/<stamp>/     pre-reset/primes copies of jmpped.json + entries/
+    project.json                 the project manifest
+    characters/<slug>/           authored/imported characters
+    out/source/<level>/          extracted Driver 2 level (exports only)
+    out/build/                   baked archive and preview (builds only)
+    .state/                      last-used paths and backups (not an export)
+
+The old layout (out/jmppeds/v3 with jmpped.json and entries/) is refused with a
+pointer to `JMPPED.bat migrate`; it is never written by a normal command.
 """
 
 from __future__ import annotations
@@ -21,12 +23,33 @@ import jmpped_common as jc
 
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-STATE_ROOT = os.path.join(HERE, "out", "jmppeds")
-DEFAULT_BAKE = os.path.join(STATE_ROOT, "v3")
-DEFAULT_SOURCE = os.path.join(STATE_ROOT, "source", "current")
-LAST_BAKE = os.path.join(STATE_ROOT, "last_workspace.txt")
+STATE_ROOT = os.path.join(HERE, ".state")
+DEFAULT_PROJECT = HERE
+LAST_PROJECT = os.path.join(STATE_ROOT, "last_project.txt")
 LAST_SOURCE = os.path.join(STATE_ROOT, "last_source.txt")
 BACKUP_ROOT = os.path.join(STATE_ROOT, "backups")
+OLD_MANIFEST_REL = ("out", "jmppeds", "v3", "jmpped.json")
+
+
+def old_layout(root: str) -> str | None:
+    """Return the old manifest path when the given root still has it."""
+    path = os.path.join(os.path.abspath(root), *OLD_MANIFEST_REL)
+    return path if os.path.isfile(path) else None
+
+
+def ensure_project(root: str) -> str:
+    """Return project.json, or refuse an old/half-old workspace by name."""
+    root = os.path.abspath(root)
+    project = os.path.join(root, "project.json")
+    if os.path.isfile(project):
+        return project
+    old = old_layout(root)
+    if old:
+        raise jc.JMPPEDError(
+            "old workspace layout at %s; run JMPPED.bat migrate "
+            "(or python jmpped.py migrate --apply)" % old)
+    raise jc.JMPPEDError(
+        "no project.json in %s; run JMPPED.bat extract first" % root)
 
 
 def _read_last(path: str, fallback: str) -> str:
@@ -46,22 +69,44 @@ def _write_last(path: str, value: str) -> None:
         f.write(os.path.abspath(value) + "\n")
 
 
-def bake_root(explicit: str | None = None) -> str:
-    """Selected primed bake workspace (`--out` wins over the last-used file)."""
+def project_root(explicit: str | None = None) -> str:
+    """Selected project root (`--project`/`--out` wins over the last-used file)."""
     if explicit:
         return os.path.abspath(explicit)
-    return _read_last(LAST_BAKE, DEFAULT_BAKE)
+    return _read_last(LAST_PROJECT, DEFAULT_PROJECT)
+
+
+def bake_root(explicit: str | None = None) -> str:
+    """Compatibility name for the project root while the tools are renamed."""
+    return project_root(explicit)
 
 
 def source_root(explicit: str | None = None) -> str:
-    """Selected source export workspace (`--source-out`/wizard wins)."""
+    """Selected source export (`--source` wins over the last-used file)."""
     if explicit:
         return os.path.abspath(explicit)
-    return _read_last(LAST_SOURCE, DEFAULT_SOURCE)
+    last = _read_last(LAST_SOURCE, "")
+    if last:
+        return last
+    root = project_root()
+    project = os.path.join(root, "project.json")
+    if os.path.isfile(project):
+        try:
+            data = jc.load_json(project)
+            rel = (data.get("source") or {}).get("project")
+            if rel:
+                return os.path.join(root, rel.replace("/", os.sep))
+        except (OSError, ValueError):
+            pass
+    return os.path.join(root, "out", "source")
+
+
+def set_project(path: str) -> None:
+    _write_last(LAST_PROJECT, path)
 
 
 def set_bake(path: str) -> None:
-    _write_last(LAST_BAKE, path)
+    set_project(path)
 
 
 def set_source(path: str) -> None:
@@ -69,17 +114,21 @@ def set_source(path: str) -> None:
 
 
 def backup_workspace(root: str, reason: str) -> str | None:
-    """Copy jmpped.json and the entries tree before a reset/prime.
+    """Copy project.json and characters/ before a reset/sync.
 
-    Returns the backup directory, or None when there is no manifest to protect.
+    Returns the backup directory, or None when there is no project to protect.
+    out/source and out/build are generated and are not copied.
     """
     root = os.path.abspath(root)
-    manifest = os.path.join(root, "jmpped.json")
-    if not os.path.isfile(manifest):
+    project = os.path.join(root, "project.json")
+    if not os.path.isfile(project):
+        if old_layout(root):
+            raise jc.JMPPEDError(
+                "old workspace layout at %s; run JMPPED.bat migrate" % root)
         return None
 
     stamp = time.strftime("%Y%m%d-%H%M%S")
-    name = os.path.basename(root.rstrip("\\/")) or "workspace"
+    name = os.path.basename(root.rstrip("\\/")) or "project"
     dest = os.path.join(BACKUP_ROOT, "%s-%s" % (name, stamp))
     n = 1
     while os.path.exists(dest):
@@ -87,77 +136,95 @@ def backup_workspace(root: str, reason: str) -> str | None:
         n += 1
 
     os.makedirs(dest, exist_ok=True)
-    shutil.copy2(manifest, os.path.join(dest, "jmpped.json"))
-    entries = os.path.join(root, "entries")
-    if os.path.isdir(entries):
-        shutil.copytree(entries, os.path.join(dest, "entries"))
+    shutil.copy2(project, os.path.join(dest, "project.json"))
+    characters = os.path.join(root, "characters")
+    if os.path.isdir(characters):
+        shutil.copytree(characters, os.path.join(dest, "characters"))
     with open(os.path.join(dest, "README.txt"), "w",
               encoding="utf-8", newline="\n") as f:
         f.write("Pre-%s backup of %s\n" % (reason, root))
-        f.write("jmpped.json and entries/ copied; source export is untouched.\n")
+        f.write("project.json and characters/ copied; out/source and "
+                "out/build are generated and were not copied.\n")
     return dest
 
 
 def status(root: str, source: str | None = None) -> dict:
-    """Small report used by the wizard and the status action."""
+    """Report used by the wizard and the status action."""
     root = os.path.abspath(root)
-    manifest_path = os.path.join(root, "jmpped.json")
+    project_path = os.path.join(root, "project.json")
     out = {
         "workspace": root,
         "exists": os.path.isdir(root),
-        "manifest": os.path.isfile(manifest_path),
+        "manifest": os.path.isfile(project_path),
+        "project": os.path.isfile(project_path),
         "entries": [],
+        "characters": [],
         "base": None,
         "base_ok": None,
-        "source": source or _read_last(LAST_SOURCE, DEFAULT_SOURCE),
+        "base_exists": None,
+        "source": source or _read_last(LAST_SOURCE, ""),
         "source_exists": False,
         "source_mtime": None,
         "source_age_s": None,
+        "sync_needed": None,
         "prime_needed": None,
+        "migrate_required": (not os.path.isfile(project_path)
+                             and old_layout(root) is not None),
     }
-    if not out["manifest"]:
+    if not out["project"]:
         return out
 
-    manifest = jc.load_json(manifest_path)
-    out["entries"] = [e.get("name", "?") for e in manifest.get("entries", [])]
-    out["base"] = manifest.get("base_archive")
+    data = jc.load_json(project_path)
+    out["characters"] = [c.get("name", "?") for c in data.get("characters", [])]
+    out["entries"] = out["characters"]
+    src = data.get("source") or {}
+    out["base"] = src.get("base")
     if out["base"]:
         base_path = os.path.join(root, out["base"].replace("/", os.sep))
         out["base_exists"] = os.path.isfile(base_path)
         if out["base_exists"]:
             out["base_ok"] = (jc.sha256_file(base_path) ==
-                              manifest.get("base_archive_sha256"))
-    src = source or manifest.get("source_workspace") or out["source"]
-    out["source"] = src
-    out["source_exists"] = os.path.isdir(src)
+                              src.get("base_sha256"))
+    src_path = source or src.get("project") or out["source"]
+    if src_path and not os.path.isabs(src_path):
+        src_path = os.path.join(root, src_path.replace("/", os.sep))
+    out["source"] = src_path
+    out["source_exists"] = bool(src_path and os.path.isdir(src_path))
     if out["source_exists"]:
-        src_manifest = os.path.join(src, "jmpped.json")
-        src_time = (os.path.getmtime(src_manifest) if os.path.isfile(src_manifest)
-                    else os.path.getmtime(src))
-        out["source_mtime"] = src_time
-        out["source_age_s"] = int(time.time() - src_time)
-        out["prime_needed"] = src_time > os.path.getmtime(manifest_path)
+        probe = os.path.join(src_path, "base.LEV")
+        if not os.path.isfile(probe):
+            probe = src_path
+        out["source_mtime"] = os.path.getmtime(probe)
+        out["source_age_s"] = int(time.time() - out["source_mtime"])
+        out["sync_needed"] = out["source_mtime"] > os.path.getmtime(project_path)
+        out["prime_needed"] = out["sync_needed"]
     return out
 
 
 def main(argv=None):
     import argparse
-    ap = argparse.ArgumentParser(description="Show the selected JMPPED workspaces")
-    ap.add_argument("--bake", default=None)
+    ap = argparse.ArgumentParser(
+        description="Show the selected JMPPED project and source export")
+    ap.add_argument("--project", "--bake", dest="project", default=None)
     ap.add_argument("--source", default=None)
     args = ap.parse_args(argv)
-    bake = bake_root(args.bake)
+    project = project_root(args.project)
     source = source_root(args.source)
-    st = status(bake, source)
-    print("bake    :", bake)
-    print("source  :", source, "(missing)" if not st["source_exists"] else "")
-    print("manifest:", "yes" if st["manifest"] else "no")
-    print("entries :", ", ".join(st["entries"]) if st["entries"] else "none")
+    st = status(project, source)
+    print("project    :", project)
+    print("source     :", source,
+          "(missing)" if not st["source_exists"] else "")
+    print("manifest   :", "yes" if st["manifest"] else "no")
+    print("characters :", ", ".join(st["characters"])
+          if st["characters"] else "none")
     if st["base"]:
-        print("base    :", st["base"], "ok" if st["base_ok"] else "MISSING/CHANGED")
+        print("base       :", st["base"],
+              "ok" if st["base_ok"] else "MISSING/CHANGED")
     if st["source_exists"]:
-        print("source age:", st["source_age_s"], "s; prime:",
-              "needed" if st["prime_needed"] else "up to date")
+        print("source age :", st["source_age_s"], "s; sync:",
+              "needed" if st["sync_needed"] else "up to date")
+    if st["migrate_required"]:
+        print("migrate    : required (run JMPPED.bat migrate)")
     return 0
 
 

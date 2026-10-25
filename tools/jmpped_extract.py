@@ -9,7 +9,7 @@ baked JMPPED.LEV. The exporter writes one subexport per ped:
 
 JMPPED v3 consumes six Jericho parts plus Tanner's eight limbs; the full Tanner
 parts are still exported, with `bake_slot: null` for those the archive cannot
-hold. A `base.LEV` is generated from the same level by bake_jmpped.py so the
+hold. A `base.LEV` is generated from the same level by extract_level_peds.py so the
 builder has the untouched model/page bytes to preserve.
 
 Usage:
@@ -27,7 +27,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import jmpped_common as jc
-import jmpped_source as src
+import jmpped_level as src
 import jmpped_workspace as jws
 
 
@@ -36,7 +36,7 @@ REPO = os.path.abspath(os.path.join(HERE, "..", "..", "..", ".."))
 DEFAULT_SOURCE = os.path.join(REPO, "src_rebuild", "bin", "Release", "DRIVER2",
                               "LEVELS", "HAVANA.LEV")
 DEFAULT_OUT = os.path.join(HERE, "out", "jmppeds", "v3")
-BAKE = os.path.join(HERE, "bake_jmpped.py")
+BAKE = os.path.join(HERE, "extract_level_peds.py")
 
 
 def _sha(path: str) -> str:

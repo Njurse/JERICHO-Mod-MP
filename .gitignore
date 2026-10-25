@@ -16,5 +16,7 @@ __pycache__/
 *.log
 out/
 
-# JMPPED export/edit workspace (jmpped_export.py / jmpped_build.py)
-tools/out/jmppeds/
+# JMPPED authoring workspace (project.json, characters/, .state/)
+tools/characters/
+tools/project.json
+tools/.state/

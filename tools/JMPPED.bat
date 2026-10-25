@@ -1,16 +1,17 @@
 @echo off
 rem ============================================================
-rem  BAKE_JMPPED - thin Windows shim over jmpped_bake.py
+rem  JMPPED - pedestrian authoring launcher
 rem
-rem  Extracts Driver 2's Tanner and Jericho peds, exports a per-ped
-rem  OBJ/PNG/skeleton workspace and rebuilds JMPPED v3.
+rem  Verbs (see tools/NAMING.md):
+rem    extract | import | bake | preview | add-character |
+rem    sync-source | migrate | status | rebuild-all
 rem
-rem  Steps:  export | split | build | preview | all
 rem  Examples:
-rem    BAKE_JMPPED.bat all
-rem    BAKE_JMPPED.bat export --source DRIVER2\LEVELS\HAVANA.LEV
-rem    BAKE_JMPPED.bat split --and-build
-rem    BAKE_JMPPED.bat build --copy
+rem    JMPPED.bat status
+rem    JMPPED.bat extract --source DRIVER2\LEVELS\HAVANA.LEV
+rem    JMPPED.bat import --folder out\characters\jerichod3
+rem    JMPPED.bat bake --copy
+rem    JMPPED.bat rebuild-all --source DRIVER2\LEVELS\HAVANA.LEV
 rem ============================================================
 setlocal EnableExtensions
 
@@ -30,5 +31,5 @@ if not defined PY (
     exit /b 3
 )
 
-%PY% "%HERE%jmpped_bake.py" %*
+%PY% "%HERE%jmpped.py" %*
 exit /b %errorlevel%

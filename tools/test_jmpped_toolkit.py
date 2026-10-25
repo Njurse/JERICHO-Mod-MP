@@ -17,11 +17,12 @@ import unittest
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import jmpped_common as jc
-import jmpped_build as jb
+import jmpped_bake as jb
 import jmpped_entries as je
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 BASE = os.path.join(HERE, "JMPPED.LEV")
+SOURCE_BASE = os.path.join(HERE, "out", "source", "havana", "base.LEV")
 
 
 class ArchiveV5Tests(unittest.TestCase):
@@ -46,11 +47,13 @@ class ArchiveV5Tests(unittest.TestCase):
         return jc.Entry(name, list(self.entry.models), pages,
                         list(self.entry.raw_models))
 
-    def test_v3_reads_as_jericho_entry(self):
-        self.assertEqual(len(self.base.entries), 1)
-        self.assertEqual(self.base.entries[0].name, "Jericho")
-        self.assertEqual(len(self.base.entries[0].models), 14)
-        self.assertEqual([p.set for p in self.base.entries[0].pages], [23, 25, 2])
+    def test_v3_base_reads_as_jericho_entry(self):
+        base = jc.read_archive(SOURCE_BASE)
+        self.assertEqual(base.version, jc.VERSION_V3)
+        self.assertEqual(len(base.entries), 1)
+        self.assertEqual(base.entries[0].name, "Jericho")
+        self.assertEqual(len(base.entries[0].models), 14)
+        self.assertEqual([p.set for p in base.entries[0].pages], [23, 25, 2])
 
     def test_v5_one_entry_round_trip(self):
         data = jc.archive_bytes(self._archive([self.entry]))
@@ -97,7 +100,7 @@ class ToolkitHelpers(unittest.TestCase):
         self.assertEqual(je.slugify("  My Ped  "), "my-ped")
 
     def test_material_map(self):
-        src = {"name": "Jericho", "page_sets": [23, 25, 2]}
+        src = {"name": "Jericho", "texture_page_sets": [23, 25, 2]}
         self.assertEqual(je.material_map(src, (26, 27, 3)),
                          {23: 26, 25: 27, 2: 3})
 
@@ -116,24 +119,26 @@ class RefusalTests(unittest.TestCase):
     def _entry_dict(self):
         return {
             "name": self.entry.name,
-            "directory": "test-entry",
-            "page_sets": [p.set for p in self.entry.pages],
-            "pages": [{"set": p.set} for p in self.entry.pages],
-            "slots": [{"slot": i} for i in range(14)],
-            "bindpose": {"edit": "bindpose.obj"},
+            "folder": "test-character",
+            "texture_page_sets": [p.set for p in self.entry.pages],
+            "pages": [{"page_set": p.set} for p in self.entry.pages],
+            "parts": [{"slot": i, "part": jc.MODEL_NAMES[i],
+                       "obj_raw": "raw.obj", "obj_edit": "edit.obj"}
+                      for i in range(14)],
+            "model": {"path": "model.obj"},
         }
 
     def test_missing_slot_is_refused_by_entry_validation(self):
         e = self._entry_dict()
-        e["slots"] = e["slots"][:-1]
+        e["parts"] = e["parts"][:-1]
         with self.assertRaises(jc.JMPPEDError):
-            je.validate_entry({}, e)
+            je.validate_character({}, e)
 
     def test_duplicate_slot_is_refused_by_entry_validation(self):
         e = self._entry_dict()
-        e["slots"].append(copy.deepcopy(e["slots"][0]))
+        e["parts"].append(copy.deepcopy(e["parts"][0]))
         with self.assertRaises(jc.JMPPEDError):
-            je.validate_entry({}, e)
+            je.validate_character({}, e)
 
     def test_face_over_four_corners_is_refused(self):
         face = [(0, (0.0, 0.0), "s23_t1")] * 5

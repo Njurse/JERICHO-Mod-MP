@@ -65,7 +65,7 @@ def parse_model(blob):
     return {"instance": instance, "verts": verts, "polys": polys}
 
 
-def load_models(path, entry=None):
+def load_models(path, character=None):
     data = Path(path).read_bytes()
     if data[:8] != MAGIC:
         raise SystemExit(f"{path}: not a JMPPED.LEV")
@@ -95,16 +95,17 @@ def load_models(path, entry=None):
             entries.append((name, models))
         if not entries:
             raise SystemExit(f"{path}: v5 archive has no entries")
-        if entry is None:
+        if character is None:
             index = 0
-        elif isinstance(entry, int):
-            index = entry
+        elif isinstance(character, int):
+            index = character
         else:
-            index = next((i for i, (n, _m) in enumerate(entries) if n == entry), -1)
+            index = next((i for i, (n, _m) in enumerate(entries)
+                          if n == character), -1)
             if index < 0:
-                raise SystemExit(f"{path}: no entry named {entry!r}")
+                raise SystemExit(f"{path}: no character named {character!r}")
         if index < 0 or index >= len(entries):
-            raise SystemExit(f"{path}: entry {index} is out of range")
+            raise SystemExit(f"{path}: character {index} is out of range")
         models = entries[index][1]
     elif version in (3, 4) and count in (14, 15):
         off = 16
@@ -212,29 +213,34 @@ def render_frame(parts, angle, colour, size=512):
     return img
 
 
+def preview(lev, out, character=None, frames=36, size=512,
+            color=(200, 200, 50)) -> int:
+    parts = make_world(load_models(lev, character))
+    images = []
+    for i in range(frames):
+        angle = 2.0 * math.pi * i / frames
+        images.append(render_frame(parts, angle, tuple(color), size))
+    path = Path(out)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    images[0].save(path, save_all=True, append_images=images[1:],
+                   duration=80, loop=0, disposal=2, optimize=False)
+    print(f"wrote {path} ({len(images)} frames, {size}x{size})")
+    return 0
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--lev", default="JERICHO/MODS/mp/tools/JMPPED.LEV")
     ap.add_argument("--out", default="tmp/jmpped_360.gif")
-    ap.add_argument("--entry", default=None,
-                    help="entry name in a v5 archive (default first entry)")
+    ap.add_argument("--character", default=None,
+                    help="character name in a v5 archive (default first)")
     ap.add_argument("--color", nargs=3, type=int, default=[200, 200, 50])
     ap.add_argument("--frames", type=int, default=36)
     ap.add_argument("--size", type=int, default=512)
     args = ap.parse_args()
-
-    parts = make_world(load_models(args.lev, args.entry))
-    frames = []
-    for i in range(args.frames):
-        angle = 2.0 * math.pi * i / args.frames
-        frames.append(render_frame(parts, angle, tuple(args.color), args.size))
-
-    out = Path(args.out)
-    out.parent.mkdir(parents=True, exist_ok=True)
-    frames[0].save(out, save_all=True, append_images=frames[1:],
-                   duration=80, loop=0, disposal=2, optimize=False)
-    print(f"wrote {out} ({len(frames)} frames, {args.size}x{args.size})")
+    return preview(args.lev, args.out, args.character, args.frames, args.size,
+                   tuple(args.color))
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

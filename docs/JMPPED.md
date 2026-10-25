@@ -5,6 +5,46 @@ pages and skeleton come from, what the builder writes, and how the engine reads
 it. The toolkit quick-start stays in
 [`../tools/README.md`](../tools/README.md); this page is the full assembly map.
 
+## 0. Workspace naming
+
+The authoring workspace uses plain-language names. The full contract, including
+the target layout, is in [`../tools/NAMING.md`](../tools/NAMING.md). These are
+the renames that matter while reading the rest of this page:
+
+| Old | New |
+| --- | --- |
+| `out/jmppeds/v3` workspace | `tools/project.json` + `characters/` + `out/` |
+| `entries/<slug>/` | `characters/<slug>/` |
+| `ped.json` | `character.json` |
+| `obj/edit` / `obj/raw` | `models/blender` / `models/engine` |
+| `bindpose_edit.obj` / `bindpose_raw.obj` | `model.obj` / `models/engine_reference.obj` |
+| `png/pages`, `png/palettes`, `png/parts` | `textures/pages`, `textures/palettes`, `textures/crops` |
+| `jmpped.json` | `project.json` |
+| `peds` | `source_models` |
+| `slots` | `parts` (`slot` stays the archive index) |
+| `bindpose` | `model` |
+| `variant` | `skeleton` |
+| `source_ped` | `source_character` |
+| `directory` | `folder` |
+| `page_sets` / `palette_crops` | `texture_page_sets` / `texture_crops` |
+| `display_clut` | `palette_row` |
+| `archive_version` | `format_version` |
+| `export` / `split` / `build` / `prime` / `register` | `extract` / `import` / `bake` / `sync-source` / `import --folder` |
+
+`out/` is reserved for exports and generated builds; authored characters live
+in `characters/` beside it, never under `out/`.
+
+The user-facing verbs are `extract`, `import`, `bake`, `preview`,
+`add-character`, `sync-source`, `migrate` and `status`. `split` is an internal
+step of `import`, `register` is `import --folder`, and `build` is reserved for
+building the game; this toolkit bakes the archive.
+
+Engine-owned names do not change: the archive path stays `JMPPED.LEV`, the C
+API keeps its word **entry** (`JerPedEntryCount()`, `JerPedEntryName()`,
+`JerPedModelForEntry()`, `PEDESTRIAN.pedEntry`), and **slot** remains the
+0–13 archive index. Authoring prose calls the selectable unit a **character**
+and one of its 14 models a **part**.
+
 ## 1. What a JMPPED is
 
 `JMPPED.LEV` is a self-contained pedestrian archive loaded from

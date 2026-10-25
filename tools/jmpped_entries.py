@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
-"""Helpers shared by the multi-entry authoring tools.
+"""Helpers shared by the JMPPED authoring tools.
 
-The manifest's `entries[]` table is the single description of a selectable
-character: its name, directory, 14 slot descriptors, page sets/files, bindpose
-and palette crops. These helpers keep the add-entry/split/build/preview tools
-reading the same table.
+`project.json` is the single description of a project: its source export, the
+source models, the selectable characters, the texture pages and the 14 slot
+map. A character folder carries the same character record in `character.json`.
 """
 
 from __future__ import annotations
@@ -21,73 +20,113 @@ def rel(path: str, root: str) -> str:
 
 
 def load_manifest(out_root: str) -> dict:
-    path = os.path.join(out_root, "jmpped.json")
+    out_root = os.path.abspath(out_root)
+    path = os.path.join(out_root, "project.json")
     if not os.path.isfile(path):
-        raise jc.JMPPEDError("%s not found; run jmpped_export.py first" % path)
+        old = os.path.join(out_root, "out", "jmppeds", "v3", "jmpped.json")
+        if os.path.isfile(old):
+            raise jc.JMPPEDError(
+                "old workspace layout at %s; run JMPPED.bat migrate "
+                "(or python jmpped.py migrate --apply)" % old)
+        old_flat = os.path.join(out_root, "jmpped.json")
+        if os.path.isfile(old_flat):
+            raise jc.JMPPEDError(
+                "old workspace layout at %s; run JMPPED.bat migrate" % old_flat)
+        raise jc.JMPPEDError(
+            "%s not found; run JMPPED.bat extract first" % path)
     manifest = jc.load_json(path)
-    if manifest.get("manifest_version") != 2:
-        raise jc.JMPPEDError("unsupported manifest version %r; re-export the "
-                             "Tanner/Jericho workspace"
-                             % manifest.get("manifest_version"))
-    if not manifest.get("entries"):
-        raise jc.JMPPEDError("manifest has no entries[] table; re-export")
+    if manifest.get("project_version") != 2:
+        raise jc.JMPPEDError("unsupported project version %r; re-extract the "
+                             "workspace" % manifest.get("project_version"))
+    if not manifest.get("characters"):
+        raise jc.JMPPEDError("project has no characters[] table; re-extract")
     return manifest
 
 
-def entries(manifest: dict) -> list[dict]:
-    return manifest["entries"]
+def characters(manifest: dict) -> list[dict]:
+    return manifest["characters"]
 
 
-def entry_index(manifest: dict, name: str | int) -> int:
+def character_index(manifest: dict, name: str | int) -> int:
     if isinstance(name, int):
-        if name < 0 or name >= len(manifest["entries"]):
-            raise jc.JMPPEDError("entry index %d is out of range" % name)
+        if name < 0 or name >= len(manifest["characters"]):
+            raise jc.JMPPEDError("character index %d is out of range" % name)
         return name
-    for i, e in enumerate(manifest["entries"]):
-        if e["name"] == name:
+    for i, c in enumerate(manifest["characters"]):
+        if c["name"] == name:
             return i
-    raise jc.JMPPEDError("no entry named %r (entries: %s)"
-                         % (name, ", ".join(e["name"] for e in manifest["entries"])))
+    raise jc.JMPPEDError("no character named %r (characters: %s)"
+                         % (name, ", ".join(c["name"]
+                                            for c in manifest["characters"])))
 
 
-def entry(manifest: dict, name: str | int = "Jericho") -> dict:
-    return manifest["entries"][entry_index(manifest, name)]
+def character(manifest: dict, name: str | int = "Jericho") -> dict:
+    return manifest["characters"][character_index(manifest, name)]
+
+
+def source_models(manifest: dict) -> dict:
+    return manifest.get("source_models", {})
 
 
 def slugify(name: str) -> str:
     slug = re.sub(r"[^A-Za-z0-9]+", "-", name.strip()).strip("-").lower()
     if not slug:
-        raise jc.JMPPEDError("entry name %r has no usable directory name" % name)
+        raise jc.JMPPEDError("character name %r has no usable folder name" % name)
     return slug
 
 
-def validate_entry(manifest: dict, e: dict) -> None:
-    if not e.get("name") or not e.get("directory"):
-        raise jc.JMPPEDError("entry is missing name/directory")
-    if len(e.get("slots", [])) != len(jc.MODEL_NAMES):
-        raise jc.JMPPEDError("entry %r has %d slots; expected %d"
-                             % (e["name"], len(e.get("slots", [])), len(jc.MODEL_NAMES)))
-    slots = [int(s["slot"]) for s in e["slots"]]
+def validate_character(manifest: dict, c: dict) -> None:
+    if not c.get("name") or not c.get("folder"):
+        raise jc.JMPPEDError("character is missing name/folder")
+    parts = c.get("parts", [])
+    if len(parts) != len(jc.MODEL_NAMES):
+        raise jc.JMPPEDError("character %r has %d parts; expected %d"
+                             % (c["name"], len(parts), len(jc.MODEL_NAMES)))
+    slots = [int(p["slot"]) for p in parts]
     if sorted(slots) != list(range(len(jc.MODEL_NAMES))):
-        raise jc.JMPPEDError("entry %r slots are not 0..%d"
-                             % (e["name"], len(jc.MODEL_NAMES) - 1))
-    sets = [int(s) for s in e.get("page_sets", [])]
+        raise jc.JMPPEDError("character %r slots are not 0..%d"
+                             % (c["name"], len(jc.MODEL_NAMES) - 1))
+    sets = [int(s) for s in c.get("texture_page_sets", [])]
     if len(sets) != 3:
-        raise jc.JMPPEDError("entry %r has %d page sets; expected 3"
-                             % (e["name"], len(sets)))
-    page_sets = {int(p["set"]) for p in e.get("pages", [])}
+        raise jc.JMPPEDError("character %r has %d texture page sets; expected 3"
+                             % (c["name"], len(sets)))
+    page_sets = {int(p["page_set"]) for p in c.get("pages", [])}
     if page_sets != set(sets):
-        raise jc.JMPPEDError("entry %r page records %s do not match page_sets %s"
-                             % (e["name"], sorted(page_sets), sorted(sets)))
-    if not e.get("bindpose", {}).get("edit"):
-        raise jc.JMPPEDError("entry %r has no bindpose edit OBJ" % e["name"])
+        raise jc.JMPPEDError("character %r page records %s do not match "
+                             "texture_page_sets %s"
+                             % (c["name"], sorted(page_sets), sorted(sets)))
+    if not (c.get("model") or {}).get("path"):
+        raise jc.JMPPEDError("character %r has no model path" % c["name"])
+    for p in parts:
+        for key in ("slot", "part", "obj_raw", "obj_edit"):
+            if p.get(key) is None:
+                raise jc.JMPPEDError("%s/%s is missing %s"
+                                     % (c["name"], p.get("part", "?"), key))
 
 
-def material_map(source_entry: dict, target_sets: tuple[int, int, int]) -> dict[int, int]:
-    old = [int(s) for s in source_entry["page_sets"]]
+# Compatibility names for the transition; the authoring vocabulary is
+# character/part, but a few tools still call these entries/slots.
+def entries(manifest: dict) -> list[dict]:
+    return characters(manifest)
+
+
+def entry_index(manifest: dict, name: str | int) -> int:
+    return character_index(manifest, name)
+
+
+def entry(manifest: dict, name: str | int = "Jericho") -> dict:
+    return character(manifest, name)
+
+
+def validate_entry(manifest: dict, e: dict) -> None:
+    validate_character(manifest, e)
+
+
+def material_map(source_character: dict, target_sets) -> dict[int, int]:
+    old = [int(s) for s in source_character["texture_page_sets"]]
     if len(old) != 3:
-        raise jc.JMPPEDError("source entry %r has %d page sets"
-                             % (source_entry["name"], len(old)))
+        raise jc.JMPPEDError("source character %r has %d texture page sets"
+                             % (source_character["name"], len(old)))
     return {old[i]: int(target_sets[i]) for i in range(3)}
 
 
@@ -100,7 +139,7 @@ def remap_materials(text: str, mapping: dict[int, int]) -> str:
         new = mapping.get(setid)
         if new is None:
             raise jc.JMPPEDError("OBJ references page set %d, which is not in the "
-                                 "source entry" % setid)
+                                 "source character" % setid)
         return "usemtl s%d_t%s" % (new, m.group(2))
 
     return _MATERIAL.sub(sub, text)
