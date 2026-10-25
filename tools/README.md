@@ -40,6 +40,7 @@ BAKE_JMPPED.bat export --source DRIVER2/LEVELS/HAVANA.LEV
 BAKE_JMPPED.bat split --and-build       # edit a bindpose_edit.obj, then split+bake
 BAKE_JMPPED.bat build --copy            # copy the rebuild to DRIVER2/LEVELS
 BAKE_JMPPED.bat add-entry --name "Jericho (Driv3r)"
+REGISTER_JMPPED.bat out\jmppeds\v3\entries\jerichod3   # drag a completed entry folder
 BAKE_JMPPED.bat export --out my-edit    # keep a separate workspace
 ```
 

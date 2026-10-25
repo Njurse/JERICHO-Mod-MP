@@ -266,6 +266,24 @@ Then edit the copied 14 parts, textures and/or bindpose, set per-part
 carries the entry name; the engine sees it as `JerPedEntryCount()`/`Name()`, and
 the mp picker exposes it as `MP_PED_MODEL_*` id `entry index + 1`.
 
+### Registering a completed entry folder
+
+If `entries/<slug>/` already contains `ped.json`, all 14 `obj/raw|edit` parts,
+the three pages/palette strips and the bindpose:
+
+```sh
+python jmpped_register.py --folder entries/<slug>
+# or drag the folder onto REGISTER_JMPPED.bat
+```
+
+It validates the 14 slots, the three page sets, the page/crop/bindpose files and
+the entry index → page-set allocation, adds or replaces the entry in
+`jmpped.json`, builds the v5 archive, and copies the bake to
+`tools/JMPPED.LEV` plus the existing `Release`/`Release_dev` `DRIVER2/LEVELS`
+directories. `--no-build` registers without baking; `--no-copy` leaves the bake
+in the workspace. The folder must be inside the workspace; `add-entry` is the
+way to allocate a brand-new entry and page-set triplet from an existing one.
+
 Limits and rules:
 
 - at most 8 entries; the ninth is refused
