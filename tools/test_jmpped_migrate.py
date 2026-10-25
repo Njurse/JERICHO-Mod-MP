@@ -143,5 +143,23 @@ class MigrationStateTests(unittest.TestCase):
             self.assertTrue(jws.status(tmp)["migrate_required"])
 
 
+class BakeByteIdentityTests(unittest.TestCase):
+    def test_no_edit_bake_is_byte_identical(self):
+        project = os.path.join(HERE, "project.json")
+        base = os.path.join(HERE, "JMPPED.LEV")
+        if not os.path.isfile(project) or not os.path.isfile(base):
+            self.skipTest("no project/archive in this checkout")
+        import jmpped_bake
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            dest = os.path.join(tmp, "JMPPED.LEV")
+            self.assertEqual(jmpped_bake.bake(HERE, dest=dest), 0)
+            with open(dest, "rb") as f:
+                rebuilt = f.read()
+            with open(base, "rb") as f:
+                original = f.read()
+            self.assertEqual(rebuilt, original)
+
+
 if __name__ == "__main__":
     unittest.main()
