@@ -219,7 +219,7 @@ def _apply_crop(state: dict, crop: dict, root: str, texture_ids=()) -> None:
                 "%s: the full page and a per-part crop both changed; edit one"
                 % state["path"])
         return
-    if not (rgb_changed or idx_changed):
+    if not (rgb_changed or idx_changed or state.get("new")):
         return
 
     if idx_changed:
@@ -335,6 +335,7 @@ def _entry_page_state(page: dict, arch: ja.Archive, root: str) -> dict:
     return {
         "set": setid,
         "index": base_index,
+        "new": base_index is None,
         "page": base_page,
         "raw": base_raw,
         "indices": indices,
@@ -445,6 +446,7 @@ def _build_character(project: str, arch: ja.Archive, character: dict,
 def _apply_character_crops(character: dict, states: dict[int, dict],
                            project: str) -> int:
     changed = 0
+    seen = set()
     for part in character["parts"]:
         for crop in part.get("crops", []):
             page_set = int(crop["page_set"])
@@ -453,6 +455,13 @@ def _apply_character_crops(character: dict, states: dict[int, dict],
                     "%s/%s: crop references page set %d, which the character "
                     "does not carry"
                     % (character["name"], part["part"], page_set))
+            key = (page_set,
+                   tuple(int(v) for v in crop["rect"]),
+                   crop.get("rgb"),
+                   int(crop.get("palette_row", -1)))
+            if key in seen:
+                continue
+            seen.add(key)
             before = states[page_set]["touched"]
             texture_ids = sorted({int(m["id"]) for m in part.get("materials", [])
                                   if int(m["page_set"]) == page_set})

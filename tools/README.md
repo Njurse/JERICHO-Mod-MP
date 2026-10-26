@@ -60,6 +60,8 @@ Per-part materials are `PART__s<set>_t<id>`, mapped by `model_textured.mtl` to
 
 The wizard's **Extract a Driver 2 level** option is source-only; it does not create a custom character's `model_textured.obj`. Use **Rebuild the textured model** (wizard option 10) or `JMPPED.bat textured --character "<name>"` after extracting.
 
+`textured --combine` (wizard option 10, prompt default N) groups parts that share a game texture into one crop image; `--no-combine` keeps per-part crops. See the authoring guide §5b.
+
 **Refusals.** The baker names the character/part and source rather than dropping
 data: both model copies changed, both RGB and indexed page forms changed, a full
 page and a crop changed together, an unknown texture page, or a page set owned

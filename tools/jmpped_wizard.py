@@ -110,7 +110,10 @@ def main() -> int:
             _status()
         elif choice == "10":
             name = _ask("Character name (blank = last/custom): ")
+            combine = _ask("Combine identical textures into shared crops? [y/N]: ")
             args = ["textured", "--character", name] if name else ["textured"]
+            args.append("--combine" if combine.strip().lower() in ("y", "yes")
+                        else "--no-combine")
             _run(args)
         else:
             print("Unknown choice.")

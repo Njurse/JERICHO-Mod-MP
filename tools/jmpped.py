@@ -45,6 +45,15 @@ def _status(args) -> int:
           if st["characters"] else "none")
     pending = st.get("model_pending") or []
     print("models pending :", ", ".join(pending) if pending else "none")
+    shared = []
+    if st["manifest"]:
+        import jmpped_entries as je
+        manifest = je.load_manifest(project)
+        for character in manifest.get("characters", []):
+            shared.extend(character.get("shared_textures", []))
+    if shared:
+        print("shared textures :", ", ".join(
+            "s%d_t%d" % (g["page_set"], g["texture"]) for g in shared))
     if st["base"]:
         print("base       :", st["base"],
               "ok" if st["base_ok"] else "MISSING/CHANGED")
@@ -118,6 +127,10 @@ def _textured(args) -> int:
     project = jws.project_root(args.project)
     if args.check:
         return jmpped_textured.check_uvs(project, args.character)
+    if getattr(args, "combine", False) or getattr(args, "dry_run", False):
+        return jmpped_textured.combine_character(
+            project, args.character,
+            dry_run=getattr(args, "dry_run", False))
     return jmpped_textured.export_textured(project, args.character)
 
 
@@ -259,6 +272,14 @@ def main(argv: list[str] | None = None) -> int:
                     help="character name (default: last/custom)")
     tx.add_argument("--check", action="store_true",
                     help="report UV/crop alignment instead of exporting")
+    mode = tx.add_mutually_exclusive_group()
+    mode.add_argument("--combine", dest="combine", action="store_true",
+                      help="combine parts that share a game texture into one crop")
+    mode.add_argument("--no-combine", dest="combine", action="store_false",
+                      help="keep per-part crops (current behaviour)")
+    tx.set_defaults(combine=False)
+    tx.add_argument("--dry-run", action="store_true",
+                    help="report the shared texture groups without writing")
 
     ac = sub.add_parser("add-character",
                         help="clone a character and allocate texture pages")

@@ -223,6 +223,16 @@ Open `characters/<slug>/model_textured.obj` in Blender, edit UVs and paint the c
 
 The wizard's **Extract a Driver 2 level** option is source-only: it refreshes `out/source/<level>` and the source template, not a custom character's `model_textured.obj`. After an extract, use **Rebuild the textured model** (wizard option 10) or `JMPPED.bat textured --character "<name>"`; then bake. Extraction refuses to replace a folder containing a different `character.json`, a `model_textured.obj`, or a `source.json`.
 
+### Shared texture crops
+
+`textured --combine` groups parts by the game texture (`page_set`, `texture_id`) and writes one crop image per group:
+
+- page 26 `t9` (torso and both arm pairs) → `textures/crops/s26_t9.png` (16×64)
+- page 3 `t12` (thighs, calves, feet) → `textures/crops/s3_t12.png` (49×64)
+- page 3 `t2` (hands) → `textures/crops/s3_t2.png` (29×13)
+
+The head (`t24`/`t25`) and glasses (`t22`/`t23`) are unique and stay per-part. Per-part material slots stay; every member slot points at the shared image. Wizard option 10 asks **Combine identical textures into shared crops? [y/N]** and defaults to N. `--combine` runs it, `--no-combine` keeps the old per-part output, and `--dry-run` reports the groups. `textured --check` and `status` list the shared crops and their members.
+
 **If a texture is wrong, start here.** Check `model_textured.mtl` first: material `PART__s<set>_t<id>` must map to the right crop, crop size must equal its `rect`, and UVs must stay 0..1. Then check `character.json` crop rects and `texture_page_map`, and run `textured --check`.
 
 ## 6. Pages and CLUTs

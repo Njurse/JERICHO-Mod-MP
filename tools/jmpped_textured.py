@@ -131,6 +131,339 @@ def _crop_path(project: str, character: dict, crop: dict) -> str:
     return _abs(project, crop["rgb"])
 
 
+def texture_groups(character: dict) -> dict:
+    """Group part crops by the game texture they belong to."""
+    groups: dict[tuple[int, int], dict] = {}
+    for part in character.get("parts", []):
+        name = part.get("part")
+        for crop in part.get("crops", []):
+            if "page_set" not in crop or "texture" not in crop:
+                continue
+            page_set = int(crop["page_set"])
+            texture = int(crop["texture"])
+            key = (page_set, texture)
+            group = groups.get(key)
+            if group is None:
+                group = {
+                    "page_set": page_set,
+                    "texture": texture,
+                    "rect": None,
+                    "palette_row": int(crop.get("palette_row", texture)),
+                    "members": [],
+                }
+                groups[key] = group
+            rect = [int(v) for v in crop["rect"]]
+            group["members"].append({
+                "part": name,
+                "rect": rect,
+                "rgb": crop["rgb"],
+                "palette_row": int(crop.get("palette_row", texture)),
+            })
+            if group["rect"] is None:
+                group["rect"] = rect[:]
+            else:
+                x, y, w, h = group["rect"]
+                nx, ny, nw, nh = rect
+                x2 = max(x + w, nx + nw)
+                y2 = max(y + h, ny + nh)
+                x = min(x, nx)
+                y = min(y, ny)
+                group["rect"] = [x, y, x2 - x, y2 - y]
+    folder = character.get("folder", "characters").rstrip("/")
+    for (page_set, texture), group in groups.items():
+        group["shared"] = len(group["members"]) > 1
+        group["rgb"] = "%s/textures/crops/s%d_t%d.png" % (
+            folder, page_set, texture)
+    return groups
+
+
+def shared_textures(character: dict) -> list[dict]:
+    """Return the shared-texture metadata for groups used by >1 part."""
+    result = []
+    for (page_set, texture), group in sorted(texture_groups(character).items()):
+        if not group["shared"]:
+            continue
+        result.append({
+            "page_set": page_set,
+            "texture": texture,
+            "rect": list(group["rect"]),
+            "rgb": group["rgb"],
+            "palette_row": group["palette_row"],
+            "members": [m["part"] for m in group["members"]],
+            "source_rects": [list(m["rect"]) for m in group["members"]],
+        })
+    return result
+
+
+def _page_state(project: str, character: dict, page_set: int):
+    page = next((p for p in character.get("pages", [])
+                 if int(p.get("page_set", -1)) == int(page_set)), None)
+    if page is None:
+        raise jc.JMPPEDError("page set %d is not in the character" % page_set)
+    indexed = page.get("indexed_png")
+    palette = page.get("palette_png")
+    if not indexed or not palette:
+        raise jc.JMPPEDError("page set %d has no indexed/palette image" % page_set)
+    w, h, indices = ji.load_png_indices(_abs(project, indexed))
+    if (w, h) != (jc.PAGE_W, jc.PAGE_H):
+        raise jc.JMPPEDError("%s is %dx%d, expected %dx%d"
+                             % (indexed, w, h, jc.PAGE_W, jc.PAGE_H))
+    pw, ph, pixels = ji.load_png_rgb(_abs(project, palette))
+    if pw != jc.CLUT_ROW_ENTRIES:
+        raise jc.JMPPEDError("%s has %d palette entries per row, expected %d"
+                             % (palette, pw, jc.CLUT_ROW_ENTRIES))
+    rows = [ji.rgb_to_clut(pixels[y * pw:(y + 1) * pw])
+            for y in range(ph)]
+    return indices, rows
+
+
+def _union_pixels(project: str, character: dict, group: dict):
+    x, y, w, h = (int(v) for v in group["rect"])
+    indices, rows = _page_state(project, character, int(group["page_set"]))
+    row = int(group["palette_row"])
+    if row < 0 or row >= len(rows):
+        raise jc.JMPPEDError("texture row %d is outside page %d's %d rows"
+                             % (row, group["page_set"], len(rows)))
+    clut = ji.clut_rgb(rows[row])
+    pixels = []
+    for yy in range(h):
+        base = (y + yy) * jc.PAGE_W + x
+        for xx in range(w):
+            pixels.append(clut[indices[base + xx]])
+    for member in group["members"]:
+        mx, my, mw, mh = (int(v) for v in member["rect"])
+        path = _abs(project, member["rgb"])
+        if not os.path.isfile(path):
+            continue
+        cw, ch, crop = ji.load_png_rgb(path)
+        ox, oy = mx - x, my - y
+        for cy in range(min(ch, h - oy)):
+            for cx in range(min(cw, w - ox)):
+                px, py = ox + cx, oy + cy
+                if 0 <= px < w and 0 <= py < h:
+                    pixels[py * w + px] = crop[cy * cw + cx]
+    return pixels, w, h
+
+
+def _write_rgb(path: str, pixels, width: int, height: int) -> None:
+    from PIL import Image
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    data = bytes(c for p in pixels for c in p)
+    Image.frombytes("RGB", (width, height), data).save(path)
+
+
+def _backup_combine(project: str, character: dict, shared: dict) -> str:
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    dest = os.path.join(project, ".state", "backups", "combine-%s" % stamp)
+    n = 1
+    base = dest
+    while os.path.exists(dest):
+        dest = "%s-%d" % (base, n)
+        n += 1
+    os.makedirs(dest)
+    model = character.get("model") or {}
+    for rel in (model.get("path"), model.get("mtl"),
+                character["folder"].rstrip("/") + "/character.json",
+                "project.json"):
+        if rel:
+            src = _abs(project, rel)
+            if os.path.isfile(src):
+                shutil.copy2(src, os.path.join(dest, os.path.basename(src)))
+    crop_dir = os.path.join(dest, "crops")
+    os.makedirs(crop_dir, exist_ok=True)
+    for group in shared.values():
+        for member in group["members"]:
+            src = _abs(project, member["rgb"])
+            if os.path.isfile(src):
+                shutil.copy2(src, os.path.join(crop_dir,
+                                               os.path.basename(src)))
+    return dest
+
+
+def _rewrite_model(project: str, character: dict, model_abs: str,
+                   mtl_abs: str, old_crops: dict, shared: dict) -> None:
+    names = set(p["part"] for p in character.get("parts", []))
+    groups = jm.read_combined_obj(model_abs, names, blender=True)
+    lines = ["# JMPPED textured model (shared crops)\n",
+             "mtllib %s\n" % os.path.basename(mtl_abs)]
+    vert_base = 1
+    uv_base = 1
+    for part in character["parts"]:
+        name = part["part"]
+        group = groups.get(name)
+        if not group:
+            continue
+        lines.append("o %s\n" % name)
+        for x, y, z in group["verts"]:
+            lines.append("v %.6f %.6f %.6f\n" %
+                         (x * jc.BLENDER_SCALE, z * jc.BLENDER_SCALE,
+                          -y * jc.BLENDER_SCALE))
+        for face in group["faces"]:
+            material = face[0][2]
+            parsed = parse_material(material)
+            uvs = []
+            for _vi, uv, _mat in face:
+                if uv is None:
+                    uvs.append(None)
+                    continue
+                if parsed is not None:
+                    _p, source_set, texture = parsed
+                    target_set = _target_set(character, source_set)
+                    old = old_crops.get((name, target_set, texture))
+                    group_rec = shared.get((target_set, texture))
+                    if old is not None and group_rec is not None:
+                        uv = _clip_uv(page_to_crop(
+                            crop_to_page(uv, old["rect"]),
+                            group_rec["rect"]))
+                uvs.append(uv)
+            ids = []
+            for uv in uvs:
+                if uv is None:
+                    ids.append(None)
+                else:
+                    ids.append(uv_base)
+                    lines.append("vt %.6f %.6f\n" % (uv[0], uv[1]))
+                    uv_base += 1
+            lines.append("usemtl %s\n" % material)
+            corners = []
+            for (vi, _uv, _mat), uid in zip(face, ids):
+                gi = vert_base + vi
+                corners.append("%d" % gi if uid is None
+                               else "%d/%d" % (gi, uid))
+            lines.append("f " + " ".join(corners) + "\n")
+        vert_base += len(group["verts"])
+    with open(model_abs, "w", encoding="utf-8", newline="\n") as f:
+        f.write("".join(lines))
+
+
+def _rewrite_mtl(project: str, character: dict, mtl_abs: str,
+                 shared: dict) -> None:
+    char_dir = os.path.join(project, character["folder"])
+    lines = []
+    current = None
+    with open(mtl_abs, encoding="utf-8") as f:
+        for line in f:
+            if line.startswith("newmtl "):
+                current = line.split(None, 1)[1].strip()
+            if line.startswith("map_Kd ") and current:
+                rel = None
+                parsed = parse_material(current)
+                if parsed is not None:
+                    part, source_set, texture = parsed
+                    target_set = _target_set(character, source_set)
+                    group = shared.get((target_set, texture))
+                    if group is not None:
+                        rel = os.path.relpath(
+                            _abs(project, group["rgb"]), char_dir)
+                    else:
+                        crop = _crop(character, part, target_set, texture)
+                        if crop is not None:
+                            rel = os.path.relpath(
+                                _abs(project, crop["rgb"]), char_dir)
+                else:
+                    extra = _extra_material(character, current)
+                    if extra is not None:
+                        rel = os.path.relpath(
+                            _abs(project, extra["rgb"]), char_dir)
+                if rel is not None:
+                    line = "map_Kd %s\n" % rel.replace(os.sep, "/")
+            lines.append(line)
+    with open(mtl_abs, "w", encoding="utf-8", newline="\n") as f:
+        f.write("".join(lines))
+
+
+def combine_character(project: str, character_name: str | None = None,
+                      dry_run: bool = False) -> int:
+    project = os.path.abspath(project)
+    manifest = je.load_manifest(project)
+    character = _character(manifest, character_name)
+    groups = texture_groups(character)
+    shared = {k: g for k, g in groups.items() if g["shared"]}
+    if dry_run:
+        print("shared textures:")
+        for (page_set, texture), group in sorted(shared.items()):
+            print("  s%d_t%d row %d rect %s members %s"
+                  % (page_set, texture, group["palette_row"],
+                     group["rect"],
+                     ", ".join(m["part"] for m in group["members"])))
+        for (page_set, texture), group in sorted(groups.items()):
+            if not group["shared"]:
+                print("  unique s%d_t%d row %d rect %s members %s"
+                      % (page_set, texture, group["palette_row"],
+                         group["rect"],
+                         ", ".join(m["part"] for m in group["members"])))
+        return 0
+    if not shared:
+        print("no shared textures to combine in %s" % character["name"])
+        return 0
+
+    model = character.get("model") or {}
+    if (model.get("format") != FORMAT
+            or not os.path.isfile(_abs(project, model.get("path", "")))):
+        rc = export_textured(project, character.get("name"))
+        if rc:
+            return rc
+        manifest = je.load_manifest(project)
+        character = _character(manifest, character.get("name"))
+        groups = texture_groups(character)
+        shared = {k: g for k, g in groups.items() if g["shared"]}
+        if not shared:
+            print("no shared textures to combine in %s" % character["name"])
+            return 0
+
+    shared_meta = shared_textures(character)
+    old_crops = {}
+    for part in character["parts"]:
+        for crop in part.get("crops", []):
+            old_crops[(part["part"], int(crop["page_set"]),
+                       int(crop["texture"]))] = dict(crop)
+
+    backup = _backup_combine(project, character, shared)
+    for (page_set, texture), group in shared.items():
+        pixels, w, h = _union_pixels(project, character, group)
+        path = _abs(project, group["rgb"])
+        _write_rgb(path, pixels, w, h)
+        print("shared s%d_t%d -> %s (%dx%d)"
+              % (page_set, texture, group["rgb"], w, h))
+
+    for part in character["parts"]:
+        for crop in part.get("crops", []):
+            key = (int(crop["page_set"]), int(crop["texture"]))
+            group = shared.get(key)
+            if group is None:
+                continue
+            crop["rgb"] = group["rgb"]
+            crop["rect"] = list(group["rect"])
+            crop["palette_row"] = group["palette_row"]
+            crop["rgb_sha256"] = ""
+            crop.pop("indexed", None)
+            crop.pop("indexed_sha256", None)
+
+    character["shared_textures"] = shared_meta
+    model_path = _abs(project, character["model"]["path"])
+    mtl_rel = (character["model"].get("mtl")
+               or character["folder"].rstrip("/") + "/model_textured.mtl")
+    mtl_abs = _abs(project, mtl_rel)
+    _rewrite_model(project, character, model_path, mtl_abs,
+                   old_crops, shared)
+    _rewrite_mtl(project, character, mtl_abs, shared)
+
+    index = next((i for i, c in enumerate(manifest.get("characters", []))
+                  if c.get("name") == character.get("name")
+                  or c.get("folder") == character.get("folder")), None)
+    if index is None:
+        raise jc.JMPPEDError("character %r is not in project.json"
+                             % character.get("name", "?"))
+    manifest["characters"][index] = character
+    jc.save_json(os.path.join(project, "project.json"), manifest)
+    jc.save_json(os.path.join(project, character["folder"], "character.json"),
+                 character)
+    print("combined %d shared texture(s) in %s"
+          % (len(shared), character["name"]))
+    print("backed up -> %s" % backup)
+    return 0
+
+
 def page_to_crop(uv, rect):
     x, y, w, h = (float(v) for v in rect)
     px = uv[0] * 255.0
@@ -489,6 +822,13 @@ def check_uvs(project: str, character_name: str | None = None) -> int:
     _groups, stats, issues = scan_textured(project, character)
     print("character : %s" % character["name"])
     print("model     : %s" % character.get("model", {}).get("path"))
+    shared = character.get("shared_textures") or []
+    if shared:
+        print("shared    :")
+        for group in shared:
+            print("  s%d_t%d %s members=%s"
+                  % (group["page_set"], group["texture"], group["rgb"],
+                     ", ".join(group["members"])))
     print("%-26s %-12s %-42s %-14s %-9s %-5s %s"
           % ("material", "part", "crop", "rect", "size", "row",
              "uvs / status"))

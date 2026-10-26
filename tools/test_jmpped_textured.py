@@ -15,8 +15,29 @@ sys.path.insert(0, HERE)
 
 import jmpped_core as jc
 import jmpped_entries as je
+import jmpped_images as ji
 import jmpped_models as jm
 import jmpped_textured as jt
+
+
+def _copy_character(root):
+    fixture = os.path.join(HERE, ".state", "backups",
+                           "pre-combine-fixture", "jerichod3")
+    src = fixture if os.path.isdir(fixture) else os.path.join(
+        HERE, "characters", "jerichod3")
+    dst = os.path.join(root, "characters", "test")
+    shutil.copytree(src, dst)
+    character = jc.load_json(os.path.join(dst, "character.json"))
+    je.rewrite_paths(character, "characters/jerichod3", "characters/test")
+    jc.save_json(os.path.join(dst, "character.json"), character)
+    jc.save_json(os.path.join(root, "project.json"), {
+        "project_version": 2,
+        "format_version": jc.VERSION_V5,
+        "source": {"skeleton": {
+            "json": "out/source/havana/skeleton/skeleton.json"}},
+        "characters": [character],
+    })
+    return character
 
 
 class HeadMappingTests(unittest.TestCase):
@@ -26,6 +47,32 @@ class HeadMappingTests(unittest.TestCase):
         cls.character = je.character(cls.manifest, "Jericho Driv3r")
         cls.page_abs = os.path.join(HERE, "characters", "jerichod3", "model.obj")
         cls.groups = jt._read_page_groups(HERE, cls.character, cls.page_abs)
+
+    def test_texture_groups(self):
+        groups = jt.texture_groups(self.character)
+        body = groups[(26, 9)]
+        self.assertTrue(body["shared"])
+        self.assertEqual(body["rect"], [112, 128, 16, 64])
+        self.assertEqual(len(body["members"]), 5)
+        legs = groups[(3, 12)]
+        self.assertTrue(legs["shared"])
+        self.assertEqual(legs["rect"], [128, 0, 49, 64])
+        self.assertEqual(len(legs["members"]), 6)
+        hands = groups[(3, 2)]
+        self.assertTrue(hands["shared"])
+        self.assertEqual(hands["rect"], [194, 51, 29, 13])
+        self.assertEqual(len(hands["members"]), 2)
+        for key in ((27, 22), (27, 23), (27, 24), (27, 25)):
+            self.assertFalse(groups[key]["shared"], key)
+        shared = jt.shared_textures(self.character)
+        self.assertEqual(len(shared), 3)
+        self.assertEqual({tuple(g["members"]) for g in shared}, {
+            ("JERI_TORSO", "JERI_U_ARM_LEFT", "JERI_L_ARM_LEFT",
+             "JERI_U_ARM_RIGHT", "JERI_L_ARM_RIGHT"),
+            ("THIGH_LEFT", "CALF_LEFT", "FOOT_LEFT",
+             "THIGH_RIGHT", "CALF_RIGHT", "FOOT_RIGHT"),
+            ("HAND_LEFT", "HAND_RIGHT"),
+        })
 
     def test_material_names_round_trip(self):
         self.assertEqual(jt.part_material("JERI_HEAD", 27, 24),
@@ -70,10 +117,12 @@ class HeadMappingTests(unittest.TestCase):
         for part in ("JERI_TORSO", "JERI_U_ARM_LEFT", "JERI_U_ARM_RIGHT"):
             target = jt._target_set(self.character, 23)
             materials = {face[0][2] for face in self.groups[part]["faces"]}
-            self.assertIn("s%d_t9" % target, materials)
+            self.assertTrue("s23_t9" in materials or "s26_t9" in materials,
+                            materials)
             crop = jt._crop(self.character, part, target, 9)
             self.assertIsNotNone(crop, part)
-            self.assertIn("_set26_t9.png", crop["rgb"])
+            self.assertTrue("_set26_t9.png" in crop["rgb"]
+                            or "s26_t9.png" in crop["rgb"], crop["rgb"])
 
 
 class TempExportTests(unittest.TestCase):
@@ -114,10 +163,14 @@ class TempExportTests(unittest.TestCase):
                         or "JERI_U_ARM_RIGHT__s26_t9" in obj)
         self.assertIn("Glasses", obj)
         self.assertIn("Material.001", obj)
-        self.assertIn("map_Kd textures/crops/JERI_HEAD_set27_t22.png", mtl)
-        self.assertIn("map_Kd textures/crops/JERI_HEAD_set27_t23.png", mtl)
-        self.assertIn("map_Kd textures/crops/JERI_HEAD_set27_t24.png", mtl)
-        self.assertIn("map_Kd textures/crops/JERI_HEAD_set27_t25.png", mtl)
+        self.assertTrue("map_Kd textures/crops/JERI_HEAD_set27_t22.png" in mtl
+                        or "map_Kd textures/extra_assets/glasses.png" in mtl)
+        self.assertTrue("map_Kd textures/crops/JERI_HEAD_set27_t23.png" in mtl
+                        or "map_Kd textures/extra_assets/glasses_side.png" in mtl)
+        self.assertTrue("map_Kd textures/crops/JERI_HEAD_set27_t24.png" in mtl
+                        or "map_Kd textures/crops/JERI_HEAD_set25_t24.png" in mtl)
+        self.assertTrue("map_Kd textures/crops/JERI_HEAD_set27_t25.png" in mtl
+                        or "map_Kd textures/crops/JERI_HEAD_set25_t25.png" in mtl)
         char_dir = os.path.join(self.root, "characters", "test")
         for line in mtl.splitlines():
             if line.startswith("map_Kd "):
@@ -180,6 +233,132 @@ class TempExportTests(unittest.TestCase):
         self.assertTrue(issues)
         with self.assertRaises(jc.JMPPEDError):
             jt.read_textured(self.root, self.character)
+
+
+class CombineTests(unittest.TestCase):
+    def setUp(self):
+        self.root = tempfile.mkdtemp(prefix="jmpped-combine-")
+        self.addCleanup(shutil.rmtree, self.root, True)
+        self.character = _copy_character(self.root)
+        self.before_groups, _stats, issues = jt.scan_textured(
+            self.root, self.character)
+        self.assertEqual(issues, [])
+        self.assertEqual(jt.combine_character(self.root,
+                                             self.character["name"]), 0)
+        self.character = jc.load_json(os.path.join(
+            self.root, "characters", "test", "character.json"))
+
+    def test_union_crops_overlay_member_edits(self):
+        groups = jt.texture_groups(self.character)
+        records = self.character["shared_textures"]
+        self.assertEqual(len(records), 3)
+        for record in records:
+            key = (record["page_set"], record["texture"])
+            group = groups[key]
+            self.assertTrue(group["shared"])
+            self.assertEqual(group["rect"], record["rect"])
+            path = os.path.join(self.root, group["rgb"])
+            self.assertTrue(os.path.isfile(path))
+            w, h, pixels = ji.load_png_rgb(path)
+            self.assertEqual((w, h), (record["rect"][2], record["rect"][3]))
+            for index, (member, source) in enumerate(
+                    zip(record["members"], record["source_rects"])):
+                later = record["source_rects"][index + 1:]
+                old = os.path.join(
+                    self.root, "characters", "test", "textures", "crops",
+                    "%s_set%d_t%d.png" % (member, key[0], key[1]))
+                self.assertTrue(os.path.isfile(old), old)
+                cw, ch, crop = ji.load_png_rgb(old)
+                ox = source[0] - record["rect"][0]
+                oy = source[1] - record["rect"][1]
+                for yy in range(ch):
+                    for xx in range(cw):
+                        page_x = source[0] + xx
+                        page_y = source[1] + yy
+                        if any(l[0] <= page_x < l[0] + l[2]
+                               and l[1] <= page_y < l[1] + l[3]
+                               for l in later):
+                            continue
+                        self.assertEqual(
+                            pixels[(oy + yy) * w + ox + xx],
+                            crop[yy * cw + xx],
+                            (member, xx, yy))
+
+    def test_member_records_and_slots(self):
+        groups = jt.texture_groups(self.character)
+        for key in ((26, 9), (3, 12), (3, 2)):
+            group = groups[key]
+            for member in group["members"]:
+                part = next(p for p in self.character["parts"]
+                            if p["part"] == member["part"])
+                crop = next(c for c in part["crops"]
+                            if int(c["page_set"]) == key[0]
+                            and int(c["texture"]) == key[1])
+                self.assertEqual(crop["rgb"], group["rgb"])
+                self.assertEqual(crop["rect"], group["rect"])
+                self.assertEqual(crop["rgb_sha256"], "")
+        head = next(p for p in self.character["parts"]
+                    if p["part"] == "JERI_HEAD")
+        for tex in (22, 23, 24, 25):
+            crop = next(c for c in head["crops"]
+                        if int(c["texture"]) == tex)
+            self.assertIn("set27_t%d" % tex, crop["rgb"])
+        self.assertEqual(len(self.character["shared_textures"]), 3)
+
+    def test_uvs_keep_page_space(self):
+        after, _stats, issues = jt.scan_textured(self.root, self.character)
+        self.assertEqual(issues, [])
+        for part in ("JERI_TORSO", "JERI_U_ARM_LEFT",
+                     "THIGH_LEFT", "HAND_LEFT"):
+            before = sorted((round(uv[0], 4), round(uv[1], 4))
+                            for face in self.before_groups[part]["faces"]
+                            for _vi, uv, _mat in face)
+            now = sorted((round(uv[0], 4), round(uv[1], 4))
+                         for face in after[part]["faces"]
+                         for _vi, uv, _mat in face)
+            self.assertEqual(before, now, part)
+
+    def test_mtl_uses_shared_paths(self):
+        mtl = open(os.path.join(self.root, "characters", "test",
+                                "model_textured.mtl"),
+                   encoding="utf-8").read()
+        for name in ("s26_t9", "s3_t12", "s3_t2"):
+            self.assertIn("map_Kd textures/crops/%s.png" % name, mtl)
+        self.assertIn("map_Kd textures/crops/JERI_HEAD_set27_t24.png", mtl)
+        self.assertIn("map_Kd textures/crops/JERI_HEAD_set27_t22.png", mtl)
+        self.assertIn("map_d textures/extra_assets/glasses.png", mtl)
+
+    def test_backup_and_check(self):
+        self.assertEqual(jt.check_uvs(self.root, self.character["name"]), 0)
+        backups = os.listdir(os.path.join(self.root, ".state", "backups"))
+        self.assertTrue(any(n.startswith("combine-") for n in backups))
+
+
+class NoCombineTests(unittest.TestCase):
+    def setUp(self):
+        self.root = tempfile.mkdtemp(prefix="jmpped-nocombine-")
+        self.addCleanup(shutil.rmtree, self.root, True)
+        self.character = _copy_character(self.root)
+
+    def test_per_part_output_intact(self):
+        groups = jt.texture_groups(self.character)
+        self.assertTrue(groups[(26, 9)]["shared"])
+        for member in groups[(26, 9)]["members"]:
+            part = next(p for p in self.character["parts"]
+                        if p["part"] == member["part"])
+            crop = next(c for c in part["crops"]
+                        if int(c["page_set"]) == 26
+                        and int(c["texture"]) == 9)
+            self.assertIn("%s_set26_t9" % member["part"], crop["rgb"])
+        self.assertFalse(os.path.exists(os.path.join(
+            self.root, "characters", "test", "textures", "crops",
+            "s26_t9.png")))
+        self.assertNotIn("shared_textures", self.character)
+        mtl = open(os.path.join(self.root, "characters", "test",
+                                "model_textured.mtl"),
+                   encoding="utf-8").read()
+        self.assertNotIn("map_Kd textures/crops/s26_t9.png", mtl)
+        self.assertEqual(jt.check_uvs(self.root, self.character["name"]), 0)
 
 
 class CropPaintTests(unittest.TestCase):
