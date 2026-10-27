@@ -41,7 +41,7 @@ extern int gWantNight;		/* glaunch.c: 1 = the night take-a-ride level variant */
 #include "jer_map.h"	/* jer_map_*: the region maths behind "is the ground there?" */
 #include "map.h"	/* regions_across/down, MAP_REGION_SIZE, units_across_halved: map-wide join spawn */
 #include "pedest.h"	/* pUsedPeds: our player's own pedestrian, when on foot */
-#include "models.h"	/* JerPedImport*: the cross-level Jericho model/texture import */
+#include "jer_ped_archive.h"	/* interface-3 JMPPED archive contract (pedhacks) */
 #include "motion_c.h"	/* SetSkelModelPointers: the character switch */
 #include "jer_npc.h"	/* jer_npc_*: the pedestrian we stand in for a REMOTE one */
 #include "camera.h"	/* InitCamera: snap the camera with a placed late joiner */
@@ -3474,7 +3474,6 @@ static void MpTestCarCycleTick(void);
 static void MpTestReloadCarsTick(void);
 static void MpTestLeaveTick(void);
 static void MpTestKickTick(void);
-static void MpTestOnFootTick(void);
 static int MpEnsureJerichoImported(void);
 static int MpEnsureJerichoInstalled(void);
 static void MpTestEnterLeftTick(void);
@@ -5653,16 +5652,16 @@ static void MpTestKickTick(void)
  * Separate from MP_TEST_CARCHANGE on purpose: that lever has to find a civilian
  * car of a different model before it will do anything, which makes it useless as
  * a way to test THIS. */
-static void MpTestOnFootTick(void)
+void MpTestOnFootTick(void)
 {
 	static int done;
 	static int noted;
 	static unsigned long startMs;
 	const char* s;
 	unsigned long now = MpNowMs();
-	MP_PLAYER* me;
+	int carId = -1;
 
-	if (done || !gMp.running)
+	if (done)
 		return;
 
 	s = gTestOnFootStr;
@@ -5685,7 +5684,20 @@ static void MpTestOnFootTick(void)
 	if (startMs == 0)
 		startMs = MpNowMs();
 
-	me = MpLocalPlayer();
+	/* In a session the roster says which car is ours; in single player the
+	 * engine's own player[0] is the authority (the same rule the character apply
+	 * uses). -1 while already on foot. */
+	if (gMp.running)
+	{
+		MP_PLAYER* me = MpLocalPlayer();
+
+		if (me != NULL)
+			carId = me->carId;
+	}
+	else if (!gInFrontend && GameLevel >= 0)
+	{
+		carId = (int)player[0].playerCarId;
+	}
 
 	/* MP_DEBUG: name the wait and the car state, so "it did not fire" can be read
 	 * rather than guessed at. Same inline-condition form as MpLinkTick, so nothing
@@ -5693,12 +5705,12 @@ static void MpTestOnFootTick(void)
 	if (MpDebugOn() && gMpCtx != NULL && (gMp.frame % 60) == 0)
 		gMpCtx->jer_log(gMpCtx,
 			"[mp] test: onfoot waited %lums of %d000ms, carId %d, running %d\n",
-			now - startMs, atoi(s), me != NULL ? me->carId : -99, gMp.running);
+			now - startMs, atoi(s), carId, gMp.running);
 
 	if ((now - startMs) < (unsigned long)(atoi(s) * 1000))
 		return;
 
-	if (me == NULL || me->carId < 0)
+	if (carId < 0 || carId >= MAX_CARS)
 		return;			/* not in a car (yet): nothing to get out of */
 
 	done = 1;
@@ -5713,7 +5725,7 @@ static void MpTestOnFootTick(void)
 	 * ped. Calling ChangeCarPlayerToPed directly leaves spoolXZ pointing at a
 	 * NULL ped, and the next civ-AI pass (CivControl -> CheckPingOut) faults on
 	 * it. Mirror the engine: activate the ped, then step out. */
-	ActivatePlayerPedestrian(&car_data[me->carId], NULL, 0, NULL, TANNER_MODEL);
+	ActivatePlayerPedestrian(&car_data[carId], NULL, 0, NULL, TANNER_MODEL);
 	ChangeCarPlayerToPed(0);
 }
 
@@ -6913,7 +6925,7 @@ static LPPEDESTRIAN MpLocalPed(void)
 
 int MpPedModelCount(void)
 {
-	int entries = JerPedEntryCount();
+	int entries = jer_ped_archive_entry_count();
 
 	if (entries < 1)
 		entries = 1;	/* the Jericho id is always offered */
@@ -6941,7 +6953,7 @@ const char* MpPedModelName(int model)
 	if (model < 0 || model >= MP_PED_MODEL_MAX)
 		return "?";
 
-	name = JerPedEntryName(model - 1);
+	name = jer_ped_archive_entry_name(model - 1);
 
 	if (name != NULL && name[0] != '\0')
 		return name;
@@ -6965,25 +6977,25 @@ int MpPedModelAvailable(int model)
 	{
 		for (i = 0; i < 6; i++)
 		{
-			if (pmJerichoModels[0][i] == NULL)
+			if (!jer_ped_archive_model_installed(i))
 				return 0;
 		}
 
 		/* Native Havana models are already resident; imported models are ready
 		 * only when their pages and palette are in place. */
-		return (GameLevel == 1) ? 1 : JerPedImportReady();
+		return (GameLevel == 1) ? 1 : jer_ped_archive_ready();
 	}
 
-	if (entry >= JerPedEntryCount())
+	if (entry >= jer_ped_archive_entry_count())
 		return 0;
 
 	for (i = 0; i < 6; i++)
 	{
-		if (JerPedModelForEntry(entry, i) == NULL)
+		if (!jer_ped_archive_model_for_entry(entry, i))
 			return 0;
 	}
 
-	return JerPedImportReady();
+	return jer_ped_archive_ready();
 }
 
 static int sMpJerPedInstalledLevel = -1;
@@ -7007,7 +7019,7 @@ int MpPedModelSelectable(int model)
 	/* Jericho is offered before its import, because selecting it is what starts
 	 * the import. Later archive entries only appear once the count is known. */
 	return (model == MP_PED_MODEL_JERICHO) &&
-		(JerPedBakedAvailable() || JerPedImportProbe(1));
+		(jer_ped_archive_baked_available() || jer_ped_archive_probe(1));
 }
 
 int MpPedModelEffective(int model)
@@ -7101,6 +7113,7 @@ static void MpSelectLocalPalette(void)
  * explicit re-selection clears the flag. */
 static int sMpJerPedImportFailed;
 static int sMpJerPedImportLevel = -1;
+static int sMpJerPedBakedFailed;	/* the v5 bake itself was tried and refused */
 
 /* Make the resident six models usable for drawing: append their palette pairs,
  * rebuild the Jericho vertex list and rebind the skeleton. One success per
@@ -7113,7 +7126,7 @@ static int MpEnsureJerichoInstalled(void)
 	if (sMpJerPedInstalledLevel == GameLevel)
 		return 1;
 
-	if (!JerPedInstallModels())
+	if (!jer_ped_archive_install_models())
 		return 0;
 
 	sMpJerPedInstalledLevel = GameLevel;
@@ -7137,18 +7150,18 @@ static int MpEnsureJerichoImported(void)
 
 	/* The baked JMPPED.LEV is self-contained and is the shipping path; the live
 	 * Havana import remains as a diagnostic fallback. */
-	if (JerPedBakedAvailable())
+	if (jer_ped_archive_baked_available())
 	{
-		if (JerPedImportBaked(GameLevel) && MpEnsureJerichoInstalled())
+		if (jer_ped_archive_import_baked(GameLevel) && MpEnsureJerichoInstalled())
 			return 1;
 
-		JerPedImportReset();
+		jer_ped_archive_reset();
 	}
 
-	if (!JerPedImportProbe(1) || !JerPedImportBuild(1) || !MpEnsureJerichoInstalled())
+	if (!jer_ped_archive_probe(1) || !jer_ped_archive_import_build(1) || !MpEnsureJerichoInstalled())
 	{
 		sMpJerPedImportFailed = 1;
-		JerPedImportReset();
+		jer_ped_archive_reset();
 
 		if (gMpCtx != NULL)
 			gMpCtx->jer_log(gMpCtx,
@@ -7161,27 +7174,87 @@ static int MpEnsureJerichoImported(void)
 	return MpPedModelAvailable(MP_PED_MODEL_JERICHO);
 }
 
+/* A level (re)start rebuilds the engine's ped banks: InitTanner calls
+ * JerPedImportReset and jer_ped_palette_init, which drops the imported models,
+ * the stored vertex lists' authority and the palette pairs. Forget what we did
+ * for the previous world as well, or the same-GameLevel -1 mismatch checks below
+ * would trust a stale install and never re-bind. Called from JER_EVENT_GAME_START. */
+void MpPedArchiveReset(void)
+{
+	sMpJerPedInstalledLevel = -1;
+	sMpJerPedImportLevel = -1;
+	sMpJerPedImportFailed = 0;
+	sMpJerPedBakedFailed = 0;
+}
+
+/* Import and install the JMPPED archive for a loaded level. Shared by the
+ * session path and by single player: a missing bake still leaves the caller on
+ * the Jericho/Tanner fallback, and a refusal is remembered per level.
+ *
+ * Havana's native JERI_* models satisfy entry 0, so the ordinary import path
+ * (MpEnsureJerichoImported) short-circuits there -- but native Havana has no
+ * entries past 0. The bake is the only source of those, so read it first when
+ * the caller actually needs the entry table. */
+int MpPedArchiveEnsure(void)
+{
+	if (gInFrontend || GameLevel < 0)
+		return 0;
+
+	if (!sMpJerPedBakedFailed && jer_ped_archive_baked_available() && !jer_ped_archive_ready())
+	{
+		if (!jer_ped_archive_import_baked(GameLevel))
+		{
+			jer_ped_archive_reset();
+			sMpJerPedBakedFailed = 1;
+		}
+	}
+
+	return MpEnsureJerichoImported() && MpEnsureJerichoInstalled();
+}
+
+/* The pedestrian the engine is driving for OUR player, or NULL while we are in a
+ * car. In a session the roster is the authority; in single player there is no
+ * MP_PLAYER row at all, so player[0] is -- the engine puts our ped there and
+ * leaves playerCarId at -1 for as long as we are on foot. */
+static LPPEDESTRIAN MpPreferredCharacterPed(void)
+{
+	if (gMp.running)
+	{
+		MP_PLAYER* me = MpLocalPlayer();
+
+		if (me == NULL || me->carId >= 0)
+			return NULL;
+
+		return MpLocalPed();
+	}
+
+	if (gInFrontend || player[0].playerCarId >= 0)
+		return NULL;
+
+	return player[0].pPed;
+}
+
 /* Apply the chosen character to OUR pedestrian, if we have one. While in a car
- * there is no ped; the next MpSendOwnPedState on foot calls this again, which is
- * exactly "apply when you next get out". */
+ * there is no ped; the next on-foot frame calls this again, which is exactly
+ * "apply when you next get out". Runs in single player as well as a session. */
 static void MpApplyLocalPedModel(void)
 {
-	MP_PLAYER* me = MpLocalPlayer();
-	LPPEDESTRIAN ped;
+	LPPEDESTRIAN ped = MpPreferredCharacterPed();
 	int model, type, entry, gen;
 	static int sLocalSkelGen = -1;
-
-	if (me == NULL || me->carId >= 0)
-		return;
-
-	ped = MpLocalPed();
 
 	if (ped == NULL)
 		return;
 
 	/* A stored archive character that was chosen before the level loaded is
-	 * imported here, on the first frame the player actually has a pedestrian. */
-	if (gMp.config.pedModel >= MP_PED_MODEL_JERICHO)
+	 * imported here, on the first frame the player actually has a pedestrian.
+	 * Jericho alone can use Havana's native models; a custom entry needs the
+	 * bake's entry table, which native Havana does not have. */
+	if (gMp.config.pedModel >= MP_PED_MODEL_CUSTOM_FIRST)
+	{
+		MpPedArchiveEnsure();
+	}
+	else if (gMp.config.pedModel >= MP_PED_MODEL_JERICHO)
 	{
 		MpEnsureJerichoImported();
 		MpEnsureJerichoInstalled();
@@ -7190,7 +7263,7 @@ static void MpApplyLocalPedModel(void)
 	model = MpPedModelEffective(gMp.config.pedModel);
 	type = MpPedTypeForModel(model);
 	entry = MpPedModelEntry(model);
-	gen = JerPedSkeletonGeneration();
+	gen = jer_ped_archive_skeleton_generation();
 
 	if (ped->pedType == type && ped->pedEntry == entry && sLocalSkelGen == gen)
 		return;
@@ -7231,6 +7304,22 @@ static void MpApplyLocalPedModel(void)
 	}
 }
 
+/* Single-player per-frame entry point. A session drives the apply from the pose
+ * send and from MpSetPedModel; a solo game has neither. Do not force a TANNER
+ * choice here: the engine's own "play as Jericho" cheat and missions that create
+ * the player as OTHER_MODEL must keep that ped. An explicit Tanner pick still
+ * applies through MpSetPedModel. */
+void MpPreferredCharacterTick(void)
+{
+	if (gMp.running)
+		return;
+
+	if (gMp.config.pedModel < MP_PED_MODEL_JERICHO)
+		return;
+
+	MpApplyLocalPedModel();
+}
+
 /* Owner -> peers: persist the choice, apply it if we are on foot, and tell
  * everyone. A client's JPCL row goes to the host, which republishes the table;
  * the host sends the table itself. JPPD carries the same id on the next pose, so
@@ -7241,33 +7330,40 @@ int MpSetPedModel(int model)
 	if (model < 0 || model >= MP_PED_MODEL_MAX)
 		return 0;
 
-	/* The picker only offers entries the archive knows. Do not bounce the choice
-	 * back just because its models are not resident yet: this function is the
-	 * retry, and the first on-foot frame imports it. */
-	if (model >= MpPedModelCount())
-		return 0;
-
 	/* An explicit pick is also a retry: a previous import failure must not keep
 	 * the archive refused for the rest of the level. */
 	sMpJerPedImportLevel = GameLevel;
 	sMpJerPedImportFailed = 0;
+	sMpJerPedBakedFailed = 0;
 
-	if (gMp.running && model >= MP_PED_MODEL_JERICHO && !MpPedModelAvailable(model))
+	/* Single player only warms the archive on demand, so a stored custom id can
+	 * arrive before the entry table exists. Import/install here, then the count
+	 * below is the archive's real count instead of the pre-import zero. At the
+	 * frontend there is no level to pin pages into, so the choice is only stored
+	 * and the first on-foot frame applies it. */
+	if (!gInFrontend && GameLevel >= 0 && model >= MP_PED_MODEL_JERICHO)
 	{
-		/* At the frontend there is no level to pin pages into. Persist the choice;
-		 * MpApplyLocalPedModel imports it on the first on-foot frame. Keep the
-		 * choice even if this attempt is still pending, so the menu does not fight
-		 * the player back to Tanner. */
-		if (!MpEnsureJerichoImported() && gMpCtx != NULL)
+		int ready;
+
+		/* A custom entry needs the bake's entry table even on Havana, where the
+		 * resident JERI_* models make the ordinary Jericho path succeed without
+		 * reading it. */
+		if (model >= MP_PED_MODEL_CUSTOM_FIRST)
+			ready = MpPedArchiveEnsure();
+		else
+			ready = MpEnsureJerichoImported() && MpEnsureJerichoInstalled();
+
+		if (!ready && gMpCtx != NULL)
 			gMpCtx->jer_log(gMpCtx,
 				"[mp] character: %s (id %d) import is still pending; keeping the choice\n",
 				MpPedModelName(model), model);
 	}
 
-	if (gMp.running && model >= MP_PED_MODEL_JERICHO && !MpEnsureJerichoInstalled() && gMpCtx != NULL)
-		gMpCtx->jer_log(gMpCtx,
-			"[mp] character: %s (id %d) install is still pending; keeping the choice\n",
-			MpPedModelName(model), model);
+	/* The picker only offers entries the archive knows. Do not bounce the choice
+	 * back just because its models are not resident yet: this function is the
+	 * retry, and the first on-foot frame imports it. */
+	if (model >= MpPedModelCount())
+		return 0;
 
 	gMp.config.pedModel = model;
 	MpConfigSave();
@@ -7277,9 +7373,12 @@ int MpSetPedModel(int model)
 	if (me != NULL)
 		me->pedModel = model;
 
+	/* Apply on foot in single player as well; in a session this is the immediate
+	 * swap the peers then learn about from the colour/pose sends. */
+	MpApplyLocalPedModel();
+
 	if (gMp.running)
 	{
-		MpApplyLocalPedModel();
 		MpSendColors(0);	/* identity travels with colour */
 		MpSendOwnPedState();	/* and with the pose, when there is one */
 	}
@@ -7311,7 +7410,7 @@ void MpTestJerichoImport(void)
 	/* The shipping v5 archive carries the selectable entries, so warm it at
 	 * level start: the picker can then list every entry before the player first
 	 * gets out. MP_TEST_JERICHO still forces the diagnostic import. */
-	if (!verbose && !JerPedBakedAvailable())
+	if (!verbose && !jer_ped_archive_baked_available())
 		return;
 
 	ok = MpEnsureJerichoImported() && MpEnsureJerichoInstalled();
@@ -7323,7 +7422,7 @@ void MpTestJerichoImport(void)
 				ok ? "succeeded" : "FAILED", GameLevel);
 		else if (ok)
 			gMpCtx->jer_log(gMpCtx, "[mp] character: archive entries ready (%d)\n",
-				JerPedEntryCount());
+				jer_ped_archive_entry_count());
 	}
 }
 
@@ -7507,7 +7606,7 @@ static void MpDriveRemotePed(MP_PLAYER* p)
 
 	applied = MpPedModelEffective(p->pedModel);
 	entry = MpPedModelEntry(applied);
-	gen = JerPedSkeletonGeneration();
+	gen = jer_ped_archive_skeleton_generation();
 
 	if (n != NULL)
 	{
