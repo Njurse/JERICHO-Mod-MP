@@ -5,6 +5,13 @@ pages and skeleton come from, what the builder writes, and how the engine reads
 it. The toolkit quick-start stays in
 [`../tools/README.md`](../tools/README.md); this page is the full assembly map.
 
+> **Runtime ownership (interface 3).** The core order is
+> `carhacks -> bake -> pedhacks -> mp`. `pedhacks` owns the archive lifecycle
+> and the `jer_ped_archive.h` contract; `mp` consumes it and falls back to
+> Tanner when the archive is unavailable. The engine v3/v5 parser and the
+> authoring tools below remain engine/mp-owned for now; moving them is a
+> separate change.
+
 ## 0. Workspace naming
 
 The authoring workspace uses plain-language names. The full contract, including
@@ -325,6 +332,18 @@ bake/v5 models and pages are in place; the mp apply path waits for it.
 beside the exe when present). A missing bake is not a build failure; the engine
 falls back to Havana's streamed pages, and otherwise to Tanner.
 
+The mp module applies the stored `mp.ped_model` in **single player** as well as
+in a session. A solo level warms the archive at start through
+`MpPedArchiveEnsure()` only when the stored choice is a custom entry (a Tanner
+run loads no ped pages; Jericho uses Havana's native models, or the bake on a
+level that does not have them). The first cycle of
+`Player Options → Preferred Character` also imports on demand. Every level start
+calls `MpPedArchiveReset()` first, because `InitTanner` has already dropped the
+imported models and palette pairs. `MpPreferredCharacterTick()` then applies the
+effective entry to `player[0].pPed` on the first sim frame the player is on foot.
+The engine itself needs no extra code: `DrawTanner`/`DrawCharacter` already bind
+the per-ped `pedEntry`.
+
 ## 9. Adding a new selectable entry
 
 ```sh
@@ -379,7 +398,24 @@ row recorded in `display_clut`; `palettes/page_<set>.png` shows the rows. A
 combined `<part>_set<set>.png` uses one row for every material in that part and
 will look wrong when the part has several texture ids — run wizard option 5 or
 `jmpped_textures.py` to split it. The page's indexed PNG is internal/base data,
-not the editing surface.
+not the editing surface. Pure black is the engine's transparent entry; a texel
+that is not pure black is never folded onto it by the palettizer, it takes the
+nearest other shade (the next black shade when the crop has one).
+
+**A bake refuses a UV as "outside the crop".** A UV within two pixels of the
+crop edge is clipped and accepted — the Jericho Driv3r glasses sit like that on
+their 20x8 extra crops. A miss larger than that is still an error: check the
+crop rect and the material's page set. `JMPPED.bat textured --check` prints
+`UV CLIPPED (n)` for the accepted case and `UV OUTSIDE (n)` only for a real
+mismatch.
+
+**A repaint or extra asset did not reach the game.** Extra materials such as
+`Glasses` and `Material.001` own a crop in `extra_materials` just like a part,
+and the bake applies both. A changed `model_textured.obj` is re-split and every
+part is rebuilt; a repaint only needs the crop's hash to differ (an empty
+`rgb_sha256` always re-palettizes). If the bake reports no model change, confirm
+you edited the character folder the command is pointed at (the default is the
+last/custom character).
 
 **Mashed torso/legs.** `JERI_TORSO` is much longer than Tanner's `TORSO` and
 extends through the hips/thighs. Fix it with a per-part `offset`/`scale` on the
@@ -414,6 +450,11 @@ has `entries`; the legacy v3 path remains for old workspaces.
 - `python tools/doccheck.py` — links, docs index and counted claims.
 - `python JERICHO/build.py game mod mp` — the module build.
 - A two-seat Havana rig with `MP_TEST_PED_MODEL` — character sync/apply.
+- A single-player run: `MP_TEST_PED_MODEL=2 MP_TEST_ONFOOT=10` with
+  `-level havana` — the solo import/apply. Expect
+  `ped import: baked JMPPED.LEV v5 loaded (N entries`, `[mp] character: chose`
+  and `[mp] character: applied`; with a Tanner choice the run must not import
+  the archive at all.
 - `MP_TEST_JERICHO` — import the archive without a session.
 - A missing `JMPPED.LEV` must leave both seats on Tanner with no crash.
 
