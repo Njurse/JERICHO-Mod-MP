@@ -11,3 +11,5 @@ description = "Online and LAN multiplayer for up to 16 players: discovery-server
 # pages), so there is no load-order dependency to declare here.
 dependencies = []
 default-enabled = true
+# host API generation this module expects (see jer_host_api.h)
+host_api = 1

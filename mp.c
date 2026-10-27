@@ -1078,12 +1078,15 @@ static int MpOnFrame(void* userdata, void* args)
 	MpSessionRulesTick();
 
 	/* The test levers ride on the lockstep tick, which exists only inside a session
-	 * (MpLockstepFrame returns at once when not running). Run the one lever that has
-	 * a single-player meaning out here as well, so the single-player Change car path
-	 * has a padless way to be exercised. Two no-ops unless MP_TEST_PAUSECAR is set
-	 * AND the player is actually driving. */
+	 * (MpLockstepFrame returns at once when not running). Run the ones that have a
+	 * single-player meaning out here as well, so the on-foot and Change car paths
+	 * have a padless way to be exercised. No-ops unless their lever is set AND the
+	 * player is actually driving. */
 	if (!gMp.running && !gInFrontend)
+	{
 		MpTestPauseCarTick();
+		MpTestOnFootTick();
+	}
 
 	/* MP_DEBUG: this hook runs whether or not the world is stepping, so its own
 	 * counter can tell "the sim stopped" from "the module stopped". gMp.frame is
@@ -1267,23 +1270,30 @@ static int MpOnFrame(void* userdata, void* args)
 	}
 
 	/* Test lever: MP_TEST_PED_MODEL=<id> selects a character through the same
-	 * MpSetPedModel the Player Options row calls, once the match is live. This
-	 * is what lets a padless two-seat run exercise the whole sync path (the
-	 * choice log, JPCL/the roster/JPPD, and the receiving stand-in). Inert
-	 * unless set. */
+	 * MpSetPedModel the Player Options row calls, once a level is live (a session
+	 * or single player). This is what lets a padless run exercise the whole sync
+	 * path (the choice log, JPCL/the roster/JPPD, and the receiving stand-in) and
+	 * the single-player apply. Inert unless set. */
 	{
 		static int pedModelDone = 0;
 		static unsigned long pedModelWaitMs = 0;
 		const char* s = getenv("MP_TEST_PED_MODEL");
 
-		if (s != NULL && !pedModelDone && gMp.running && gMpCtx != NULL)
+		if (s != NULL && !pedModelDone && gMpCtx != NULL &&
+		    (gMp.running || (!gInFrontend && gMp.gameStarted)))
 		{
 			int model = atoi(s);
 			int ok;
 
-			/* The archive is warmed at level start; a client can reach the frame
-			 * hook a frame or two before that finishes. Wait for the entry to
-			 * become selectable instead of burning the one-shot on accepted 0. */
+			/* Single player has not warmed the archive for a Tanner default, so a
+			 * custom id cannot be selectable until its entry table exists. A
+			 * session may also reach the frame hook a frame or two before its
+			 * level-start warm finishes. */
+			if (model >= MP_PED_MODEL_CUSTOM_FIRST && !MpPedModelSelectable(model))
+				MpPedArchiveEnsure();
+
+			/* Wait for the entry to become selectable instead of burning the
+			 * one-shot on accepted 0. */
 			if (model >= MP_PED_MODEL_JERICHO && !MpPedModelSelectable(model))
 			{
 				if (pedModelWaitMs == 0)
@@ -2618,6 +2628,12 @@ static int MpCharAdjust(void* ud, int dir)
 	if (dir == 0)
 		return JER_PAUSE_QUIT_NONE;
 
+	/* A solo game does not warm the archive at level start when the stored
+	 * character is Tanner, so this row is where the custom entries first become
+	 * reachable. Importing here makes the count below include them. Sessions are
+	 * already warm; the call is a fast no-op there. */
+	MpPedArchiveEnsure();
+
 	count = MpPedModelCount();
 
 	/* Walk in the asked direction until a character this level can draw. With
@@ -2714,6 +2730,11 @@ static int MpOnPreSim(void* userdata, void* args)
 	 * stand-in in single-player as the session failsafe gives it in MP. No-op while a
 	 * session is running (the failsafe owns that) and in the frontend. */
 	MpCarReadinessTick();
+
+	/* Single player has no pose send to hang the character apply on, so do it
+	 * here, on the sim frame, as soon as the player is actually on foot. */
+	if (!gMp.running)
+		MpPreferredCharacterTick();
 
 	/* MP_DEBUG: is this hook still being called at all? A session whose sim silently
 	 * stops here looks alive (polls continue on the FRAME hook, remote cars keep
@@ -2995,13 +3016,31 @@ static int MpOnGameStart(void* userdata, void* args)
 	(void)userdata;
 	(void)args;
 
-	if (!MpIsActive() || gMpCtx == NULL)
-		return JER_RESULT_CONTINUE;
+	/* A level start (fresh launch, restart or next mission) rebuilds the engine's
+	 * ped banks, so our "already imported/installed" bookkeeping is stale even
+	 * when GameLevel is unchanged. Forget it before anything decides to skip. */
+	MpPedArchiveReset();
 
 	/* A level is up: our car (and every peer's copy) is real from this moment.
 	 * MpSendOwnCarState refuses to send anything before this, because the
-	 * frontend/loading world's car_data is zeroed or a demo car at the origin. */
+	 * frontend/loading world's car_data is zeroed or a demo car at the origin.
+	 * Set for single player too, so the module has one "level is really up"
+	 * signal there as well (the test levers read it). */
 	gMp.gameStarted = 1;
+
+	if (!MpIsActive())
+	{
+		/* Single player: no session warm runs, so load the archive here when the
+		 * stored choice is a custom entry. A Tanner run loads no ped pages, and
+		 * Jericho alone uses Havana's native models or the on-foot import. */
+		if (gMp.config.pedModel >= MP_PED_MODEL_CUSTOM_FIRST)
+			MpPedArchiveEnsure();
+
+		return JER_RESULT_CONTINUE;
+	}
+
+	if (gMpCtx == NULL)
+		return JER_RESULT_CONTINUE;
 
 	MpTestJerichoImport();
 

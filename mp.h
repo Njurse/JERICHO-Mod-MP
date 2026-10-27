@@ -401,6 +401,9 @@ int  MpPedModelEffective(int model);	/* model, or Tanner when unavailable here *
 int  MpPedModelSelected(void);		/* the local player's own choice (config) */
 int  MpSetPedModel(int model);		/* owner: persist, apply, broadcast; 0 = refused */
 const char* MpPedModelName(int model);	/* "Tanner" / "Jericho" / ... for the menu */
+int  MpPedArchiveEnsure(void);		/* import + install the JMPPED archive (needs a level) */
+void MpPedArchiveReset(void);		/* level (re)start: forget the previous install */
+void MpPreferredCharacterTick(void);	/* single player: apply the stored character on foot */
 void MpTestJerichoImport(void);		/* headless lever: MP_TEST_JERICHO */
 
 /* Addon network bridge (mp_bridge.c / jer_net.h). */
@@ -554,6 +557,11 @@ int MpResidentSlotForCar(int city, int model);
  * not running). Inert unless the lever is set, and a no-op unless the player is
  * actually driving. */
 void MpTestPauseCarTick(void);
+
+/* Test lever (MP_TEST_ONFOOT): get our player out of the car that many seconds
+ * in. Called from the lockstep tick in a session and from the frame hook in
+ * single player, where there is no lockstep tick. Inert unless set. */
+void MpTestOnFootTick(void);
 
 /* Lower-left info overlay (who joined/left) + the chat prompt. */
 void MpNotify(const char* text);	/* queue a line for the overlay */
