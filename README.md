@@ -282,13 +282,23 @@ carries on.
 
 ## If nobody can see your game
 
-Two things have to be true, and the module only controls one of them.
+Three things decide whether a game is visible, and the module handles the first
+two by itself.
 
-1. **Windows Firewall.** Inbound **UDP 1318** (discovery) and **TCP 1318** (the
-   session) must be allowed on the host. The module cannot create that rule,
-   so if you never see another machine's game, check the firewall first.
-2. **Discovery actually running.** If the discovery socket cannot be opened
-   or its port is taken, the module now says so instead of failing quietly:
+1. **Windows Firewall.** The first time you press **Host Game**, binding the
+   **UDP 1318** (discovery) and **TCP 1318** (session) sockets triggers
+   Windows' own security prompt. Click **Allow** once, on **Private** and
+   **Public**, and the rule is in. The module cannot create that rule itself,
+   and deliberately ships **no `netsh` helper** -- the bind is the whole
+   mechanism. If the prompt never appeared (or was cancelled), Windows made a
+   *block* rule for the game, so check the firewall.
+2. **UPnP.** The host also tries to open the router's port automatically when
+   it starts. If that works the game is reachable from the internet and the
+   console shows a copyable public address; if it does not, the console says
+   so ("couldn't open router port ... LAN still works, or use Direct Connect")
+   and nothing else changes.
+3. **Discovery actually running.** If the discovery socket cannot be opened
+   or its port is taken, the module says so instead of failing quietly:
 
        [mp] discovery unavailable: the port is already taken by another program (UDP/1318)
        [error] LAN discovery is off: the port is already taken by another program (UDP/1318)
@@ -311,6 +321,12 @@ Direct connect, no relay: forward **TCP 1318** on the host's router to its PC, t
 join with the host's public IP or its DDNS name -- typed into the manual field, or
 passed as `-join <host>[:port]`. UDP 1318 is only needed for the LAN server list, so
 forward it too if you want local machines to discover the game.
+
+The host **tries to do the forwarding for you** with UPnP when it starts: if the
+router accepts it, the console prints the mapped public address (copyable for
+Direct Connect) and the game is reachable from outside without touching the
+router. If UPnP is unavailable or the router refuses, the console says so and you
+fall back to forwarding the port by hand.
 
 Three things to know before relying on it:
 

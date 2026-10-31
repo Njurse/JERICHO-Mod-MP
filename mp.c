@@ -91,6 +91,14 @@ JERICHO_CONTEXT* gMpCtx;
 extern int gBootMpLevel;	/* 1 = a multiplayer map, 0 = the full city */
 extern int gBootMpArena;	/* which multiplayer map (0/1) */
 
+/* The engine's frontend screen table, to answer "is the player back on the main
+ * menu" from the frame hook without a dedicated getter. Screen 0 is the main
+ * menu (the title/demo screen). Forward-declared: pointer comparison needs no
+ * layout, and the type is defined in FEmain.c. */
+struct PSXSCREEN;
+extern PSXSCREEN* pCurrScreen;
+extern PSXSCREEN PsxScreens[];
+
 /* Is MP_DEBUG set? Resolved ONCE and cached. The module asks this from the
  * per-frame, per-poll and per-message paths (and a getenv there is a libc call
  * per ask), while the environment cannot change once the game is running. This
@@ -159,6 +167,12 @@ void MpReturnToFrontend(void)
 	gMp.role = MP_ROLE_NONE;
 	gMp.connected = 0;
 	gMp.running = 0;
+
+	/* Same as MpLeaveSession: the multiplayer flow set these globals, and the
+	 * session is gone, so restore them for the next single-player ride. */
+	GameType = GAME_TAKEADRIVE;
+	NumPlayers = 1;
+
 	gMpShowPlayers = 0;	/* the overlay only belongs to a live match */
 	gMpPauseOpened = 0;
 
@@ -1071,6 +1085,10 @@ static int MpOnFrame(void* userdata, void* args)
 	MpMasterAdvertiseCounts(gMp.playerCount, gMp.running);
 	MpMasterAdvertisePoll();
 
+	/* The UPnP attempt reports itself once, on the frame after its worker
+	 * finishes -- never from the worker (it must not touch the console). */
+	MpUpnpPoll();
+
 	MpUiTick();
 
 	/* The host's session rules, every frame -- the level sets these for itself
@@ -1439,6 +1457,23 @@ static int MpOnFrame(void* userdata, void* args)
 			gMpCtx->jer_log(gMpCtx, "[mp] host left the match - notifying clients\n");
 
 		MpHostByeAll();
+		MpLeaveSession();
+	}
+
+	/* BACKING OUT OF THE MULTIPLAYER MENUS WITHOUT STARTING. Pressing Host Game
+	 * (or joining) puts the module in HOST/CLIENT role and opens a listener or a
+	 * connect, and backing out of the menus before a match starts used to leave
+	 * that role behind -- the next single-player Take a Ride was then intercepted
+	 * as a multiplayer launch, and the idle demo stayed suppressed. Cancel the
+	 * lobby once the player is back on the MAIN MENU (screen 0) with no match.
+	 * The -host / MP_AUTOSTART path is exempt: it has no menus and must keep
+	 * hosting until a player arrives or the user quits. */
+	if (gMp.role != MP_ROLE_NONE && !gMp.running && !gMp.autoSession &&
+	    gInFrontend && pCurrScreen == PsxScreens)
+	{
+		if (gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx, "[mp] back on the main menu with no match - cancelling the lobby\n");
+
 		MpLeaveSession();
 	}
 

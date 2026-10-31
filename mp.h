@@ -520,6 +520,19 @@ void MpOnlineMotdColor(unsigned char* r, unsigned char* g, unsigned char* b);
 unsigned short MpModHash(void);
 
 /* ------------------------------------------------------------------ */
+/* UPnP port mapping (mp_upnp.c)                                       */
+/* ------------------------------------------------------------------ */
+/* Automatic Internet Gateway Device port mapping for a hosted game. On host
+ * start the worker tries to AddPortMapping the session port for TCP and UDP and
+ * to learn the router's external IP, so the host can show a copyable public
+ * address for Direct Connect. All of it runs on a short-lived worker thread --
+ * nothing here blocks the game -- and a failure is one console line, never a
+ * broken session (LAN and direct address still work). */
+void MpUpnpStart(int port);	/* begin the mapping attempt (idempotent) */
+void MpUpnpPoll(void);		/* game thread: report the outcome once (jer_console) */
+void MpUpnpStop(void);		/* teardown: delete our mappings, best effort */
+
+/* ------------------------------------------------------------------ */
 /* Session sync / start (mp_session.c)                                 */
 /* ------------------------------------------------------------------ */
 void MpSessionReset(void);

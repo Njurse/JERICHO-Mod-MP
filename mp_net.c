@@ -454,6 +454,11 @@ void MpNetShutdown(void)
 
 	MpDiscoveryStop();
 	MpCloseSock(&gListen);
+
+	/* The UPnP worker (if any) must stop before Winsock is torn down; it deletes
+	 * its mappings best-effort and exits on its own. */
+	MpUpnpStop();
+
 #ifdef _WIN32
 	if (gNetStarted)
 		WSACleanup();
@@ -568,6 +573,10 @@ int MpHostBegin(void)
 	addr.sin_port = htons((unsigned short)gMp.config.port);
 	addr.sin_addr.s_addr = htonl(INADDR_ANY);
 
+	/* This bind, on INADDR_ANY, is what makes Windows show its "Allow this app"
+	 * firewall prompt the first time a game is hosted -- deliberately no netsh /
+	 * rule-writing here. Keep it a plain bind on the wildcard address: an
+	 * interface-specific bind would not trigger the prompt the same way. */
 	if (bind(gListen, (struct sockaddr*)&addr, sizeof(addr)) == SOCKET_ERROR)
 	{
 		MpCloseSock(&gListen);
@@ -2873,6 +2882,12 @@ static void MpOnlineFail(const char* why)
 
 	if (gMpCtx != NULL)
 		gMpCtx->jer_log(gMpCtx, "[mp] discovery server %s: %s\n", gOnlineHostHdr, why);
+
+	/* A HOST whose listing never landed should be told so, not left to wonder why
+	 * the game is not on the Online board. The success case already says "master:
+	 * listed as ..."; this is the failure half of that same report. */
+	if (gAdvertOn)
+		jer_console_log("hosting: not listed online (%s) - LAN beacon still works", why);
 }
 
 void MpOnlineReset(void)
@@ -3646,6 +3661,12 @@ void MpMasterAdvertiseStart(const char* name, int port, int city, int gamemode, 
 	gAdvertMaxPlayers = MP_MAX_PLAYERS;
 	gAdvertInProgress = gMp.running ? 1 : 0;
 	gAdvertNextMs = 0;			/* due on the next poll */
+
+	/* No master configured = no listing, on purpose: say so once on the console
+	 * so a host is not left wondering why its game never shows up Online. The
+	 * LAN beacon still runs. */
+	if (gMp.config.masterUrl[0] == '\0')
+		jer_console_log("hosting: LAN only - no discovery server set (master_url in mp.ini)");
 }
 
 void MpMasterAdvertiseCounts(int players, int inProgress)

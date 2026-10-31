@@ -38,7 +38,12 @@
 extern "C" {
 #endif
 
-#define MP_PROTO_VERSION	19	/* 19: dynamic on-foot characters. Id 0 is Tanner,
+#define MP_PROTO_VERSION	20	/* 20: MP_ROSTER_ENTRY carries the car a player
+				 *     got OUT of (leftModel/leftModelCity), so a late
+				 *     joiner's roster snapshot names abandoned cars and
+				 *     marks on-foot players before the first carstate.
+				 *     MP_ROSTER_ENTRY is 32 bytes (was 30).
+				 * 19: dynamic on-foot characters. Id 0 is Tanner,
 				 *     1 is JMPPED entry 0, and 2.. are the archive's
 				 *     later entries; the id is the same byte in
 				 *     JPCL/roster/JPPD. The retired COP/CIVILIAN
@@ -198,6 +203,13 @@ typedef struct MP_ROSTER_ENTRY
 	uint16_t ping;		/* round trip in ms, as the host measured it */
 	uint16_t palette;	/* the player's palette (was named `reserved`; it has only
 				 * ever held this, so the name now says so) */
+	uint8_t  leftModel;	/* the car this player got OUT of and left parked (model
+				 * NUMBER), 0xFF = none. Carried so a late joiner's
+				 * roster snapshot names abandoned cars -- the pose still
+				 * rides the per-frame carstate (MP_CARSTATE_LEFT_CAR),
+				 * which is the only place a position can live. */
+	uint8_t  leftModelCity;	/* city leftModel belongs to: MP_CAR_CITY_SESSION = the
+				 * session's city, 0..CITY_COUNT-1 = a cross-city import */
 	char     name[MP_ROSTER_NAME_MAX];
 } MP_ROSTER_ENTRY;
 
@@ -769,7 +781,7 @@ static_assert(sizeof(MP_REJECT) == 68, "MP_REJECT layout");
 static_assert(sizeof(MP_SESSION) == 12, "MP_SESSION layout");
 static_assert(sizeof(MP_PLAYER_INPUT) == 4, "MP_PLAYER_INPUT layout");
 static_assert(sizeof(MP_INPUT) == 4, "MP_INPUT layout");
-static_assert(sizeof(MP_ROSTER_ENTRY) == 30, "MP_ROSTER_ENTRY layout");
+static_assert(sizeof(MP_ROSTER_ENTRY) == 32, "MP_ROSTER_ENTRY layout");
 static_assert(sizeof(MP_CARSTATE_ENTRY) == 57, "MP_CARSTATE_ENTRY layout");
 static_assert(sizeof(MP_HIT) == 32, "MP_HIT layout");
 static_assert(sizeof(MP_STATS_ENTRY) == 12, "MP_STATS_ENTRY layout");

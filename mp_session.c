@@ -241,6 +241,10 @@ void MpSessionReset(void)
 	 * "this session is over" paths can all call it. */
 	MpMasterAdvertiseStop();
 
+	/* ...and the router mapping the host opened must go too (best effort; the
+	 * worker deletes what it added and exits on its own thread). */
+	MpUpnpStop();
+
 	/* THE OLD SESSION'S LISTENER GOES WITH IT, and this is where, because this is the one
 	 * primitive EVERY "the session is over" path goes through - MpReturnToFrontend and both
 	 * Begin* calls (which reset before they establish anything new).
@@ -350,6 +354,11 @@ int MpBeginHost(void)
 	 * beacon carries a live game.
 	 */
 
+	/* UPnP: try to open the router for this session's port, so a friend outside
+	 * the LAN can reach it. Runs on its own thread and reports on the console;
+	 * a failure changes nothing about hosting (LAN and direct address work). */
+	MpUpnpStart(gMp.config.port);
+
 	if (gMpCtx)
 		gMpCtx->jer_log(gMpCtx, "[mp] hosting as '%s' (mod enforcement=%d)\n",
 			gMp.config.playerName, gMp.config.modCheck);
@@ -443,6 +452,14 @@ void MpLeaveSession(void)
 	gMp.role = MP_ROLE_NONE;
 	gMp.connected = 0;
 	gMp.running = 0;
+
+	/* The LAN/multiplayer flow leaves the stock frontend's globals in a
+	 * multiplayer state: a joiner's GameType is still GAME_MISSION and the stock
+	 * "Multiplayer" button left NumPlayers at 2 for its split-screen path. A
+	 * session that has ended must not leak either into the next single-player
+	 * Take a Ride, so put the two back to their single-player defaults. */
+	GameType = GAME_TAKEADRIVE;
+	NumPlayers = 1;
 
 	/* The cars stay in the world, but they stop being ours the moment the session
 	 * does: a stale mark would make the next match take a STOCK traffic car for
@@ -1108,6 +1125,32 @@ void MpHostSendRoster(void)
 		if (p->carId < 0)
 			e->model = 0xff;
 
+		/* THE CAR THIS PLAYER WALKED AWAY FROM. A late joiner that missed the
+		 * get-out has no local body for it; the roster is its snapshot, so name
+		 * the abandoned car here (the pose still rides the carstate's
+		 * MP_CARSTATE_LEFT_CAR row every frame). 0xff = none. Only while the body
+		 * is still parked by us -- a commandeered car is a player car now, not
+		 * ours to describe. */
+		e->leftModel = 0xff;
+		e->leftModelCity = MP_CAR_CITY_SESSION;
+		if (p->carId < 0 && p->leftCarSlot1 > 0)
+		{
+			int left = p->leftCarSlot1 - 1;
+
+			if (left >= 0 && left < MAX_CARS &&
+				car_data[left].controlType == CONTROL_TYPE_CIV_AI &&
+				car_data[left].ai.padid == &gMpQuietPad &&
+				car_data[left].ap.model >= 0 &&
+				car_data[left].ap.model < MAX_CAR_RESIDENT_MODELS &&
+				residentCarModels[car_data[left].ap.model] >= 0)
+			{
+				int src = GetCarModelSourceCity(car_data[left].ap.model);
+
+				e->leftModel = (uint8_t)residentCarModels[car_data[left].ap.model];
+				e->leftModelCity = (uint8_t)((src >= 0) ? src : MP_CAR_CITY_SESSION);
+			}
+		}
+
 		e->ping = (uint16_t)(id == 0 ? 0 : MpPingForPlayer(id));
 		snprintf(e->name, sizeof(e->name), "%s", p->name);
 
@@ -1748,6 +1791,33 @@ static void MpHandleRoster(const unsigned char* p, int len)
 			pl->carIsSlot = 0;
 			pl->carCity = (e->modelCity == MP_CAR_CITY_SESSION) ? -1 : (int)e->modelCity;
 		}
+
+		/* ON FOOT, from the roster: the host names no car (0xff) for a player who
+		 * is standing next to theirs. Mark it HERE, from the deterministic late-join
+		 * snapshot, instead of waiting for the carstate that says the same thing --
+		 * otherwise the spawn request below fires for a player who must never be
+		 * re-seated, and only the joinedPose guard (a live-joiner-only fact) stops
+		 * it. The carstate keeps its authority: a later real body clears onFoot. */
+		if (!pl->isLocal && e->model == 0xff && gMp.running)
+			pl->onFoot = 1;
+
+		/* The roster also names the car they left, when they left one. The body
+		 * itself is materialized from the carstate (whose pose a roster cannot
+		 * carry); this log just makes the snapshot verifiable. Throttled because
+		 * the roster repeats every 120 frames. */
+		if (!pl->isLocal && e->model == 0xff && e->leftModel != 0xff)
+		{
+			static unsigned long lastLeftLogMs;
+
+			if (gMpCtx != NULL && (MpNowMs() - lastLeftLogMs) > 2000)
+			{
+				lastLeftLogMs = MpNowMs();
+				gMpCtx->jer_log(gMpCtx,
+					"[mp] roster: player %d left model %d (city %d) parked\n",
+					pl->id, (int)e->leftModel, (int)e->leftModelCity);
+			}
+		}
+
 		pl->palette = (int)e->palette;
 		/* The roster is the late-join snapshot: it names the character the owner
 		 * chose, so a joiner can draw the right ped before JPPD arrives. Keep the
