@@ -203,6 +203,7 @@ static int MpFindRoadSpotNear(int cx, int cy, int cz, int seed,
 static int MpFindRespawnSpot(int cx, int cz, int* outX, int* outZ, int* outDir);
 static int MpWarpStreamTo(int x, int z);
 static int MpRespawnOnFoot(MP_PLAYER* me);
+static void MpFollowLocalCar(void);
 
 /* The last message received and from which connection: logged with every respawn,
  * re-place and refused write to our own car, so a log says what set it off. */
@@ -10140,8 +10141,109 @@ static int MpRespawnCarSlot(MP_PLAYER* me)
 	return -1;
 }
 
-/* ON-FOOT RESPAWN: back in the car we parked if it is still ours to take, else onto the
- * nearest road (streamed and grounded), else where we stand. Always clears the death
+/* A FRESH CAR for an on-foot respawn whose parked car someone else has taken: the same
+ * model and palette, built beside us on the nearest road through the same InitPlayer path
+ * every other mp-built car uses, parked as ours (CIV_AI EMPTY, quiet pad, gMpOurCars) and
+ * then entered through the engine's get-in. Nobody is kicked out of the old one. The slot
+ * rule is the late-joiner's (1..MAX_PLAYERS-1, never a car a player owns), preferring a
+ * free slot over recycling a stock traffic car. Returns 1 when we are in the new car. */
+static int MpRespawnFreshCar(MP_PLAYER* me, int fromSlot, PEDESTRIAN* ped)
+{
+	int k, slot = -1, bx = 0, bz = 0, bdir = -1, ring = 0;
+	int extModel, palette;
+
+	if (me == NULL || ped == NULL || fromSlot < 0 || fromSlot >= MAX_CARS ||
+		car_data[fromSlot].ap.model < 0 || car_data[fromSlot].ap.model >= MAX_CAR_RESIDENT_MODELS ||
+		!JerCarSlotUsable(car_data[fromSlot].ap.model))
+		return 0;
+
+	extModel = residentCarModels[car_data[fromSlot].ap.model];
+	palette = car_data[fromSlot].ap.palette;
+
+	if (!MpFindRoadSpotNear(ped->position.vx, -ped->position.vy, ped->position.vz, -1, &bx, &bz, &bdir, &ring) ||
+		!MpWarpStreamTo(bx, bz))
+		return 0;
+
+	for (k = 1; k < MAX_CARS && k < MAX_PLAYERS; k++)
+	{
+		if (car_data[k].controlType == CONTROL_TYPE_NONE && !reservedSlots[k] &&
+			!gMpOurCars[k] && !MpCarSlotOwnedByPlayer(k, -1))
+		{
+			slot = k;
+			break;
+		}
+	}
+
+	/* No free slot: recycle a stock traffic car (never a cop, never one of ours). */
+	for (k = 1; slot < 0 && k < MAX_CARS && k < MAX_PLAYERS; k++)
+	{
+		if (car_data[k].controlType == CONTROL_TYPE_CIV_AI &&
+			!(car_data[k].controlFlags & CONTROL_FLAG_COP) &&
+			!gMpOurCars[k] && !MpCarSlotOwnedByPlayer(k, -1) &&
+			PingOutCar(&car_data[k]))
+			slot = k;
+	}
+
+	if (slot < 1)
+	{
+		if (gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx, "[mp] respawn on foot: parked car taken and no free slot for a fresh one\n");
+		return 0;
+	}
+
+	{
+		LONGVECTOR4 start;
+		char padid = (char)-slot;
+		int dir = (bdir >= 0) ? bdir : MpRoadHeadingNear(bx, bz, 0);
+		CAR_DATA* cp = &car_data[slot];
+		LPPEDESTRIAN oldPed = player[0].pPed;
+
+		start[0] = bx;
+		start[1] = 0;
+		start[2] = bz;
+		start[3] = 0;
+
+		InitPlayer(&player[slot], cp, CONTROL_TYPE_PLAYER, dir, &start, extModel, palette, &padid);
+
+		if (cp->ap.carCos == NULL || !MpPlaceOnGround(cp, bx, bz, dir))
+		{
+			cp->controlType = CONTROL_TYPE_NONE;
+			return 0;
+		}
+
+		/* Parked as ours first, so TannerCanEnterCar-style state and the ping-out guard
+		 * hold from this frame, then the engine's own get-in. */
+		cp->controlType = CONTROL_TYPE_CIV_AI;
+		cp->ai.c.thrustState = CIV_AI_THRUST_STOP;
+		cp->ai.c.ctrlState = CIV_AI_CTRL_EMPTY;
+		cp->wheel_angle = 0;
+		cp->ai.padid = &gMpQuietPad;
+		gMpOurCars[slot] = 1;
+		gJerCarNoPingOut[slot] = 1;
+
+		ChangePedPlayerToCar(0, cp);
+		RemovePlayerPedestrian(oldPed);
+
+		player[0].cameraAngle = cp->hd.direction + 1536;
+		player[0].cameraCarId = cp->id;
+
+		/* A different body from the one we left: forget that claim (it is the other
+		 * player's car now) and adopt this one now rather than next frame. */
+		me->leftCarSlot1 = 0;
+		me->leftCarModel = -1;
+		MpFollowLocalCar();
+
+		if (gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx,
+				"[mp] respawn on foot: parked car (slot %d) is taken - fresh model %d in slot %d at %d,%d\n",
+				fromSlot, extModel, slot, bx, bz);
+	}
+
+	return 1;
+}
+
+/* ON-FOOT RESPAWN: back in the car we parked if it is still ours to take, a fresh car of
+ * the same model if another player is in it, else onto the nearest road (streamed and grounded), else where we stand. Always clears the death
  * state; returns 1 when the player was moved, 0 when left in place. */
 static int MpRespawnOnFoot(MP_PLAYER* me)
 {
@@ -10176,6 +10278,15 @@ static int MpRespawnOnFoot(MP_PLAYER* me)
 
 		return 1;
 	}
+
+	/* The parked car is still there but ANOTHER PLAYER is in it: a fresh car of the same
+	 * model, not the nearest road and never kicking them out. */
+	if (slot >= 0 && slot < MAX_CARS &&
+		car_data[slot].controlType != CONTROL_TYPE_NONE &&
+		car_data[slot].ap.carCos != NULL &&
+		MpGetPlayerByCar(slot) != NULL && MpGetPlayerByCar(slot) != me &&
+		MpRespawnFreshCar(me, slot, ped))
+		return 1;
 
 	if (ped != NULL)
 	{
