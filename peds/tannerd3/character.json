@@ -1,0 +1,964 @@
+{
+ "index": 1,
+ "name": "Tanner D3",
+ "folder": "characters/tannerd3",
+ "source_character": "jericho",
+ "skeleton": "jericho",
+ "texture_page_sets": [
+  26,
+  27,
+  3
+ ],
+ "pages": [
+  {
+   "storage": "raw",
+   "flags": 0,
+   "image_bytes": 32768,
+   "indexed_png": "characters/tannerd3/textures/pages/page_23_indexed.png",
+   "indexed_png_sha256": "6f8efe1a560c39eef636860156e75baf0571b33eb5d1879077f820794644d3ab",
+   "palette_png": "characters/tannerd3/textures/palettes/page_23.png",
+   "palette_png_sha256": "163fc341c8d4c10a06ee8abf3b5899c4eaa9e6ac5d58acf138f5d460a16506b7",
+   "page_set": 26,
+   "source_character": "jericho",
+   "palette_rows": 10,
+   "palette_row": 0,
+   "palette_rows_hex": [
+    "428812ba4ca9f9cec6983cd7b1a975c60a9d9edf1bcfadb135bad0b5e79c98c2",
+    "a49855ba6bad5be3afb1d6da09a1bef36fa1f2adface73ca2c9dc69ceebd8ead",
+    "638c10c2f7de4ba954c67be7c69c79baadb51bd315b6def398ca94d2b1b109a1",
+    "849054c26dadd9cad0b57ce32aa194ce1ad790ad56bee79cf3b54ba9f9d2b7c6",
+    "a59432c26cadd8ced2a90c951adf56bacfb908a16fa595cad7da51ceca8c7ce7",
+    "c59876bef9d68da91dbbf4a97ee32aa1bbb61dc72e9511bebeef91a15cdb7fcb",
+    "218433be6ca9d8d2f0b575c609a13bdf96ce12bef9d64ca1afada6907de754c2",
+    "428833c22ca1f8d23bdfe79c8cb975caafa97de7ea9c1adba5944badb7ced0b5",
+    "428c33be2ba51adf9defc698b7ceafb15be7a49408a1dff795c6f1b5d7da6ca9",
+    "f7de73cef0bd4aad08a5e8a0e7a0e7a0e7a0c69cc69ca698a598849484904288"
+   ]
+  },
+  {
+   "storage": "raw",
+   "flags": 0,
+   "image_bytes": 32768,
+   "indexed_png": "characters/tannerd3/textures/pages/page_25_indexed.png",
+   "indexed_png_sha256": "649f714b564c9a2d996007867adabd7766f2052934997e718f4e997fe6349a0f",
+   "palette_png": "characters/tannerd3/textures/palettes/page_25.png",
+   "palette_png_sha256": "5a56253143923e972fb4bffacbd9c9f840e2c6ac230dd695f6fac7cf2798cac3",
+   "page_set": 27,
+   "source_character": "jericho",
+   "palette_rows": 26,
+   "palette_row": 0,
+   "palette_rows_hex": [
+    "428833ba17db2aa55be7c798b4ceb0a99cf31adbea9cd7d253c64da5a494cfb5",
+    "2184cdb9d7c6e79c53ba7bef6aad668c72caf2b1f8d60c996fa976be76caf3bd",
+    "c59897c27be78eadf9d22aa5bdf710c294ce19df9defd0b54da5e79c33beb7ce",
+    "a69854c6aab51adf47adafb59cf3b7d24ca512be05a5ebc5e89c77ca3be3d9d6",
+    "638c77b61adf8fa51dc3ea94adb9beef95cef4a97ecb2c9d10c2bab67de7a694",
+    "83944ed23091d3decfb524b935ba3cd708a16da5f3ad97c2facedef3a6c9c3a8",
+    "428c32be6ca9b8c61bd7e7a0cfb177be0b9d35ba6fa5d9ced2ad5cdf96c6a594",
+    "e5a005ce4ca196caa5c1cfb1fad254c212bef2b1b8ca29a18ea934ba76c25cdb",
+    "2188f0ad4c95b4c610beaf9dc694f6d2aeb152c253b2e9904ba5b5d259df658c",
+    "849034ba8da9b7cad0ad0c9519d796c6f3b190a9e8984ca1d8d23adf55bef0b9",
+    "a594e69c28a5e8988bb54ba18ea9eec5d0b113ba74ca77beb7d219db5be3dff3",
+    "c394cadee5c1908c2cc278ef47ce6ca922a9d3dadbfb71c667ad08c253a117df",
+    "e6a076c21adbabb5fffbafadb8ca49a910be7de7cac974ce3bdff8d648b534ba",
+    "c698b8a6afa93ca3f1b595ca17e74ca59cebd5def5952ed23adf91da14aa54ba",
+    "c59853c2afa53adf28a1ceb5dffbd8ce12ba4aa507a18cad7de348a976c2efb5",
+    "428c0000b5d26aade69c0fbe7ceb839007a5adb552c618dfdef7a494a9b928a5",
+    "c69c11ba6ca994caceb5d5d609a153beaead17dff0b172ca30c24aa5b4d28cb1",
+    "e89830bab4ce8f9d17dbcfa973be6ca1d7c6efb57ae753ba93caaea9f6d20b99",
+    "a69c98c291ad1adf36ba2f957cebf9d6cfb95ce309a96dad33c696ced4a9bdf3",
+    "84944ca9f1b9e89c8ea955c291a9c6982ba16da514b6aeb197ca09a1d1b1c994",
+    "c49c00004fbe68a917d7fefb8ab5dceb07a592c2cbb1e5a0ecb969adb3ca4fca",
+    "a69454c60000aead19dbf1b52aa59cef96ceadb931c6099dd7d63ae36ca910c2",
+    "6484000011b2b6c68ca50a8d18d7508532bed199d6d2d0a92b9954b274be5ae3",
+    "e79c75c6d0b54aa93bd712ba8ea9b7ca7cdf33be2aa5f1b953c2aeb1d9ce6bad",
+    "d8dab8d297ce97ca76ca35c215baf4b5b3b1b2ad73a98ea970a92ea14ca1e998",
+    "d8dab8d297ce97ca76ca35c215baf4b5b3b1b2ad73a98ea970a92ea14ca1e998"
+   ]
+  },
+  {
+   "storage": "compressed",
+   "flags": 1,
+   "image_bytes": 28868,
+   "indexed_png": "characters/tannerd3/textures/pages/page_2_indexed.png",
+   "indexed_png_sha256": "d58cf524f1d459538dd83b1737b2107d302803d2af09a26085ed1e4fd2239733",
+   "palette_png": "characters/tannerd3/textures/palettes/page_2.png",
+   "palette_png_sha256": "02cef0e91f7dcc6524d73cee20d5408b0cff29ecc95dd90206f1a4cd3f9c6a86",
+   "page_set": 3,
+   "source_character": "tanner",
+   "palette_rows": 24,
+   "palette_row": 0,
+   "palette_rows_hex": [
+    "238015c607998a88ee90bada48a56684dcf76fb1ac8caf85468428a1a5906aa9",
+    "42904b99539ee798cf99a594f89e289910aaac9d19b7c59474aa309e49998390",
+    "21840e9da694d4b1438817ba91a9ea98859059c2f5b56fa50ba1b2b1648cc798",
+    "63906d9d749e0999f19dc694f8a66a99ce99849411aa19bf75aee794cea5a594",
+    "238400006da1e994f3a92b9db1a9a79097a24d9d0a998fa513b6c89056be858c",
+    "c698b9be5dd7d2ad9ee755bafcc64da17ddfb9caf5ad58b6719d0a9d1bd3bef3",
+    "08ad96ca13baf7e653ced8d2cfb55ae7d6b957ca7af3b6d6f8def0c56db136be",
+    "83900000ae99749e289995b6109aa594b69e8b991abb11aaaea5e6942a99f9a2",
+    "a4940000cf99759e499997ba129a8b99e694d8a23ac332aeefa5ad996b992899",
+    "418810beb6d208a139e3a590f8d6aead73c6c798d7d64ba15be78390f9daa890",
+    "a79411c26aadd6d6cdb5ed983ae36fa9ca9874ca0ea1d0b5f8da0aa16cad9ceb",
+    "4c8453c2f8d6ee946ea99de7f39496ca7084f0981bdb9684d7d218950e99d1b9",
+    "2184adb1d6de8394c59c7bf3418c52ce6290d4b107a539e7a4982188defb6bad",
+    "00800000c49c28a983906ab5e6a048ad2088008407a528adc59c49ad20848bb5",
+    "428c000081c2a1adc1df02a1abbdc6a00bdb28ade6a467c62bb18394efc5a7e3",
+    "2bad000096d211c21bdfb3b557c216be95a97cebb9cef6b517ba57c6aeb937be",
+    "2ba154c2f1b5b7ceafb175c633bef9d696ca8da912ba1adfd0b155c2d8d276c6",
+    "21888394a59cc5a4e6a807ad07b16ac14ab5acc52fde0fce73d6d4f29aff0000",
+    "428c00008cb437e1c5a0adbddffd2ab1e6a84fc1bced8394f0cde9acc6a0d8e9",
+    "638c0fc2ffba4aadd6da3ab65ae770a973cec598bdef18dfacb532c6b5adb5d6",
+    "00806aa931c2618c94d2c49cceb5208452c6acb1efbdd6da07a58294418873ce",
+    "000017eb19ef94e659f737f39bfb58fb95ff9cfb9cfb9bffddffdefffeffffff",
+    "8bbd000071d60fced4e250d692de15ebcdc530ceb3def5e6eec530d256ef71da",
+    "a698b6d211c25be33aa66dadf8dabdef53caafb519db0aa17ce7d7d6def739e3"
+   ]
+  }
+ ],
+ "parts": [
+  {
+   "slot": 0,
+   "part": "JERI_TORSO",
+   "obj_raw": "characters/tannerd3/models/engine/JERI_TORSO.obj",
+   "obj_raw_sha256": "1f8cc3750fa50d4bd3d7da825ae8df559f4fdf2f92978cf1bbcdbcd7295c1f2f",
+   "obj_edit": "characters/tannerd3/models/blender/JERI_TORSO.obj",
+   "obj_edit_sha256": "",
+   "offset": [
+    0,
+    0,
+    0
+   ],
+   "scale": [
+    1,
+    1,
+    1
+   ],
+   "materials": [
+    {
+     "id": 12,
+     "polys": 32,
+     "u": [
+      128,
+      191
+     ],
+     "v": [
+      0,
+      63
+     ],
+     "page_set": 3
+    }
+   ],
+   "crops": [
+    {
+     "page_set": 3,
+     "texture": 12,
+     "rect": [
+      128,
+      0,
+      64,
+      64
+     ],
+     "rgb": "characters/tannerd3/textures/crops/JERI_TORSO_set3_t12.png",
+     "rgb_sha256": "361c4e57f0e38a7bccbd19882756a582ec1cd7dd83720897b8eb3db58aa07fd8",
+     "polys": 32,
+     "palette_row": 12
+    }
+   ],
+   "source_model": "tanner",
+   "texture_page_sets": [
+    3
+   ]
+  },
+  {
+   "slot": 1,
+   "part": "JERI_HEAD",
+   "obj_raw": "characters/tannerd3/models/engine/JERI_HEAD.obj",
+   "obj_raw_sha256": "bab223d5b6d9a1e8882f04a07d88d811ea1b3749ae4bc1c2035387a37be19f22",
+   "obj_edit": "characters/tannerd3/models/blender/JERI_HEAD.obj",
+   "obj_edit_sha256": "",
+   "offset": [
+    0,
+    0,
+    0
+   ],
+   "scale": [
+    1,
+    1,
+    1
+   ],
+   "materials": [
+    {
+     "id": 2,
+     "polys": 47,
+     "u": [
+      192,
+      255
+     ],
+     "v": [
+      0,
+      63
+     ],
+     "page_set": 3
+    }
+   ],
+   "crops": [
+    {
+     "page_set": 3,
+     "texture": 2,
+     "rect": [
+      192,
+      0,
+      64,
+      64
+     ],
+     "rgb": "characters/tannerd3/textures/crops/JERI_HEAD_set3_t2.png",
+     "rgb_sha256": "1e70ce34c601ea6d1ad630933335164ef5438bcb0ac8d86a68a65d07fab77d66",
+     "polys": 47,
+     "palette_row": 2
+    }
+   ],
+   "source_model": "tanner",
+   "texture_page_sets": [
+    3
+   ]
+  },
+  {
+   "slot": 2,
+   "part": "JERI_U_ARM_LEFT",
+   "obj_raw": "characters/tannerd3/models/engine/JERI_U_ARM_LEFT.obj",
+   "obj_raw_sha256": "846915880b65782106a86d3d8270dde6bed5b297f3fa2234e9a60a96a8d45583",
+   "obj_edit": "characters/tannerd3/models/blender/JERI_U_ARM_LEFT.obj",
+   "obj_edit_sha256": "",
+   "offset": [
+    0,
+    0,
+    0
+   ],
+   "scale": [
+    1,
+    1,
+    1
+   ],
+   "materials": [
+    {
+     "id": 12,
+     "polys": 10,
+     "u": [
+      128,
+      162
+     ],
+     "v": [
+      31,
+      63
+     ],
+     "page_set": 3
+    }
+   ],
+   "crops": [
+    {
+     "page_set": 3,
+     "texture": 12,
+     "rect": [
+      128,
+      31,
+      35,
+      33
+     ],
+     "rgb": "characters/tannerd3/textures/crops/JERI_U_ARM_LEFT_set3_t12.png",
+     "rgb_sha256": "1983d2603eda0ee37fc84caba5d55c85ef572cafa36e4ca39ce3b87ed099ecdd",
+     "polys": 10,
+     "palette_row": 12
+    }
+   ],
+   "source_model": "tanner",
+   "texture_page_sets": [
+    3
+   ]
+  },
+  {
+   "slot": 3,
+   "part": "JERI_L_ARM_LEFT",
+   "obj_raw": "characters/tannerd3/models/engine/JERI_L_ARM_LEFT.obj",
+   "obj_raw_sha256": "15babe3d0a5a3995e6708a5a60fddc186fb9161662b98e17d8b19f35efd259ae",
+   "obj_edit": "characters/tannerd3/models/blender/JERI_L_ARM_LEFT.obj",
+   "obj_edit_sha256": "",
+   "offset": [
+    0,
+    0,
+    0
+   ],
+   "scale": [
+    1,
+    1,
+    1
+   ],
+   "materials": [
+    {
+     "id": 12,
+     "polys": 10,
+     "u": [
+      128,
+      163
+     ],
+     "v": [
+      28,
+      63
+     ],
+     "page_set": 3
+    }
+   ],
+   "crops": [
+    {
+     "page_set": 3,
+     "texture": 12,
+     "rect": [
+      128,
+      28,
+      36,
+      36
+     ],
+     "rgb": "characters/tannerd3/textures/crops/JERI_L_ARM_LEFT_set3_t12.png",
+     "rgb_sha256": "52639aa0fc675527bf8d98bc09fc740e7df7620ac2b0b5c5d2c6bb856663fd9c",
+     "polys": 10,
+     "palette_row": 12
+    }
+   ],
+   "source_model": "tanner",
+   "texture_page_sets": [
+    3
+   ]
+  },
+  {
+   "slot": 4,
+   "part": "JERI_U_ARM_RIGHT",
+   "obj_raw": "characters/tannerd3/models/engine/JERI_U_ARM_RIGHT.obj",
+   "obj_raw_sha256": "45aac92dad49e7514b23dae09afd36e804bdc5981df5cde0f535163ebdfef44b",
+   "obj_edit": "characters/tannerd3/models/blender/JERI_U_ARM_RIGHT.obj",
+   "obj_edit_sha256": "",
+   "offset": [
+    0,
+    0,
+    0
+   ],
+   "scale": [
+    1,
+    1,
+    1
+   ],
+   "materials": [
+    {
+     "id": 12,
+     "polys": 10,
+     "u": [
+      128,
+      162
+     ],
+     "v": [
+      32,
+      63
+     ],
+     "page_set": 3
+    }
+   ],
+   "crops": [
+    {
+     "page_set": 3,
+     "texture": 12,
+     "rect": [
+      128,
+      32,
+      35,
+      32
+     ],
+     "rgb": "characters/tannerd3/textures/crops/JERI_U_ARM_RIGHT_set3_t12.png",
+     "rgb_sha256": "fa0346540fad9638988d4b13ff70fa69701b05e570cfda2a664e7e6bc43551c1",
+     "polys": 10,
+     "palette_row": 12
+    }
+   ],
+   "source_model": "tanner",
+   "texture_page_sets": [
+    3
+   ]
+  },
+  {
+   "slot": 5,
+   "part": "JERI_L_ARM_RIGHT",
+   "obj_raw": "characters/tannerd3/models/engine/JERI_L_ARM_RIGHT.obj",
+   "obj_raw_sha256": "e36cd70485461200babf42b73f9f8e6b1e03d02d07a23e5c71124832778fd996",
+   "obj_edit": "characters/tannerd3/models/blender/JERI_L_ARM_RIGHT.obj",
+   "obj_edit_sha256": "",
+   "offset": [
+    0,
+    0,
+    0
+   ],
+   "scale": [
+    1,
+    1,
+    1
+   ],
+   "materials": [
+    {
+     "id": 12,
+     "polys": 10,
+     "u": [
+      128,
+      157
+     ],
+     "v": [
+      16,
+      63
+     ],
+     "page_set": 3
+    }
+   ],
+   "crops": [
+    {
+     "page_set": 3,
+     "texture": 12,
+     "rect": [
+      128,
+      16,
+      30,
+      48
+     ],
+     "rgb": "characters/tannerd3/textures/crops/JERI_L_ARM_RIGHT_set3_t12.png",
+     "rgb_sha256": "77bd2e3713ac6c7e5ef2638d6d5c713e51a0b661fd957cd4308e5fc9f4165f95",
+     "polys": 10,
+     "palette_row": 12
+    }
+   ],
+   "source_model": "tanner",
+   "texture_page_sets": [
+    3
+   ]
+  },
+  {
+   "slot": 6,
+   "part": "THIGH_LEFT",
+   "obj_raw": "characters/tannerd3/models/engine/THIGH_LEFT.obj",
+   "obj_raw_sha256": "a034642a37d3b59f475d67498a475a3352b04f3cd2543548306dbbbde72ea4c6",
+   "obj_edit": "characters/tannerd3/models/blender/THIGH_LEFT.obj",
+   "obj_edit_sha256": "327f5c6f97474655f841e08de901fa599f831d3b61929bebb94aa5b4cb4ab630",
+   "offset": [
+    0,
+    0,
+    0
+   ],
+   "scale": [
+    1,
+    1,
+    1
+   ],
+   "materials": [
+    {
+     "id": 12,
+     "polys": 14,
+     "u": [
+      128,
+      164
+     ],
+     "v": [
+      28,
+      63
+     ],
+     "page_set": 3
+    }
+   ],
+   "crops": [
+    {
+     "page_set": 3,
+     "texture": 12,
+     "rect": [
+      128,
+      28,
+      37,
+      36
+     ],
+     "rgb": "characters/tannerd3/textures/crops/THIGH_LEFT_set2_t12.png",
+     "rgb_sha256": "8b8332f0d49fbdd2ceb05551d38b5ce3e21f10e1c4c4e08acd37611d265b8fca",
+     "polys": 14,
+     "palette_row": 12
+    }
+   ],
+   "source_model": "tanner",
+   "texture_page_sets": [
+    2
+   ]
+  },
+  {
+   "slot": 7,
+   "part": "CALF_LEFT",
+   "obj_raw": "characters/tannerd3/models/engine/CALF_LEFT.obj",
+   "obj_raw_sha256": "8ef32c76883d4ffb6f9ac92b84c57cd0a620eff033b9cde61855d28a84f837b0",
+   "obj_edit": "characters/tannerd3/models/blender/CALF_LEFT.obj",
+   "obj_edit_sha256": "5a78cffec2351f6e240c5c0dcd4227b736e050a1ae4c697f9256683616d8ebb6",
+   "offset": [
+    0,
+    0,
+    0
+   ],
+   "scale": [
+    1,
+    1,
+    1
+   ],
+   "materials": [
+    {
+     "id": 12,
+     "polys": 14,
+     "u": [
+      128,
+      162
+     ],
+     "v": [
+      26,
+      63
+     ],
+     "page_set": 3
+    }
+   ],
+   "crops": [
+    {
+     "page_set": 3,
+     "texture": 12,
+     "rect": [
+      128,
+      26,
+      35,
+      38
+     ],
+     "rgb": "characters/tannerd3/textures/crops/CALF_LEFT_set2_t12.png",
+     "rgb_sha256": "b209326e5535bf31997836f8c20a07c0278201a9099e57544b4fae4ba09509fd",
+     "polys": 14,
+     "palette_row": 12
+    }
+   ],
+   "source_model": "tanner",
+   "texture_page_sets": [
+    2
+   ]
+  },
+  {
+   "slot": 8,
+   "part": "FOOT_LEFT",
+   "obj_raw": "characters/tannerd3/models/engine/FOOT_LEFT.obj",
+   "obj_raw_sha256": "0976e79529be1cface924941450cec160214018675243ed79517d9a1a7b45c53",
+   "obj_edit": "characters/tannerd3/models/blender/FOOT_LEFT.obj",
+   "obj_edit_sha256": "606c4ac748a23cd60f968eb6e0844fe59d35732ed2c4432d5539893c77c937a6",
+   "offset": [
+    0,
+    0,
+    0
+   ],
+   "scale": [
+    1,
+    1,
+    1
+   ],
+   "materials": [
+    {
+     "id": 12,
+     "polys": 6,
+     "u": [
+      128,
+      176
+     ],
+     "v": [
+      0,
+      63
+     ],
+     "page_set": 3
+    }
+   ],
+   "crops": [
+    {
+     "page_set": 3,
+     "texture": 12,
+     "rect": [
+      128,
+      0,
+      49,
+      64
+     ],
+     "rgb": "characters/tannerd3/textures/crops/FOOT_LEFT_set2_t12.png",
+     "rgb_sha256": "f649151a2294b31fc8f316a3c89b5a0b9e38a3366e5a6e8ab7fdebc13eed50ba",
+     "polys": 6,
+     "palette_row": 12
+    }
+   ],
+   "source_model": "tanner",
+   "texture_page_sets": [
+    2
+   ]
+  },
+  {
+   "slot": 9,
+   "part": "THIGH_RIGHT",
+   "obj_raw": "characters/tannerd3/models/engine/THIGH_RIGHT.obj",
+   "obj_raw_sha256": "586121b408ea31ed1c588693d7b55934dd714432c72afb10b55815df630fcc42",
+   "obj_edit": "characters/tannerd3/models/blender/THIGH_RIGHT.obj",
+   "obj_edit_sha256": "4b921b31f73a4a94f26abd7aa8e5f5a4d212294550d32d1c40626b8d56f0900b",
+   "offset": [
+    0,
+    0,
+    0
+   ],
+   "scale": [
+    1,
+    1,
+    1
+   ],
+   "materials": [
+    {
+     "id": 12,
+     "polys": 14,
+     "u": [
+      128,
+      168
+     ],
+     "v": [
+      23,
+      63
+     ],
+     "page_set": 3
+    }
+   ],
+   "crops": [
+    {
+     "page_set": 3,
+     "texture": 12,
+     "rect": [
+      128,
+      23,
+      41,
+      41
+     ],
+     "rgb": "characters/tannerd3/textures/crops/THIGH_RIGHT_set2_t12.png",
+     "rgb_sha256": "c0e9066d2f116c7f7794ca1d2e850ad6885bff989bef82be99a5b724d86ee370",
+     "polys": 14,
+     "palette_row": 12
+    }
+   ],
+   "source_model": "tanner",
+   "texture_page_sets": [
+    2
+   ]
+  },
+  {
+   "slot": 10,
+   "part": "CALF_RIGHT",
+   "obj_raw": "characters/tannerd3/models/engine/CALF_RIGHT.obj",
+   "obj_raw_sha256": "69382bbeb033a99f09df03a38c1f03022ebe637c17295de957c7ce984ab4a9d2",
+   "obj_edit": "characters/tannerd3/models/blender/CALF_RIGHT.obj",
+   "obj_edit_sha256": "042b4f211db06fecd09b1a7d610e1a0543fe373b2d11854283e6a8582d423df4",
+   "offset": [
+    0,
+    0,
+    0
+   ],
+   "scale": [
+    1,
+    1,
+    1
+   ],
+   "materials": [
+    {
+     "id": 12,
+     "polys": 14,
+     "u": [
+      128,
+      165
+     ],
+     "v": [
+      24,
+      63
+     ],
+     "page_set": 3
+    }
+   ],
+   "crops": [
+    {
+     "page_set": 3,
+     "texture": 12,
+     "rect": [
+      128,
+      24,
+      38,
+      40
+     ],
+     "rgb": "characters/tannerd3/textures/crops/CALF_RIGHT_set2_t12.png",
+     "rgb_sha256": "02357d21d581fbb38c5dcd7a1bf997ae22d355a024633333f6c301155f0e8a89",
+     "polys": 14,
+     "palette_row": 12
+    }
+   ],
+   "source_model": "tanner",
+   "texture_page_sets": [
+    2
+   ]
+  },
+  {
+   "slot": 11,
+   "part": "FOOT_RIGHT",
+   "obj_raw": "characters/tannerd3/models/engine/FOOT_RIGHT.obj",
+   "obj_raw_sha256": "9cb5a23bdaaf3d100b4db567e93d79b235d22b09c90d5b061432e07b52fd516c",
+   "obj_edit": "characters/tannerd3/models/blender/FOOT_RIGHT.obj",
+   "obj_edit_sha256": "9dd43d864516d2c4424fc79f498c60082ba8af42a88067c77632057602859fc3",
+   "offset": [
+    0,
+    0,
+    0
+   ],
+   "scale": [
+    1,
+    1,
+    1
+   ],
+   "materials": [
+    {
+     "id": 12,
+     "polys": 6,
+     "u": [
+      128,
+      173
+     ],
+     "v": [
+      1,
+      63
+     ],
+     "page_set": 3
+    }
+   ],
+   "crops": [
+    {
+     "page_set": 3,
+     "texture": 12,
+     "rect": [
+      128,
+      1,
+      46,
+      63
+     ],
+     "rgb": "characters/tannerd3/textures/crops/FOOT_RIGHT_set2_t12.png",
+     "rgb_sha256": "9adc23bb9807ec14df789c64776188b74d576cb27fa37b40ea26deabdfaad4cc",
+     "polys": 6,
+     "palette_row": 12
+    }
+   ],
+   "source_model": "tanner",
+   "texture_page_sets": [
+    2
+   ]
+  },
+  {
+   "slot": 12,
+   "part": "HAND_LEFT",
+   "obj_raw": "characters/tannerd3/models/engine/HAND_LEFT.obj",
+   "obj_raw_sha256": "ec231e0158b60eb2901ec09d833977f9ce61849269a311c47fc3b55433136ade",
+   "obj_edit": "characters/tannerd3/models/blender/HAND_LEFT.obj",
+   "obj_edit_sha256": "37285c03d15b5bbc2892feaa55c24eed02caac71c883612a4517704377bd8487",
+   "offset": [
+    0,
+    0,
+    0
+   ],
+   "scale": [
+    1,
+    1,
+    1
+   ],
+   "materials": [
+    {
+     "id": 2,
+     "polys": 5,
+     "u": [
+      194,
+      220
+     ],
+     "v": [
+      51,
+      63
+     ],
+     "page_set": 3
+    }
+   ],
+   "crops": [
+    {
+     "page_set": 3,
+     "texture": 2,
+     "rect": [
+      194,
+      51,
+      27,
+      13
+     ],
+     "rgb": "characters/tannerd3/textures/crops/HAND_LEFT_set2_t2.png",
+     "rgb_sha256": "a182530bcd29424fcbd7dce22cb522b1d19cca4f372ebd9b843b5cbf462497b8",
+     "polys": 5,
+     "palette_row": 2
+    }
+   ],
+   "source_model": "tanner",
+   "texture_page_sets": [
+    2
+   ]
+  },
+  {
+   "slot": 13,
+   "part": "HAND_RIGHT",
+   "obj_raw": "characters/tannerd3/models/engine/HAND_RIGHT.obj",
+   "obj_raw_sha256": "a0ebfa288401b80d620c55648785f5bc71413abf6b91710845db7558ae7f389e",
+   "obj_edit": "characters/tannerd3/models/blender/HAND_RIGHT.obj",
+   "obj_edit_sha256": "1e1ec45525ed8813a8fa7e9f7dd09ab318e97ca671194a516c7ef269d37795ab",
+   "offset": [
+    0,
+    0,
+    0
+   ],
+   "scale": [
+    1,
+    1,
+    1
+   ],
+   "materials": [
+    {
+     "id": 2,
+     "polys": 5,
+     "u": [
+      201,
+      222
+     ],
+     "v": [
+      53,
+      63
+     ],
+     "page_set": 3
+    }
+   ],
+   "crops": [
+    {
+     "page_set": 3,
+     "texture": 2,
+     "rect": [
+      201,
+      53,
+      22,
+      11
+     ],
+     "rgb": "characters/tannerd3/textures/crops/HAND_RIGHT_set2_t2.png",
+     "rgb_sha256": "e82e1e1b273f88dfe2920e6e05f265e507a2d516fd41ca565edd2b37918790e9",
+     "polys": 5,
+     "palette_row": 2
+    }
+   ],
+   "source_model": "tanner",
+   "texture_page_sets": [
+    2
+   ]
+  }
+ ],
+ "texture_crops": [
+  {
+   "palette_png": "characters/tannerd3/textures/palettes/page_23.png",
+   "palette_png_sha256": "163fc341c8d4c10a06ee8abf3b5899c4eaa9e6ac5d58acf138f5d460a16506b7",
+   "page_set": 26,
+   "palette_row": 0,
+   "palette_rows_hex": [
+    "428812ba4ca9f9cec6983cd7b1a975c60a9d9edf1bcfadb135bad0b5e79c98c2",
+    "a49855ba6bad5be3afb1d6da09a1bef36fa1f2adface73ca2c9dc69ceebd8ead",
+    "638c10c2f7de4ba954c67be7c69c79baadb51bd315b6def398ca94d2b1b109a1",
+    "849054c26dadd9cad0b57ce32aa194ce1ad790ad56bee79cf3b54ba9f9d2b7c6",
+    "a59432c26cadd8ced2a90c951adf56bacfb908a16fa595cad7da51ceca8c7ce7",
+    "c59876bef9d68da91dbbf4a97ee32aa1bbb61dc72e9511bebeef91a15cdb7fcb",
+    "218433be6ca9d8d2f0b575c609a13bdf96ce12bef9d64ca1afada6907de754c2",
+    "428833c22ca1f8d23bdfe79c8cb975caafa97de7ea9c1adba5944badb7ced0b5",
+    "428c33be2ba51adf9defc698b7ceafb15be7a49408a1dff795c6f1b5d7da6ca9",
+    "f7de73cef0bd4aad08a5e8a0e7a0e7a0e7a0c69cc69ca698a598849484904288"
+   ]
+  },
+  {
+   "palette_png": "characters/tannerd3/textures/palettes/page_25.png",
+   "palette_png_sha256": "5a56253143923e972fb4bffacbd9c9f840e2c6ac230dd695f6fac7cf2798cac3",
+   "page_set": 27,
+   "palette_row": 0,
+   "palette_rows_hex": [
+    "428833ba17db2aa55be7c798b4ceb0a99cf31adbea9cd7d253c64da5a494cfb5",
+    "2184cdb9d7c6e79c53ba7bef6aad668c72caf2b1f8d60c996fa976be76caf3bd",
+    "c59897c27be78eadf9d22aa5bdf710c294ce19df9defd0b54da5e79c33beb7ce",
+    "a69854c6aab51adf47adafb59cf3b7d24ca512be05a5ebc5e89c77ca3be3d9d6",
+    "638c77b61adf8fa51dc3ea94adb9beef95cef4a97ecb2c9d10c2bab67de7a694",
+    "83944ed23091d3decfb524b935ba3cd708a16da5f3ad97c2facedef3a6c9c3a8",
+    "428c32be6ca9b8c61bd7e7a0cfb177be0b9d35ba6fa5d9ced2ad5cdf96c6a594",
+    "e5a005ce4ca196caa5c1cfb1fad254c212bef2b1b8ca29a18ea934ba76c25cdb",
+    "2188f0ad4c95b4c610beaf9dc694f6d2aeb152c253b2e9904ba5b5d259df658c",
+    "849034ba8da9b7cad0ad0c9519d796c6f3b190a9e8984ca1d8d23adf55bef0b9",
+    "a594e69c28a5e8988bb54ba18ea9eec5d0b113ba74ca77beb7d219db5be3dff3",
+    "c394cadee5c1908c2cc278ef47ce6ca922a9d3dadbfb71c667ad08c253a117df",
+    "e6a076c21adbabb5fffbafadb8ca49a910be7de7cac974ce3bdff8d648b534ba",
+    "c698b8a6afa93ca3f1b595ca17e74ca59cebd5def5952ed23adf91da14aa54ba",
+    "c59853c2afa53adf28a1ceb5dffbd8ce12ba4aa507a18cad7de348a976c2efb5",
+    "428c0000b5d26aade69c0fbe7ceb839007a5adb552c618dfdef7a494a9b928a5",
+    "c69c11ba6ca994caceb5d5d609a153beaead17dff0b172ca30c24aa5b4d28cb1",
+    "e89830bab4ce8f9d17dbcfa973be6ca1d7c6efb57ae753ba93caaea9f6d20b99",
+    "a69c98c291ad1adf36ba2f957cebf9d6cfb95ce309a96dad33c696ced4a9bdf3",
+    "84944ca9f1b9e89c8ea955c291a9c6982ba16da514b6aeb197ca09a1d1b1c994",
+    "c49c00004fbe68a917d7fefb8ab5dceb07a592c2cbb1e5a0ecb969adb3ca4fca",
+    "a69454c60000aead19dbf1b52aa59cef96ceadb931c6099dd7d63ae36ca910c2",
+    "6484000011b2b6c68ca50a8d18d7508532bed199d6d2d0a92b9954b274be5ae3",
+    "e79c75c6d0b54aa93bd712ba8ea9b7ca7cdf33be2aa5f1b953c2aeb1d9ce6bad",
+    "d8dab8d297ce97ca76ca35c215baf4b5b3b1b2ad73a98ea970a92ea14ca1e998",
+    "d8dab8d297ce97ca76ca35c215baf4b5b3b1b2ad73a98ea970a92ea14ca1e998"
+   ]
+  },
+  {
+   "palette_png": "characters/tannerd3/textures/palettes/page_2.png",
+   "palette_png_sha256": "02cef0e91f7dcc6524d73cee20d5408b0cff29ecc95dd90206f1a4cd3f9c6a86",
+   "page_set": 3,
+   "palette_row": 0,
+   "palette_rows_hex": [
+    "238015c607998a88ee90bada48a56684dcf76fb1ac8caf85468428a1a5906aa9",
+    "42904b99539ee798cf99a594f89e289910aaac9d19b7c59474aa309e49998390",
+    "21840e9da694d4b1438817ba91a9ea98859059c2f5b56fa50ba1b2b1648cc798",
+    "63906d9d749e0999f19dc694f8a66a99ce99849411aa19bf75aee794cea5a594",
+    "238400006da1e994f3a92b9db1a9a79097a24d9d0a998fa513b6c89056be858c",
+    "c698b9be5dd7d2ad9ee755bafcc64da17ddfb9caf5ad58b6719d0a9d1bd3bef3",
+    "08ad96ca13baf7e653ced8d2cfb55ae7d6b957ca7af3b6d6f8def0c56db136be",
+    "83900000ae99749e289995b6109aa594b69e8b991abb11aaaea5e6942a99f9a2",
+    "a4940000cf99759e499997ba129a8b99e694d8a23ac332aeefa5ad996b992899",
+    "418810beb6d208a139e3a590f8d6aead73c6c798d7d64ba15be78390f9daa890",
+    "a79411c26aadd6d6cdb5ed983ae36fa9ca9874ca0ea1d0b5f8da0aa16cad9ceb",
+    "4c8453c2f8d6ee946ea99de7f39496ca7084f0981bdb9684d7d218950e99d1b9",
+    "2184adb1d6de8394c59c7bf3418c52ce6290d4b107a539e7a4982188defb6bad",
+    "00800000c49c28a983906ab5e6a048ad2088008407a528adc59c49ad20848bb5",
+    "428c000081c2a1adc1df02a1abbdc6a00bdb28ade6a467c62bb18394efc5a7e3",
+    "2bad000096d211c21bdfb3b557c216be95a97cebb9cef6b517ba57c6aeb937be",
+    "2ba154c2f1b5b7ceafb175c633bef9d696ca8da912ba1adfd0b155c2d8d276c6",
+    "21888394a59cc5a4e6a807ad07b16ac14ab5acc52fde0fce73d6d4f29aff0000",
+    "428c00008cb437e1c5a0adbddffd2ab1e6a84fc1bced8394f0cde9acc6a0d8e9",
+    "638c0fc2ffba4aadd6da3ab65ae770a973cec598bdef18dfacb532c6b5adb5d6",
+    "00806aa931c2618c94d2c49cceb5208452c6acb1efbdd6da07a58294418873ce",
+    "000017eb19ef94e659f737f39bfb58fb95ff9cfb9cfb9bffddffdefffeffffff",
+    "8bbd000071d60fced4e250d692de15ebcdc530ceb3def5e6eec530d256ef71da",
+    "a698b6d211c25be33aa66dadf8dabdef53caafb519db0aa17ce7d7d6def739e3"
+   ]
+  }
+ ],
+ "model": {
+  "path": "characters/tannerd3/model.obj",
+  "sha256": "29ee2d172480469aae3dcaea523c2200e9b3c37da1b7cf443b5932d7c514724a",
+  "split": true
+ },
+ "engine_reference": {
+  "path": "characters/tannerd3/models/engine_reference.obj",
+  "sha256": "439ece257cee0cb84734bed4fe8ff56c2f8b07d31d794a7d47ff2d0e3ebbcb1a"
+ },
+ "texture_page_map": {
+  "23": 26,
+  "25": 27,
+  "2": 3
+ },
+ "note": "Tanner (HAVANA.LEV) upper body in the JERI slots; generated by jmpped_make_tannerd3.py"
+}

@@ -1,0 +1,1085 @@
+{
+ "index": 1,
+ "name": "Jericho Driv3r",
+ "folder": "characters/jerichod3",
+ "source_character": "jericho",
+ "skeleton": "jericho",
+ "texture_page_sets": [
+  26,
+  27,
+  3
+ ],
+ "pages": [
+  {
+   "storage": "raw",
+   "flags": 0,
+   "image_bytes": 32768,
+   "indexed_png": "characters/jerichod3/textures/pages/page_26_indexed.png",
+   "indexed_png_sha256": "6f8efe1a560c39eef636860156e75baf0571b33eb5d1879077f820794644d3ab",
+   "palette_png": "characters/jerichod3/textures/palettes/page_26.png",
+   "palette_png_sha256": "163fc341c8d4c10a06ee8abf3b5899c4eaa9e6ac5d58acf138f5d460a16506b7",
+   "page_set": 26,
+   "source_character": "jericho-driv3r",
+   "palette_rows": 10,
+   "palette_row": 0,
+   "palette_rows_hex": [
+    "428812ba4ca9f9cec6983cd7b1a975c60a9d9edf1bcfadb135bad0b5e79c98c2",
+    "a49855ba6bad5be3afb1d6da09a1bef36fa1f2adface73ca2c9dc69ceebd8ead",
+    "638c10c2f7de4ba954c67be7c69c79baadb51bd315b6def398ca94d2b1b109a1",
+    "849054c26dadd9cad0b57ce32aa194ce1ad790ad56bee79cf3b54ba9f9d2b7c6",
+    "a59432c26cadd8ced2a90c951adf56bacfb908a16fa595cad7da51ceca8c7ce7",
+    "c59876bef9d68da91dbbf4a97ee32aa1bbb61dc72e9511bebeef91a15cdb7fcb",
+    "218433be6ca9d8d2f0b575c609a13bdf96ce12bef9d64ca1afada6907de754c2",
+    "428833c22ca1f8d23bdfe79c8cb975caafa97de7ea9c1adba5944badb7ced0b5",
+    "428c33be2ba51adf9defc698b7ceafb15be7a49408a1dff795c6f1b5d7da6ca9",
+    "f7de73cef0bd4aad08a5e8a0e7a0e7a0e7a0c69cc69ca698a598849484904288"
+   ]
+  },
+  {
+   "storage": "raw",
+   "flags": 0,
+   "image_bytes": 32768,
+   "indexed_png": "characters/jerichod3/textures/pages/page_27_indexed.png",
+   "indexed_png_sha256": "649f714b564c9a2d996007867adabd7766f2052934997e718f4e997fe6349a0f",
+   "palette_png": "characters/jerichod3/textures/palettes/page_27.png",
+   "palette_png_sha256": "5a56253143923e972fb4bffacbd9c9f840e2c6ac230dd695f6fac7cf2798cac3",
+   "page_set": 27,
+   "source_character": "jericho-driv3r",
+   "palette_rows": 26,
+   "palette_row": 0,
+   "palette_rows_hex": [
+    "428833ba17db2aa55be7c798b4ceb0a99cf31adbea9cd7d253c64da5a494cfb5",
+    "2184cdb9d7c6e79c53ba7bef6aad668c72caf2b1f8d60c996fa976be76caf3bd",
+    "c59897c27be78eadf9d22aa5bdf710c294ce19df9defd0b54da5e79c33beb7ce",
+    "a69854c6aab51adf47adafb59cf3b7d24ca512be05a5ebc5e89c77ca3be3d9d6",
+    "638c77b61adf8fa51dc3ea94adb9beef95cef4a97ecb2c9d10c2bab67de7a694",
+    "83944ed23091d3decfb524b935ba3cd708a16da5f3ad97c2facedef3a6c9c3a8",
+    "428c32be6ca9b8c61bd7e7a0cfb177be0b9d35ba6fa5d9ced2ad5cdf96c6a594",
+    "e5a005ce4ca196caa5c1cfb1fad254c212bef2b1b8ca29a18ea934ba76c25cdb",
+    "2188f0ad4c95b4c610beaf9dc694f6d2aeb152c253b2e9904ba5b5d259df658c",
+    "849034ba8da9b7cad0ad0c9519d796c6f3b190a9e8984ca1d8d23adf55bef0b9",
+    "a594e69c28a5e8988bb54ba18ea9eec5d0b113ba74ca77beb7d219db5be3dff3",
+    "c394cadee5c1908c2cc278ef47ce6ca922a9d3dadbfb71c667ad08c253a117df",
+    "e6a076c21adbabb5fffbafadb8ca49a910be7de7cac974ce3bdff8d648b534ba",
+    "c698b8a6afa93ca3f1b595ca17e74ca59cebd5def5952ed23adf91da14aa54ba",
+    "c59853c2afa53adf28a1ceb5dffbd8ce12ba4aa507a18cad7de348a976c2efb5",
+    "428c0000b5d26aade69c0fbe7ceb839007a5adb552c618dfdef7a494a9b928a5",
+    "c69c11ba6ca994caceb5d5d609a153beaead17dff0b172ca30c24aa5b4d28cb1",
+    "e89830bab4ce8f9d17dbcfa973be6ca1d7c6efb57ae753ba93caaea9f6d20b99",
+    "a69c98c291ad1adf36ba2f957cebf9d6cfb95ce309a96dad33c696ced4a9bdf3",
+    "84944ca9f1b9e89c8ea955c291a9c6982ba16da514b6aeb197ca09a1d1b1c994",
+    "c49c00004fbe68a917d7fefb8ab5dceb07a592c2cbb1e5a0ecb969adb3ca4fca",
+    "a69454c60000aead19dbf1b52aa59cef96ceadb931c6099dd7d63ae36ca910c2",
+    "6484000011b2b6c68ca50a8d18d7508532bed199d6d2d0a92b9954b274be5ae3",
+    "e79c75c6d0b54aa93bd712ba8ea9b7ca7cdf33be2aa5f1b953c2aeb1d9ce6bad",
+    "d8dab8d297ce97ca76ca35c215baf4b5b3b1b2ad73a98ea970a92ea14ca1e998",
+    "d8dab8d297ce97ca76ca35c215baf4b5b3b1b2ad73a98ea970a92ea14ca1e998"
+   ]
+  },
+  {
+   "storage": "compressed",
+   "flags": 1,
+   "image_bytes": 28868,
+   "indexed_png": "characters/jerichod3/textures/pages/page_3_indexed.png",
+   "indexed_png_sha256": "d58cf524f1d459538dd83b1737b2107d302803d2af09a26085ed1e4fd2239733",
+   "palette_png": "characters/jerichod3/textures/palettes/page_3.png",
+   "palette_png_sha256": "02cef0e91f7dcc6524d73cee20d5408b0cff29ecc95dd90206f1a4cd3f9c6a86",
+   "page_set": 3,
+   "source_character": "jericho-driv3r",
+   "palette_rows": 24,
+   "palette_row": 0,
+   "palette_rows_hex": [
+    "238015c607998a88ee90bada48a56684dcf76fb1ac8caf85468428a1a5906aa9",
+    "42904b99539ee798cf99a594f89e289910aaac9d19b7c59474aa309e49998390",
+    "21840e9da694d4b1438817ba91a9ea98859059c2f5b56fa50ba1b2b1648cc798",
+    "63906d9d749e0999f19dc694f8a66a99ce99849411aa19bf75aee794cea5a594",
+    "238400006da1e994f3a92b9db1a9a79097a24d9d0a998fa513b6c89056be858c",
+    "c698b9be5dd7d2ad9ee755bafcc64da17ddfb9caf5ad58b6719d0a9d1bd3bef3",
+    "08ad96ca13baf7e653ced8d2cfb55ae7d6b957ca7af3b6d6f8def0c56db136be",
+    "83900000ae99749e289995b6109aa594b69e8b991abb11aaaea5e6942a99f9a2",
+    "a4940000cf99759e499997ba129a8b99e694d8a23ac332aeefa5ad996b992899",
+    "418810beb6d208a139e3a590f8d6aead73c6c798d7d64ba15be78390f9daa890",
+    "a79411c26aadd6d6cdb5ed983ae36fa9ca9874ca0ea1d0b5f8da0aa16cad9ceb",
+    "4c8453c2f8d6ee946ea99de7f39496ca7084f0981bdb9684d7d218950e99d1b9",
+    "2184adb1d6de8394c59c7bf3418c52ce6290d4b107a539e7a4982188defb6bad",
+    "00800000c49c28a983906ab5e6a048ad2088008407a528adc59c49ad20848bb5",
+    "428c000081c2a1adc1df02a1abbdc6a00bdb28ade6a467c62bb18394efc5a7e3",
+    "2bad000096d211c21bdfb3b557c216be95a97cebb9cef6b517ba57c6aeb937be",
+    "2ba154c2f1b5b7ceafb175c633bef9d696ca8da912ba1adfd0b155c2d8d276c6",
+    "21888394a59cc5a4e6a807ad07b16ac14ab5acc52fde0fce73d6d4f29aff0000",
+    "428c00008cb437e1c5a0adbddffd2ab1e6a84fc1bced8394f0cde9acc6a0d8e9",
+    "638c0fc2ffba4aadd6da3ab65ae770a973cec598bdef18dfacb532c6b5adb5d6",
+    "00806aa931c2618c94d2c49cceb5208452c6acb1efbdd6da07a58294418873ce",
+    "000017eb19ef94e659f737f39bfb58fb95ff9cfb9cfb9bffddffdefffeffffff",
+    "8bbd000071d60fced4e250d692de15ebcdc530ceb3def5e6eec530d256ef71da",
+    "a698b6d211c25be33aa66dadf8dabdef53caafb519db0aa17ce7d7d6def739e3"
+   ]
+  }
+ ],
+ "parts": [
+  {
+   "slot": 0,
+   "part": "JERI_TORSO",
+   "obj_raw": "characters/jerichod3/models/engine/JERI_TORSO.obj",
+   "obj_raw_sha256": "b12d7fc5d8b1d7512db85683a6b1c9a9bad4f04f04c39cb7571b20baf22a49d0",
+   "obj_edit": "characters/jerichod3/models/blender/JERI_TORSO.obj",
+   "obj_edit_sha256": "7775e08bb0d987f5e6f59cf6a8e2a2713ece71b154428166d47359a59fbf93c6",
+   "materials": [
+    {
+     "id": 9,
+     "polys": 48,
+     "u": [
+      112,
+      127
+     ],
+     "v": [
+      128,
+      191
+     ],
+     "page_set": 26
+    }
+   ],
+   "crops": [
+    {
+     "page_set": 26,
+     "texture": 9,
+     "rect": [
+      112,
+      128,
+      16,
+      64
+     ],
+     "rgb": "characters/jerichod3/textures/crops/s26_t9.png",
+     "rgb_sha256": "",
+     "polys": 48,
+     "palette_row": 9
+    }
+   ],
+   "source_model": "jericho",
+   "texture_page_sets": [
+    26
+   ]
+  },
+  {
+   "slot": 1,
+   "part": "JERI_HEAD",
+   "obj_raw": "characters/jerichod3/models/engine/JERI_HEAD.obj",
+   "obj_raw_sha256": "0718eeac13e8a2ca5e2d2902370df66e2a7a8f4d37bad5e35cc5925687e465d1",
+   "obj_edit": "characters/jerichod3/models/blender/JERI_HEAD.obj",
+   "obj_edit_sha256": "036aba962c8f0a496c1c9b08af3a307d7ec87a996b9fa74dafea5389689f1783",
+   "materials": [
+    {
+     "id": 24,
+     "polys": 20,
+     "u": [
+      144,
+      159
+     ],
+     "v": [
+      120,
+      143
+     ],
+     "page_set": 27
+    },
+    {
+     "id": 25,
+     "polys": 30,
+     "u": [
+      128,
+      143
+     ],
+     "v": [
+      192,
+      215
+     ],
+     "page_set": 27
+    },
+    {
+     "id": 22,
+     "polys": 1,
+     "u": [
+      0,
+      20
+     ],
+     "v": [
+      0,
+      8
+     ],
+     "page_set": 27
+    },
+    {
+     "id": 23,
+     "polys": 2,
+     "u": [
+      0,
+      20
+     ],
+     "v": [
+      10,
+      18
+     ],
+     "page_set": 27
+    }
+   ],
+   "crops": [
+    {
+     "page_set": 27,
+     "texture": 24,
+     "rect": [
+      144,
+      120,
+      16,
+      24
+     ],
+     "rgb": "characters/jerichod3/textures/crops/JERI_HEAD_set27_t24.png",
+     "rgb_sha256": "2c231995fe6ff708fcaa0eec8cee6342be6ddc4d50b550d90fdaa55becc409b0",
+     "polys": 20,
+     "palette_row": 24
+    },
+    {
+     "page_set": 27,
+     "texture": 25,
+     "rect": [
+      128,
+      192,
+      16,
+      24
+     ],
+     "rgb": "characters/jerichod3/textures/crops/JERI_HEAD_set27_t25.png",
+     "rgb_sha256": "ea9ce7191f6b0816f467c9d927529af4676672d793e631211f2277957ed21643",
+     "polys": 30,
+     "palette_row": 25
+    },
+    {
+     "page_set": 27,
+     "texture": 22,
+     "rect": [
+      0,
+      0,
+      20,
+      8
+     ],
+     "rgb": "characters/jerichod3/textures/crops/JERI_HEAD_set27_t22.png",
+     "rgb_sha256": "",
+     "polys": 1,
+     "palette_row": 22
+    },
+    {
+     "page_set": 27,
+     "texture": 23,
+     "rect": [
+      0,
+      10,
+      20,
+      8
+     ],
+     "rgb": "characters/jerichod3/textures/crops/JERI_HEAD_set27_t23.png",
+     "rgb_sha256": "",
+     "polys": 2,
+     "palette_row": 23
+    }
+   ],
+   "source_model": "jericho",
+   "texture_page_sets": [
+    27
+   ],
+   "polys": 53
+  },
+  {
+   "slot": 2,
+   "part": "JERI_U_ARM_LEFT",
+   "obj_raw": "characters/jerichod3/models/engine/JERI_U_ARM_LEFT.obj",
+   "obj_raw_sha256": "171abf91f1c8350a1d49fa4620effa37709c49cb850ff6a82f9c781165284e80",
+   "obj_edit": "characters/jerichod3/models/blender/JERI_U_ARM_LEFT.obj",
+   "obj_edit_sha256": "03dda68159b93b70d1dbc8a189186747af1c27b85e40f8927c6a82cb595bafa4",
+   "materials": [
+    {
+     "id": 9,
+     "polys": 10,
+     "u": [
+      116,
+      127
+     ],
+     "v": [
+      128,
+      185
+     ],
+     "page_set": 26
+    }
+   ],
+   "crops": [
+    {
+     "page_set": 26,
+     "texture": 9,
+     "rect": [
+      112,
+      128,
+      16,
+      64
+     ],
+     "rgb": "characters/jerichod3/textures/crops/s26_t9.png",
+     "rgb_sha256": "",
+     "polys": 10,
+     "palette_row": 9
+    }
+   ],
+   "source_model": "jericho",
+   "texture_page_sets": [
+    26
+   ]
+  },
+  {
+   "slot": 3,
+   "part": "JERI_L_ARM_LEFT",
+   "obj_raw": "characters/jerichod3/models/engine/JERI_L_ARM_LEFT.obj",
+   "obj_raw_sha256": "4713230a174d42b775270cc8ad7a0131385fdccfc78c8c26c336102423beb415",
+   "obj_edit": "characters/jerichod3/models/blender/JERI_L_ARM_LEFT.obj",
+   "obj_edit_sha256": "765c5c503f2a7e20fea4ca86deae4d55e816a2780527f51e1967347090d42915",
+   "materials": [
+    {
+     "id": 9,
+     "polys": 10,
+     "u": [
+      113,
+      127
+     ],
+     "v": [
+      128,
+      184
+     ],
+     "page_set": 26
+    }
+   ],
+   "crops": [
+    {
+     "page_set": 26,
+     "texture": 9,
+     "rect": [
+      112,
+      128,
+      16,
+      64
+     ],
+     "rgb": "characters/jerichod3/textures/crops/s26_t9.png",
+     "rgb_sha256": "",
+     "polys": 10,
+     "palette_row": 9
+    }
+   ],
+   "source_model": "jericho",
+   "texture_page_sets": [
+    26
+   ]
+  },
+  {
+   "slot": 4,
+   "part": "JERI_U_ARM_RIGHT",
+   "obj_raw": "characters/jerichod3/models/engine/JERI_U_ARM_RIGHT.obj",
+   "obj_raw_sha256": "3cf2a0e1691d958ef22de0b5c2db621a625143bc439003bb5f38b582ca68adde",
+   "obj_edit": "characters/jerichod3/models/blender/JERI_U_ARM_RIGHT.obj",
+   "obj_edit_sha256": "80b98e91bb4d52afb6a30ec4e7ae1dc48983f298dfe36bd0df23c1071dfe0a2f",
+   "materials": [
+    {
+     "id": 9,
+     "polys": 10,
+     "u": [
+      116,
+      127
+     ],
+     "v": [
+      128,
+      185
+     ],
+     "page_set": 26
+    }
+   ],
+   "crops": [
+    {
+     "page_set": 26,
+     "texture": 9,
+     "rect": [
+      112,
+      128,
+      16,
+      64
+     ],
+     "rgb": "characters/jerichod3/textures/crops/s26_t9.png",
+     "rgb_sha256": "",
+     "polys": 10,
+     "palette_row": 9
+    }
+   ],
+   "source_model": "jericho",
+   "texture_page_sets": [
+    26
+   ]
+  },
+  {
+   "slot": 5,
+   "part": "JERI_L_ARM_RIGHT",
+   "obj_raw": "characters/jerichod3/models/engine/JERI_L_ARM_RIGHT.obj",
+   "obj_raw_sha256": "d3cc27df30608b91be36801c9c651feb26570245422e2b5b647897f2327f4f6a",
+   "obj_edit": "characters/jerichod3/models/blender/JERI_L_ARM_RIGHT.obj",
+   "obj_edit_sha256": "1caa3d8c94152045f923d9206dd0237464d8fe7ac03e8a8ac81166fb95f1e008",
+   "materials": [
+    {
+     "id": 9,
+     "polys": 10,
+     "u": [
+      113,
+      127
+     ],
+     "v": [
+      128,
+      183
+     ],
+     "page_set": 26
+    }
+   ],
+   "crops": [
+    {
+     "page_set": 26,
+     "texture": 9,
+     "rect": [
+      112,
+      128,
+      16,
+      64
+     ],
+     "rgb": "characters/jerichod3/textures/crops/s26_t9.png",
+     "rgb_sha256": "",
+     "polys": 10,
+     "palette_row": 9
+    }
+   ],
+   "source_model": "jericho",
+   "texture_page_sets": [
+    26
+   ]
+  },
+  {
+   "slot": 6,
+   "part": "THIGH_LEFT",
+   "obj_raw": "characters/jerichod3/models/engine/THIGH_LEFT.obj",
+   "obj_raw_sha256": "11c8dcbf9fa232bcc6ab08560d7d5f3b22d3f2309ff932bfb28a249af93e3692",
+   "obj_edit": "characters/jerichod3/models/blender/THIGH_LEFT.obj",
+   "obj_edit_sha256": "c3b35f7d2cb36e6df76616b349aaf92ea9d2e7cfbabdb4c42f9fe2840655ff2b",
+   "materials": [
+    {
+     "id": 12,
+     "polys": 14,
+     "u": [
+      128,
+      164
+     ],
+     "v": [
+      28,
+      63
+     ],
+     "page_set": 3
+    }
+   ],
+   "crops": [
+    {
+     "page_set": 3,
+     "texture": 12,
+     "rect": [
+      128,
+      0,
+      49,
+      64
+     ],
+     "rgb": "characters/jerichod3/textures/crops/s3_t12.png",
+     "rgb_sha256": "",
+     "polys": 14,
+     "palette_row": 12
+    }
+   ],
+   "source_model": "tanner",
+   "texture_page_sets": [
+    3
+   ]
+  },
+  {
+   "slot": 7,
+   "part": "CALF_LEFT",
+   "obj_raw": "characters/jerichod3/models/engine/CALF_LEFT.obj",
+   "obj_raw_sha256": "2e45f7b9a9de56b6f380aac23c4b99125323967c393d9b48f4f818ab8f46d7c3",
+   "obj_edit": "characters/jerichod3/models/blender/CALF_LEFT.obj",
+   "obj_edit_sha256": "2a76b4d1559629740bb6c4e1cb057ffe9eeba481b15d40a1a3626c31ea470ba4",
+   "materials": [
+    {
+     "id": 12,
+     "polys": 14,
+     "u": [
+      128,
+      162
+     ],
+     "v": [
+      26,
+      63
+     ],
+     "page_set": 3
+    }
+   ],
+   "crops": [
+    {
+     "page_set": 3,
+     "texture": 12,
+     "rect": [
+      128,
+      0,
+      49,
+      64
+     ],
+     "rgb": "characters/jerichod3/textures/crops/s3_t12.png",
+     "rgb_sha256": "",
+     "polys": 14,
+     "palette_row": 12
+    }
+   ],
+   "source_model": "tanner",
+   "texture_page_sets": [
+    3
+   ]
+  },
+  {
+   "slot": 8,
+   "part": "FOOT_LEFT",
+   "obj_raw": "characters/jerichod3/models/engine/FOOT_LEFT.obj",
+   "obj_raw_sha256": "49d4325378631c1316ae2881a52e923515e63db1095f18c3e046a7d77c81f15b",
+   "obj_edit": "characters/jerichod3/models/blender/FOOT_LEFT.obj",
+   "obj_edit_sha256": "6ff11c75e8877d4481799078e4a017f633064b298f5bc4cf15c29657a493ee6a",
+   "materials": [
+    {
+     "id": 12,
+     "polys": 6,
+     "u": [
+      128,
+      176
+     ],
+     "v": [
+      0,
+      63
+     ],
+     "page_set": 3
+    }
+   ],
+   "crops": [
+    {
+     "page_set": 3,
+     "texture": 12,
+     "rect": [
+      128,
+      0,
+      49,
+      64
+     ],
+     "rgb": "characters/jerichod3/textures/crops/s3_t12.png",
+     "rgb_sha256": "",
+     "polys": 6,
+     "palette_row": 12
+    }
+   ],
+   "source_model": "tanner",
+   "texture_page_sets": [
+    3
+   ]
+  },
+  {
+   "slot": 9,
+   "part": "THIGH_RIGHT",
+   "obj_raw": "characters/jerichod3/models/engine/THIGH_RIGHT.obj",
+   "obj_raw_sha256": "1a87cb9f5ea06b7c4e3dcf4379f3c33343939568c01b88188c0e8c9bfe999ca7",
+   "obj_edit": "characters/jerichod3/models/blender/THIGH_RIGHT.obj",
+   "obj_edit_sha256": "9514c5b6a6e059965011efebd38a2896ec8772f9f7152bb33139a135cbf240b9",
+   "materials": [
+    {
+     "id": 12,
+     "polys": 14,
+     "u": [
+      128,
+      168
+     ],
+     "v": [
+      23,
+      63
+     ],
+     "page_set": 3
+    }
+   ],
+   "crops": [
+    {
+     "page_set": 3,
+     "texture": 12,
+     "rect": [
+      128,
+      0,
+      49,
+      64
+     ],
+     "rgb": "characters/jerichod3/textures/crops/s3_t12.png",
+     "rgb_sha256": "",
+     "polys": 14,
+     "palette_row": 12
+    }
+   ],
+   "source_model": "tanner",
+   "texture_page_sets": [
+    3
+   ]
+  },
+  {
+   "slot": 10,
+   "part": "CALF_RIGHT",
+   "obj_raw": "characters/jerichod3/models/engine/CALF_RIGHT.obj",
+   "obj_raw_sha256": "8435c9fa58b35c579dcd8a4737f9f0d4901e3973567dcc1cddc0182908346f44",
+   "obj_edit": "characters/jerichod3/models/blender/CALF_RIGHT.obj",
+   "obj_edit_sha256": "9517ba4413a401df811b2b7624bb1dc50243650d07373d74510d4f124c17f096",
+   "materials": [
+    {
+     "id": 12,
+     "polys": 14,
+     "u": [
+      128,
+      165
+     ],
+     "v": [
+      24,
+      63
+     ],
+     "page_set": 3
+    }
+   ],
+   "crops": [
+    {
+     "page_set": 3,
+     "texture": 12,
+     "rect": [
+      128,
+      0,
+      49,
+      64
+     ],
+     "rgb": "characters/jerichod3/textures/crops/s3_t12.png",
+     "rgb_sha256": "",
+     "polys": 14,
+     "palette_row": 12
+    }
+   ],
+   "source_model": "tanner",
+   "texture_page_sets": [
+    3
+   ]
+  },
+  {
+   "slot": 11,
+   "part": "FOOT_RIGHT",
+   "obj_raw": "characters/jerichod3/models/engine/FOOT_RIGHT.obj",
+   "obj_raw_sha256": "9a5d1ebc1f1de5e12fb959b28190a065e00ac5cedf6f914df83c2666925fbf4c",
+   "obj_edit": "characters/jerichod3/models/blender/FOOT_RIGHT.obj",
+   "obj_edit_sha256": "89c020df896b0a5f853d474f590b643addf4d2c44e47221ef03c073444db9840",
+   "materials": [
+    {
+     "id": 12,
+     "polys": 6,
+     "u": [
+      128,
+      173
+     ],
+     "v": [
+      1,
+      63
+     ],
+     "page_set": 3
+    }
+   ],
+   "crops": [
+    {
+     "page_set": 3,
+     "texture": 12,
+     "rect": [
+      128,
+      0,
+      49,
+      64
+     ],
+     "rgb": "characters/jerichod3/textures/crops/s3_t12.png",
+     "rgb_sha256": "",
+     "polys": 6,
+     "palette_row": 12
+    }
+   ],
+   "source_model": "tanner",
+   "texture_page_sets": [
+    3
+   ]
+  },
+  {
+   "slot": 12,
+   "part": "HAND_LEFT",
+   "obj_raw": "characters/jerichod3/models/engine/HAND_LEFT.obj",
+   "obj_raw_sha256": "f07a853a4e6c521d00f46c9fec1778ac00835d894ac83ebc013f249b7636e1af",
+   "obj_edit": "characters/jerichod3/models/blender/HAND_LEFT.obj",
+   "obj_edit_sha256": "5c093f34ca9c13fa678e7174c41a008f52bb7c61cb42652c80ba3a2ec036b524",
+   "materials": [
+    {
+     "id": 2,
+     "polys": 5,
+     "u": [
+      194,
+      220
+     ],
+     "v": [
+      51,
+      63
+     ],
+     "page_set": 3
+    }
+   ],
+   "crops": [
+    {
+     "page_set": 3,
+     "texture": 2,
+     "rect": [
+      194,
+      51,
+      29,
+      13
+     ],
+     "rgb": "characters/jerichod3/textures/crops/s3_t2.png",
+     "rgb_sha256": "",
+     "polys": 5,
+     "palette_row": 2
+    }
+   ],
+   "source_model": "tanner",
+   "texture_page_sets": [
+    3
+   ]
+  },
+  {
+   "slot": 13,
+   "part": "HAND_RIGHT",
+   "obj_raw": "characters/jerichod3/models/engine/HAND_RIGHT.obj",
+   "obj_raw_sha256": "62feafc98e6a1f2e20b4954c95343cba63fb7fb0db3e5141d0f1e8c6c03eaee4",
+   "obj_edit": "characters/jerichod3/models/blender/HAND_RIGHT.obj",
+   "obj_edit_sha256": "7e5ddffc98dc1a337ecddf09fc015fd1dae36c559291460c762a615a38e522f9",
+   "materials": [
+    {
+     "id": 2,
+     "polys": 5,
+     "u": [
+      201,
+      222
+     ],
+     "v": [
+      53,
+      63
+     ],
+     "page_set": 3
+    }
+   ],
+   "crops": [
+    {
+     "page_set": 3,
+     "texture": 2,
+     "rect": [
+      194,
+      51,
+      29,
+      13
+     ],
+     "rgb": "characters/jerichod3/textures/crops/s3_t2.png",
+     "rgb_sha256": "",
+     "polys": 5,
+     "palette_row": 2
+    }
+   ],
+   "source_model": "tanner",
+   "texture_page_sets": [
+    3
+   ]
+  }
+ ],
+ "texture_crops": [
+  {
+   "palette_png": "characters/jerichod3/textures/palettes/page_26.png",
+   "palette_png_sha256": "163fc341c8d4c10a06ee8abf3b5899c4eaa9e6ac5d58acf138f5d460a16506b7",
+   "page_set": 26,
+   "palette_row": 0,
+   "palette_rows_hex": [
+    "428812ba4ca9f9cec6983cd7b1a975c60a9d9edf1bcfadb135bad0b5e79c98c2",
+    "a49855ba6bad5be3afb1d6da09a1bef36fa1f2adface73ca2c9dc69ceebd8ead",
+    "638c10c2f7de4ba954c67be7c69c79baadb51bd315b6def398ca94d2b1b109a1",
+    "849054c26dadd9cad0b57ce32aa194ce1ad790ad56bee79cf3b54ba9f9d2b7c6",
+    "a59432c26cadd8ced2a90c951adf56bacfb908a16fa595cad7da51ceca8c7ce7",
+    "c59876bef9d68da91dbbf4a97ee32aa1bbb61dc72e9511bebeef91a15cdb7fcb",
+    "218433be6ca9d8d2f0b575c609a13bdf96ce12bef9d64ca1afada6907de754c2",
+    "428833c22ca1f8d23bdfe79c8cb975caafa97de7ea9c1adba5944badb7ced0b5",
+    "428c33be2ba51adf9defc698b7ceafb15be7a49408a1dff795c6f1b5d7da6ca9",
+    "f7de73cef0bd4aad08a5e8a0e7a0e7a0e7a0c69cc69ca698a598849484904288"
+   ]
+  },
+  {
+   "palette_png": "characters/jerichod3/textures/palettes/page_27.png",
+   "palette_png_sha256": "5a56253143923e972fb4bffacbd9c9f840e2c6ac230dd695f6fac7cf2798cac3",
+   "page_set": 27,
+   "palette_row": 0,
+   "palette_rows_hex": [
+    "428833ba17db2aa55be7c798b4ceb0a99cf31adbea9cd7d253c64da5a494cfb5",
+    "2184cdb9d7c6e79c53ba7bef6aad668c72caf2b1f8d60c996fa976be76caf3bd",
+    "c59897c27be78eadf9d22aa5bdf710c294ce19df9defd0b54da5e79c33beb7ce",
+    "a69854c6aab51adf47adafb59cf3b7d24ca512be05a5ebc5e89c77ca3be3d9d6",
+    "638c77b61adf8fa51dc3ea94adb9beef95cef4a97ecb2c9d10c2bab67de7a694",
+    "83944ed23091d3decfb524b935ba3cd708a16da5f3ad97c2facedef3a6c9c3a8",
+    "428c32be6ca9b8c61bd7e7a0cfb177be0b9d35ba6fa5d9ced2ad5cdf96c6a594",
+    "e5a005ce4ca196caa5c1cfb1fad254c212bef2b1b8ca29a18ea934ba76c25cdb",
+    "2188f0ad4c95b4c610beaf9dc694f6d2aeb152c253b2e9904ba5b5d259df658c",
+    "849034ba8da9b7cad0ad0c9519d796c6f3b190a9e8984ca1d8d23adf55bef0b9",
+    "a594e69c28a5e8988bb54ba18ea9eec5d0b113ba74ca77beb7d219db5be3dff3",
+    "c394cadee5c1908c2cc278ef47ce6ca922a9d3dadbfb71c667ad08c253a117df",
+    "e6a076c21adbabb5fffbafadb8ca49a910be7de7cac974ce3bdff8d648b534ba",
+    "c698b8a6afa93ca3f1b595ca17e74ca59cebd5def5952ed23adf91da14aa54ba",
+    "c59853c2afa53adf28a1ceb5dffbd8ce12ba4aa507a18cad7de348a976c2efb5",
+    "428c0000b5d26aade69c0fbe7ceb839007a5adb552c618dfdef7a494a9b928a5",
+    "c69c11ba6ca994caceb5d5d609a153beaead17dff0b172ca30c24aa5b4d28cb1",
+    "e89830bab4ce8f9d17dbcfa973be6ca1d7c6efb57ae753ba93caaea9f6d20b99",
+    "a69c98c291ad1adf36ba2f957cebf9d6cfb95ce309a96dad33c696ced4a9bdf3",
+    "84944ca9f1b9e89c8ea955c291a9c6982ba16da514b6aeb197ca09a1d1b1c994",
+    "c49c00004fbe68a917d7fefb8ab5dceb07a592c2cbb1e5a0ecb969adb3ca4fca",
+    "a69454c60000aead19dbf1b52aa59cef96ceadb931c6099dd7d63ae36ca910c2",
+    "6484000011b2b6c68ca50a8d18d7508532bed199d6d2d0a92b9954b274be5ae3",
+    "e79c75c6d0b54aa93bd712ba8ea9b7ca7cdf33be2aa5f1b953c2aeb1d9ce6bad",
+    "d8dab8d297ce97ca76ca35c215baf4b5b3b1b2ad73a98ea970a92ea14ca1e998",
+    "d8dab8d297ce97ca76ca35c215baf4b5b3b1b2ad73a98ea970a92ea14ca1e998"
+   ]
+  },
+  {
+   "palette_png": "characters/jerichod3/textures/palettes/page_3.png",
+   "palette_png_sha256": "02cef0e91f7dcc6524d73cee20d5408b0cff29ecc95dd90206f1a4cd3f9c6a86",
+   "page_set": 3,
+   "palette_row": 0,
+   "palette_rows_hex": [
+    "238015c607998a88ee90bada48a56684dcf76fb1ac8caf85468428a1a5906aa9",
+    "42904b99539ee798cf99a594f89e289910aaac9d19b7c59474aa309e49998390",
+    "21840e9da694d4b1438817ba91a9ea98859059c2f5b56fa50ba1b2b1648cc798",
+    "63906d9d749e0999f19dc694f8a66a99ce99849411aa19bf75aee794cea5a594",
+    "238400006da1e994f3a92b9db1a9a79097a24d9d0a998fa513b6c89056be858c",
+    "c698b9be5dd7d2ad9ee755bafcc64da17ddfb9caf5ad58b6719d0a9d1bd3bef3",
+    "08ad96ca13baf7e653ced8d2cfb55ae7d6b957ca7af3b6d6f8def0c56db136be",
+    "83900000ae99749e289995b6109aa594b69e8b991abb11aaaea5e6942a99f9a2",
+    "a4940000cf99759e499997ba129a8b99e694d8a23ac332aeefa5ad996b992899",
+    "418810beb6d208a139e3a590f8d6aead73c6c798d7d64ba15be78390f9daa890",
+    "a79411c26aadd6d6cdb5ed983ae36fa9ca9874ca0ea1d0b5f8da0aa16cad9ceb",
+    "4c8453c2f8d6ee946ea99de7f39496ca7084f0981bdb9684d7d218950e99d1b9",
+    "2184adb1d6de8394c59c7bf3418c52ce6290d4b107a539e7a4982188defb6bad",
+    "00800000c49c28a983906ab5e6a048ad2088008407a528adc59c49ad20848bb5",
+    "428c000081c2a1adc1df02a1abbdc6a00bdb28ade6a467c62bb18394efc5a7e3",
+    "2bad000096d211c21bdfb3b557c216be95a97cebb9cef6b517ba57c6aeb937be",
+    "2ba154c2f1b5b7ceafb175c633bef9d696ca8da912ba1adfd0b155c2d8d276c6",
+    "21888394a59cc5a4e6a807ad07b16ac14ab5acc52fde0fce73d6d4f29aff0000",
+    "428c00008cb437e1c5a0adbddffd2ab1e6a84fc1bced8394f0cde9acc6a0d8e9",
+    "638c0fc2ffba4aadd6da3ab65ae770a973cec598bdef18dfacb532c6b5adb5d6",
+    "00806aa931c2618c94d2c49cceb5208452c6acb1efbdd6da07a58294418873ce",
+    "000017eb19ef94e659f737f39bfb58fb95ff9cfb9cfb9bffddffdefffeffffff",
+    "8bbd000071d60fced4e250d692de15ebcdc530ceb3def5e6eec530d256ef71da",
+    "a698b6d211c25be33aa66dadf8dabdef53caafb519db0aa17ce7d7d6def739e3"
+   ]
+  }
+ ],
+ "model": {
+  "path": "characters/jerichod3/model_textured.obj",
+  "sha256": "004e6170c037f3ea8a864ccacb90dee3a3c389d96f2a8fcb32276b9235602f3b",
+  "split": true,
+  "uv_space": "crop",
+  "format": "textured-obj-v1",
+  "page_path": "characters/jerichod3/model.obj",
+  "page_sha256": "414757786ce6bcc260e87d5446afa36b67d70b97e542d38e3899e84a4e18cc66",
+  "mtl": "characters/jerichod3/model_textured.mtl"
+ },
+ "engine_reference": {
+  "path": "characters/jerichod3/models/engine_reference.obj",
+  "sha256": "3c80f78ad540f047f40bb8d661973f519db8ca67cfc3dc62bfd54b313fb6fc34"
+ },
+ "texture_page_map": {
+  "23": 26,
+  "25": 27,
+  "2": 3
+ },
+ "extra_materials": [
+  {
+   "material": "Glasses",
+   "part": "JERI_HEAD",
+   "page_set": 27,
+   "texture": 22,
+   "rect": [
+    0,
+    0,
+    20,
+    8
+   ],
+   "rgb_sha256": "",
+   "palette_row": 22,
+   "polys": 1,
+   "rgb": "characters/jerichod3/textures/crops/JERI_HEAD_set27_t22.png"
+  },
+  {
+   "material": "Material.001",
+   "part": "JERI_HEAD",
+   "page_set": 27,
+   "texture": 23,
+   "rect": [
+    0,
+    10,
+    20,
+    8
+   ],
+   "rgb_sha256": "",
+   "palette_row": 23,
+   "polys": 2,
+   "rgb": "characters/jerichod3/textures/crops/JERI_HEAD_set27_t23.png"
+  }
+ ],
+ "shared_textures": [
+  {
+   "page_set": 3,
+   "texture": 2,
+   "rect": [
+    194,
+    51,
+    29,
+    13
+   ],
+   "rgb": "characters/jerichod3/textures/crops/s3_t2.png",
+   "palette_row": 2,
+   "members": [
+    "HAND_LEFT",
+    "HAND_RIGHT"
+   ],
+   "source_rects": [
+    [
+     194,
+     51,
+     27,
+     13
+    ],
+    [
+     201,
+     53,
+     22,
+     11
+    ]
+   ]
+  },
+  {
+   "page_set": 3,
+   "texture": 12,
+   "rect": [
+    128,
+    0,
+    49,
+    64
+   ],
+   "rgb": "characters/jerichod3/textures/crops/s3_t12.png",
+   "palette_row": 12,
+   "members": [
+    "THIGH_LEFT",
+    "CALF_LEFT",
+    "FOOT_LEFT",
+    "THIGH_RIGHT",
+    "CALF_RIGHT",
+    "FOOT_RIGHT"
+   ],
+   "source_rects": [
+    [
+     128,
+     28,
+     37,
+     36
+    ],
+    [
+     128,
+     26,
+     35,
+     38
+    ],
+    [
+     128,
+     0,
+     49,
+     64
+    ],
+    [
+     128,
+     23,
+     41,
+     41
+    ],
+    [
+     128,
+     24,
+     38,
+     40
+    ],
+    [
+     128,
+     1,
+     46,
+     63
+    ]
+   ]
+  },
+  {
+   "page_set": 26,
+   "texture": 9,
+   "rect": [
+    112,
+    128,
+    16,
+    64
+   ],
+   "rgb": "characters/jerichod3/textures/crops/s26_t9.png",
+   "palette_row": 9,
+   "members": [
+    "JERI_TORSO",
+    "JERI_U_ARM_LEFT",
+    "JERI_L_ARM_LEFT",
+    "JERI_U_ARM_RIGHT",
+    "JERI_L_ARM_RIGHT"
+   ],
+   "source_rects": [
+    [
+     112,
+     128,
+     16,
+     64
+    ],
+    [
+     116,
+     128,
+     12,
+     58
+    ],
+    [
+     113,
+     128,
+     15,
+     57
+    ],
+    [
+     116,
+     128,
+     12,
+     58
+    ],
+    [
+     113,
+     128,
+     15,
+     56
+    ]
+   ]
+  }
+ ]
+}
