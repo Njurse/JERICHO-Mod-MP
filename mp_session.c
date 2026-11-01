@@ -7640,7 +7640,7 @@ static void MpDriveRemotePed(MP_PLAYER* p)
 {
 	JerNpc* n;
 	LPPEDESTRIAN ped;
-	int dx, dz, err, gen, entry, applied;
+	int dx, dz, err, tol, gen, entry, applied;
 
 	if (p == NULL || !p->active || p->isLocal)
 		return;
@@ -7758,7 +7758,23 @@ static void MpDriveRemotePed(MP_PLAYER* p)
 	dz = p->pedZ - ped->position.vz;
 	err = (int)sqrt((double)dx * (double)dx + (double)dz * (double)dz);
 
-	if (err > 120)
+	/* The sample is already (half a ping + its age) old, and the stand-in keeps
+	 * walking at the owner's speed in the meantime, so a moving stand-in LEADS the
+	 * last sample by about speed x that many frames. A flat 120 made every runner
+	 * on a >100 ms link snap back several times a second (on-foot rubber-banding);
+	 * widen the gate by that expected lead, capped so a real drift still corrects. */
+	{
+		int lagMs = (int)(MpNowMs() - p->pedLastMs) + (p->pingMs > 0 ? p->pingMs / 2 : 0);
+		int lagFrames = lagMs / 33;
+		int spd = p->pedSpeed < 0 ? -p->pedSpeed : p->pedSpeed;
+
+		if (lagFrames > 10)
+			lagFrames = 10;
+
+		tol = 120 + spd * lagFrames;
+	}
+
+	if (err > tol)
 	{
 		jer_npc_set_world(n, p->pedX, p->pedY, p->pedZ, p->pedHeading);
 
@@ -11615,6 +11631,53 @@ static void MpMaterializeLeftCar(MP_PLAYER* pl, const MP_CARSTATE_ENTRY* e)
 			pl->id, slot, (int)e->leftModel, (int)e->x, (int)e->z);
 }
 
+/* The parked player body a remote owner just got into: stopped (CIV_AI, quiet
+ * pad), driven by nobody, not a traffic mirror and not our own car, of the model
+ * the owner reports, nearest to the owner's pose. -1 when there is none. */
+#define MP_ENTER_ADOPT_DIST	1536	/* world units: the owner's car can have moved a little */
+
+static int MpFindEnteredParkedBody(const MP_PLAYER* pl, const MP_CARSTATE_ENTRY* e)
+{
+	MP_PLAYER* me = MpLocalPlayer();
+	int wantCity = (e->modelCity == MP_CAR_CITY_SESSION) ? -1 : (int)e->modelCity;
+	int resident = MpResidentSlotForCar(wantCity, (int)e->model);
+	int k, best = -1;
+	double bestD2 = (double)MP_ENTER_ADOPT_DIST * MP_ENTER_ADOPT_DIST;
+
+	if (resident < 0)
+		return -1;
+
+	for (k = 1; k < MAX_CARS; k++)
+	{
+		CAR_DATA* cp = &car_data[k];
+		double dx, dz, d2;
+
+		if (k == (int)player[0].playerCarId || (me != NULL && k == me->carId))
+			continue;
+		if (gMpPeerTraffic[k])
+			continue;
+		if (cp->controlType != CONTROL_TYPE_CIV_AI || cp->ai.padid != &gMpQuietPad)
+			continue;
+		if (cp->ap.carCos == NULL || cp->ap.model != resident || !JerCarSlotUsable(cp->ap.model))
+			continue;
+		if (MpGetPlayerByCar(k) != NULL)
+			continue;
+
+		dx = (double)e->x - (double)cp->hd.where.t[0];
+		dz = (double)e->z - (double)cp->hd.where.t[2];
+		d2 = dx * dx + dz * dz;
+
+		if (d2 < bestD2)
+		{
+			bestD2 = d2;
+			best = k;
+		}
+	}
+
+	(void)pl;
+	return best;
+}
+
 static void MpHandleCarState(int connIndex, const unsigned char* p, int len)
 {
 	MP_CARSTATE h;
@@ -11649,6 +11712,13 @@ static void MpHandleCarState(int connIndex, const unsigned char* p, int len)
 		 * does the same), so nobody is left steering an empty car. */
 		if (e.model == MP_CARSTATE_NO_CAR)
 		{
+			/* Just got OUT (this machine still had them in a car): the ped pose we
+			 * hold is from their PREVIOUS time on foot. Forget it, so the stand-in
+			 * is built from their first fresh JPPD at the car door instead of at
+			 * the old spot and then snapped across the map (on-foot desync). */
+			if (pl->carId >= 0)
+				pl->pedLastMs = 0;
+
 			/* No car to drive: drop the timeline too, or walking back into a
 			 * body (or a different one) would replay the old car's motion. */
 			MpPlayClear(pl->id);
@@ -11792,6 +11862,54 @@ static void MpHandleCarState(int connIndex, const unsigned char* p, int len)
 						gMpCtx->jer_log(gMpCtx,
 							"[mp] player %d is back in the car they left (slot %d) - "
 							"reusing the body instead of spawning another\n",
+							pl->id, slot);
+				}
+			}
+
+			/* ENTERED A DIFFERENT PARKED CAR. SAME_BODY only covers the car they
+			 * last got out of; walking into ANY other parked player body (an older
+			 * car of theirs, someone else's parked car, ours) used to fall through
+			 * to the spawn below, which built a second copy while the body they
+			 * really took stayed parked here: the MP car dupe on enter. That body
+			 * is in this machine's world at the owner's reported pose, so find it
+			 * and seat them in it. Traffic mirrors are excluded (their REMOVE row
+			 * retires them); only stopped quiet-pad bodies nobody drives qualify. */
+			if (!reused)
+			{
+				int slot = MpFindEnteredParkedBody(pl, &e);
+
+				if (slot >= 0)
+				{
+					int k;
+
+					/* the claim on that body moves with it: nobody else's parked
+					 * car any more (MpMaterializeLeftCar would otherwise rebuild it) */
+					for (k = 0; k < MP_MAX_PLAYERS; k++)
+					{
+						MP_PLAYER* o = &gMp.players[k];
+
+						if (o->active && !o->isLocal && o->leftCarSlot1 == slot + 1)
+						{
+							o->leftCarSlot1 = 0;
+							o->leftCarModel = -1;
+						}
+					}
+
+					if (pl->leftCarSlot1 == slot + 1)
+					{
+						pl->leftCarSlot1 = 0;
+						pl->leftCarModel = -1;
+					}
+
+					pl->carId = slot;
+					pl->onFoot = 0;
+					reused = 1;
+					MpPlayClear(pl->id);
+
+					if (gMpCtx != NULL)
+						gMpCtx->jer_log(gMpCtx,
+							"[mp] player %d got into the parked car in slot %d - "
+							"seating them in it instead of spawning a copy\n",
 							pl->id, slot);
 				}
 			}
