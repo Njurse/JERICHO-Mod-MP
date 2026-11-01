@@ -27,7 +27,7 @@ import sys
 import threading
 import time
 
-PROTO = 19                    # mp_proto.h MP_PROTO_VERSION (19: dynamic JMPPED entries on top of 18's ped model id) -- the game drops any frame whose envelope version differs
+PROTO = 20                    # mp_proto.h MP_PROTO_VERSION (20: MP_ROSTER_ENTRY carries leftModel/leftModelCity, 32 bytes; 19: dynamic JMPPED entries on top of 18's ped model id) -- the game drops any frame whose envelope version differs
 SDK = 2                       # JERICHO_SDK_VERSION
 MP_VER = "0.17.0"             # JERICHO/MODS/mp/mod.toml version -- always advertised
 NUL = bytes([0])
@@ -143,7 +143,7 @@ ROSTER_NAME_MAX = 20          # mp_proto.h MP_ROSTER_NAME_MAX
 ROSTER_FLAG_HOST = 1          # mp_proto.h MP_ROSTER_FLAG_HOST
 ROSTER_FLAG_CAR_READY = 2     # mp_proto.h MP_ROSTER_FLAG_CAR_READY
 ROSTER = struct.Struct("<4B")          # count, reserved[3] = 4
-ROSTER_ENTRY = struct.Struct("<6B2H20s")  # id, carId, model, modelCity, flags, pedModel, ping, palette, name[20] = 30 (model 0xFF = on foot)
+ROSTER_ENTRY = struct.Struct("<6B2H2B20s")  # id, carId, model, modelCity, flags, pedModel, ping, palette, leftModel, leftModelCity, name[20] = 32 (model 0xFF = on foot)
 
 REJECT_NAMES = {0: "NONE", 1: "FULL", 2: "VERSION", 3: "MODS", 4: "INPROGRESS", 5: "CUSTOM"}
 REJECT_IDS = {v.lower(): k for k, v in REJECT_NAMES.items() if k != 0}
