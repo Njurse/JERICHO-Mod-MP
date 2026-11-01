@@ -73,6 +73,7 @@ static unsigned char gMpOurCars[MAX_CARS];
  * spawners in disjoint slots, but a mirror must ALSO be remembered as not-ours so
  * teardown removes exactly what we built and nothing of the engine's. */
 static unsigned char gMpPeerTraffic[MAX_CARS];	/* 1 = we built a peer's car here */
+static uint8_t gMpPedSeq[MP_MAX_PLAYERS];	/* last on-foot sequence applied, per player row */
 static unsigned gMpPeerTrafficSeen[MAX_CARS];	/* frame we last heard about a mirror */
 static unsigned gMpPeerTrafficSiren[MAX_CARS];	/* frame we last heard it was on duty (MP_TRAFFIC_SIREN) */
 static int gMpMirrorSirenChannel = -1;		/* our locked voice for a peer's siren loop */
@@ -7545,6 +7546,18 @@ static void MpSendOwnPedState(void)
 
 	h.count = 1;
 
+	/* ORDER: reserved[0] carries a wrapping 1..255 sequence (0 = an older build,
+	 * which receivers accept unordered), so a late datagram cannot walk the
+	 * stand-in backwards. */
+	{
+		static uint8_t sSeq;
+
+		if (++sSeq == 0)
+			sSeq = 1;
+
+		h.reserved[0] = sSeq;
+	}
+
 	e.playerId = (uint8_t)me->id;
 	e.flags = (uint8_t)(p->speed != 0 ? MP_PED_MOVING : 0);
 	e.pedModel = (uint8_t)MpPedModelFromWire(gMp.config.pedModel);
@@ -7603,6 +7616,21 @@ static void MpHandlePedState(int connIndex, const unsigned char* p, int len)
 		{
 			forged = 1;
 			continue;
+		}
+
+		/* Drop a datagram older than the last one applied (see MpSendOwnPedState).
+		 * Sequence 0 is an older sender: no ordering, as before. A long silence
+		 * (> 1 s) resets the window, so a restarted sender is never locked out. */
+		if (h.reserved[0] != 0)
+		{
+			int idx = (int)(pl - gMp.players);
+			uint8_t last = gMpPedSeq[idx];
+
+			if (last != 0 && pl->pedLastMs != 0 && (MpNowMs() - pl->pedLastMs) < 1000 &&
+				(int8_t)(uint8_t)(h.reserved[0] - last) <= 0)
+				continue;
+
+			gMpPedSeq[idx] = h.reserved[0];
 		}
 
 		pl->pedX = e.x;

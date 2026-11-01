@@ -506,7 +506,7 @@ static_assert(sizeof(MP_PEDSTATE_ENTRY) == 24, "MP_PEDSTATE_ENTRY layout");
 typedef struct MP_PEDSTATE
 {
 	uint8_t  count;
-	uint8_t  reserved[3];
+	uint8_t  reserved[3];	/* [0] = wrapping 1..255 send sequence; 0 = older build (unordered) */
 } MP_PEDSTATE;	/* header only, like MP_CARSTATE: the entries follow */
 
 /* A player's chosen colour.
