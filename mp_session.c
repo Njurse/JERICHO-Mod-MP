@@ -201,6 +201,8 @@ static int MpRoadHeadingNear(int x, int z, int want);
 static int MpFindRoadSpotNear(int cx, int cy, int cz, int seed,
 	int* outX, int* outZ, int* outDir, int* outRing);
 static int MpFindRespawnSpot(int cx, int cz, int* outX, int* outZ, int* outDir);
+static int MpWarpStreamTo(int x, int z);
+static int MpRespawnOnFoot(MP_PLAYER* me);
 
 /* The last message received and from which connection: logged with every respawn,
  * re-place and refused write to our own car, so a log says what set it off. */
@@ -466,6 +468,7 @@ void MpLeaveSession(void)
 	 * does: a stale mark would make the next match take a STOCK traffic car for
 	 * one of ours and break the traffic instead of protecting it. */
 	memset(gMpOurCars, 0, sizeof(gMpOurCars));
+	memset(gJerCarNoPingOut, 0, sizeof(gJerCarNoPingOut));
 
 	/* ...and the peer's traffic mirrors, which are OUR builds of THEIR cars. */
 	MpTrafficMirrorsClear();
@@ -7895,7 +7898,10 @@ static void MpDriveRemotePed(MP_PLAYER* p)
 void MpReleaseOurCarSlot(int slot)
 {
 	if (slot >= 0 && slot < MAX_CARS)
+	{
 		gMpOurCars[slot] = 0;
+		gJerCarNoPingOut[slot] = 0;
+	}
 }
 
 static void MpKeepOurCarsFromTrafficAi(void)
@@ -7949,6 +7955,13 @@ static void MpKeepOurCarsFromTrafficAi(void)
 					"taken back so the AI cannot reach it\n", i, was);
 		}
 	}
+	/* PUBLISH THE MARKS TO THE ENGINE: PingOutCar refuses a marked slot. A parked
+	 * (CIV_AI, EMPTY) player car is otherwise fair game for CheckPingOut's 24000-unit
+	 * cull, the roadblock and spawn culls and the stationary-car request -- the
+	 * "my car got deleted" report. Parked player cars now stay until someone takes
+	 * them or the session ends. */
+	for (i = 0; i < MAX_CARS; i++)
+		gJerCarNoPingOut[i] = gMpOurCars[i];
 }
 
 /* ------------------------------------------------------------------ */
@@ -10091,6 +10104,113 @@ static int MpPlaceOnGround(CAR_DATA* cp, int x, int z, int dir)
 	return 1;
 }
 
+/* Not dying, not wanted: the state the engine's death route counts down through.
+ * Left standing, the wrecked banner and the playersdead game over re-arm. */
+static void MpClearDeathState(void)
+{
+	tannerDeathTimer = 0;
+	player[0].dying = 0;
+	player[0].upsideDown = 0;
+	pedestrianFelony = 0;
+}
+
+/* The car slot a respawn should place: our row's car, and when the row has not caught
+ * up yet (just got in, a car swap in flight) the engine's own player car. -1 = none. */
+static int MpRespawnCarSlot(MP_PLAYER* me)
+{
+	int slot = (me != NULL) ? me->carId : -1;
+
+	if (slot >= 0 && slot < MAX_CARS && car_data[slot].controlType != CONTROL_TYPE_NONE)
+		return slot;
+
+	if (player[0].playerType == PLAYER_TYPE_CAR)
+	{
+		slot = player[0].playerCarId;
+
+		if (slot >= 0 && slot < MAX_CARS && car_data[slot].controlType != CONTROL_TYPE_NONE &&
+			car_data[slot].ap.carCos != NULL)
+		{
+			if (gMpCtx != NULL)
+				gMpCtx->jer_log(gMpCtx, "[mp] respawn: row carId %d not usable - using engine playerCarId %d\n",
+					me != NULL ? me->carId : -1, slot);
+			return slot;
+		}
+	}
+
+	return -1;
+}
+
+/* ON-FOOT RESPAWN: back in the car we parked if it is still ours to take, else onto the
+ * nearest road (streamed and grounded), else where we stand. Always clears the death
+ * state; returns 1 when the player was moved, 0 when left in place. */
+static int MpRespawnOnFoot(MP_PLAYER* me)
+{
+	PEDESTRIAN* ped = player[0].pPed;
+	int slot = (me != NULL) ? me->leftCarSlot1 - 1 : -1;
+
+	MpClearDeathState();
+
+	if (slot >= 0 && slot < MAX_CARS &&
+		car_data[slot].controlType == CONTROL_TYPE_CIV_AI &&
+		car_data[slot].ap.carCos != NULL &&
+		car_data[slot].ap.model == me->leftCarModel &&
+		MpGetPlayerByCar(slot) == NULL && ped != NULL)
+	{
+		CAR_DATA* cp = &car_data[slot];
+
+		/* An upside-down parked car is righted where it stands first. */
+		if (cp->hd.where.m[1][1] < 100)
+			MpPlaceOnGround(cp, cp->hd.where.t[0], cp->hd.where.t[2], cp->hd.direction & 0xfff);
+
+		/* The engine's get-in, and the ped put away after it (see the enter-left lever:
+		 * ChangePedPlayerToCar clears pPed, the stale ped must not stay in the pool). */
+		ChangePedPlayerToCar(0, cp);
+		RemovePlayerPedestrian(ped);
+
+		cp->felonyRating = 0;
+		player[0].cameraAngle = cp->hd.direction + 1536;
+		player[0].cameraCarId = cp->id;
+
+		if (gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx, "[mp] respawn on foot: back in our parked car (slot %d)\n", slot);
+
+		return 1;
+	}
+
+	if (ped != NULL)
+	{
+		int bx = 0, bz = 0, bdir = -1, ring = 0;
+		VECTOR at;
+
+		if (MpFindRoadSpotNear(ped->position.vx, -ped->position.vy, ped->position.vz, -1, &bx, &bz, &bdir, &ring) &&
+			MpWarpStreamTo(bx, bz))
+		{
+			at.vx = bx;
+			at.vy = 0;
+			at.vz = bz;
+			at.pad = 0;
+
+			if (MapHeight(&at) > -1000)
+			{
+				ped->position.vx = bx;
+				ped->position.vz = bz;
+				ped->position.vy = -62 - MapHeight(&at);	/* standing height, as pedest.c places him */
+
+				if (gMpCtx != NULL)
+					gMpCtx->jer_log(gMpCtx, "[mp] respawn on foot: no parked car - nearest road %d,%d (ring %d)\n",
+						bx, bz, ring);
+
+				return 1;
+			}
+		}
+	}
+
+	if (gMpCtx != NULL)
+		gMpCtx->jer_log(gMpCtx, "[mp] respawn on foot: no parked car and no road - left in place\n");
+
+	return 0;
+}
+
 /* IN A SESSION, DYING IS A RESPAWN, NOT A GAME OVER.
  *
  * The engine asks (JER_PAUSE_GAMEOVER) just before it arms the game-over pause - the death
@@ -10120,39 +10240,30 @@ int MpRespawnAfterDeath(void)
 	VECTOR probe;
 	int ground;
 	int x, z, dir;
+	int slot;
 
 	if (!gMp.running)
 		return 0;
 
 	me = MpLocalPlayer();
 
+	/* From here on, IN A SESSION THE ANSWER IS ALWAYS "REFUSED": a failed placement
+	 * leaves the player where they are (not dying, not wanted) rather than handing the
+	 * engine a game over that tears the session down on this machine. */
 	if (me == NULL)
-		return 0;
+	{
+		MpClearDeathState();
+		return 1;
+	}
 
 	/* ON FOOT: busted by a cop (the "You've been caught" route), drowned or hit by
 	 * a train. The engine's game over there tore the session down -- the menu
 	 * opened over a world the camera no longer had a target in, and the player
 	 * had to rejoin. Refuse it the same way: not dying, not wanted, and off the
 	 * water if that is what was killing us. */
-	if (me->carId < 0 && player[0].playerType == PLAYER_TYPE_PEDESTRIAN)
+	if (player[0].playerType == PLAYER_TYPE_PEDESTRIAN)
 	{
-		PEDESTRIAN* ped = player[0].pPed;
-
-		tannerDeathTimer = 0;
-		player[0].dying = 0;
-		pedestrianFelony = 0;
-
-		if (ped != NULL)
-		{
-			int surf = GetSurfaceIndex((VECTOR*)&ped->position);
-
-			if ((surf == -26 || surf == -23) && PlayerStartInfo[0] != NULL)
-			{
-				ped->position.vx = PlayerStartInfo[0]->position.vx;
-				ped->position.vz = PlayerStartInfo[0]->position.vz;
-				ped->position.vy = -62 - MapHeight((VECTOR*)&ped->position);	/* standing height, as pedest.c places him */
-			}
-		}
+		MpRespawnOnFoot(me);
 
 		if (gMpCtx != NULL)
 			gMpCtx->jer_log(gMpCtx, "[mp] death on foot in a session - game over refused\n");
@@ -10160,15 +10271,24 @@ int MpRespawnAfterDeath(void)
 		return 1;
 	}
 
-	if (me->carId < 0 || me->carId >= MAX_CARS)
-		return 0;
+	slot = MpRespawnCarSlot(me);
 
-	cp = &car_data[me->carId];
+	if (slot < 0)
+	{
+		MpClearDeathState();
+
+		if (gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx, "[mp] death in a session with no car slot we can place - game over refused, left in place\n");
+
+		return 1;
+	}
+
+	cp = &car_data[slot];
 
 	if (gMpCtx != NULL)
 		gMpCtx->jer_log(gMpCtx,
 			"[mp] respawn reason: engine game over (car) - slot %d at %d,%d,%d damage %d/%d dying %d upsideDown %d felony %d; last rx %s conn %d frame %lu (now %lu)\n",
-			me->carId, cp->hd.where.t[0], cp->hd.where.t[1], cp->hd.where.t[2],
+			slot, cp->hd.where.t[0], cp->hd.where.t[1], cp->hd.where.t[2],
 			cp->totalDamage, MaxPlayerDamage[0], (int)player[0].dying, (int)player[0].upsideDown,
 			(int)cp->felonyRating, gMpLastRxTag, gMpLastRxConn, gMpLastRxFrame, gMp.frame);
 
@@ -10191,12 +10311,14 @@ int MpRespawnAfterDeath(void)
 
 	if (ground <= -1000)
 	{
-		if (PlayerStartInfo[0] == NULL)
-			return 0;			/* nothing sane to fall back to - let the engine end it */
-
-		x = PlayerStartInfo[0]->position.vx;
-		z = PlayerStartInfo[0]->position.vz;
-		dir = PlayerStartInfo[0]->rotation;
+		/* The void here: stream the level start in and go there, if there is one;
+		 * otherwise the ring search below works from where we are. */
+		if (PlayerStartInfo[0] != NULL)
+		{
+			x = PlayerStartInfo[0]->position.vx;
+			z = PlayerStartInfo[0]->position.vz;
+			dir = PlayerStartInfo[0]->rotation;
+		}
 	}
 
 	/* Face ALONG THE ROAD: a wreck usually ends at an angle (or upside down
@@ -10218,17 +10340,35 @@ int MpRespawnAfterDeath(void)
 	 * a road at y=2048 left the car two thousand units below it, falling. If the
 	 * chosen spot is somehow void, fall back to the level start rather than drop
 	 * the player. */
-	if (!MpPlaceOnGround(cp, x, z, dir))
+	/* STREAM BEFORE PLACING, the way the pause Respawn does: MapHeight answers the void
+	 * for ground that simply is not resident yet, which used to end the session. */
+	if (!MpPlaceOnGround(cp, x, z, dir) &&
+		!(MpWarpStreamTo(x, z) && MpPlaceOnGround(cp, x, z, dir)))
 	{
-		if (PlayerStartInfo[0] == NULL)
-			return 0;
+		int ok = 0;
 
-		x = PlayerStartInfo[0]->position.vx;
-		z = PlayerStartInfo[0]->position.vz;
-		dir = PlayerStartInfo[0]->rotation;
+		if (PlayerStartInfo[0] != NULL)
+		{
+			x = PlayerStartInfo[0]->position.vx;
+			z = PlayerStartInfo[0]->position.vz;
+			dir = PlayerStartInfo[0]->rotation;
 
-		if (!MpPlaceOnGround(cp, x, z, dir))
-			return 0;
+			ok = MpPlaceOnGround(cp, x, z, dir) ||
+				(MpWarpStreamTo(x, z) && MpPlaceOnGround(cp, x, z, dir));
+		}
+
+		if (!ok)
+		{
+			/* At worst: refuse and leave the car where it is. */
+			MpClearDeathState();
+			cp->felonyRating = 0;
+
+			if (gMpCtx != NULL)
+				gMpCtx->jer_log(gMpCtx,
+					"[mp] death in a session: no ground to place slot %d on - game over refused, left in place\n", slot);
+
+			return 1;
+		}
 	}
 	cp->hd.speed = 0;
 	cp->wheel_angle = 0;
@@ -10264,14 +10404,14 @@ int MpRespawnAfterDeath(void)
 	{
 		JER_ARGS_RESET_CAR rc;
 
-		rc.carId = me->carId;
+		rc.carId = slot;
 		jer_fire(JER_EVENT_RESET_CAR, &rc);
 	}
 
 	if (gMpCtx != NULL)
 		gMpCtx->jer_log(gMpCtx,
 			"[mp] death in a session: respawned at %d,%d (ground=%d) in slot %d - game over refused\n",
-			cp->hd.where.t[0], cp->hd.where.t[2], ground, me->carId);
+			cp->hd.where.t[0], cp->hd.where.t[2], ground, slot);
 
 	return 1;
 }
@@ -11388,21 +11528,34 @@ int MpRespawnOnRoad(void)
 	CAR_DATA* cp;
 	int cx, cy, cz;
 	int bestX = 0, bestZ = 0, found = 0, bestRing = 0, bestDir = -1;
+	int slot;
 
 	me = MpLocalPlayer();
 
-	if (me == NULL || me->carId < 0 || me->carId >= MAX_CARS)
+	/* ON FOOT: back in the parked car, else the nearest road. */
+	if (player[0].playerType == PLAYER_TYPE_PEDESTRIAN)
 	{
-		MpNotify("Respawn: you are on foot with no car");
+		if (MpRespawnOnFoot(me))
+			return 1;
+
+		MpNotify("Respawn: no parked car or road near enough");
 		return 0;
 	}
 
-	cp = &car_data[me->carId];
+	slot = MpRespawnCarSlot(me);
+
+	if (slot < 0)
+	{
+		MpNotify("Respawn: no car to respawn");
+		return 0;
+	}
+
+	cp = &car_data[slot];
 
 	if (gMpCtx != NULL)
 		gMpCtx->jer_log(gMpCtx,
 			"[mp] respawn reason: Respawn (pause menu / Restart row / test) - slot %d damage %d felony %d; last rx %s conn %d frame %lu (now %lu)\n",
-			me->carId, cp->totalDamage, (int)cp->felonyRating, gMpLastRxTag, gMpLastRxConn, gMpLastRxFrame, gMp.frame);
+			slot, cp->totalDamage, (int)cp->felonyRating, gMpLastRxTag, gMpLastRxConn, gMpLastRxFrame, gMp.frame);
 
 	cx = cp->hd.where.t[0];
 	cy = cp->hd.where.t[1];
@@ -11486,7 +11639,7 @@ int MpRespawnOnRoad(void)
 		player[0].cameraAngle = cp->hd.direction + 1536;
 		player[0].cameraCarId = cp->id;
 
-		rc.carId = me->carId;
+		rc.carId = slot;
 		jer_fire(JER_EVENT_RESET_CAR, &rc);
 
 		if (gMpCtx != NULL)

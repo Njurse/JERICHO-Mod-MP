@@ -2917,8 +2917,11 @@ static int MpOnGameQuit(void* userdata, void* args)
 	if (q->code != JER_PAUSE_QUIT_RESTART)
 		return JER_RESULT_CONTINUE;
 
-	if (!MpRespawnOnRoad())
-		return JER_RESULT_CONTINUE;
+	/* ALWAYS claimed in a session: falling through to the stock Restart rebuilt the
+	 * level on this machine alone, wiping its cars and its player out of the match.
+	 * A respawn that could not place us says so (MpRespawnOnRoad notifies) and leaves
+	 * us where we are. */
+	MpRespawnOnRoad();
 
 	pauseflag = 0;
 	UnPauseSound();
