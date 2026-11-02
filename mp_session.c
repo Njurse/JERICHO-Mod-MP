@@ -489,6 +489,10 @@ void MpLeaveSession(void)
  * value at CONNECT time - long before the player reached the car select - so
  * without this every other machine drew a car they never chose. Only a client
  * sends: the host's own car is in the roster it builds anyway. */
+/* city wire codec (defined below with MpPlayerCarCity) */
+static uint8_t MpCityToWire(int city);
+static int MpCityFromWire(uint8_t wire);
+
 static void MpSendPickedCar(int model, int city)
 {
 	MP_CAR c;
