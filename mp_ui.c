@@ -1351,12 +1351,15 @@ static void OnlineOnEnter(void* ud)
 	gOnlineItems[k].submenu = gMenuIdx[M_MANUAL];
 	k++;
 
-	/* Hosting online: NOT WIRED UP YET, and it was worse than nothing to offer the
-	 * row - pressing it went nowhere, with no way to tell a missing feature from a
-	 * broken one. It says so instead. The LAN row (M_LAN) is the real host path. */
+	/* Host a listen session from Online. Same path as LAN Host Game (one host
+	 * stack): MpBeginHost binds the session port on every interface, asks the
+	 * router for a UPnP mapping, and MpStartMatch lists the game on the master
+	 * when master_url is set. Friends can always join by address (Manual
+	 * address ...) on the host's public IP:port, listed or not. */
 	OnlineRowClear(k);
-	gOnlineItems[k].label = "Hosting In-Game: Coming Soon ...";
-	gOnlineItems[k].on_activate = NULL;	/* a statement, not a button */
+	gOnlineItems[k].label = "Host Game";
+	gOnlineItems[k].on_activate = ActHostGame;
+	gOnlineItems[k].submenu = gMenuIdx[M_HOST];
 	k++;
 
 	OnlineRowClear(k);
