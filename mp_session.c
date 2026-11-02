@@ -498,7 +498,7 @@ static void MpSendPickedCar(int model, int city)
 
 	memset(&c, 0, sizeof(c));
 	c.model = (model >= 0 && model < 0xFF) ? (uint8_t)model : 0xFF;
-	c.city = (city >= 0 && city < CITY_COUNT) ? (uint8_t)city : 0xFF;
+	c.city = MpCityToWire(city);
 
 	/* reserved[0] = our palette, reserved[1] = 1 "palette present" (old hosts
 	 * ignore both): so the roster names our colour before our first carstate. */
@@ -750,12 +750,62 @@ static int MpPlayerCarModel(int car, int isSlot)
  * model number. A "slotN" pick is a per-city frontend SLOT, so it resolves in the
  * SESSION's city; a raw model number may name a city explicitly (-mpcar
  * city:model). Either way the default is MP_CAR_CITY_SESSION -- the level's own. */
+/* ---- the city byte on the wire (MP_PROTO_VERSION 21) -------------------
+ *
+ * Stock rows 0..10 travel as their index. A runtime bank (row 11+) sits on whatever
+ * row was free on the machine that registered it, so carhacks spells it by a code
+ * from its NAME (jer_carquery.h, JER_CARQ_CITYWIRE): 0x80..0xFE. Reading a code
+ * this machine does not hold gives back the code itself - >= CITY_COUNT, so every
+ * resolver here misses it and the peer gets a stand-in, never a different car - and
+ * writing it again forwards it unchanged, so a host re-sending a roster (or a
+ * dedicated server, which has no carhacks) relays the original spelling. */
+static int MpIsWireCode(int v)
+{
+	return v >= JER_CITY_WIRE_CODE_FIRST && v <= JER_CITY_WIRE_CODE_LAST;
+}
+
+static uint8_t MpCityToWire(int city)
+{
+	JER_CARQ_CITYWIRE_ARGS a;
+
+	if (city < 0 || city == MP_CAR_CITY_SESSION)
+		return MP_CAR_CITY_SESSION;
+	if (MpIsWireCode(city))
+		return (uint8_t)city;
+
+	memset(&a, 0, sizeof(a));
+	a.toWire = 1;
+	a.city = city;
+	a.wire = (city < CITY_COUNT) ? city : MP_CAR_CITY_SESSION;	/* no handler: legacy */
+	jer_fire(JER_CARQ_CITYWIRE, &a);
+	return (uint8_t)a.wire;
+}
+
+/* -1 = the session's own city; 0..CITY_COUNT-1 = a row here; anything else is a car
+ * this machine cannot name (opaque). */
+static int MpCityFromWire(uint8_t wire)
+{
+	JER_CARQ_CITYWIRE_ARGS a;
+
+	if (wire == MP_CAR_CITY_SESSION)
+		return -1;
+
+	memset(&a, 0, sizeof(a));
+	a.toWire = 0;
+	a.wire = wire;
+	a.city = wire;		/* no handler (dedicated server): keep the byte as-is */
+	jer_fire(JER_CARQ_CITYWIRE, &a);
+	return a.city;
+}
+
 static int MpPlayerCarCity(int city, int isSlot)
 {
-	if (isSlot || city < 0 || city >= CITY_COUNT)
+	if (isSlot || city < 0)
+		return MP_CAR_CITY_SESSION;
+	if (city >= CITY_COUNT && !MpIsWireCode(city))
 		return MP_CAR_CITY_SESSION;
 
-	return city;
+	return MpCityToWire(city);
 }
 
 /* ------------------------------------------------------------------ */
@@ -1152,7 +1202,7 @@ void MpHostSendRoster(void)
 				int src = GetCarModelSourceCity(car_data[left].ap.model);
 
 				e->leftModel = (uint8_t)residentCarModels[car_data[left].ap.model];
-				e->leftModelCity = (uint8_t)((src >= 0) ? src : MP_CAR_CITY_SESSION);
+				e->leftModelCity = MpCityToWire(src);
 			}
 		}
 
@@ -1179,7 +1229,7 @@ void MpHostSendRoster(void)
 				int src = GetCarModelSourceCity(cp->ap.model);
 
 				e->model = (uint8_t)residentCarModels[cp->ap.model];
-				e->modelCity = (uint8_t)((src >= 0) ? src : MP_CAR_CITY_SESSION);
+				e->modelCity = MpCityToWire(src);
 			}
 		}
 	}
@@ -1794,7 +1844,7 @@ static void MpHandleRoster(const unsigned char* p, int len)
 		{
 			pl->car = (int)e->model;
 			pl->carIsSlot = 0;
-			pl->carCity = (e->modelCity == MP_CAR_CITY_SESSION) ? -1 : (int)e->modelCity;
+			pl->carCity = MpCityFromWire(e->modelCity);
 		}
 
 		/* ON FOOT, from the roster: the host names no car (0xff) for a player who
@@ -2387,7 +2437,7 @@ static void MpHandleCar(int connIndex, const unsigned char* p, int len)
 
 	pl->car = (c.model == 0xFF) ? -1 : (int)c.model;
 	pl->carIsSlot = 0;
-	pl->carCity = (c.city < CITY_COUNT) ? (int)c.city : -1;
+	pl->carCity = MpCityFromWire(c.city);
 	pl->carConfirmed = 1;
 	if (c.reserved[1] == 1)
 		pl->palette = (int)c.reserved[0];	/* the colour they will drive in */
@@ -2506,7 +2556,7 @@ static void MpHandleHello(int connIndex, const unsigned char* p, int len)
 		{
 			pl->car = (h.car == 0xFFFF) ? -1 : (int)h.car;
 			pl->carIsSlot = h.reserved[0] ? 1 : 0;
-			pl->carCity = (h.reserved[2] < CITY_COUNT) ? (int)h.reserved[2] : -1;
+			pl->carCity = MpCityFromWire(h.reserved[2]);
 			pl->palette = (int)h.reserved[1];
 
 			/* the optional player id block after the manifest (mp_proto.h) */
@@ -8350,7 +8400,7 @@ static void MpSendOwnCarState(void)
 
 			e.flags |= MP_CARSTATE_LEFT_CAR;
 			e.leftModel = (uint8_t)residentCarModels[car_data[left].ap.model];
-			e.leftModelCity = (uint8_t)((src >= 0) ? src : MP_CAR_CITY_SESSION);
+			e.leftModelCity = MpCityToWire(src);
 			e.palette = (uint8_t)car_data[left].ap.palette;
 			e.x = car_data[left].hd.where.t[0];
 			e.y = car_data[left].hd.where.t[1];
@@ -8409,14 +8459,14 @@ static void MpSendOwnCarState(void)
 			if (sMpStandIn && sMpWantModel >= 0)
 			{
 				e.model = (uint8_t)sMpWantModel;
-				e.modelCity = (uint8_t)((sMpWantCity >= 0) ? sMpWantCity : MP_CAR_CITY_SESSION);
+				e.modelCity = MpCityToWire(sMpWantCity);
 			}
 			else if (slot >= 0 && slot < MAX_CAR_RESIDENT_MODELS && residentCarModels[slot] >= 0)
 			{
 				int src = GetCarModelSourceCity(slot);
 
 				e.model = (uint8_t)residentCarModels[slot];
-				e.modelCity = (uint8_t)((src >= 0) ? src : MP_CAR_CITY_SESSION);
+				e.modelCity = MpCityToWire(src);
 			}
 			/* else: the slot holds no model, so there is no car to describe --
 			 * e.model stays MP_CARSTATE_NO_CAR (set above) and the peers release. */
@@ -8532,7 +8582,7 @@ static void MpSendTrafficState(void)
 
 		src = GetCarModelSourceCity(slot);
 		e.model = (uint8_t)residentCarModels[slot];
-		e.modelCity = (uint8_t)((src >= 0) ? src : MP_CAR_CITY_SESSION);
+		e.modelCity = MpCityToWire(src);
 		e.palette = (uint8_t)cp->ap.palette;
 
 		/* ON DUTY: the siren and lightbar state, decided HERE because this is the
@@ -11833,7 +11883,7 @@ static void MpMaterializeLeftCar(MP_PLAYER* pl, const MP_CARSTATE_ENTRY* e)
 	if (e->leftModel == MP_CARSTATE_NO_CAR)
 		return;
 
-	city = (e->leftModelCity == MP_CAR_CITY_SESSION) ? -1 : (int)e->leftModelCity;
+	city = MpCityFromWire(e->leftModelCity);
 	resident = MpResidentSlotForCar(city, (int)e->leftModel);
 
 	if (resident < 0 || !JerCarSlotUsable(resident))
@@ -11931,7 +11981,7 @@ static void MpMaterializeLeftCar(MP_PLAYER* pl, const MP_CARSTATE_ENTRY* e)
 static int MpFindEnteredParkedBody(const MP_PLAYER* pl, const MP_CARSTATE_ENTRY* e)
 {
 	MP_PLAYER* me = MpLocalPlayer();
-	int wantCity = (e->modelCity == MP_CAR_CITY_SESSION) ? -1 : (int)e->modelCity;
+	int wantCity = MpCityFromWire(e->modelCity);
 	int resident = MpResidentSlotForCar(wantCity, (int)e->model);
 	int k, best = -1;
 	double bestD2 = (double)MP_ENTER_ADOPT_DIST * MP_ENTER_ADOPT_DIST;
@@ -12239,7 +12289,7 @@ static void MpHandleCarState(int connIndex, const unsigned char* p, int len)
 		 * itself is changed, so gating on pl->car silently agreed with the roster
 		 * while the car on screen stayed the old one. */
 		{
-			int wantCity = (e.modelCity == MP_CAR_CITY_SESSION) ? -1 : (int)e.modelCity;
+			int wantCity = MpCityFromWire(e.modelCity);
 			int haveSlot = cp->ap.model;
 			int haveModel = (haveSlot >= 0 && haveSlot < MAX_CAR_RESIDENT_MODELS) ? residentCarModels[haveSlot] : -1;
 			int haveCity = (haveSlot >= 0 && haveSlot < MAX_CAR_RESIDENT_MODELS) ? GetCarModelSourceCity(haveSlot) : -2;
@@ -12895,7 +12945,7 @@ static void MpHandleTraffic(int connIndex, const unsigned char* p, int len)
 		int slot = e[i].carSlot;
 		/* The wire spells "the level's own city" as MP_CAR_CITY_SESSION; the resolver
 		 * wants -1 for it (see MpHandleCarState). */
-		int wantCity = (e[i].modelCity == MP_CAR_CITY_SESSION) ? -1 : (int)e[i].modelCity;
+		int wantCity = MpCityFromWire(e[i].modelCity);
 
 		if (slot < 0 || slot >= MAX_CARS)
 			continue;

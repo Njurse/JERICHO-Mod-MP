@@ -628,7 +628,9 @@ class Dedicated:
             info = self.clients.get(conn)
             if info is None:
                 return False
-            info["car"] = (model, city if city < m.CITY_COUNT else 0xFF)
+            # proto 21: 0..10 a stock city, 0x80..0xFE a runtime bank spelled by its NAME
+            # code (carhacks decides; the server only relays it), 0xFF the session's own.
+            info["car"] = (model, city if (city < m.CITY_COUNT or m.CITY_WIRE_CODE_FIRST <= city <= m.CITY_WIRE_CODE_LAST) else 0xFF)
             if len(payload) >= 4 and payload[3] == 1:
                 info["palette"] = payload[2]           # MP_CAR reserved[0], flagged by [1]
         return True

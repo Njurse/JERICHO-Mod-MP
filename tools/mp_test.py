@@ -27,7 +27,7 @@ import sys
 import threading
 import time
 
-PROTO = 20                    # mp_proto.h MP_PROTO_VERSION (20: MP_ROSTER_ENTRY carries leftModel/leftModelCity, 32 bytes; 19: dynamic JMPPED entries on top of 18's ped model id) -- the game drops any frame whose envelope version differs
+PROTO = 21                    # mp_proto.h MP_PROTO_VERSION (21: a car's city byte past the stock rows is a bank NAME code 0x80..0xFE; 20: MP_ROSTER_ENTRY carries leftModel/leftModelCity, 32 bytes; 19: dynamic JMPPED entries on top of 18's ped model id) -- the game drops any frame whose envelope version differs
 SDK = 3                       # JERICHO_SDK_VERSION
 MP_VER = "0.17.0"             # JERICHO/MODS/mp/mod.toml version -- always advertised
 NUL = bytes([0])
@@ -46,6 +46,10 @@ MOD_VER_MAX = 16              # mp_proto.h MP_MOD_VER_MAX (MP_MOD_INFO.version)
 # NOTE: this mirrors system.h, not mp_proto.h, so proto_check.py does NOT verify
 # it -- it is hand-kept beside the C header like the struct formats are.
 CITY_COUNT = 27
+# proto 21: a runtime bank's city byte is a code from its NAME (jer_carquery.h
+# JER_CITY_WIRE_CODE_FIRST..LAST), never its row number on the sending machine.
+CITY_WIRE_CODE_FIRST = 0x80
+CITY_WIRE_CODE_LAST = 0xFE
 
 # Session rules, packed into ONE byte (mp_proto.h MP_RULES_PACK). The beacon now
 # carries this so a browser can NAME a server's mode without joining it.

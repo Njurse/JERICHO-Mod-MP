@@ -38,7 +38,12 @@
 extern "C" {
 #endif
 
-#define MP_PROTO_VERSION	20	/* 20: MP_ROSTER_ENTRY carries the car a player
+#define MP_PROTO_VERSION	21	/* 21: every car CITY byte (MP_CAR.city, roster/carstate
+				 *     modelCity + leftModelCity, traffic modelCity) past the
+				 *     stock rows 0..10 is a bank NAME code 0x80..0xFE
+				 *     (jer_carquery.h JER_CARQ_CITYWIRE), not the sender's
+				 *     runtime row - rows differ with the installed packs.
+				 * 20: MP_ROSTER_ENTRY carries the car a player
 				 *     got OUT of (leftModel/leftModelCity), so a late
 				 *     joiner's roster snapshot names abandoned cars and
 				 *     marks on-foot players before the first carstate.
