@@ -168,6 +168,10 @@ class ServerAPI:
         a level stay in the old one until they rejoin. Returns the new city."""
         return self._s.set_city(city)
 
+    def set_map_mode(self, mode):
+        """Set the map shape for new joiners: 'city' (full city) or 'mp'."""
+        return self._s.set_map_mode(mode)
+
     def set_arena(self, arena):
         """Which of the city's two multiplayer maps (0/1) new joiners load (the
         game's -mp 0 / -mp 1). The welcome and start carry it and the discovery

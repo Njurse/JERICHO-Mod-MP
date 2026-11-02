@@ -275,7 +275,7 @@ def main():
               and vote.city_index("Las Vegas") == 2 and vote.city_index("paris") == -1)
         out = say(vs, a, "!vote paris")
         check("vote: an unknown city is refused", "unknown city" in out[-1][1], out)
-        out = say(vs, a, "!vote chicago")
+        out = say(vs, a, "!vote chicago mp")
         check("vote: the current city is refused", "already on CHICAGO" in out[-1][1], out)
         out = say(vs, a, "!vote havana")
         check("vote: start is announced with the first tally",
@@ -283,7 +283,7 @@ def main():
         out = say(vs, a, "!vote havana")
         check("vote: one vote per player id", "already voted" in out[-1][1], out)
         out = say(vs, b, "!vote rio")
-        check("vote: a second city waits", "vote for HAVANA mp 0 is running" in out[-1][1], out)
+        check("vote: a second city waits", "vote for HAVANA" in out[-1][1], out)
         out = say(vs, adm, "!vote cancel")
         check("vote: an admin can cancel", any("cancelled" in t for _, t in out), out)
         out = say(vs, b, "!vote havana")
@@ -326,23 +326,23 @@ def main():
         ma = join(ms, 1, "Ann")
         mb = join(ms, 2, "Ben")
         check("vote: mp parses as the city's two maps",
-              mv.parse_target("mp 1") == (None, 1)
-              and mv.parse_target("city rio mp 0") == (3, 0)
-              and mv.parse_target("havana mp 1") == (1, 1)
-              and mv.parse_target("havana") == (1, None),
+              mv.parse_target("mp 1") == (None, "mp", 1)
+              and mv.parse_target("city rio mp 0") == (3, "mp", 0)
+              and mv.parse_target("havana mp 1") == (1, "mp", 1)
+              and mv.parse_target("havana") == (1, "city", None),
               [mv.parse_target(x) for x in ("mp 1", "city rio mp 0", "havana mp 1", "havana")])
         out = say(ms, ma, "!vote mp 2")
         check("vote: mp is 0 or 1", "mp is 0 or 1" in out[-1][1], out)
         out = say(ms, ma, "!vote city")
         check("vote: !vote city needs a city", "usage" in out[-1][1], out)
         out = say(ms, ma, "!vote city chicago mp")
-        check("vote: mp needs a value", "mp needs a value" in out[-1][1], out)
+        check("vote: bare mp means the current map", "already on CHICAGO mp 0" in out[-1][1], out)
         out = say(ms, ma, "!vote city havana 1")
         check("vote: mp must be named", "unknown option" in out[-1][1], out)
         out = say(ms, ma, "!help vote")
         help_text = " ".join(t for _, t in out)
         check("vote: the help names both forms",
-              "!vote city <city> [mp 0|1]" in help_text and "!vote mp 0|1" in help_text, help_text)
+              "!vote city <city> [mp [0|1]]" in help_text and "!vote mp [0|1]" in help_text, help_text)
         out = say(ms, ma, "!vote havana mp 1")
         check("vote: city + mp starts the vote",
               any("started a vote to switch to HAVANA mp 1" in t for _, t in out)
