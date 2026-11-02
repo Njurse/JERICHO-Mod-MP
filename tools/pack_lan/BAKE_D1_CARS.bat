@@ -36,11 +36,11 @@ set "GAME_EXE="
 if /i "%~1"=="--from-game" set "FROM_GAME=1"
 if /i "%~1"=="--from-game" set "GAME_EXE=%~2"
 
-set "T=%~dp0JERICHO\MODS\d1cars\tools"
+set "T=%~dp0JERICHO\MODS\bake\tools\car"
 rem The dev tree's game folder (src_rebuild\bin\<config>) does not carry the
-rem data-only d1cars module, so fall back to the repo's copy three levels up.
+rem data-only bake module, so fall back to the repo's copy three levels up.
 rem A shipped package has the tools beside the script and takes the first path.
-if not exist "%T%\bake.py" if exist "%~dp0..\..\..\JERICHO\MODS\d1cars\tools\bake.py" set "T=%~dp0..\..\..\JERICHO\MODS\d1cars\tools"
+if not exist "%T%\bake.py" if exist "%~dp0..\..\..\JERICHO\MODS\bake\tools\car\bake.py" set "T=%~dp0..\..\..\JERICHO\MODS\bake\tools\car"
 set "LEV=DRIVER\LEVELS"
 set "D2=DRIVER2\LEVELS"
 set "OUT=JERICHO\MODS\carhacks\D1CARS"
@@ -52,15 +52,8 @@ echo.
 
 if not exist "%T%\bake.py" (
 	echo   FAILED: "%T%\bake.py" is missing.
-	echo   This package was built without the d1cars tools, so there is nothing to
+	echo   This package was built without the bake tools, so there is nothing to
 	echo   bake with. Re-download the package, or run the tools from the repo.
-	goto :fail
-)
-
-if not exist "%LEV%" (
-	echo   FAILED: no "%LEV%".
-	echo   Put your Driver 1 game data in DRIVER\ first -- the layout the game
-	echo   uses, so that DRIVER\LEVELS\*.LEV exists.
 	goto :fail
 )
 
@@ -82,6 +75,24 @@ if errorlevel 1 (
 	goto :fail
 )
 
+rem Peds first: DRIVER2\LEVELS\JMPPED.LEV (stock Tanner + Jericho) is built from
+rem YOUR Driver 2 HAVANA.LEV -- JERICHO does not ship the Jericho model. This
+rem needs no Driver 1 data, so it runs even when the cars are skipped.
+set "PT=%~dp0JERICHO\MODS\bake\tools\ped"
+if not exist "%PT%\jmpped_player.py" if exist "%~dp0..\..\..\JERICHO\MODS\bake\tools\ped\jmpped_player.py" set "PT=%~dp0..\..\..\JERICHO\MODS\bake\tools\ped"
+echo [peds] building %D2%\JMPPED.LEV from your Driver 2 data ...
+set "PEDS="
+if exist "%~dp0JERICHO\MODS\mp\peds" set "PEDS=--characters "%~dp0JERICHO\MODS\mp\peds""
+if exist "%~dp0peds" set "PEDS=--characters "%~dp0peds""
+%PY% "%PT%\jmpped_player.py" --levels "%D2%" %PEDS% || goto :fail
+echo.
+
+if not exist "%LEV%" (
+	echo   No "%LEV%" -- skipping the Driver 1 cars. Put your Driver 1 game data
+	echo   in DRIVER\ ^(so DRIVER\LEVELS\*.LEV exists^) and re-run to bake them.
+	goto :finish
+)
+
 rem Euro Demo 43 is optional. Detect it once, and let the player see that we found
 rem it: Beta Miami only exists in that leaked beta build.
 if exist "EURO43\LEVELS\MIAMI.LEV" (
@@ -100,8 +111,9 @@ if "%BETA%"=="1" set "CITIES=%CITIES%,BETAMIAMI"
 
 rem BAKE_VERSION: bump when the bake gains something the game reads. 8 moved the
 rem output into carhacks and made the EURO-43 beta read the demo's MIAMI.LEV;
-rem 9 retuned the beta engine/idle loop rates, which are stamped into the bank.
-set "BAKE_VERSION=9"
+rem 9 retuned the beta engine/idle loop rates, which are stamped into the bank;
+rem 10 also builds DRIVER2\LEVELS\JMPPED.LEV (Jericho) from the player's game.
+set "BAKE_VERSION=10"
 set "HAVE_VERSION="
 if exist "%OUT%\BAKE_VERSION" set /p HAVE_VERSION=<"%OUT%\BAKE_VERSION"
 if exist "%OUT%" if not "%HAVE_VERSION%"=="%BAKE_VERSION%" (
@@ -175,11 +187,12 @@ echo BAKE_D1_CARS: done. %OUT% now holds:
 dir /b "%OUT%"
 echo.
 if "%BETA%"=="1" if exist "%OUT%\BETAMIAMI.LEV" (
-	echo   Beta Miami is in. Go enjoy your favourite yellow Buick GX.
+	echo   Beta Miami is in. Go enjoy your favorite Yellow Buick GSX.
 ) else (
 	echo   Start the game and the seven retail Driver 1 cities will be offered.
 	echo   ^(Put the Euro Demo 43's LEVELS and SOUND in EURO43\ and re-run for Beta Miami.^)
 )
+:finish
 if "%FROM_GAME%"=="1" goto :reopen
 pause
 exit /b 0

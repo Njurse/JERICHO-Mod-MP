@@ -41,12 +41,12 @@ echo packaging %EXEDIR% -^> %OUT%
 
 rem The bake tools, out of the repo: the dev mirror excludes d1cars, so the exe
 rem dir has no copy of them and the package would ship without a way to bake.
-if exist "%ROOT%\JERICHO\MODS\d1cars\tools" (
-    xcopy /E /I /Y "%ROOT%\JERICHO\MODS\d1cars\tools" "%EXEDIR%\JERICHO\MODS\d1cars\tools" >nul
+if exist "%ROOT%\JERICHO\MODS\bake\tools" (
+    xcopy /E /I /Y "%ROOT%\JERICHO\MODS\bake\tools" "%EXEDIR%\JERICHO\MODS\bake\tools" >nul
 ) else (
-    echo make_lan_package: no JERICHO\MODS\d1cars\tools in the repo - the package
+    echo make_lan_package: no JERICHO\MODS\bake\tools in the repo - the package
     echo                  will ship without the BAKE_D1_CARS tools. See the
-    echo                  d1cars submodule ^(JERICHO-D1^).
+    echo                  bake submodule.
 )
 
 pushd "%EXEDIR%" || exit /b 1
