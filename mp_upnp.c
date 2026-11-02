@@ -816,3 +816,93 @@ void MpUpnpStop(void)
 {
 	gUpnpStop = 1;
 }
+
+int MpUpnpStatus(char* pub, size_t pubCap, char* lan, size_t lanCap)
+{
+	static char lanCache[64];
+	static unsigned long lanAt;
+
+	if (pub != NULL && pubCap > 0)
+		snprintf(pub, pubCap, "%s", (gUpnpDone && gUpnpOk) ? gUpnpPublicIp : "");
+
+	if (lan != NULL && lanCap > 0)
+	{
+		/* one UDP connect, no packet; cached so a drawn frame never pays for it */
+		if (lanCache[0] == 0 || MpNowMs() - lanAt > 10000UL)
+		{
+			MpUpnpLocalIp(lanCache, sizeof(lanCache));
+			lanAt = MpNowMs();
+		}
+
+		snprintf(lan, lanCap, "%s", lanCache[0] ? lanCache : "this PC");
+	}
+
+	if (gUpnpPortMap == 0)
+		return -1;
+	if (!gUpnpDone)
+		return 0;
+
+	return gUpnpOk ? 1 : 2;
+}
+
+void MpHostStatusLines(char* addr, size_t addrCap, char* list, size_t listCap, int brief)
+{
+	char pub[64], lan[64], ip[64];
+	const char *why = "", *seen = "", *master = "";
+	const char* how;
+	int port = gMp.config.port;
+	int up = MpUpnpStatus(pub, sizeof(pub), lan, sizeof(lan));
+	int adv = MpMasterAdvertiseStatus(&why, &seen, &master);
+	int reach = MpMasterAdvertiseReachable();
+	const char* st;
+
+	(void)master;
+
+	/* The address a friend types into Manual. Best source first: the router's own
+	 * answer (UPnP), then the address the master saw us register from, then the
+	 * LAN address -- and in that last case we say it is LAN only. */
+	if (up == 1 && pub[0] != 0)
+	{
+		snprintf(ip, sizeof(ip), "%s", pub);
+		how = "UPnP opened the port";
+	}
+	else if (seen[0] != 0)
+	{
+		snprintf(ip, sizeof(ip), "%s", seen);
+		how = (reach == 1) ? "port is open" : "no UPnP: forward the port";
+	}
+	else
+	{
+		snprintf(ip, sizeof(ip), "%s", lan);
+		how = (up == 0) ? "LAN - asking router (UPnP)..." : "LAN only - no UPnP, public IP unknown";
+	}
+
+	if (brief)
+		snprintf(addr, addrCap, "Address: %s:%d", ip, port);
+	else
+		snprintf(addr, addrCap, "JOIN AT  %s:%d   (%s)", ip, port, how);
+
+	switch (adv)
+	{
+	case MP_ADV_NO_MASTER: st = brief ? "off (no master_url)" : "not advertised - LAN only (master_url is empty)"; break;
+	case MP_ADV_PENDING:   st = brief ? "registering..." : "registering with the master..."; break;
+	case MP_ADV_FAILED:    st = brief ? "FAILED, retrying" : NULL; break;
+	case MP_ADV_ACKED:     st = brief ? "accepted, checking" : "master accepted it - checking the public list..."; break;
+	case MP_ADV_MISSING:   st = brief ? "accepted, NOT shown" : "master accepted it but it is NOT on the public list"; break;
+	case MP_ADV_LISTED:
+		if (reach == 1)      st = brief ? "listed + reachable" : "LISTED - on the public list, master reached the port";
+		else if (reach == 0) st = brief ? "listed, port CLOSED" : "LISTED - but the master CANNOT reach the port (forward it)";
+		else                 st = brief ? "listed" : "LISTED - on the public list (reachability not checked yet)";
+		break;
+	default:
+		st = (gMp.config.masterUrl[0] == '\0')
+			? (brief ? "off (no master_url)" : "not advertised - LAN only (master_url is empty)")
+			: (brief ? "lists once match starts" : "advertises once the match starts");
+		break;
+	}
+
+	if (st == NULL)
+		snprintf(list, listCap, "ONLINE LIST  not listed: %s - retrying", why[0] ? why : "no answer");
+	else
+		snprintf(list, listCap, brief ? "Online: %s" : "ONLINE LIST  %s", st);
+}

@@ -1896,6 +1896,29 @@ static void MpDrawPlayerList(void)
 			}
 		}
 	}
+
+	/* The HOST also gets where to be found: the address a friend types into
+	 * Manual and whether the Online list really shows this game. */
+	if (gMp.role == MP_ROLE_HOST)
+	{
+		char addr[112], list[112];
+		int y = MP_PANEL_Y_FIRST + row * MP_PANEL_Y_STEP + 4;
+		int adv = MpMasterAdvertiseStatus(NULL, NULL, NULL);
+		int bad = (adv == MP_ADV_FAILED || adv == MP_ADV_MISSING ||
+			(adv == MP_ADV_LISTED && MpMasterAdvertiseReachable() == 0));
+
+		MpHostStatusLines(addr, sizeof(addr), list, sizeof(list), 0);
+
+		SetTextColour(MP_INK(MP_PANEL_HOST_R, MP_PANEL_HOST_G, MP_PANEL_HOST_B));
+		MpPanelText(addr, MP_COL_NAME, y);
+
+		if (bad)
+			SetTextColour(MP_INK(MP_PANEL_WARN_R, MP_PANEL_WARN_G, MP_PANEL_WARN_B));
+		else
+			SetTextColour(MP_INK(MP_PANEL_IDENT_R, MP_PANEL_IDENT_G, MP_PANEL_IDENT_B));
+
+		MpPanelText(list, MP_COL_NAME, y + MP_PANEL_Y_STEP);
+	}
 }
 
 /* A car whose real model is still loading is drawn as the host city's car 1,

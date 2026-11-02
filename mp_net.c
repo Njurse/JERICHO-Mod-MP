@@ -2545,6 +2545,7 @@ static struct sockaddr_in gOnlineAddr;
 #define MPI_REQ_REGISTER	1
 #define MPI_REQ_HEARTBEAT	2
 #define MPI_REQ_UNREGISTER	3
+#define MPI_REQ_VERIFY		4	/* the host fetching the list to find ITSELF */
 
 static int  gOnlineKind;
 static int  gOnlineState = MP_ONLINE_OFF;
@@ -2601,6 +2602,13 @@ static int  gAdvertPlayers, gAdvertMaxPlayers = 8, gAdvertInProgress;
 static unsigned long gAdvertNextMs;	/* when the next beat (or retry) is due */
 static void MpAdvertReply(int status, const char* body);
 static const char* gAdvertWhy = "";	/* the last thing that went wrong, for the log */
+static char gAdvertWhyBuf[64];		/* a socket-level failure, copied (MpOnlineFail's text) */
+static int  gAdvertReach = -1;		/* the master's own probe of our port: -1 unknown, 0 down, 1 up */
+static int  gAdvertListed = -1;		/* -1 unchecked, 0 missing from the list, 1 on it */
+static char gAdvertSeenHost[64];	/* the host field our own row carries on the master */
+static unsigned long gAdvertVerifyMs;	/* when the next list check is due (0 = none) */
+#define MPI_ADVERT_VERIFY_FIRST_MS	1500	/* after the register ACK */
+#define MPI_ADVERT_VERIFY_MS		60000	/* then, while hosting */
 
 /* --- a fixed-subset JSON reader ------------------------------------ */
 
@@ -2861,7 +2869,19 @@ static void MpOnlineFail(const char* why)
 	gAdvertBusy = 0;
 
 	if (gAdvertOn)
+	{
 		gAdvertNextMs = MpNowMs() + MPI_ADVERT_RETRY_MS;
+
+		/* a failed register is a failed listing; a failed beat or list check only
+		 * means we do not know right now */
+		if (gOnlineKind == MPI_REQ_VERIFY)
+			gAdvertVerifyMs = MpNowMs() + MPI_ADVERT_RETRY_MS;
+		else if (!gAdvertRegistered)
+		{
+			snprintf(gAdvertWhyBuf, sizeof(gAdvertWhyBuf), "%s", why);
+			gAdvertWhy = gAdvertWhyBuf;
+		}
+	}
 
 	snprintf(gOnlineError, sizeof(gOnlineError), "%s", why);
 
@@ -2886,7 +2906,7 @@ static void MpOnlineFail(const char* why)
 	/* A HOST whose listing never landed should be told so, not left to wonder why
 	 * the game is not on the Online board. The success case already says "master:
 	 * listed as ..."; this is the failure half of that same report. */
-	if (gAdvertOn)
+	if (gAdvertOn && !gAdvertRegistered && gOnlineKind != MPI_REQ_VERIFY)
 		jer_console_log("hosting: not listed online (%s) - LAN beacon still works", why);
 }
 
@@ -3581,12 +3601,136 @@ static void MpAdvertUnregister(void)
 	MpAdvertPost("/v1/unregister", body, MPI_REQ_UNREGISTER);
 }
 
+/* Our own row in a /v1/servers reply: same name and port as we registered. The
+ * master fills "host" from the address it saw the register come from, which is
+ * the host's public address as the internet sees it. */
+static void MpAdvertVerifyReply(int status, const char* body)
+{
+	const char* end = body + strlen(body);
+	const char* arr = MpJsonValue(body, end, "servers");
+	const char* p;
+	int found = 0;
+
+	gAdvertVerifyMs = MpNowMs() + MPI_ADVERT_VERIFY_MS;
+
+	if (status != 200 || arr == NULL || *arr != '[')
+		return;				/* unknown, not "missing": keep the last verdict */
+
+	for (p = arr + 1; p < end && *p != ']' && !found; )
+	{
+		const char* close;
+		char name[MP_NAME_MAX], host[64];
+
+		if (*p != '{')
+		{
+			p++;
+			continue;
+		}
+
+		close = MpJsonObjectEnd(p, end);
+		if (close == NULL)
+			break;
+
+		MpJsonStr(p, close, "name", name, sizeof(name));
+		MpJsonStr(p, close, "host", host, sizeof(host));
+
+		if (MpJsonInt(p, close, "port", 0) == gAdvertPort && strcmp(name, gAdvertName) == 0)
+		{
+			const char* r = MpJsonValue(p, close, "reachable");
+
+			found = 1;
+			snprintf(gAdvertSeenHost, sizeof(gAdvertSeenHost), "%s", host);
+			gAdvertReach = (r == NULL || *r == 'n') ? -1 : (*r == 't') ? 1 : 0;
+		}
+
+		p = close + 1;
+	}
+
+	if (found != gAdvertListed)
+	{
+		if (found)
+			jer_console_log("master: confirmed on the public list as %s:%d", gAdvertSeenHost, gAdvertPort);
+		else
+			jer_console_log("master: accepted the listing but it is NOT on the public list");
+
+		if (gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx, "[mp] advertising: list check %s (seen as '%s')\n",
+				found ? "found us" : "did NOT find us", gAdvertSeenHost);
+	}
+
+	gAdvertListed = found;
+
+	if (!found)
+		gAdvertReach = -1;
+}
+
+static void MpAdvertVerify(void)
+{
+	char req[320];
+
+	snprintf(req, sizeof(req),
+		"GET /v1/servers?limit=%d HTTP/1.1\r\n"
+		"Host: %s\r\n"
+		"User-Agent: jericho-mp\r\n"
+		"Accept: application/json\r\n"
+		"Connection: close\r\n"
+		"\r\n",
+		MP_ONLINE_MAX, gOnlineHostHdr);
+
+	gAdvertBusy = 1;
+	MpHttpKick(req, MPI_REQ_VERIFY);
+}
+
+int MpMasterAdvertiseReachable(void) { return gAdvertReach; }
+
+int MpMasterAdvertiseStatus(const char** why, const char** seenHost, const char** master)
+{
+	if (why != NULL)
+		*why = gAdvertWhy;
+	if (seenHost != NULL)
+		*seenHost = gAdvertSeenHost;
+	if (master != NULL)
+		*master = gOnlineHostHdr;
+
+	if (!gAdvertOn)
+		return MP_ADV_OFF;
+	if (gMp.config.masterUrl[0] == '\0' || gOnlineHostHdr[0] == '\0')
+		return MP_ADV_NO_MASTER;
+	if (!gAdvertRegistered)
+		return (gAdvertWhy[0] != '\0') ? MP_ADV_FAILED : MP_ADV_PENDING;
+	if (gAdvertListed == 1)
+		return MP_ADV_LISTED;
+	if (gAdvertListed == 0)
+		return MP_ADV_MISSING;
+
+	return MP_ADV_ACKED;
+}
+
 static void MpAdvertReply(int status, const char* body)
 {
 	gAdvertBusy = 0;
 
+	if (gOnlineKind == MPI_REQ_VERIFY)
+	{
+		MpAdvertVerifyReply(status, body);
+		return;
+	}
+
 	if (status < 200 || status > 299)
 	{
+		/* A master that restarted or expired us answers a beat 404 unknown_token:
+		 * register again instead of beating a dead token forever. */
+		if (gOnlineKind == MPI_REQ_HEARTBEAT && status == 404)
+		{
+			gAdvertRegistered = 0;
+			gAdvertToken[0] = '\0';
+			gAdvertListed = -1;
+			gAdvertSeenHost[0] = '\0';
+			gAdvertNextMs = 0;
+			jer_console_log("master: forgot this game - registering again");
+			return;
+		}
+
 		gAdvertWhy = "the master refused it";
 		jer_console_log("master: %s refused the listing", gOnlineHostHdr);
 		gAdvertNextMs = MpNowMs() + MPI_ADVERT_RETRY_MS;
@@ -3629,10 +3773,19 @@ static void MpAdvertReply(int status, const char* body)
 		 * characters, which is why "contacting the discovery server..." arrives cut in
 		 * half. The console has room for the whole sentence and keeps it for a moment. */
 		jer_console_log("master: listed as %s", gAdvertName);
+
+		/* the register reply carries the address the master saw us from */
+		MpJsonStr(body, body + strlen(body), "host", gAdvertSeenHost, sizeof(gAdvertSeenHost));
+
+		/* ACK is not presence: go and look for our own row */
+		gAdvertWhy = "";
+		gAdvertListed = -1;
+		gAdvertVerifyMs = MpNowMs() + MPI_ADVERT_VERIFY_FIRST_MS;
 	}
 	else if (gOnlineKind == MPI_REQ_HEARTBEAT)
 	{
 		gAdvertNextMs = MpNowMs() + MPI_ADVERT_BEAT_MS;
+
 	}
 	else if (gOnlineKind == MPI_REQ_UNREGISTER)
 	{
@@ -3651,6 +3804,10 @@ void MpMasterAdvertiseStart(const char* name, int port, int city, int gamemode, 
 	gAdvertBusy = 0;
 	gAdvertToken[0] = '\0';
 	gAdvertWhy = "";
+	gAdvertListed = -1;
+	gAdvertReach = -1;
+	gAdvertSeenHost[0] = '\0';
+	gAdvertVerifyMs = 0;
 	snprintf(gAdvertName, sizeof(gAdvertName), "%s",
 		(name != NULL && name[0] != '\0') ? name : "A game");
 	gAdvertPort = port;
@@ -3722,6 +3879,13 @@ void MpMasterAdvertisePoll(void)
 		return;					/* no master configured: LAN beacon only */
 
 	now = MpNowMs();
+
+	if (gAdvertRegistered && gAdvertVerifyMs != 0 && (long)(now - gAdvertVerifyMs) >= 0)
+	{
+		gAdvertVerifyMs = 0;			/* re-armed by the reply */
+		MpAdvertVerify();
+		return;
+	}
 
 	if (gAdvertNextMs != 0 && (long)(now - gAdvertNextMs) < 0)
 		return;					/* not due yet */

@@ -501,6 +501,27 @@ void MpMasterAdvertiseStart(const char* name, int port, int city, int gamemode, 
 void MpMasterAdvertiseCounts(int players, int inProgress);	/* live, every frame */
 void MpMasterAdvertiseStop(void);				/* unregister (best effort) */
 void MpMasterAdvertisePoll(void);				/* the state machine + the beat */
+
+/* What the host can honestly say about its listing. ACKED = the master took the
+ * register POST (we hold a token); LISTED / MISSING = we then fetched the public
+ * list ourselves and did / did not find our own row in it. */
+enum
+{
+	MP_ADV_OFF = 0,		/* not hosting a live match */
+	MP_ADV_NO_MASTER,	/* master_url is empty: LAN beacon only */
+	MP_ADV_PENDING,		/* register on its way */
+	MP_ADV_FAILED,		/* register refused / unreachable: retrying */
+	MP_ADV_ACKED,		/* registered, list check not back yet */
+	MP_ADV_LISTED,		/* our row is on the master's public list */
+	MP_ADV_MISSING		/* registered, but the public list does not show us */
+};
+/* why: last failure text (or ""); seenHost: the address the master lists us
+ * under (the public IP as the internet sees it), "" until a list check finds us;
+ * master: the master's host:port. Any out-pointer may be NULL. */
+int  MpMasterAdvertiseStatus(const char** why, const char** seenHost, const char** master);
+/* The master's own TCP probe of our session port, from our list row: -1 not
+ * known yet, 0 the internet cannot reach us, 1 it can. */
+int  MpMasterAdvertiseReachable(void);
 int  MpOnlineState(void);
 const char* MpOnlineError(void);
 int  MpOnlineCount(void);
@@ -531,6 +552,12 @@ unsigned short MpModHash(void);
 void MpUpnpStart(int port);	/* begin the mapping attempt (idempotent) */
 void MpUpnpPoll(void);		/* game thread: report the outcome once (jer_console) */
 void MpUpnpStop(void);		/* teardown: delete our mappings, best effort */
+/* -1 never started, 0 still asking the router, 1 mapped, 2 no mapping. pub gets the
+ * router's external IP when it told us one, lan this machine's LAN address. */
+int  MpUpnpStatus(char* pub, size_t pubCap, char* lan, size_t lanCap);
+/* The host's address block, one line each, ready to draw (out1 = address, out2 =
+ * online list). brief = fits a 31-char menu row (host menu); else the pause panel. */
+void MpHostStatusLines(char* addr, size_t addrCap, char* list, size_t listCap, int brief);
 
 /* ------------------------------------------------------------------ */
 /* Session sync / start (mp_session.c)                                 */

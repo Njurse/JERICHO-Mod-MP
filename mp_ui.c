@@ -639,8 +639,16 @@ static JER_FE_ITEM kLanItems[] =
 };
 static const JER_FE_MENU kLanMenu = { "mp.lan", kLanItems, 3, NULL, NULL };
 
+/* What a friend needs to reach this host, and whether the Online list has it.
+ * Read live on every layout from the UPnP worker and the advertise state. */
+static void LblHostAddr(void* ud, char* o, int n) { char l[8]; (void)ud; MpHostStatusLines(o, (size_t)n, l, sizeof(l), 1); }
+static void LblHostList(void* ud, char* o, int n) { char a[8]; (void)ud; MpHostStatusLines(a, sizeof(a), o, (size_t)n, 1); }
+
 static const JER_FE_ITEM kHostItems[] =
 {
+	{ NULL, LblHostAddr, NULL, NULL, NULL, -1, 0 },
+	{ NULL, LblHostList, NULL, NULL, NULL, -1, 0 },
+
 	/* SESSION RULES first: these are the host's gameplay settings for the match
 	 * about to be set up, and they apply to everyone who joins it. */
 	{ NULL, LblCops,    NULL, NULL, AdjCops,    -1, 0 },
@@ -651,7 +659,7 @@ static const JER_FE_ITEM kHostItems[] =
 	{ "Take a Ride", NULL, NULL, ActTakeARide, NULL, -1, 0 },
 	{ "Back",        NULL, NULL, NULL,         NULL, -1, 1 },
 };
-static const JER_FE_MENU kHostMenu = { "mp.host", kHostItems, 6, NULL, NULL };
+static const JER_FE_MENU kHostMenu = { "mp.host", kHostItems, 8, NULL, NULL };
 
 static const JER_FE_ITEM kHostSetItems[] =
 {
