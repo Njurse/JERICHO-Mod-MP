@@ -28,7 +28,7 @@ import threading
 import time
 
 PROTO = 20                    # mp_proto.h MP_PROTO_VERSION (20: MP_ROSTER_ENTRY carries leftModel/leftModelCity, 32 bytes; 19: dynamic JMPPED entries on top of 18's ped model id) -- the game drops any frame whose envelope version differs
-SDK = 2                       # JERICHO_SDK_VERSION
+SDK = 3                       # JERICHO_SDK_VERSION
 MP_VER = "0.17.0"             # JERICHO/MODS/mp/mod.toml version -- always advertised
 NUL = bytes([0])
 
