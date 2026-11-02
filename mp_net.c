@@ -657,7 +657,11 @@ static void MpAcceptPeers(void)
 		if (gMpCtx) gMpCtx->jer_log(gMpCtx, "[mp] peer %s connected (awaiting handshake)\n",
 			gConn[idx].peer);
 
-		MpConnEvent("accepted a peer", idx, "they connected to us");
+		/* NOT MpConnEvent here: the master's reachability prober (and any port
+		 * scanner) opens a bare TCP connect to this port every few seconds and closes
+		 * it without a byte. Announcing each one on the console made a listed host
+		 * look like it was flapping with the master. A real peer is announced as
+		 * soon as its handshake arrives. */
 	}
 }
 
@@ -1529,6 +1533,27 @@ void MpConnEvent(const char* ev, int idx, const char* why)
 
 static void MpDropConn(int idx, const char* why)
 {
+	/* A host-side connection that closed without sending one byte and never
+	 * started a handshake is a reachability probe (the master checks the port
+	 * every few seconds) or a scanner, not a player: tear it down quietly. No
+	 * diag dump, no console line -- each probe used to read as a peer joining
+	 * and dropping, the "flapping with the master" a LAN/listen host saw. */
+	if (gConn[idx].used && gConn[idx].hostSide && gConn[idx].rxBytes == 0 &&
+		!gConn[idx].hsDone && gConn[idx].playerId < 0)
+	{
+		if (gMpCtx)
+			gMpCtx->jer_log(gMpCtx, "[mp] silent connect from %s closed (%s) - probe, not a player\n",
+				gConn[idx].peer[0] ? gConn[idx].peer : "?", why);
+
+		MpCloseSock(&gConn[idx].sock);
+		gConn[idx].used = 0;
+		gConn[idx].rbufLen = 0;
+		gConn[idx].hsStage = MP_HS_NONE;
+		gConn[idx].peer[0] = 0;
+		gConn[idx].rxBytes = 0;
+		return;
+	}
+
 	/* Capture the state NOW, before any of it is torn down: this is the moment the
 	 * interesting information exists, and it is gone by the time anyone looks. Every
 	 * drop funnels through this function, so this one call covers them all. */
@@ -1786,6 +1811,11 @@ static void MpProcessConn(int idx)
 		 * was the burst bug. */
 		memcpy(c->rbuf + c->rbufLen, buf, n);
 		c->rbufLen += n;
+		/* first bytes from an accepted socket: now it is a peer worth announcing
+		 * (MpAcceptPeers stays quiet so the master's port probes do not show) */
+		if (c->hostSide && c->rxBytes == 0 && n > 0)
+			MpConnEvent("accepted a peer", idx, "they connected to us");
+
 		c->rxBytes += (unsigned long)n;
 		c->lastRecvMs = MpClockMs();
 	}
