@@ -547,6 +547,7 @@ class Dedicated:
                 ped_model & 0xFF,                     # MP_PED_MODEL_*: the late-join snapshot
                 min(int(ping), 0xFFFF),               # ping: our PING -> their PONG round trip
                 palette & 0xFFFF,
+                0xFF, 0xFF,                           # leftModel/leftModelCity (proto 20): the server tracks no parked car
                 name.encode("latin1", "replace")[: m.ROSTER_NAME_MAX - 1])
         return bytes(out)
 
