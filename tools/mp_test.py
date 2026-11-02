@@ -28,7 +28,7 @@ import threading
 import time
 
 PROTO = 17                    # mp_proto.h MP_PROTO_VERSION (17: MP_CARSTATE_ENTRY carries crushScale) -- the game drops any frame whose envelope version differs
-SDK = 2                       # JERICHO_SDK_VERSION
+SDK = 3                       # JERICHO_SDK_VERSION
 MP_VER = "0.1.0"              # JERICHO/MODS/mp/mod.toml version -- always advertised
 NUL = bytes([0])
 
