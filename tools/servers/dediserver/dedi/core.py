@@ -323,9 +323,34 @@ def _net(conn):
     return st
 
 
+# The roster each connection was last SENT: (rows, previous rows, when it changed).
+# A client cuts its traffic band from the last roster it got, not from who is
+# connected right now, so the band check uses this (relay_peer_state).
+_ROSTER_N = {}
+_ROSTER_LOCK = threading.Lock()
+
+
 def _send(conn, tag, payload=b""):
     m.send_frame(conn, tag, payload)
     _net(conn)[1] += m.ENV.size + len(payload)
+    if tag == m.TAG["roster"] and payload:
+        with _ROSTER_LOCK:
+            cur = _ROSTER_N.get(conn)
+            if cur is None or cur[0] != payload[0]:
+                _ROSTER_N[conn] = (payload[0], cur[0] if cur else None, time.monotonic())
+
+
+def _roster_counts(conn):
+    """The roster sizes a client may be cutting its band from: the last one sent,
+    and for ROSTER_REFRESH_S after a change the one before (frames already in
+    flight when the new roster went out). None before any roster was sent."""
+    with _ROSTER_LOCK:
+        cur = _ROSTER_N.get(conn)
+    if cur is None:
+        return None
+    if cur[1] is not None and time.monotonic() - cur[2] < ROSTER_REFRESH_S:
+        return [cur[0], cur[1]]
+    return [cur[0]]
 
 
 def _ms32():
@@ -698,16 +723,19 @@ class Dedicated:
         elif tag == m.TAG["traffic"]:
             # A client may only speak for the slots of its OWN band (mp_session.c
             # MpHandleTraffic): the band as the sender computes it, from its player
-            # count (the roster rows: no player 0 here) and never below pid + 1.
+            # count (the rows of the last roster it was sent: no player 0 here) and
+            # never below pid + 1.
             try:
                 count = m.TRAFFIC.unpack_from(payload, 0)[1]
                 count = min(count, m.MAX_CARS,
                             (len(payload) - m.TRAFFIC.size) // m.TRAFFIC_ENTRY.size)
-                with self.lock:
-                    n = len(self.clients)
-                first, last = relay.client_traffic_band(pid, n)
+                counts = _roster_counts(conn)
+                if counts is None:
+                    with self.lock:
+                        counts = [len(self.clients)]
                 slots = [payload[m.TRAFFIC.size + i * m.TRAFFIC_ENTRY.size] for i in range(count)]
-                if any(s >= m.MAX_CARS or first < 0 or not first <= s <= last for s in slots):
+                if not any(all(s < m.MAX_CARS and first >= 0 and first <= s <= last for s in slots)
+                           for first, last in (relay.client_traffic_band(pid, n) for n in counts)):
                     raise ValueError
             except (ValueError, IndexError, struct.error):
                 self.log.debug("player %d: dropping a traffic frame outside its band" % pid)
@@ -1014,6 +1042,8 @@ class Dedicated:
                     self.colors.pop(info["id"], None)
                     self.ped_models.pop(info["id"], None)
                 _NET.pop(conn, None)
+                with _ROSTER_LOCK:
+                    _ROSTER_N.pop(conn, None)
             if info:
                 self.plugins.call("on_player_leave", Player(conn, info))
                 self.log.info("player %d '%s' left (%d/%d)"
