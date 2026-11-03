@@ -11917,8 +11917,7 @@ static void MpMaterializeLeftCar(MP_PLAYER* pl, const MP_CARSTATE_ENTRY* e)
 			int dx = car_data[have].hd.where.t[0] - e->x;
 			int dz = car_data[have].hd.where.t[2] - e->z;
 
-			if (dx > -MP_INTERP_SNAP_DIST && dx < MP_INTERP_SNAP_DIST &&
-				dz > -MP_INTERP_SNAP_DIST && dz < MP_INTERP_SNAP_DIST)
+			if (MpDistSq64(dx, dz) < (long long)MP_INTERP_SNAP_DIST * MP_INTERP_SNAP_DIST)
 			{
 				pl->leftCarModel = car_data[have].ap.model;
 				return;
