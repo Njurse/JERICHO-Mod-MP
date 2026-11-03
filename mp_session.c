@@ -1861,10 +1861,9 @@ static void MpHandleRoster(const unsigned char* p, int len)
 			pl->onFoot = 1;
 
 		/* A late joiner's roster arrives before it is running (pre-welcome), when
-		 * 0xff alone cannot tell on foot from "lobby, no car yet". A parked LEFT car
-		 * only exists in a match, so model 0xff + a left car is on foot. */
-		if (!pl->isLocal && e->model == 0xff && e->leftModel != 0xff)
-			pl->onFoot = 1;
+		 * 0xff alone cannot tell on foot from "lobby, no car yet". Remember it; the
+		 * welcome says which (MpHandleWelcome), whether or not a left car is named. */
+		pl->rosterNoCar = (e->model == 0xff);
 
 		/* The roster also names the car they left, when they left one. The body
 		 * itself is materialized from the carstate (whose pose a roster cannot
@@ -3253,6 +3252,21 @@ static void MpHandleWelcome(const unsigned char* p, int len)
 		 * from. Mark the join so the gather is skipped and MpPlaceSelfTick owns
 		 * the spawn. Cleared by MpSessionReset. */
 		gMp.liveJoin = 1;
+
+		/* ...so a peer the pre-welcome roster named no car for is ON FOOT, not in a
+		 * lobby: the same rule MpHandleRoster applies once running. Without it the
+		 * net spawn seats them in a phantom car at the level start (A1). */
+		{
+			int k;
+
+			for (k = 0; k < MP_MAX_PLAYERS; k++)
+			{
+				MP_PLAYER* o = MpGetPlayer(k);
+
+				if (o != NULL && k != (int)w.playerId && !o->isLocal && o->rosterNoCar)
+					o->onFoot = 1;
+			}
+		}
 
 		if (gMpCtx != NULL)
 			gMpCtx->jer_log(gMpCtx, "[mp] live join: not gathering beside a peer - our car will be placed on a clear road\n");
@@ -11877,11 +11891,33 @@ static void MpMaterializeLeftCar(MP_PLAYER* pl, const MP_CARSTATE_ENTRY* e)
 			car_data[have].ai.padid == &gMpQuietPad &&
 			car_data[have].ap.carCos != NULL)
 		{
-			pl->leftCarModel = car_data[have].ap.model;
-			return;
+			int dx = car_data[have].hd.where.t[0] - e->x;
+			int dz = car_data[have].hd.where.t[2] - e->z;
+
+			if (dx > -MP_INTERP_SNAP_DIST && dx < MP_INTERP_SNAP_DIST &&
+				dz > -MP_INTERP_SNAP_DIST && dz < MP_INTERP_SNAP_DIST)
+			{
+				pl->leftCarModel = car_data[have].ap.model;
+				return;
+			}
+
+			/* ...but not one nowhere near where the owner says it is parked: that is a
+			 * car this machine built for them (a net spawn at the level start), not the
+			 * car they left. It is ours and nobody else's (tested above): remove it and
+			 * build the real body at the owner's pose below. */
+			MpReleaseOurCarSlot(have);
+			car_data[have].controlType = CONTROL_TYPE_NONE;
+
+			if (gMpCtx != NULL)
+				gMpCtx->jer_log(gMpCtx,
+					"[mp] left car: player %d's claim on slot %d is %d,%d from the parked pose - removed, rebuilding\n",
+					pl->id, have, dx, dz);
+
+			pl->leftCarSlot1 = 0;
+			pl->leftCarModel = -1;
 		}
 
-		if (gMpCtx != NULL && (MpNowMs() - lastLogMs) > 2000)
+		if (pl->leftCarSlot1 > 0 && gMpCtx != NULL && (MpNowMs() - lastLogMs) > 2000)
 		{
 			lastLogMs = MpNowMs();
 			gMpCtx->jer_log(gMpCtx,
