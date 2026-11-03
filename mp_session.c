@@ -7675,18 +7675,19 @@ static void MpHandlePedState(int connIndex, const unsigned char* p, int len)
 
 		memcpy(&e, p + sizeof(MP_PEDSTATE) + i * sizeof(e), sizeof(e));
 
-		pl = MpGetPlayer(e.playerId);
-
-		if (pl == NULL || pl->isLocal)
-			continue;
-
 		/* A pose may only describe its SENDER (the dedi enforces the same rule):
-		 * otherwise one client could walk another player's Tanner around. */
+		 * otherwise one client could walk another player's Tanner around. Checked
+		 * before the local/unknown skip, as in MpHandleCarState. */
 		if (MpIsHost() && connIndex >= 0 && e.playerId != MpConnPlayerId(connIndex))
 		{
 			forged = 1;
 			continue;
 		}
+
+		pl = MpGetPlayer(e.playerId);
+
+		if (pl == NULL || pl->isLocal)
+			continue;
 
 		/* Drop a datagram older than the last one applied (see MpSendOwnPedState).
 		 * Sequence 0 is an older sender: no ordering, as before. A long silence
@@ -12060,18 +12061,20 @@ static void MpHandleCarState(int connIndex, const unsigned char* p, int len)
 
 		memcpy(&e, p + sizeof(MP_CARSTATE) + i * sizeof(e), sizeof(e));
 
-		pl = MpGetPlayer(e.playerId);
-
-		if (pl == NULL || pl->isLocal)
-			continue;
-
 		/* A carstate may only describe its SENDER (as for pedstate): otherwise one
-		 * client could release or re-body another player's car on every machine. */
+		 * client could release or re-body another player's car on every machine.
+		 * Checked before the local/unknown skip, or a row naming the host (local
+		 * here) or an id not in the roster would be relayed unchecked. */
 		if (MpIsHost() && connIndex >= 0 && e.playerId != MpConnPlayerId(connIndex))
 		{
 			forged = 1;
 			continue;
 		}
+
+		pl = MpGetPlayer(e.playerId);
+
+		if (pl == NULL || pl->isLocal)
+			continue;
 
 		/* NO CAR: the owner is on foot. Let the car we were driving for them go
 		 * back to the world -- it stays where they left it (their own engine
