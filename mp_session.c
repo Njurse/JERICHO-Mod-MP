@@ -12936,7 +12936,8 @@ static void MpHandleTraffic(int connIndex, const unsigned char* p, int len)
 {
 	const MP_TRAFFIC* h;
 	const MP_TRAFFIC_ENTRY* e;
-	int i, n;
+	int i, n, forged = 0;
+	int from = -1, bandFirst = -1, bandLast = -1;
 
 	if (len < (int)sizeof(MP_TRAFFIC))
 		return;
@@ -12952,6 +12953,23 @@ static void MpHandleTraffic(int connIndex, const unsigned char* p, int len)
 
 	e = (const MP_TRAFFIC_ENTRY*)(p + sizeof(MP_TRAFFIC));
 
+	/* A client may only speak for the slots of its OWN band (MpSendTrafficState
+	 * publishes nothing else): otherwise one peer could despawn or InitCar over
+	 * the host's or another peer's traffic. The band is computed the way the
+	 * sender computes it, with at least from+1 machines. Clients trust the host. */
+	if (MpIsHost() && connIndex >= 0)
+	{
+		int machines = MpTrafficMachineCount();
+
+		from = MpConnPlayerId(connIndex);
+
+		if (machines < from + 1)
+			machines = from + 1;
+
+		if (from >= 0)
+			MpTrafficBandFor(from, machines, &bandFirst, &bandLast);
+	}
+
 	for (i = 0; i < n; i++)
 	{
 		int slot = e[i].carSlot;
@@ -12961,6 +12979,12 @@ static void MpHandleTraffic(int connIndex, const unsigned char* p, int len)
 
 		if (slot < 0 || slot >= MAX_CARS)
 			continue;
+
+		if (MpIsHost() && connIndex >= 0 && (bandFirst < 0 || slot < bandFirst || slot > bandLast))
+		{
+			forged = 1;
+			continue;
+		}
 
 		if (MpRemoteTargetsLocalCar(slot, "traffic", -1))
 			continue;
@@ -12991,7 +13015,7 @@ static void MpHandleTraffic(int connIndex, const unsigned char* p, int len)
 
 	/* The host is the hub: relay a client's traffic to the other clients, exactly
 	 * as it relays their carstate. */
-	if (MpIsHost() && connIndex >= 0)
+	if (MpIsHost() && connIndex >= 0 && !forged)
 		MpHostRelay(connIndex, MP_TAG_TRAFFIC, 0, p, len);
 }
 
