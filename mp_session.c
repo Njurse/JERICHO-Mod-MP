@@ -12027,7 +12027,7 @@ static int MpFindEnteredParkedBody(const MP_PLAYER* pl, const MP_CARSTATE_ENTRY*
 static void MpHandleCarState(int connIndex, const unsigned char* p, int len)
 {
 	MP_CARSTATE h;
-	int i, n;
+	int i, n, forged = 0;
 
 	if (len < (int)sizeof(MP_CARSTATE))
 		return;
@@ -12052,6 +12052,14 @@ static void MpHandleCarState(int connIndex, const unsigned char* p, int len)
 
 		if (pl == NULL || pl->isLocal)
 			continue;
+
+		/* A carstate may only describe its SENDER (as for pedstate): otherwise one
+		 * client could release or re-body another player's car on every machine. */
+		if (MpIsHost() && connIndex >= 0 && e.playerId != MpConnPlayerId(connIndex))
+		{
+			forged = 1;
+			continue;
+		}
 
 		/* NO CAR: the owner is on foot. Let the car we were driving for them go
 		 * back to the world -- it stays where they left it (their own engine
@@ -12642,7 +12650,7 @@ static void MpHandleCarState(int connIndex, const unsigned char* p, int len)
 		 * exactly that row. It also relayed a multi-row frame once per row. */
 	}
 
-	if (MpIsHost() && connIndex >= 0)
+	if (MpIsHost() && connIndex >= 0 && !forged)
 		MpHostRelay(connIndex, MP_TAG_CARSTATE, 0, p, len);
 }
 

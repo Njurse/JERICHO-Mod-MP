@@ -947,7 +947,8 @@ class Dedicated:
                             for i in range(min(count, max(0, avail))):
                                 off = m.CARSTATE.size + i * m.CARSTATE_ENTRY.size
                                 e = payload[off:off + m.CARSTATE_ENTRY.size]
-                                if len(e) == m.CARSTATE_ENTRY.size:
+                                # a row may only describe its sender (as for JPPD)
+                                if len(e) == m.CARSTATE_ENTRY.size and e[0] == pid:
                                     self.cars[e[0]] = e
                     except Exception:
                         # a malformed frame is this connection's problem, not the
