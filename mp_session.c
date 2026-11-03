@@ -1860,6 +1860,12 @@ static void MpHandleRoster(const unsigned char* p, int len)
 		if (!pl->isLocal && e->model == 0xff && gMp.running)
 			pl->onFoot = 1;
 
+		/* A late joiner's roster arrives before it is running (pre-welcome), when
+		 * 0xff alone cannot tell on foot from "lobby, no car yet". A parked LEFT car
+		 * only exists in a match, so model 0xff + a left car is on foot. */
+		if (!pl->isLocal && e->model == 0xff && e->leftModel != 0xff)
+			pl->onFoot = 1;
+
 		/* The roster also names the car they left, when they left one. The body
 		 * itself is materialized from the carstate (whose pose a roster cannot
 		 * carry); this log just makes the snapshot verifiable. Throttled because
@@ -3501,6 +3507,12 @@ int MpOnNetSpawn(void* userdata, void* args)
 		 * every screen before they have picked it in the car select. MpHandleCar builds
 		 * it the moment the pick lands. */
 		if (p == NULL || p->isLocal || !MpPlayerCarReady(p))
+			continue;
+
+		/* ...and nobody who is ON FOOT (MpSpawnLateJoiners skips them too): a car
+		 * built here is claimed as their left car by the NO_CAR row, so the real
+		 * parked body is never materialized at its LEFT_CAR pose (#56). */
+		if (p->onFoot)
 			continue;
 
 		PlayerStartInfo[slot] = &ReplayStreams[slot].SourceType;
