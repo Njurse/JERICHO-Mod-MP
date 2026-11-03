@@ -695,6 +695,24 @@ class Dedicated:
             # verbatim -- peers read the same field.
             with self.lock:
                 self.ped_models[pid] = payload[m.PEDSTATE.size + 2]
+        elif tag == m.TAG["traffic"]:
+            # A client may only speak for the slots of its OWN band (mp_session.c
+            # MpHandleTraffic): the band as the sender computes it, from its player
+            # count (the roster plus the phantom player 0) and never below pid + 1.
+            try:
+                count = m.TRAFFIC.unpack_from(payload, 0)[1]
+                count = min(count, m.MAX_CARS,
+                            (len(payload) - m.TRAFFIC.size) // m.TRAFFIC_ENTRY.size)
+                with self.lock:
+                    n = len(self.clients) + 1
+                n = min(m.MAX_PLAYERS, max(n, pid + 1))
+                first, last = relay.traffic_band(pid, n)
+                slots = [payload[m.TRAFFIC.size + i * m.TRAFFIC_ENTRY.size] for i in range(count)]
+                if any(s < m.MAX_CARS and (first < 0 or not first <= s <= last) for s in slots):
+                    raise ValueError
+            except (ValueError, IndexError, struct.error):
+                self.log.debug("player %d: dropping a traffic frame outside its band" % pid)
+                return False
         self.broadcast(payload, tag, skip=conn)
         return True
 
