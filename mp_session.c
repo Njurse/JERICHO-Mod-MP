@@ -1860,6 +1860,11 @@ static void MpHandleRoster(const unsigned char* p, int len)
 		if (!pl->isLocal && e->model == 0xff && gMp.running)
 			pl->onFoot = 1;
 
+		/* A late joiner's roster arrives before it is running (pre-welcome), when
+		 * 0xff alone cannot tell on foot from "lobby, no car yet". Remember it; the
+		 * welcome says which (MpHandleWelcome), whether or not a left car is named. */
+		pl->rosterNoCar = (e->model == 0xff);
+
 		/* The roster also names the car they left, when they left one. The body
 		 * itself is materialized from the carstate (whose pose a roster cannot
 		 * carry); this log just makes the snapshot verifiable. Throttled because
@@ -3128,6 +3133,23 @@ void MpSelfClearFelony(void)
 	MpNotify("Wanted level cleared");
 }
 
+/* Every peer the last roster named no car for is ON FOOT (A1): called once the
+ * match is known to be running -- the live-join welcome, or a dedicated server's
+ * START (MpHandleStart). `self` is our own id, which the pre-welcome roster
+ * adopted before we knew it was us. */
+static void MpMarkRosterNoCarOnFoot(int self)
+{
+	int k;
+
+	for (k = 0; k < MP_MAX_PLAYERS; k++)
+	{
+		MP_PLAYER* o = MpGetPlayer(k);
+
+		if (o != NULL && k != self && !o->isLocal && o->rosterNoCar)
+			o->onFoot = 1;
+	}
+}
+
 static void MpHandleWelcome(const unsigned char* p, int len)
 {
 	MP_WELCOME w;
@@ -3247,6 +3269,11 @@ static void MpHandleWelcome(const unsigned char* p, int len)
 		 * from. Mark the join so the gather is skipped and MpPlaceSelfTick owns
 		 * the spawn. Cleared by MpSessionReset. */
 		gMp.liveJoin = 1;
+
+		/* ...so a peer the pre-welcome roster named no car for is ON FOOT, not in a
+		 * lobby: the same rule MpHandleRoster applies once running. Without it the
+		 * net spawn seats them in a phantom car at the level start (A1). */
+		MpMarkRosterNoCarOnFoot((int)w.playerId);
 
 		if (gMpCtx != NULL)
 			gMpCtx->jer_log(gMpCtx, "[mp] live join: not gathering beside a peer - our car will be placed on a clear road\n");
@@ -3413,6 +3440,22 @@ static void MpHandleStart(const unsigned char* p, int len)
 
 	memcpy(&st, p, sizeof(st));
 
+	/* A dedicated server (its roster names no host row) that welcomed us as a
+	 * LOBBY ("live": false) starts a level whose players may already be on foot:
+	 * mark them as the live-join welcome does. Not for a game host's lobby: nobody
+	 * is on foot there, yet its roster says 0xff for every player (no level yet). */
+	if (!gMp.running)
+	{
+		int k, hostRow = 0;
+
+		for (k = 0; k < MP_MAX_PLAYERS; k++)
+			if (MpGetPlayer(k) != NULL && MpGetPlayer(k)->isHost)
+				hostRow = 1;
+
+		if (!hostRow)
+			MpMarkRosterNoCarOnFoot(gMp.localPlayerId);
+	}
+
 	gMp.gamemode = st.session.gamemode;
 	gMp.city = st.session.city;
 	gMp.timeOfDay = st.session.timeOfDay;
@@ -3501,6 +3544,12 @@ int MpOnNetSpawn(void* userdata, void* args)
 		 * every screen before they have picked it in the car select. MpHandleCar builds
 		 * it the moment the pick lands. */
 		if (p == NULL || p->isLocal || !MpPlayerCarReady(p))
+			continue;
+
+		/* ...and nobody who is ON FOOT (MpSpawnLateJoiners skips them too): a car
+		 * built here is claimed as their left car by the NO_CAR row, so the real
+		 * parked body is never materialized at its LEFT_CAR pose (#56). */
+		if (p->onFoot)
 			continue;
 
 		PlayerStartInfo[slot] = &ReplayStreams[slot].SourceType;
@@ -7663,18 +7712,19 @@ static void MpHandlePedState(int connIndex, const unsigned char* p, int len)
 
 		memcpy(&e, p + sizeof(MP_PEDSTATE) + i * sizeof(e), sizeof(e));
 
-		pl = MpGetPlayer(e.playerId);
-
-		if (pl == NULL || pl->isLocal)
-			continue;
-
 		/* A pose may only describe its SENDER (the dedi enforces the same rule):
-		 * otherwise one client could walk another player's Tanner around. */
+		 * otherwise one client could walk another player's Tanner around. Checked
+		 * before the local/unknown skip, as in MpHandleCarState. */
 		if (MpIsHost() && connIndex >= 0 && e.playerId != MpConnPlayerId(connIndex))
 		{
 			forged = 1;
 			continue;
 		}
+
+		pl = MpGetPlayer(e.playerId);
+
+		if (pl == NULL || pl->isLocal)
+			continue;
 
 		/* Drop a datagram older than the last one applied (see MpSendOwnPedState).
 		 * Sequence 0 is an older sender: no ordering, as before. A long silence
@@ -11864,11 +11914,36 @@ static void MpMaterializeLeftCar(MP_PLAYER* pl, const MP_CARSTATE_ENTRY* e)
 			car_data[have].ai.padid == &gMpQuietPad &&
 			car_data[have].ap.carCos != NULL)
 		{
-			pl->leftCarModel = car_data[have].ap.model;
-			return;
+			/* long long: a far-off pose must not overflow the subtraction; either axis
+			 * at or past the snap distance is far, rejected before squaring */
+			long long dx = (long long)car_data[have].hd.where.t[0] - e->x;
+			long long dz = (long long)car_data[have].hd.where.t[2] - e->z;
+
+			if (dx > -MP_INTERP_SNAP_DIST && dx < MP_INTERP_SNAP_DIST &&
+				dz > -MP_INTERP_SNAP_DIST && dz < MP_INTERP_SNAP_DIST &&
+				dx * dx + dz * dz < (long long)MP_INTERP_SNAP_DIST * MP_INTERP_SNAP_DIST)
+			{
+				pl->leftCarModel = car_data[have].ap.model;
+				return;
+			}
+
+			/* ...but not one nowhere near where the owner says it is parked: that is a
+			 * car this machine built for them (a net spawn at the level start), not the
+			 * car they left. It is ours and nobody else's (tested above): remove it and
+			 * build the real body at the owner's pose below. */
+			MpReleaseOurCarSlot(have);
+			car_data[have].controlType = CONTROL_TYPE_NONE;
+
+			if (gMpCtx != NULL)
+				gMpCtx->jer_log(gMpCtx,
+					"[mp] left car: player %d's claim on slot %d is %lld,%lld from the parked pose - removed, rebuilding\n",
+					pl->id, have, dx, dz);
+
+			pl->leftCarSlot1 = 0;
+			pl->leftCarModel = -1;
 		}
 
-		if (gMpCtx != NULL && (MpNowMs() - lastLogMs) > 2000)
+		if (pl->leftCarSlot1 > 0 && gMpCtx != NULL && (MpNowMs() - lastLogMs) > 2000)
 		{
 			lastLogMs = MpNowMs();
 			gMpCtx->jer_log(gMpCtx,
@@ -12027,7 +12102,7 @@ static int MpFindEnteredParkedBody(const MP_PLAYER* pl, const MP_CARSTATE_ENTRY*
 static void MpHandleCarState(int connIndex, const unsigned char* p, int len)
 {
 	MP_CARSTATE h;
-	int i, n;
+	int i, n, forged = 0;
 
 	if (len < (int)sizeof(MP_CARSTATE))
 		return;
@@ -12047,6 +12122,16 @@ static void MpHandleCarState(int connIndex, const unsigned char* p, int len)
 		CAR_DATA* cp;
 
 		memcpy(&e, p + sizeof(MP_CARSTATE) + i * sizeof(e), sizeof(e));
+
+		/* A carstate may only describe its SENDER (as for pedstate): otherwise one
+		 * client could release or re-body another player's car on every machine.
+		 * Checked before the local/unknown skip, or a row naming the host (local
+		 * here) or an id not in the roster would be relayed unchecked. */
+		if (MpIsHost() && connIndex >= 0 && e.playerId != MpConnPlayerId(connIndex))
+		{
+			forged = 1;
+			continue;
+		}
 
 		pl = MpGetPlayer(e.playerId);
 
@@ -12642,7 +12727,7 @@ static void MpHandleCarState(int connIndex, const unsigned char* p, int len)
 		 * exactly that row. It also relayed a multi-row frame once per row. */
 	}
 
-	if (MpIsHost() && connIndex >= 0)
+	if (MpIsHost() && connIndex >= 0 && !forged)
 		MpHostRelay(connIndex, MP_TAG_CARSTATE, 0, p, len);
 }
 
@@ -12928,7 +13013,8 @@ static void MpHandleTraffic(int connIndex, const unsigned char* p, int len)
 {
 	const MP_TRAFFIC* h;
 	const MP_TRAFFIC_ENTRY* e;
-	int i, n;
+	int i, n, forged = 0;
+	int from = -1, bandFirst = -1, bandLast = -1;
 
 	if (len < (int)sizeof(MP_TRAFFIC))
 		return;
@@ -12944,6 +13030,23 @@ static void MpHandleTraffic(int connIndex, const unsigned char* p, int len)
 
 	e = (const MP_TRAFFIC_ENTRY*)(p + sizeof(MP_TRAFFIC));
 
+	/* A client may only speak for the slots of its OWN band (MpSendTrafficState
+	 * publishes nothing else): otherwise one peer could despawn or InitCar over
+	 * the host's or another peer's traffic. The band is computed the way the
+	 * sender computes it, with at least from+1 machines. Clients trust the host. */
+	if (MpIsHost() && connIndex >= 0)
+	{
+		int machines = MpTrafficMachineCount();
+
+		from = MpConnPlayerId(connIndex);
+
+		if (machines < from + 1)
+			machines = from + 1;
+
+		if (from >= 0)
+			MpTrafficBandFor(from, machines, &bandFirst, &bandLast);
+	}
+
 	for (i = 0; i < n; i++)
 	{
 		int slot = e[i].carSlot;
@@ -12953,6 +13056,12 @@ static void MpHandleTraffic(int connIndex, const unsigned char* p, int len)
 
 		if (slot < 0 || slot >= MAX_CARS)
 			continue;
+
+		if (MpIsHost() && connIndex >= 0 && (bandFirst < 0 || slot < bandFirst || slot > bandLast))
+		{
+			forged = 1;
+			continue;
+		}
 
 		if (MpRemoteTargetsLocalCar(slot, "traffic", -1))
 			continue;
@@ -12983,7 +13092,7 @@ static void MpHandleTraffic(int connIndex, const unsigned char* p, int len)
 
 	/* The host is the hub: relay a client's traffic to the other clients, exactly
 	 * as it relays their carstate. */
-	if (MpIsHost() && connIndex >= 0)
+	if (MpIsHost() && connIndex >= 0 && !forged)
 		MpHostRelay(connIndex, MP_TAG_TRAFFIC, 0, p, len);
 }
 

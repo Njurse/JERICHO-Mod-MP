@@ -323,9 +323,34 @@ def _net(conn):
     return st
 
 
+# The roster each connection was last SENT: (rows, previous rows, when it changed).
+# A client cuts its traffic band from the last roster it got, not from who is
+# connected right now, so the band check uses this (relay_peer_state).
+_ROSTER_N = {}
+_ROSTER_LOCK = threading.Lock()
+
+
 def _send(conn, tag, payload=b""):
     m.send_frame(conn, tag, payload)
     _net(conn)[1] += m.ENV.size + len(payload)
+    if tag == m.TAG["roster"] and payload:
+        with _ROSTER_LOCK:
+            cur = _ROSTER_N.get(conn)
+            if cur is None or cur[0] != payload[0]:
+                _ROSTER_N[conn] = (payload[0], cur[0] if cur else None, time.monotonic())
+
+
+def _roster_counts(conn):
+    """The roster sizes a client may be cutting its band from: the last one sent,
+    and for ROSTER_REFRESH_S after a change the one before (frames already in
+    flight when the new roster went out). None before any roster was sent."""
+    with _ROSTER_LOCK:
+        cur = _ROSTER_N.get(conn)
+    if cur is None:
+        return None
+    if cur[1] is not None and time.monotonic() - cur[2] < ROSTER_REFRESH_S:
+        return [cur[0], cur[1]]
+    return [cur[0]]
 
 
 def _ms32():
@@ -537,6 +562,7 @@ class Dedicated:
             for info in self.clients.values():
                 car = self.cars.get(info["id"])
                 model, model_city, ready = 0xFF, 0xFF, 0
+                left_model, left_city = 0xFF, 0xFF
                 palette = info.get("palette", 0)       # HELLO / JPCC until their carstate
                 pick = info.get("car")
                 if pick is not None and pick[0] != 0xFF:
@@ -546,21 +572,27 @@ class Dedicated:
                     ready = m.ROSTER_FLAG_CAR_READY
                 if car is not None and len(car) == m.CARSTATE_ENTRY.size:
                     # the first five fields of the row: pid, flags, palette, model, modelCity
-                    _pid, _fl, palette, model, model_city = m.CARSTATE_ENTRY.unpack_from(car, 0)[:5]
+                    fields = m.CARSTATE_ENTRY.unpack_from(car, 0)
+                    _pid, flags, palette, model, model_city = fields[:5]
                     ready = m.ROSTER_FLAG_CAR_READY
+                    # on foot beside a parked car (MP_CARSTATE_LEFT_CAR): name it, as the
+                    # in-game host's roster does, so a late joiner sees them on foot
+                    if model == 0xFF and flags & m.CARSTATE_LEFT_CAR:
+                        left_model, left_city = fields[-4], fields[-3]
                 rows.append((info["id"], info["name"], model, model_city, palette, ready,
                              info.get("ping", 0),
-                             self.ped_models.get(info["id"], m.PED_MODEL_TANNER)))
+                             self.ped_models.get(info["id"], m.PED_MODEL_TANNER),
+                             left_model, left_city))
         rows.sort(key=lambda r: r[0])
 
         out = bytearray(m.ROSTER.pack(len(rows), 0, 0, 0))
-        for pid, name, model, model_city, palette, ready, ping, ped_model in rows:
+        for pid, name, model, model_city, palette, ready, ping, ped_model, left_model, left_city in rows:
             out += m.ROSTER_ENTRY.pack(
                 pid & 0xFF, 0, model & 0xFF, model_city & 0xFF, ready,
                 ped_model & 0xFF,                     # MP_PED_MODEL_*: the late-join snapshot
                 min(int(ping), 0xFFFF),               # ping: our PING -> their PONG round trip
                 palette & 0xFFFF,
-                0xFF, 0xFF,                           # leftModel/leftModelCity (proto 20): the server tracks no parked car
+                left_model & 0xFF, left_city & 0xFF,  # leftModel/leftModelCity (proto 20): from the owner's carstate
                 name.encode("latin1", "replace")[: m.ROSTER_NAME_MAX - 1])
         return bytes(out)
 
@@ -688,6 +720,26 @@ class Dedicated:
             # verbatim -- peers read the same field.
             with self.lock:
                 self.ped_models[pid] = payload[m.PEDSTATE.size + 2]
+        elif tag == m.TAG["traffic"]:
+            # A client may only speak for the slots of its OWN band (mp_session.c
+            # MpHandleTraffic): the band as the sender computes it, from its player
+            # count (the rows of the last roster it was sent: no player 0 here) and
+            # never below pid + 1.
+            try:
+                count = m.TRAFFIC.unpack_from(payload, 0)[1]
+                count = min(count, m.MAX_CARS,
+                            (len(payload) - m.TRAFFIC.size) // m.TRAFFIC_ENTRY.size)
+                counts = _roster_counts(conn)
+                if counts is None:
+                    with self.lock:
+                        counts = [len(self.clients)]
+                slots = [payload[m.TRAFFIC.size + i * m.TRAFFIC_ENTRY.size] for i in range(count)]
+                if not any(all(s < m.MAX_CARS and first >= 0 and first <= s <= last for s in slots)
+                           for first, last in (relay.client_traffic_band(pid, n) for n in counts)):
+                    raise ValueError
+            except (ValueError, IndexError, struct.error):
+                self.log.debug("player %d: dropping a traffic frame outside its band" % pid)
+                return False
         self.broadcast(payload, tag, skip=conn)
         return True
 
@@ -947,7 +999,8 @@ class Dedicated:
                             for i in range(min(count, max(0, avail))):
                                 off = m.CARSTATE.size + i * m.CARSTATE_ENTRY.size
                                 e = payload[off:off + m.CARSTATE_ENTRY.size]
-                                if len(e) == m.CARSTATE_ENTRY.size:
+                                # a row may only describe its sender (as for JPPD)
+                                if len(e) == m.CARSTATE_ENTRY.size and e[0] == pid:
                                     self.cars[e[0]] = e
                     except Exception:
                         # a malformed frame is this connection's problem, not the
@@ -989,6 +1042,8 @@ class Dedicated:
                     self.colors.pop(info["id"], None)
                     self.ped_models.pop(info["id"], None)
                 _NET.pop(conn, None)
+                with _ROSTER_LOCK:
+                    _ROSTER_N.pop(conn, None)
             if info:
                 self.plugins.call("on_player_leave", Player(conn, info))
                 self.log.info("player %d '%s' left (%d/%d)"

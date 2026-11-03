@@ -140,6 +140,11 @@ typedef struct MP_PLAYER
 	 * into a car again is reported as a choice (JER_CARQ_CHOSEN) - and only then. */
 	int   onFoot;
 
+	/* The last roster named no car for this player (model 0xff). Kept because the
+	 * late joiner's roster arrives before the welcome, which is what says whether
+	 * the match is live (on foot) or still in the lobby (no car yet). */
+	int   rosterNoCar;
+
 	/* The car this player last got OUT of (slot + 1, 0 = none) and its model, so a
 	 * leaver's abandoned car can go with them -- unless someone else has since
 	 * taken it (see MpCleanupLeaverWorld). */
