@@ -707,7 +707,7 @@ class Dedicated:
                     n = len(self.clients)
                 first, last = relay.client_traffic_band(pid, n)
                 slots = [payload[m.TRAFFIC.size + i * m.TRAFFIC_ENTRY.size] for i in range(count)]
-                if any(s < m.MAX_CARS and (first < 0 or not first <= s <= last) for s in slots):
+                if any(s >= m.MAX_CARS or first < 0 or not first <= s <= last for s in slots):
                     raise ValueError
             except (ValueError, IndexError, struct.error):
                 self.log.debug("player %d: dropping a traffic frame outside its band" % pid)
