@@ -169,12 +169,16 @@ def main():
     check("a bump aimed at yourself is dropped", relay.hit(server, pairs[4][0], 4, m.HIT.pack(4, 0, 1, 1, 1, 0, 0, 0, 0)) is None)
     check("a short bump is dropped", relay.hit(server, pairs[4][0], 4, hit[:8]) is None)
     check("a bump on an absent player is dropped", relay.hit(server, pairs[4][0], 4, m.HIT.pack(9, 0, 1, 1, 1, 0, 0, 0, 0)) is None)
-    # 3 clients (ids 4..6) -> clients count 7 machines (ids + 1): 12 // 7 = 1 slot each,
-    # rank 5 owns slot 25 (mp_session.c MpTrafficBandFor)
+    # 3 clients (ids 4..6): each counts the roster rows, never below its id + 1
+    # (mp_session.c MpTrafficMachineCount), so client 6 counts 7 machines: 12 // 7 = 1
+    # slot each, and as the last rank it owns 26..31 (MpTrafficBandFor). Client 4
+    # (5 machines) owns 28..31, client 5 (6) 30..31, so slot 26 is client 6's alone.
     check("band maths matches the game", relay.traffic_band(5, 7) == (25, 25) and relay.traffic_band(6, 7) == (26, 31))
-    thit = m.HIT.pack(25, m.HIT_F_TRAFFIC, 1, 2, 3, 0, 0, 0, 0)
-    check("a traffic bump goes to the slot's owner", relay.hit(server, pairs[4][0], 4, thit) == 5)
-    check("the owner got it", got(5, 1.0) == (m.TAG["hit"], thit))
+    thit = m.HIT.pack(26, m.HIT_F_TRAFFIC, 1, 2, 3, 0, 0, 0, 0)
+    check("a traffic bump goes to the slot's owner", relay.hit(server, pairs[4][0], 4, thit) == 6)
+    check("the owner got it", got(6, 1.0) == (m.TAG["hit"], thit))
+    check("a bump on a slot no client spawns into is dropped",
+          relay.hit(server, pairs[4][0], 4, m.HIT.pack(25, m.HIT_F_TRAFFIC, 1, 2, 3, 0, 0, 0, 0)) is None)
 
     # -- COLOR: own rows only, whole table to everyone, dropped on leave
     mine = m.COLOR.pack(2) + m.COLOR_ENTRY.pack(4, 1, 255, 0, 0, 0) + m.COLOR_ENTRY.pack(5, 1, 0, 0, 255, 0)

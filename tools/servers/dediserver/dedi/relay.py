@@ -20,15 +20,23 @@ def traffic_band(rank, machines):
     return f, max(f, last)
 
 
+def client_traffic_band(pid, clients):
+    """The band client `pid` really uses (mp_session.c MpTrafficBandRefresh): its
+    MpTrafficMachineCount is its playerCount, never below its own id + 1. On this
+    server that is the roster rows only: the roster names no player 0, so the
+    client drops the welcome's phantom "Host" at the first roster (MpHandleRoster),
+    which this server sends on the first loop pass after the welcome."""
+    return traffic_band(pid, min(m.MAX_PLAYERS, max(clients, pid + 1)))
+
+
 def traffic_slot_owner(server, slot):
-    """MpTrafficSlotOwnerRank as the clients see it. A client's machine count is its
-    playerCount -- the roster plus the phantom player 0 this server stands in for --
-    and never below its own id + 1, so take the largest any client can hold."""
+    """MpTrafficSlotOwnerRank as the clients see it: the client whose own band
+    (client_traffic_band) holds the slot. Bands can overlap (each client counts
+    with its own id), so the highest id wins, as it does for the frames."""
     with server.lock:
         ids = [c["id"] for c in server.clients.values()]
-    n = min(m.MAX_PLAYERS, max([len(ids) + 1] + [i + 1 for i in ids]))
-    for r in range(n):
-        f, last = traffic_band(r, n)
+    for r in sorted(ids, reverse=True):
+        f, last = client_traffic_band(r, len(ids))
         if f <= slot <= last:
             return r
     return -1
