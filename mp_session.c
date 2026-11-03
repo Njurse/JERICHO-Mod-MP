@@ -3133,6 +3133,23 @@ void MpSelfClearFelony(void)
 	MpNotify("Wanted level cleared");
 }
 
+/* Every peer the last roster named no car for is ON FOOT (A1): called once the
+ * match is known to be running -- the live-join welcome, or a dedicated server's
+ * START (MpHandleStart). `self` is our own id, which the pre-welcome roster
+ * adopted before we knew it was us. */
+static void MpMarkRosterNoCarOnFoot(int self)
+{
+	int k;
+
+	for (k = 0; k < MP_MAX_PLAYERS; k++)
+	{
+		MP_PLAYER* o = MpGetPlayer(k);
+
+		if (o != NULL && k != self && !o->isLocal && o->rosterNoCar)
+			o->onFoot = 1;
+	}
+}
+
 static void MpHandleWelcome(const unsigned char* p, int len)
 {
 	MP_WELCOME w;
@@ -3256,17 +3273,7 @@ static void MpHandleWelcome(const unsigned char* p, int len)
 		/* ...so a peer the pre-welcome roster named no car for is ON FOOT, not in a
 		 * lobby: the same rule MpHandleRoster applies once running. Without it the
 		 * net spawn seats them in a phantom car at the level start (A1). */
-		{
-			int k;
-
-			for (k = 0; k < MP_MAX_PLAYERS; k++)
-			{
-				MP_PLAYER* o = MpGetPlayer(k);
-
-				if (o != NULL && k != (int)w.playerId && !o->isLocal && o->rosterNoCar)
-					o->onFoot = 1;
-			}
-		}
+		MpMarkRosterNoCarOnFoot((int)w.playerId);
 
 		if (gMpCtx != NULL)
 			gMpCtx->jer_log(gMpCtx, "[mp] live join: not gathering beside a peer - our car will be placed on a clear road\n");
@@ -3432,6 +3439,22 @@ static void MpHandleStart(const unsigned char* p, int len)
 		return;
 
 	memcpy(&st, p, sizeof(st));
+
+	/* A dedicated server (its roster names no host row) that welcomed us as a
+	 * LOBBY ("live": false) starts a level whose players may already be on foot:
+	 * mark them as the live-join welcome does. Not for a game host's lobby: nobody
+	 * is on foot there, yet its roster says 0xff for every player (no level yet). */
+	if (!gMp.running)
+	{
+		int k, hostRow = 0;
+
+		for (k = 0; k < MP_MAX_PLAYERS; k++)
+			if (MpGetPlayer(k) != NULL && MpGetPlayer(k)->isHost)
+				hostRow = 1;
+
+		if (!hostRow)
+			MpMarkRosterNoCarOnFoot(gMp.localPlayerId);
+	}
 
 	gMp.gamemode = st.session.gamemode;
 	gMp.city = st.session.city;
