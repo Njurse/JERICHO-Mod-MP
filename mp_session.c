@@ -11914,10 +11914,11 @@ static void MpMaterializeLeftCar(MP_PLAYER* pl, const MP_CARSTATE_ENTRY* e)
 			car_data[have].ai.padid == &gMpQuietPad &&
 			car_data[have].ap.carCos != NULL)
 		{
-			int dx = car_data[have].hd.where.t[0] - e->x;
-			int dz = car_data[have].hd.where.t[2] - e->z;
+			/* long long: a far-off pose must not overflow the subtraction */
+			long long dx = (long long)car_data[have].hd.where.t[0] - e->x;
+			long long dz = (long long)car_data[have].hd.where.t[2] - e->z;
 
-			if (MpDistSq64(dx, dz) < (long long)MP_INTERP_SNAP_DIST * MP_INTERP_SNAP_DIST)
+			if (dx * dx + dz * dz < (long long)MP_INTERP_SNAP_DIST * MP_INTERP_SNAP_DIST)
 			{
 				pl->leftCarModel = car_data[have].ap.model;
 				return;
@@ -11932,7 +11933,7 @@ static void MpMaterializeLeftCar(MP_PLAYER* pl, const MP_CARSTATE_ENTRY* e)
 
 			if (gMpCtx != NULL)
 				gMpCtx->jer_log(gMpCtx,
-					"[mp] left car: player %d's claim on slot %d is %d,%d from the parked pose - removed, rebuilding\n",
+					"[mp] left car: player %d's claim on slot %d is %lld,%lld from the parked pose - removed, rebuilding\n",
 					pl->id, have, dx, dz);
 
 			pl->leftCarSlot1 = 0;
