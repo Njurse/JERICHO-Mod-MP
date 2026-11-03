@@ -537,6 +537,7 @@ class Dedicated:
             for info in self.clients.values():
                 car = self.cars.get(info["id"])
                 model, model_city, ready = 0xFF, 0xFF, 0
+                left_model, left_city = 0xFF, 0xFF
                 palette = info.get("palette", 0)       # HELLO / JPCC until their carstate
                 pick = info.get("car")
                 if pick is not None and pick[0] != 0xFF:
@@ -546,21 +547,27 @@ class Dedicated:
                     ready = m.ROSTER_FLAG_CAR_READY
                 if car is not None and len(car) == m.CARSTATE_ENTRY.size:
                     # the first five fields of the row: pid, flags, palette, model, modelCity
-                    _pid, _fl, palette, model, model_city = m.CARSTATE_ENTRY.unpack_from(car, 0)[:5]
+                    fields = m.CARSTATE_ENTRY.unpack_from(car, 0)
+                    _pid, flags, palette, model, model_city = fields[:5]
                     ready = m.ROSTER_FLAG_CAR_READY
+                    # on foot beside a parked car (MP_CARSTATE_LEFT_CAR): name it, as the
+                    # in-game host's roster does, so a late joiner sees them on foot
+                    if model == 0xFF and flags & m.CARSTATE_LEFT_CAR:
+                        left_model, left_city = fields[-4], fields[-3]
                 rows.append((info["id"], info["name"], model, model_city, palette, ready,
                              info.get("ping", 0),
-                             self.ped_models.get(info["id"], m.PED_MODEL_TANNER)))
+                             self.ped_models.get(info["id"], m.PED_MODEL_TANNER),
+                             left_model, left_city))
         rows.sort(key=lambda r: r[0])
 
         out = bytearray(m.ROSTER.pack(len(rows), 0, 0, 0))
-        for pid, name, model, model_city, palette, ready, ping, ped_model in rows:
+        for pid, name, model, model_city, palette, ready, ping, ped_model, left_model, left_city in rows:
             out += m.ROSTER_ENTRY.pack(
                 pid & 0xFF, 0, model & 0xFF, model_city & 0xFF, ready,
                 ped_model & 0xFF,                     # MP_PED_MODEL_*: the late-join snapshot
                 min(int(ping), 0xFFFF),               # ping: our PING -> their PONG round trip
                 palette & 0xFFFF,
-                0xFF, 0xFF,                           # leftModel/leftModelCity (proto 20): the server tracks no parked car
+                left_model & 0xFF, left_city & 0xFF,  # leftModel/leftModelCity (proto 20): from the owner's carstate
                 name.encode("latin1", "replace")[: m.ROSTER_NAME_MAX - 1])
         return bytes(out)
 
