@@ -263,8 +263,9 @@ same policy the game's own host does:
 | `2` | as 1, **and** the versions in `mod_versions` must match |
 
 The shipped example sets `mod_check: 1` and
-`core_mods: ["mp", "carhacks", "d1cars"]` — the multiplayer suite every client
-needs. That is the *minimum*: optional modules such as crumple may be enabled
+`core_mods: ["mp", "carhacks", "pedhacks"]` — the multiplayer suite every client
+needs. `bake` (and the old id `d1cars`) is tooling and is ignored even if listed.
+That is the *minimum*: optional modules such as crumple may be enabled
 beside them, and the core suite is ordered first in the client's `modlist.ini`
 (the game rewrites the order on join; see `jer_manager_normalize_core`). Leave
 `mods` empty unless you want to forbid extras as well.
