@@ -967,7 +967,10 @@ static void MpSessionRulesTick(void)
 	static int reportedCops = -1, reportedDiff = -1, reportedInv = -1, reportedImmune = -1;
 
 	if (!gMp.ruleSet || !gMp.running)
+	{
+		gInvulnerableWorld = 0;
 		return;
+	}
 
 	CopsAllowed = gMp.ruleCops;
 	gCopDifficultyLevel = gMp.ruleDiff;
@@ -1006,6 +1009,10 @@ static void MpSessionRulesTick(void)
 
 	if (gMp.ruleInvuln)
 		gInvincibleCar = 1;
+
+	/* The cheat flag above covers the local driver. The host rule is every
+	 * car, on every machine — the same bit the welcome/start packet carried. */
+	gInvulnerableWorld = gMp.ruleInvuln ? 1 : 0;
 
 	if (gMp.ruleCops != reportedCops || gMp.ruleDiff != reportedDiff ||
 	    gMp.ruleInvuln != reportedInv || gMp.ruleImmune != reportedImmune)
