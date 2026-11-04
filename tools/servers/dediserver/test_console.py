@@ -410,12 +410,14 @@ def main():
     check("a server naming no mods matches everyone", d.mods_match([], [], {}, 2))
 
     # -- CORE mods: a mandatory subset, optional modules may ride along
-    core = ["mp", "carhacks", "d1cars"]
-    full = [("mp", "1", 1), ("carhacks", "1", 1), ("d1cars", "1", 1)]
+    core = ["mp", "carhacks", "pedhacks"]
+    full = [("mp", "1", 1), ("carhacks", "1", 1), ("pedhacks", "1", 1)]
     check("core mods are mandatory",
           d.mods_match(full[:2], [], {}, 1, core) is False)
+    check("bake is not a join requirement",
+          d.mods_match(full, [], {}, 1, core + ["bake", "d1cars"]) is True)
     check("optional mods may accompany the core suite",
-          d.mods_match(full + [("crumple", "1", 1)], [], {}, 1, core) is True)
+          d.mods_match(full + [("crumple", "1", 1), ("bake", "1", 0)], [], {}, 1, core) is True)
     check("an exact mods list still forbids extras",
           d.mods_match(full + [("crumple", "1", 1)], core, {}, 1, core) is False)
     check("the core suite alone satisfies an empty exact list",

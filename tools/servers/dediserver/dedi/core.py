@@ -153,7 +153,9 @@ def mods_match(declared, required, versions, level, core=None):
 
     level 0 admits anyone. Above it:
       * every id in `core` MUST be enabled (the multiplayer suite: mp, carhacks,
-        d1cars). Optional modules are allowed beside them;
+        pedhacks). Optional modules are allowed beside them;
+      * `bake` and its old id `d1cars` are tooling, never a join requirement,
+        even if a config still lists them in core_mods or mods;
       * if `required` is non-empty, the enabled set must equal it exactly;
       * level 2 also compares the versions named in `versions`.
 
@@ -162,21 +164,25 @@ def mods_match(declared, required, versions, level, core=None):
     without having to name every one of them. A server that names neither core
     nor required modules still matches everyone.
     """
+    tooling = ("bake", "d1cars")
+
     if int(level) <= 0:
         return True
 
-    have = set(mod_id for mod_id, _ver, enabled in declared if enabled)
-    need = set(core or ())
+    have = set(mod_id for mod_id, _ver, enabled in declared
+               if enabled and mod_id not in tooling)
+    need = set(core or ()) - set(tooling)
 
     if need and not need <= have:
         return False
 
-    if required and have != set(required):
+    if required and have != (set(required) - set(tooling)):
         return False
 
     if int(level) >= 2:
         for mod_id, version, enabled in declared:
-            if enabled and mod_id in versions and versions[mod_id] != version:
+            if (enabled and mod_id not in tooling and mod_id in versions
+                    and versions[mod_id] != version):
                 return False
 
     return True
