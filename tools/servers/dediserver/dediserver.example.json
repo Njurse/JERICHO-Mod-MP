@@ -20,7 +20,7 @@
   "weather": "clear",
   "announce_joins": true,
   "mod_check": 1,
-  "core_mods": ["mp", "carhacks", "d1cars"],
+  "core_mods": ["mp", "carhacks", "pedhacks"],
   "mods": [],
   "mod_versions": {},
   "plugins": null,

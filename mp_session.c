@@ -2292,6 +2292,14 @@ void MpSendHello(void)
 		gMpCtx->jer_log(gMpCtx, "[mp] hello sent (%d mods)\n", n);
 }
 
+/* bake (and its old id, d1cars) is offline tooling. It is not a join
+ * requirement: a host that has it on must still take a client that has it off. */
+static int MpModIsTooling(const char* id)
+{
+	return id != NULL && (strncmp(id, "bake", MP_MOD_ID_MAX) == 0 ||
+		strncmp(id, "d1cars", MP_MOD_ID_MAX) == 0);
+}
+
 /* Does the client's manifest satisfy the host's policy? */
 static int MpModsMatchHost(const MP_MOD_INFO* cm, int cn, int strict)
 {
@@ -2301,6 +2309,9 @@ static int MpModsMatchHost(const MP_MOD_INFO* cm, int cn, int strict)
 
 	for (i = 0; i < cn; i++)
 	{
+		if (MpModIsTooling(cm[i].id))
+			continue;
+
 		found = 0;
 
 		for (j = 0; j < hn; j++)
@@ -2327,6 +2338,9 @@ static int MpModsMatchHost(const MP_MOD_INFO* cm, int cn, int strict)
 	/* every host-enabled mod must also be present on the client */
 	for (j = 0; j < hn; j++)
 	{
+		if (MpModIsTooling(hm[j].id))
+			continue;
+
 		found = 0;
 
 		for (i = 0; i < cn; i++)
@@ -3173,8 +3187,9 @@ static void MpHandleWelcome(const unsigned char* p, int len)
 	gMp.seed = w.seed;
 
 	/* THE JOIN IS WHERE THE CORE ORDER IS APPLIED. A client's own modlist may put
-	 * optional modules first (or have a core one off); a session needs mp, carhacks
-	 * and d1cars first, in that order. Normalise the file now - the modules already
+	 * optional modules first (or have a core one off); a session needs carhacks,
+	 * pedhacks and mp first, in that order. bake is not part of that. Normalise
+	 * the file now - the modules already
 	 * loaded cannot be reordered in this process, so the next boot is what uses it,
 	 * and that is said plainly rather than implied. */
 	{
@@ -3183,7 +3198,7 @@ static void MpHandleWelcome(const unsigned char* p, int len)
 		if (gMpCtx != NULL)
 		{
 			if (moved > 0)
-				gMpCtx->jer_log(gMpCtx, "[mp] modlist: core order applied (mp, carhacks, d1cars first) - restart to use it\n");
+				gMpCtx->jer_log(gMpCtx, "[mp] modlist: core order applied (carhacks, pedhacks, mp first) - restart to use it\n");
 			else if (moved < 0)
 				gMpCtx->jer_log(gMpCtx, "[mp] modlist: could not write the core order (read-only install?)\n");
 		}
