@@ -1990,11 +1990,12 @@ static int MpCarIsLocalSeat(const CAR_DATA* cp)
 }
 
 /* JER_EVENT_CAR_ENGINE: end of ProcessCarPad, after engine force is computed
- * and before it is stored. Super Turbo is a local JMP Options toggle (not the
- * host's Invulnerability rule, which is packed into the session and applied
- * on every machine). Only the local seat is scaled, so a remote car's pad
- * path — and therefore its net sync — is left alone. Peers still see the
- * faster car, because they adopt this machine's owner-authoritative state. */
+ * and before it is stored. Super Turbo is a local toggle — JMP Options and the
+ * pause Multiplayer page both write gMp.config.superTurbo — not the host's
+ * Invulnerability rule, which is packed into the session and applied on every
+ * machine. Only the local seat is scaled, so a remote car's pad path — and
+ * therefore its net sync — is left alone. Peers still see the faster car,
+ * because they adopt this machine's owner-authoritative state. */
 static int MpOnCarEngine(void* userdata, void* args)
 {
 	JER_ARGS_CAR_ENGINE* a = (JER_ARGS_CAR_ENGINE*)args;
@@ -3522,6 +3523,33 @@ static int MpOptToggleImmune(void* ud, int dir)
 	return JER_PAUSE_QUIT_NONE;
 }
 
+/* Same field the JMP Options row writes (AdjSuperTurbo in mp_ui.c). Local
+ * only: MpConfigSave persists super_turbo, and nothing here packs it into
+ * MP_RULES / WELCOME. Cross toggles, like Invincibility and Immunity on this
+ * page; left/right flips it too, like Strict Version. */
+static void MpOptLabelSuperTurbo(void* ud, char* out, int max)
+{
+	(void)ud;
+	snprintf(out, max, "Super Turbo: < %s >", gMp.config.superTurbo ? "On" : "Off");
+}
+
+static int MpOptToggleSuperTurbo(void* ud, int dir)
+{
+	(void)ud;
+	(void)dir;
+
+	/* 0/1 only, so Cross (dir 0) and left/right (±1) are the same flip.
+	 * JMP Options' AdjSuperTurbo writes this same field and saves it. */
+	gMp.config.superTurbo = gMp.config.superTurbo ? 0 : 1;
+	MpConfigSave();
+
+	if (gMpCtx != NULL)
+		gMpCtx->jer_log(gMpCtx, "[mp] player option: super turbo %s\n",
+			gMp.config.superTurbo ? "On" : "Off");
+
+	return JER_PAUSE_QUIT_NONE;
+}
+
 static int MpOptRepair(void* ud, int dir)
 {
 	(void)ud;
@@ -3568,13 +3596,16 @@ static const JER_PAUSE_MENU_ITEM mpPauseItems[] =
 	/* Respawn first, then the two things that shape a player: their car and
 	 * their character. Player Color and Preferred Character live one level down
 	 * in Player Options, together with the colour they depend on. Then the
-	 * movement row, the two local switches, and the admin/debug rows last. */
+	 * movement row, the local switches, and the admin/debug rows last.
+	 * Super Turbo is the saved switch (mp.ini); the two above it are the live
+	 * cheat flags and are not written out. */
 	{ "Respawn", NULL, MpRespawn, NULL, NULL, 0 },
 	{ "Vehicle Options", NULL, NULL, NULL, &mpChangeCarMenu, 0 },
 	{ "Player Options", NULL, NULL, NULL, &mpPlayerMenu, 0 },
 	{ "Warp To Player", NULL, NULL, NULL, &mpWarpMenu, 0 },
 	{ NULL, MpOptLabelInvincible, MpOptToggleInvincible, NULL, NULL, 0 },
 	{ NULL, MpOptLabelImmune, MpOptToggleImmune, NULL, NULL, 0 },
+	{ NULL, MpOptLabelSuperTurbo, MpOptToggleSuperTurbo, NULL, NULL, 1 },
 	{ "Kick player", NULL, NULL, NULL, &mpKickMenu, 0 },
 	{ "Reload all cars", NULL, MpMenuReloadCars, NULL, NULL, 0 },
 	{ "Write diagnostics now", NULL, MpMenuWriteDiag, NULL, NULL, 0 },
