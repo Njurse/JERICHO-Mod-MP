@@ -45,8 +45,9 @@ typedef struct MP_CONFIG
 	int  modCheck;			/* host lobby setting: MP_MODCHECK_* */
 	int  strictVersion;		/* host lobby setting: also require the same build */
 
-	/* JMP Options, this machine only. Not a session rule: it does not ride
-	 * MP_RULES_* / MP_WELCOME and it is not applied to anyone else's car.
+	/* JMP Options and the pause Multiplayer page, this machine only. Not a
+	 * session rule: it does not ride MP_RULES_* / MP_WELCOME and it is not
+	 * applied to anyone else's car.
 	 * 1 = multiply the local player's engine thrust by 10 (JER_EVENT_CAR_ENGINE). */
 	int  superTurbo;
 
