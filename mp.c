@@ -1952,6 +1952,69 @@ static int MpOnCarDrawColor(void* userdata, void* args)
 	return JER_RESULT_CONTINUE;
 }
 
+/* CAR_DATA.thrust is a short. ProcessCarPad (handling.c) copies this hook's
+ * thrust back with `(short)jerArgs.thrust`. A stock accel thrust is about
+ * 4915 (powerRatio 4096 × 4915, FIXEDH), so ×10 does not fit: 49150 wraps to
+ * a negative short and the car reverses. Clamp to the short range. That is
+ * the whole of ×10 the field can hold — about 6.7× on that stock car, and
+ * exactly ×10 when the unscaled thrust is within ±3276. */
+#define MP_SUPER_TURBO_MUL	10
+#define MP_THRUST_SHORT_MAX	32767
+#define MP_THRUST_SHORT_MIN	(-32768)
+
+/* The car this machine is driving. In a match NumPlayers is forced to 1, so
+ * this is player[0]. Split-screen outside a session is 2. Do not walk the
+ * rest of player[]: those entries are how a match seats other people's cars. */
+static int MpCarIsLocalSeat(const CAR_DATA* cp)
+{
+	int i, n;
+
+	if (cp == NULL)
+		return 0;
+
+	n = (int)NumPlayers;
+	if (n < 1)
+		n = 1;
+	if (n > 2)
+		n = 2;
+
+	for (i = 0; i < n; i++)
+	{
+		int slot = (int)player[i].playerCarId;
+
+		if (slot >= 0 && slot == (int)cp->id)
+			return 1;
+	}
+
+	return 0;
+}
+
+/* JER_EVENT_CAR_ENGINE: end of ProcessCarPad, after engine force is computed
+ * and before it is stored. Super Turbo is a local JMP Options toggle (not the
+ * host's Invulnerability rule, which is packed into the session and applied
+ * on every machine). Only the local seat is scaled, so a remote car's pad
+ * path — and therefore its net sync — is left alone. Peers still see the
+ * faster car, because they adopt this machine's owner-authoritative state. */
+static int MpOnCarEngine(void* userdata, void* args)
+{
+	JER_ARGS_CAR_ENGINE* a = (JER_ARGS_CAR_ENGINE*)args;
+	long long scaled;
+
+	(void)userdata;
+
+	if (a == NULL || !gMp.config.superTurbo || !MpCarIsLocalSeat((const CAR_DATA*)a->car))
+		return JER_RESULT_CONTINUE;
+
+	scaled = (long long)a->thrust * MP_SUPER_TURBO_MUL;
+	if (scaled > MP_THRUST_SHORT_MAX)
+		scaled = MP_THRUST_SHORT_MAX;
+	else if (scaled < MP_THRUST_SHORT_MIN)
+		scaled = MP_THRUST_SHORT_MIN;
+	a->thrust = (int)scaled;
+
+	return JER_RESULT_CONTINUE;
+}
+
 static int MpOnDrawOverlay(void* userdata, void* args)
 {
 	(void)userdata;
@@ -3616,6 +3679,9 @@ JER_MODULE_ENTRY(jer_module_mp_entry)(JERICHO_CONTEXT* ctx)
 	ctx->jer_register_hook(ctx, JER_EVENT_DRAW_OVERLAY, MpUiDrawOverlay, NULL, 0);
 	ctx->jer_register_hook(ctx, JER_EVENT_DRAW_OVERLAY, MpOnDrawOverlay, NULL, 10);
 	ctx->jer_register_hook(ctx, JER_EVENT_CAR_DRAW_COLOR, MpOnCarDrawColor, NULL, 0);
+	/* Local Super Turbo. Runs for every car ProcessCarPad steps; the handler
+	 * itself ignores anything that is not this machine's seat. */
+	ctx->jer_register_hook(ctx, JER_EVENT_CAR_ENGINE, MpOnCarEngine, NULL, 0);
 	ctx->jer_register_hook(ctx, JER_EVENT_MP_FRONTEND, MpOnMpFrontend, NULL, 0);
 	ctx->jer_register_hook(ctx, JER_EVENT_FRONTEND, MpOnFrontendConfirm, NULL, 0);
 	ctx->jer_register_hook(ctx, JER_EVENT_CMDLINE, MpOnCmdLine, NULL, 0);

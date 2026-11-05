@@ -6,7 +6,8 @@
  *
  *   - MP_CONFIG : the per-instance settings persisted in
  *                 JERICHO/CONFIG/mp.ini (port, player name, host name,
- *                 beacon interval, and the host's lobby mod-check mode).
+ *                 beacon interval, the host's lobby mod-check mode, and the
+ *                 local Super Turbo toggle).
  *   - MP_PLAYER : one tracked network participant (self or a peer), with
  *                 the CAR_DATA slot it drives -- this is how we tell our
  *                 players apart from genuine AI/NPC traffic.
@@ -43,6 +44,11 @@ typedef struct MP_CONFIG
 	int  idleDropMs;		/* silence that drops a peer; 0 = never drop */
 	int  modCheck;			/* host lobby setting: MP_MODCHECK_* */
 	int  strictVersion;		/* host lobby setting: also require the same build */
+
+	/* JMP Options, this machine only. Not a session rule: it does not ride
+	 * MP_RULES_* / MP_WELCOME and it is not applied to anyone else's car.
+	 * 1 = multiply the local player's engine thrust by 10 (JER_EVENT_CAR_ENGINE). */
+	int  superTurbo;
 
 	/* SESSION RULES -- the host's per-session gameplay settings, chosen in the
 	 * Host Game menu and applied on EVERY machine (they ride the wire: see
