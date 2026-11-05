@@ -9,7 +9,7 @@
  *   mp.mode     Single Player | Multiplayer | Back          (the take-a-ride question)
  *   mp.join     <LAN servers...> / Manual IP / Back
  *   mp.lobby    <players...> / Start Match (host) or Leave / Back
- *   mp.jmpoptions  Change Name | Enforce Mods | Port / Back
+ *   mp.jmpoptions  Change Name | Enforce Mods | Strict Version | Super Turbo | Port / Back
  *   mp.name     10 character slots / Done / Back
  *
  * "JMP Options" used to be an "Options" row INSIDE the LAN page. It moved up one
@@ -148,6 +148,7 @@ static unsigned long gJoinScanStart;	/* when the browse began (0 = not browsing)
 /* ------------------------------------------------------------------ */
 static void LblEnforce(void* ud, char* o, int n) { (void)ud; snprintf(o, n, "Enforce Mods: < %s >", kModCheckNames[gMp.config.modCheck % 3]); }
 static void LblStrict(void* ud, char* o, int n)  { (void)ud; snprintf(o, n, "Strict Version: < %s >", gMp.config.strictVersion ? "On" : "Off"); }
+static void LblSuperTurbo(void* ud, char* o, int n) { (void)ud; snprintf(o, n, "Super Turbo: < %s >", gMp.config.superTurbo ? "On" : "Off"); }
 static void LblPort(void* ud, char* o, int n)    { (void)ud; snprintf(o, n, "Port: %d", gMp.config.port); }
 static void LblManualGo(void* ud, char* o, int n) { (void)ud; snprintf(o, n, "Connect to %s", gManualIp); }
 
@@ -167,6 +168,10 @@ static int AdjEnforce(void* ud, int dir) { (void)ud; gMp.config.modCheck = (gMp.
  * the hash tracks git describe, so requiring it shuts out anyone who is on a
  * different commit. */
 static int AdjStrict(void* ud, int dir) { (void)ud; gMp.config.strictVersion = (gMp.config.strictVersion + dir + 2) & 1; MpConfigSave(); return 1; }
+
+/* Local giggle, not a host rule. Left/right flips it and writes mp.ini, the
+ * same way Strict Version does. The ×10 itself is MpOnCarEngine. */
+static int AdjSuperTurbo(void* ud, int dir) { (void)ud; gMp.config.superTurbo = (gMp.config.superTurbo + dir + 2) & 1; MpConfigSave(); return 1; }
 
 static int AdjPort(void* ud, int dir)
 {
@@ -713,10 +718,11 @@ static JER_FE_ITEM kJmpOptionsItems[] ={
 	{ NULL, LblPreferredCharacter, NULL, NULL, AdjPreferredCharacter, -1, 0 },
 	{ NULL, LblEnforce, NULL, NULL, AdjEnforce, -1,       0 },
 	{ NULL, LblStrict,  NULL, NULL, AdjStrict,  -1,       0 },
+	{ NULL, LblSuperTurbo, NULL, NULL, AdjSuperTurbo, -1, 0 },
 	{ NULL, LblPort,    NULL, NULL, AdjPort,    -1,       0 },
 	{ "Back",           NULL, NULL, NULL,       NULL,      -1,     1 },
 };
-static const JER_FE_MENU kJmpOptionsMenu = { "mp.jmpoptions", kJmpOptionsItems, 6, NULL, NULL };
+static const JER_FE_MENU kJmpOptionsMenu = { "mp.jmpoptions", kJmpOptionsItems, 7, NULL, NULL };
 
 /* Resolve every mp menu by id and point the submenu rows at what they got. The
  * item arrays are written with -1 and wired HERE, because the registered index
