@@ -194,7 +194,7 @@ the match was built. `MP_PAUSE=1` **logs** the player rows for a test (it does n
 hold the pause -- `MP_OPENPAUSE=<secs>` does that), and `MP_DEBUG` logs each row.
 
 The engine's own pause menu keeps working, and the module adds a `Multiplayer`
-page to it with nine rows:
+page to it with ten rows:
 
 | Row | What it does |
 | --- | --- |
@@ -204,6 +204,7 @@ page to it with nine rows:
 | `Player Options` | the character submenu: `Player Color` (suit colour on/off plus RGB; off keeps the game's own colours) and `Preferred Character` (Tanner, Jericho or an archive entry). The character is applied on foot, validated against what this level can actually draw, and synced to every peer. The same stored choice applies in SINGLE PLAYER: a solo level imports `JMPPED.LEV` on demand and lists every archive entry, and a Tanner run loads no ped pages. Jericho needs the Havana data or the shipped `JMPPED.LEV`; without either the row keeps Tanner |
 | `Invincibility` | on/off: you take no damage |
 | `Immunity` | on/off: the police leave you alone |
+| `Super Turbo` | on/off, saved to `mp.ini` as `super_turbo`. The same local switch as JMP Options: left/right or Cross. Multiplies this machine's own car thrust by 10. Not a host session rule and not on the wire |
 | `Kick player` | (host) remove a peer from the session |
 | `Reload all cars` | releases and rebuilds every imported car slot through carhacks (`chkImportReloadAll`): pins, pool pages, palette rows, geometry and the city buffers whose last live user went, then re-reads and hot-loads each slot. Stock/level cars are untouched. It also arms a quick re-announce. For when an imported car looks wonky |
 | `Write diagnostics now` | writes `mp_diag.txt` next to the game |
@@ -231,7 +232,7 @@ no wanted level, and the session carries on.
 | `chat_hold_seconds` | `12` | seconds a chat line stays at full brightness before fading (2..120; was a fixed 20) |
 | `mod_check` | `0` | host lobby mod policy: 0 off, 1 by id, 2 by id+version |
 | `strict_version` | `0` | host lobby setting: 1 also requires an identical build hash (off by default, because that hash tracks `git describe`) |
-| `super_turbo` | `0` | JMP Options **Super Turbo**: `1` multiplies this machine's own car thrust by 10. Local only — not a host session rule and not on the wire, so other cars are not rescaled. Off leaves thrust untouched. The engine stores thrust as a short (`JER_EVENT_CAR_ENGINE` in `ProcessCarPad`), so the product is clamped to ±32767 instead of wrapping into reverse; a stock ~4915 accel becomes the largest force that field can hold |
+| `super_turbo` | `0` | JMP Options and the pause menu's **Multiplayer** page, **Super Turbo**: `1` multiplies this machine's own car thrust by 10. Local only — not a host session rule and not on the wire, so other cars are not rescaled. Off leaves thrust untouched. The engine stores thrust as a short (`JER_EVENT_CAR_ENGINE` in `ProcessCarPad`), so the product is clamped to ±32767 instead of wrapping into reverse; a stock ~4915 accel becomes the largest force that field can hold |
 | `master_url` | `http://jerichomp.animetiddi.es:8100` | the discovery server: `host`, `host:port` or `http://host:port`. It is BOTH what the `Online` screen lists and where a hosted game lists itself (see below). Empty = LAN-only: no listing, no advertisement, the beacon still works. Resolved on the first frame that needs it -- never at startup -- so an edit takes effect on the next launch and a launch that never opens the `Online` screen never speaks to the master at all |
 
 **The ini's port is the base; the command line can move it -- but not under the shipped

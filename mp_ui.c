@@ -170,7 +170,8 @@ static int AdjEnforce(void* ud, int dir) { (void)ud; gMp.config.modCheck = (gMp.
 static int AdjStrict(void* ud, int dir) { (void)ud; gMp.config.strictVersion = (gMp.config.strictVersion + dir + 2) & 1; MpConfigSave(); return 1; }
 
 /* Local giggle, not a host rule. Left/right flips it and writes mp.ini, the
- * same way Strict Version does. The ×10 itself is MpOnCarEngine. */
+ * same way Strict Version does. The pause Multiplayer page
+ * (MpOptToggleSuperTurbo) writes this same field. The ×10 itself is MpOnCarEngine. */
 static int AdjSuperTurbo(void* ud, int dir) { (void)ud; gMp.config.superTurbo = (gMp.config.superTurbo + dir + 2) & 1; MpConfigSave(); return 1; }
 
 static int AdjPort(void* ud, int dir)
