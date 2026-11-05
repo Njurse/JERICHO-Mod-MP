@@ -231,6 +231,7 @@ no wanted level, and the session carries on.
 | `chat_hold_seconds` | `12` | seconds a chat line stays at full brightness before fading (2..120; was a fixed 20) |
 | `mod_check` | `0` | host lobby mod policy: 0 off, 1 by id, 2 by id+version |
 | `strict_version` | `0` | host lobby setting: 1 also requires an identical build hash (off by default, because that hash tracks `git describe`) |
+| `super_turbo` | `0` | JMP Options **Super Turbo**: `1` multiplies this machine's own car thrust by 10. Local only — not a host session rule and not on the wire, so other cars are not rescaled. Off leaves thrust untouched. The engine stores thrust as a short (`JER_EVENT_CAR_ENGINE` in `ProcessCarPad`), so the product is clamped to ±32767 instead of wrapping into reverse; a stock ~4915 accel becomes the largest force that field can hold |
 | `master_url` | `http://jerichomp.animetiddi.es:8100` | the discovery server: `host`, `host:port` or `http://host:port`. It is BOTH what the `Online` screen lists and where a hosted game lists itself (see below). Empty = LAN-only: no listing, no advertisement, the beacon still works. Resolved on the first frame that needs it -- never at startup -- so an edit takes effect on the next launch and a launch that never opens the `Online` screen never speaks to the master at all |
 
 **The ini's port is the base; the command line can move it -- but not under the shipped
