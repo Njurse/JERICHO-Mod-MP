@@ -3535,7 +3535,7 @@ static int MpOptToggleImmune(void* ud, int dir)
 static void MpOptLabelSuperTurbo(void* ud, char* out, int max)
 {
 	(void)ud;
-	snprintf(out, max, "Super Turbo: < %s >", gMp.config.superTurbo ? "On" : "Off");
+	snprintf(out, max, "Super Turbo: %s", gMp.config.superTurbo ? "On" : "Off");
 }
 
 static int MpOptToggleSuperTurbo(void* ud, int dir)
