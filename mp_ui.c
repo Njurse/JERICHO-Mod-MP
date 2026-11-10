@@ -2274,6 +2274,7 @@ int MpUiDrawOverlay(void* userdata, void* args)
 	}
 
 	MpDrawNameTags();
+	MpMarkDrawOverlay();	/* fox centre line; no-op when it is not live */
 
 	/* The chat prompt: the line being typed, with a cursor. The ENGINE console
 	 * draws it now, on its own bottom row (jer_console_input), which also keeps

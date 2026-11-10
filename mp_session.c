@@ -26,6 +26,9 @@
 #include "gamesnd.h"	/* CarHasSiren: whether a model has a siren, and its bank/sample */
 #include "sound.h"		/* Start3DSoundVolPitch: the engine's own 3D sound call */
 #include "jer_sound.h"	/* jer_sound_ensure: a voice a module may keep (never starving SFX) */
+#include "jer_carexplode.h"	/* bomb-tag wreck: dent, tumble, visual-only blasts */
+#include "jer_carglow.h"	/* the fox / bomb-car glow shell */
+#include "pres.h"	/* SetTextColour / PrintStringCentred: the fox centre line */
 #include "system.h"	/* CITY_COUNT and LevelNames: the city registry MpCarCityName reads */
 #include "denting.h"	/* CreateDentableCar: the only writer of the drawn vertex dump */
 #include "civ_ai.h"	/* reservedSlots: the array PingInCivCar's free-slot scan reads */
@@ -490,6 +493,11 @@ static int gMpMarkPanelOn;
 static int gMpMarkArrowOn;
 static int gMpMarkMusicOn;
 static int gMpMarkShownCount = -1;	/* the countdown notice last shown: 4 = GET READY, 3..1 */
+static int gMpMarkTickFrame = -1;	/* last bomb-tick frame, or -1 */
+static int gMpHudR = 128, gMpHudG = 128, gMpHudB = 64;	/* eased panel colour */
+static char gMpFoxLine1[64];
+static char gMpFoxLine2[16];
+static int gMpFoxLinesOn;
 
 /* the round-start cluster on THIS machine (MpMarkClusterTick, defined with the
  * other placement code below) */
@@ -710,6 +718,15 @@ static void MpMarkPresentClear(void)
 	gMpMarkShownCount = -1;
 	gMpClusterState = 0;
 	gMpClusterTries = 0;
+	gMpMarkTickFrame = -1;
+	gMpFoxLinesOn = 0;
+	gMpFoxLine1[0] = '\0';
+	gMpFoxLine2[0] = '\0';
+	gMpHudR = 128;
+	gMpHudG = 128;
+	gMpHudB = 64;
+	jer_carexplode_reset(-1);
+	jer_carglow_clear();
 }
 
 /* JERICHO round start: is the local player held still for the 3-2-1? See mp.h. Only
@@ -812,6 +829,101 @@ static void MpMarkNotices(int me, int since)
 	gMpMarkShownPhase = phase;
 }
 
+static int MpHudLerp(int cur, int tgt)
+{
+	int d = tgt - cur;
+	int step = d / 4;
+
+	if (step == 0 && d != 0)
+		step = (d > 0) ? 1 : -1;
+
+	return cur + step;
+}
+
+/* Car Bomb Tag only, while LIVE: a 3D tick from the holder's car. Interval
+ * shrinks as the clock runs down (1 s -> 200 ms approaching 10 s), then
+ * 100 ms at or under 10 s, and every other frame under 5 s. */
+static void MpMarkTickBomb(CAR_DATA* cp, int remMs, int fullMs)
+{
+	int interval, pitch;
+
+	if (cp == NULL || remMs < 0)
+		return;
+
+	if (remMs < 5000)
+		interval = 2;
+	else if (remMs <= 10000)
+		interval = 3;
+	else
+	{
+		int span = fullMs - 10000;
+		int ms;
+
+		if (span < 1)
+			span = 1;
+
+		ms = 200 + (int)(((long)(remMs - 10000) * 800) / span);
+		interval = (ms * 30 + 500) / 1000;
+		if (interval < 3)
+			interval = 3;
+	}
+
+	if (gMpMarkTickFrame >= 0 && (int)gMp.frame - gMpMarkTickFrame < interval)
+		return;
+
+	gMpMarkTickFrame = (int)gMp.frame;
+	/* same pitch curve as mission 23 (mc_snd.c): 4096 - count/750,
+	 * and count is milliseconds * 3 */
+	pitch = 4096 - remMs / 250;
+	if (pitch < 2048)
+		pitch = 2048;
+	if (pitch > 5120)
+		pitch = 5120;
+
+	Start3DSoundVolPitch(-1, jer_carexplode_bank(), jer_carexplode_tick_sample(),
+		cp->hd.where.t[0], cp->hd.where.t[1], cp->hd.where.t[2],
+		-1500, pitch);
+}
+
+static void MpMarkGlowFor(int marked, int myId, int bomb)
+{
+	MP_PLAYER* mp = (marked >= 0) ? MpGetPlayer(marked) : NULL;
+	int on, r, g, b;
+
+	if (mp == NULL || mp->carId < 0 || mp->carId >= MAX_CARS ||
+	    !JerCarSlotDrawable(mp->carId))
+	{
+		jer_carglow_clear();
+		return;
+	}
+
+	if (bomb)
+	{
+		r = 255;
+		g = 0;
+		b = 0;
+	}
+	else
+	{
+		if (mp->id == myId)
+			on = MpModePlayerColour(gMp.gamemode, mp->id, gMp.config.colorOn,
+				gMp.config.colorR, gMp.config.colorG, gMp.config.colorB,
+				&r, &g, &b);
+		else
+			on = MpModePlayerColour(gMp.gamemode, mp->id, mp->colorOn,
+				mp->colorR, mp->colorG, mp->colorB, &r, &g, &b);
+
+		if (!on)
+		{
+			r = 0;
+			g = 255;
+			b = 255;
+		}
+	}
+
+	jer_carglow_set(&car_data[mp->carId], r, g, b);
+}
+
 /* Every machine, once a frame in a match. */
 static void MpMarkPresentTick(void)
 {
@@ -822,8 +934,7 @@ static void MpMarkPresentTick(void)
 
 	if (!MpModeUsesTimer(gMp.gamemode) || !MpMarkHaveState() || MpMarkMode() != gMp.gamemode)
 	{
-		if (gMpMarkPanelOn || gMpMarkArrowOn || gMpMarkMusicOn)
-			MpMarkPresentClear();
+		MpMarkPresentClear();
 		return;
 	}
 
@@ -879,11 +990,43 @@ static void MpMarkPresentTick(void)
 			(ms + 999) / 1000 / 60, (ms + 999) / 1000 % 60);
 	}
 
-	if (marked == myId && phase == MP_MARK_PHASE_LIVE)
-		jer_hud_panel(MP_MARK_PANEL_SLOT, JER_HUD_ANCHOR_TOP_CENTRE, text, 255, 140, 40);
-	else
-		jer_hud_panel(MP_MARK_PANEL_SLOT, JER_HUD_ANCHOR_TOP_CENTRE, text, 235, 235, 235);
-	gMpMarkPanelOn = 1;
+	/* own clock, top-right: cream while it is running, mid grey if this
+	 * viewer is a frozen hound, red and flashing while they hold the bomb */
+	{
+		int bombKind = (MpModeTimerKind(gMp.gamemode) == MP_MODE_TIMER_SHARED);
+		int live = (phase == MP_MARK_PHASE_LIVE);
+		int tr, tg, tb, flashOff = 0;
+
+		if (bombKind && live && marked == myId)
+		{
+			int rem = MpMarkClockMs(-1, since);
+			int period = (rem < 10000) ? 2 : 4;	/* 8 Hz under 10 s, else 4 Hz */
+
+			tr = 128;
+			tg = 0;
+			tb = 0;
+			flashOff = ((CameraCnt / period) & 1) != 0;
+		}
+		else if (!bombKind && live && myId >= 0 && marked != myId)
+		{
+			tr = 128;
+			tg = 128;
+			tb = 128;	/* frozen hound */
+		}
+		else
+		{
+			tr = 128;
+			tg = 128;
+			tb = 64;	/* cream: running fox, shared timer, lobby */
+		}
+
+		gMpHudR = MpHudLerp(gMpHudR, tr);
+		gMpHudG = MpHudLerp(gMpHudG, tg);
+		gMpHudB = MpHudLerp(gMpHudB, tb);
+		jer_hud_panel(MP_MARK_PANEL_SLOT, JER_HUD_ANCHOR_TOP_RIGHT,
+			flashOff ? "" : text, gMpHudR, gMpHudG, gMpHudB);
+		gMpMarkPanelOn = 1;
+	}
 
 	/* the arrow over the marked car: never our own (we have the notice and the
 	 * clock), only while a round is live */
@@ -913,6 +1056,76 @@ static void MpMarkPresentTick(void)
 		jer_music_force(JER_MUSIC_AUTO);
 		gMpMarkMusicOn = 0;
 	}
+
+	/* presentation only: tick, wreck, glow, fox centre line. No wire change. */
+	{
+		int bombKind = (MpModeTimerKind(gMp.gamemode) == MP_MODE_TIMER_SHARED);
+		int live = (phase == MP_MARK_PHASE_LIVE);
+		MP_PLAYER* markedPl = (marked >= 0) ? MpGetPlayer(marked) : NULL;
+		CAR_DATA* markedCar = (markedPl != NULL && markedPl->carId >= 0 &&
+			markedPl->carId < MAX_CARS) ? &car_data[markedPl->carId] : NULL;
+
+		if (bombKind && live && markedCar != NULL)
+		{
+			int rem = MpMarkClockMs(-1, since);
+			int full = gMp.modeMinutes * 60 * 1000;
+
+			if (full < 15000)
+				full = 15000;
+
+			MpMarkTickBomb(markedCar, rem, full);
+		}
+		else
+			gMpMarkTickFrame = -1;
+
+		if (bombKind && markedCar != NULL)
+		{
+			if (phase == MP_MARK_PHASE_ENDED)
+				jer_carexplode(markedCar);
+
+			jer_carexplode_hold(markedCar);
+		}
+
+		if (live && marked >= 0)
+			MpMarkGlowFor(marked, myId, bombKind);
+		else
+			jer_carglow_clear();
+
+		gMpFoxLinesOn = 0;
+		gMpFoxLine1[0] = '\0';
+		gMpFoxLine2[0] = '\0';
+
+		if (!bombKind && live && marked >= 0)
+		{
+			gMpFoxLinesOn = 1;
+
+			if (marked == myId)
+				snprintf(gMpFoxLine1, sizeof(gMpFoxLine1), "You're the fox!");
+			else
+			{
+				int foxMs = MpMarkClockMs(marked, since);
+
+				snprintf(gMpFoxLine1, sizeof(gMpFoxLine1), "%s is the fox!",
+					MpMarkName(marked));
+				snprintf(gMpFoxLine2, sizeof(gMpFoxLine2), "%d:%02d",
+					(foxMs + 999) / 1000 / 60, (foxMs + 999) / 1000 % 60);
+			}
+		}
+	}
+}
+
+/* The persistent fox centre line. Drawn from DRAW_OVERLAY; jer_notify cannot
+ * hold two lines or stay up for the whole live phase. Cream matches notify. */
+void MpMarkDrawOverlay(void)
+{
+	if (!gMpFoxLinesOn || gMpFoxLine1[0] == '\0')
+		return;
+
+	SetTextColour(128, 128, 64);
+	PrintStringCentred(gMpFoxLine1, 96);
+
+	if (gMpFoxLine2[0] != '\0')
+		PrintStringCentred(gMpFoxLine2, 112);
 }
 
 void MpSessionReset(void)

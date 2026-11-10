@@ -9,7 +9,11 @@ JERICHO 0.13.11+: `jer_arrow_on_car` and `jer_music_force` (core PR #94). mp mod
 0.21.0 adds two countdowns to both timer modes (still protocol 23): a pre-game
 lobby count, 5, 4, 3, 2, 1, once after each map load; then, before every round,
 the round start: wait for every car, a start cluster on a road, then GET READY,
-3, 2, 1, GO. Everything
+3, 2, 1, GO. 0.22.0 is presentation only (still protocol 23): a 3D bomb tick
+that speeds up as the clock runs down, a wreck on the bomb car when the clock
+ends, a cream/grey/flashing-red clock at the top right, a persistent "You're
+the fox!" centre line, and a glowing body shell on the fox (player colour, or
+cyan) and on the bomb car (always red). Everything
 below "Not yet" is design, not code.
 
 ## The model
@@ -279,10 +283,17 @@ contacts, and the host originates every state.
 - The pre-game lobby: `5`, `4`, `3`, `2`, `1` (priority 4, 1 s each).
 - The countdown: `GET READY`, `3`, `2`, `1` (priority 4, 1 s), then the GO line
   above (priority 4, 3 s). Each count is shown once and only ever downward.
-- The clock as a `jer_hud_panel` at the top centre: `PRE-GAME n`,
+- The clock as a `jer_hud_panel` at the top right: `PRE-GAME n`,
   `WAITING FOR PLAYERS`, `WAITING FOR CARS r/n`,
-  `FOX m:ss` / `HOUND m:ss`, or `BOMB m:ss` / `TIMER m:ss`. It is orange while you
-  are marked. A client runs the clock on between snapshots, for at most 3 s.
+  `FOX m:ss` / `HOUND m:ss`, or `BOMB m:ss` / `TIMER m:ss`. It fades to cream
+  `(128, 128, 64)` while the viewer's clock is running, and to mid grey
+  `(128, 128, 128)` while they are a frozen hound. While they hold the bomb the
+  text fades to red and flashes at 4 Hz, or 8 Hz under 10 seconds. A client
+  runs the clock on between snapshots, for at most 3 s.
+- While Fox N Hounds is live, a centre line: `You're the fox!` if you are
+  marked, or `<name> is the fox!` with the fox's clock on the next line
+  (`SetTextColour` + `PrintStringCentred`, cream). The GO / countdown /
+  match-end notices stay on `jer_notify`.
 - `jer_arrow_on_car` over the marked car while live. The arrow is never drawn
   over your own car. It is cleared at the end, when the marked player leaves, and
   on session reset.
@@ -290,6 +301,18 @@ contacts, and the host originates every state.
   `JER_MUSIC_AUTO` otherwise. Take a Ride never forces music. The engine also
   releases the force and the arrows when it leaves a level, and MP asserts them
   again every frame.
+- Car Bomb Tag, while live: a 3D tick from the holder's car (bank 54 sample 0
+  when the lump is loaded into SFX, otherwise an always-loaded SFX fallback).
+  The interval shrinks as the clock counts down, becomes a rapid beep at or
+  under 10 seconds, and a near-solid tone under 5 seconds.
+- When the bomb clock ends: `jer_carexplode` on the bomb car — a wrecked dent,
+  a tumble, locked controls, three visual-only big bangs (no blast damage),
+  and bank 54 sample 1 (or SFX 6). Fired once; a dedicated server never runs
+  this C. The files have no link to Caine's Crossfire.
+- A glowing body shell (`jer_carglow`) on the marked car while live: a slightly
+  scaled low-LOD copy, drawn semi-transparent with the explosion smoke texture
+  and pulsed. The fox uses the player's colour if they have one set, otherwise
+  cyan; the bomb car is always red.
 
 ## Choosing a mode
 

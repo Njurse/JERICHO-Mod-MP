@@ -22,6 +22,8 @@
 #include "jer_colour.h"		/* a player's suit colour is a canonical JER_COLOUR */
 #include "jer_ped_palette.h"	/* a player's own Tanner in their own colour */
 #include "jer_npc.h"		/* JerNpc: the stand-in we drew for a remote player */
+#include "jer_carexplode.h"	/* request bank 54 at entry; wreck is driven from the session */
+#include "jer_carglow.h"	/* JER_EVENT_DRAW_WORLD: the fox / bomb-car glow */
 
 /* The chat key needs PsyX's debug-key hook, but NOT its header: PsyX_public.h and
  * SDL_scancode.h both pull in math/SDL defines that collide with the game's in
@@ -3694,12 +3696,12 @@ JER_MODULE_ENTRY(jer_module_mp_entry)(JERICHO_CONTEXT* ctx)
 	 * to be unattended needs a human to click OK. Same dump, no dialog. */
 	MpSuppressCrashDialogs();
 
-	/* The version is mod.toml's (0.21.0: the timer modes' round start on proto 23;
-	 * 0.20.0 came with MP_PROTO_VERSION 23). The core
-	 * lets the manifest win over this argument (jerCtxRegisterModule), so this is
-	 * only the fallback; it is kept equal to mod.toml rather than a stale "0.1.0" so
-	 * the two never disagree in a log. Bump both together. */
-	ctx->jer_register_module(ctx, "mp", "Multiplayer", "0.21.0", "JERICHO",
+	/* The version is mod.toml's (0.22.0: bomb tick, wreck, HUD and glow on proto 23;
+	 * 0.21.0 was the timer modes' round start; 0.20.0 came with MP_PROTO_VERSION 23).
+	 * The core lets the manifest win over this argument (jerCtxRegisterModule), so
+	 * this is only the fallback; it is kept equal to mod.toml rather than a stale
+	 * "0.1.0" so the two never disagree in a log. Bump both together. */
+	ctx->jer_register_module(ctx, "mp", "Multiplayer", "0.22.0", "JERICHO",
 		"LAN multiplayer: host/join, UDP discovery, JERICHO addon net bridge, "
 		"owner-authoritative car sync (each machine drives its own car and "
 		"broadcasts its state; peers adopt it verbatim), and in-match chat.",
@@ -3723,11 +3725,16 @@ JER_MODULE_ENTRY(jer_module_mp_entry)(JERICHO_CONTEXT* ctx)
 
 	MpUiInit();		/* register the native frontend menus */
 
+	/* Mission 23's tick and bang, appended to SFX before the car-import memtop.
+	 * Asked here so any later timer-mode session has the samples. */
+	jer_carexplode_request_banks();
+
 	ctx->jer_register_hook(ctx, JER_EVENT_BOOT, MpOnBoot, NULL, 0);
 	ctx->jer_register_hook(ctx, JER_EVENT_SHUTDOWN, MpOnShutdown, NULL, 0);
 	ctx->jer_register_hook(ctx, JER_EVENT_FRAME, MpOnFrame, NULL, 0);
 	ctx->jer_register_hook(ctx, JER_EVENT_DRAW_OVERLAY, MpUiDrawOverlay, NULL, 0);
 	ctx->jer_register_hook(ctx, JER_EVENT_DRAW_OVERLAY, MpOnDrawOverlay, NULL, 10);
+	ctx->jer_register_hook(ctx, JER_EVENT_DRAW_WORLD, jer_carglow_on_draw_world, NULL, 0);
 	ctx->jer_register_hook(ctx, JER_EVENT_CAR_DRAW_COLOR, MpOnCarDrawColor, NULL, 0);
 	/* Local Super Turbo. Runs for every car ProcessCarPad steps; the handler
 	 * itself ignores anything that is not this machine's seat. */

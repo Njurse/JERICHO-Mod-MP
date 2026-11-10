@@ -293,6 +293,10 @@ int MpLocalCarChosen(void);
  * on-foot pad are held (mp.c MpOnNetInput / MpOnPedInput) and released on GO. Always
  * 0 in Take a Ride and outside a match. */
 int MpRoundStartHoldsCar(void);
+
+/* Persistent "You're the fox!" / "<name> is the fox!" centre line, drawn
+ * from DRAW_OVERLAY while Fox N Hounds is live. */
+void MpMarkDrawOverlay(void);
 MP_PLAYER* MpAddPlayer(int id, const char* name, int isLocal);
 void       MpRemovePlayer(int id);
 void       MpCleanupLeaverWorld(MP_PLAYER* p);	/* a leaver's stand-in ped + abandoned car */
