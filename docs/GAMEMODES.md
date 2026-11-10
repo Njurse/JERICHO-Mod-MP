@@ -13,7 +13,11 @@ the round start: wait for every car, a start cluster on a road, then GET READY,
 that speeds up as the clock runs down, a wreck on the bomb car when the clock
 ends, a cream/grey/flashing-red clock at the top right, a persistent "You're
 the fox!" centre line, and a glowing body shell on the fox (player colour, or
-cyan) and on the bomb car (always red). Everything
+cyan) and on the bomb car (always red). 0.22.1 (still protocol 23) folds the
+pre-game wait and countdown into the framework: a mode opts in with four fields
+on its `MP_MODE_DESC` row; Fox N Hounds and Car Bomb Tag opt in, Take a Ride
+stays off; waiting-for-players and the old pre-game lobby are one WAITING
+stage, then one COUNTDOWN; a join before GO is not a mid-round join. Everything
 below "Not yet" is design, not code.
 
 ## The model
@@ -30,7 +34,10 @@ A game mode is a row in one table, `kModes[]` in `mp_mode.c`. The row is an
 | `teamColours` | name tag, suit and chat ink forced to the team colour | 0 |
 | `respawn`, `respawnDelayFrames` | `MP_MODE_RESPAWN_INSTANT` / `_DELAY` / `_NONE` | instant |
 | `lateJoin` | `MP_MODE_LATEJOIN_LIVE` / `_SPECTATE` | live |
-| `countdown` | a 3-2-1 before each round (and the 5-4-3-2-1 pre-game lobby once per map) | 0 |
+| `waitMinPlayers` | sit in WAITING until this many players are present (0 = off) | 0 |
+| `waitForCars` | 1 = also wait until every present player has picked a car | 0 |
+| `firstCountdownSec` | once per map load, after the wait, an N..1 count then GO (0 = skip) | 0 |
+| `roundCountdownSec` | later rounds: a 1 s GET READY then an N..1 count then GO (0 = skip) | 0 |
 | `carChangeLocked` | no car change while a round runs | 0 |
 | `carPool` | car-pool filter id, `MP_MODE_CARPOOL_*` | `ALL` |
 | `spawn` | spawn rule, `MP_MODE_SPAWN_SESSION` / `_CLUSTER` (seated as SESSION, then a start cluster each round) | `SESSION` |
@@ -40,15 +47,23 @@ A game mode is a row in one table, `kModes[]` in `mp_mode.c`. The row is an
 
 The rows today:
 
-| id | name | timer | music | countdown | spawn |
+| id | name | timer | music | wait / first / later | spawn |
 | --- | --- | --- | --- | --- | --- |
-| 0 | `TAKE A RIDE` | none | auto | 0 | `SESSION` |
-| 1 | `FOX N HOUNDS` | personal | pursuit | 1 | `CLUSTER` |
-| 2 | `CAR BOMB TAG` | shared | pursuit | 1 | `CLUSTER` |
+| 0 | `TAKE A RIDE` | none | auto | off (`0, 0, 0, 0`) | `SESSION` |
+| 1 | `FOX N HOUNDS` | personal | pursuit | `2, 1, 5, 3` | `CLUSTER` |
+| 2 | `CAR BOMB TAG` | shared | pursuit | `2, 1, 5, 3` | `CLUSTER` |
 
-All three are selectable. Apart from `timer`, `music`, `countdown` and `spawn`,
-modes 1 and 2 take every Take a Ride answer: instant respawn, live late join, no
-teams, no car pool.
+All three are selectable. Apart from `timer`, `music`, the four pre-game fields
+and `spawn`, modes 1 and 2 take every Take a Ride answer: instant respawn, live
+late join, no teams, no car pool.
+
+To give a new mode the same wait-and-countdown, copy those four numbers onto its
+row in `kModes[]` (`mp_mode.c`). Leave them `0, 0, 0, 0` for Take-a-Ride
+behaviour (no wait, no count). The accessors are `MpModeWaitMinPlayers`,
+`MpModeWaitForCars`, `MpModeFirstCountdownSec`, `MpModeRoundCountdownSec`,
+`MpModeHasPreGame` and `MpModeWantsCountdown` (the last is 1 when either
+countdown field is set). The referee (`mp_mark.c`, and `dedi/markref.py` on a
+dedicated server) reads them; nothing else has to be wired.
 
 The session never reads a field. It asks a question at a fixed **decision point**
 and passes `gMp.gamemode`:
@@ -61,7 +76,7 @@ and passes `gMp.gamemode`:
 | `MpNameTagColour` (mp_ui.c), `MpOnPedDraw` (mp.c), chat ink (`MpSendChat`, `MpHandleChat`) | `MpModePlayerColour` | the player's own colour and on/off |
 | `MpSpawnLateJoiners`, `MpOnNetSpawn` | `MpModeLateJoinPolicy`, `MpModeSpawnRule` | live, the session's own placement (`CLUSTER` seats the same way) |
 | `MpMarkPresentTick` -> `MpMarkClusterTick` | `MpModeSpawnRule` == `CLUSTER` | never reached (no `JPMK` in mode 0) |
-| referee gate (`mp_mark.c`, `markref.py`), `MpRoundStartHoldsCar` | `MpModeWantsCountdown` | 0: no wait for cars, no countdown, no pad hold |
+| referee gate (`mp_mark.c`, `markref.py`), `MpRoundStartHoldsCar` | `MpModeHasPreGame` / `MpModeWantsCountdown` and the four wait/countdown fields | 0: no wait, no countdown, no pad hold |
 
 Rules every mode keeps:
 
@@ -150,32 +165,34 @@ reaches 0:00 loses, and everyone else wins.
 
 - The time is 1 to 5 minutes and defaults to 3 (`MP_MARK_MINUTES_*`). Every clock
   starts full.
-- A round needs two present players **and every present player must have picked
-  a car** (`MpPlayerCarReady` on a listen host, a received `JPCC` on a dedicated
-  server). Until then the round stays `WAITING`: round 0 idle, nobody marked, no
-  clock running. The panel says `WAITING FOR CARS r/n` when two are in but
-  someone is still in the car select.
-- **The pre-game lobby** (once per map load). A map load arms it: on a listen
-  host the match START (`MpHostMarkBegin` -> `MpMarkReset`); on a dedicated
-  server the boot, and the present set emptying -- a map vote kicks everyone to
-  rejoin on the new map, so the first player back gets it again. Once at least
-  one player is present the referee goes `LOBBY` for 5 s (`MP_MARK_LOBBY_MS`):
-  `5`, `4`, `3`, `2`, `1` (golden `jer_notify`, priority 4, 1 s each), the panel
-  says `PRE-GAME n`, no clock, no mark, no tag, no arrow, no forced music, and
-  the pads are **not** held (players can drive while it counts). If everyone
-  leaves it holds at 5 s. When it ends the round-start gate below is tried at
-  once. Later rounds on the same map (after the intermission) skip it.
-- **The round start.** When the gate opens the referee goes `COUNTDOWN` for 4 s
-  (`MP_MARK_COUNTDOWN_MS`): nobody is marked, every clock shows its full time and
-  does not tick, no tag is accepted, no arrow, no forced music. Every machine puts
-  its own car in the start cluster (below) during the first second (`GET READY`),
-  then shows `3`, `2`, `1` (golden `jer_notify`, priority 4, 1 s each). The local
-  pad and on-foot pad are held for the whole countdown (`MpRoundStartHoldsCar`,
-  `mp.c` `MpOnNetInput` / `MpOnPedInput`). If a player leaves (fewer than two) or a
-  joiner without a car arrives, it drops back to `WAITING` and starts again once
-  everyone has a car. **GO** is `LIVE`: a random marked player, picked by the
-  referee only, the clocks start, the 2 s tag cooldown starts, and the notice is
-  `GO! <name> is now the fox!` / `GO! <name> has the bomb! Stay away!`.
+- A round needs the mode's wait: at least `waitMinPlayers` present (2 for Fox
+  and Bomb) **and**, if `waitForCars` is set, every present player must have
+  picked a car (`MpPlayerCarReady` on a listen host, a received `JPCC` on a
+  dedicated server). Until then the referee stays `WAITING`: round 0 idle, nobody
+  marked, no clock running. The panel says `WAITING FOR PLAYERS`, or
+  `WAITING FOR CARS r/n` when enough people are in but someone is still in the
+  car select.
+- **One countdown, after the wait.** A map load arms the first-load count: on a
+  listen host the match START (`MpHostMarkBegin` -> `MpMarkReset`); on a
+  dedicated server the boot, and the present set emptying -- a map vote kicks
+  everyone to rejoin on the new map, so the next startable group gets the
+  first-load count again. When the wait is satisfied the referee goes
+  `COUNTDOWN` once. On a fresh map that is `firstCountdownSec` (5 for Fox and
+  Bomb) as `5`, `4`, `3`, `2`, `1` (golden `jer_notify`, priority 4, 1 s each);
+  the panel says `PRE-GAME n`; the start cluster is placed from the beginning of
+  this count; the pads are held. Later rounds on the same map skip the first-load
+  count and use a 1 s `GET READY` (the cluster) plus `roundCountdownSec` (3) as
+  `3`, `2`, `1`. Nobody is marked, clocks show their full time and do not tick,
+  no tag, no arrow, no forced music. The first-load flag is only cleared at GO,
+  so a countdown aborted by a joiner without a car is retried as the same kind
+  (first-load if GO has not happened yet). `MP_MARK_PHASE_LOBBY` (4) is retired
+  and unused; proto 23 keeps the value. **GO** is `LIVE`: a random marked
+  player, picked by the referee only, the clocks start, the 2 s tag cooldown
+  starts, and the notice is `GO! <name> is now the fox!` / `GO! <name> has the
+  bomb! Stay away!`.
+- A joiner who arrives during `WAITING` or `COUNTDOWN` (or `ENDED`, before the
+  next GO) is not a mid-round join: they go through car selection and are
+  counted in the wait. Only a join after GO uses mid-round placement.
 - **The start cluster** (`MpMarkClusterTick`, `MP_MODE_SPAWN_CLUSTER`). Cars are
   owner-authoritative, so each machine places only its own car; a dedicated
   server has no world and places nothing. The anchor is the lowest present id
@@ -202,10 +219,11 @@ reaches 0:00 loses, and everyone else wins.
   player leaves and two or more remain, a new marked player is picked at random.
 - A late joiner is a hound with a full, frozen clock (Fox N Hounds), or a player
   without the bomb (Car Bomb Tag).
-- `ENDED` lasts 10 s (`MP_MARK_INTERMISSION_MS`). Then the same gate, with no
-  pre-game lobby (the map is the same) unless everyone left meanwhile: `COUNTDOWN`
-  (a new start cluster, 3-2-1, GO with fresh clocks and a new random marked
-  player) when two or more players all have cars, else `WAITING`. The round state follows:
+- `ENDED` lasts 10 s (`MP_MARK_INTERMISSION_MS`). Then the same wait-then-countdown
+  gate, with the first-load count only if everyone left meanwhile (a new map).
+  Otherwise `COUNTDOWN` is the per-round count (a new start cluster, 3-2-1, GO
+  with fresh clocks and a new random marked player) when the wait is satisfied,
+  else `WAITING`. The round state follows:
   `MpRoundBegin` / `MpRoundEnd` (or `RoundState.begin` / `.end`), so `JPRD`
   counts the rounds.
 - None of the stock session rules change. A game over is refused, the respawn is
@@ -219,14 +237,14 @@ reaches 0:00 loses, and everyone else wins.
 | `MP_MARK` (12 bytes) | |
 | --- | --- |
 | `gamemode` u8 | the mode being refereed |
-| `phase` u8 | `MP_MARK_PHASE_WAITING` 0, `_LIVE` 1, `_ENDED` 2, `_COUNTDOWN` 3, `_LOBBY` 4 |
+| `phase` u8 | `MP_MARK_PHASE_WAITING` 0, `_LIVE` 1, `_ENDED` 2, `_COUNTDOWN` 3, `_LOBBY` 4 (retired, unused) |
 | `marked` u8 | the fox / bomb holder, `MP_MARK_NONE` (0xFF) = nobody |
 | `winner` u8 | Fox N Hounds' winner, else `MP_MARK_NONE` |
 | `minutes` u8 | the round's time |
 | `count` u8 | rows that follow |
 | `seq` u16 | +1 per change of marked player; the notices key on it |
 | `sharedDs` u16 | Car Bomb Tag's clock, deciseconds (rounded up) |
-| `countdownDs` u16 | `COUNTDOWN`: time to GO; `LOBBY`: time left in the pre-game count; deciseconds (rounded up); else 0. Was `reserved` |
+| `countdownDs` u16 | `COUNTDOWN`: time to GO, deciseconds (rounded up); else 0. Was `reserved` |
 
 | `MP_MARK_ENTRY` (4 bytes) | |
 | --- | --- |

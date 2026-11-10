@@ -5,9 +5,11 @@
  * mp_mode.h -- the game-mode registry and the questions the session asks it.
  *
  * A GAME MODE is a row in a table (mp_mode.c): a descriptor that says what the mode
- * wants -- teams, how a death is answered, what a late joiner gets, whether a round
- * starts with a countdown, whether the car can change mid-round, which cars may be
- * offered, whether the lobby may cycle maps. The session never reads a descriptor
+ * wants -- teams, how a death is answered, what a late joiner gets, whether the
+ * pre-game wait-and-countdown is on (waitMinPlayers, waitForCars,
+ * firstCountdownSec, roundCountdownSec; all zero = off), whether the car can
+ * change mid-round, which cars may be offered, whether the lobby may cycle maps.
+ * The session never reads a descriptor
  * field directly: it asks one of the MpMode* questions below at a fixed DECISION
  * POINT, and every answer for mode 0 (Take a Ride) is what the session already did
  * before modes existed. That is the contract this file exists to keep.
@@ -109,7 +111,31 @@ typedef struct MP_MODE_DESC
 	int respawn;		/* MP_MODE_RESPAWN_* */
 	int respawnDelayFrames;	/* MP_MODE_RESPAWN_DELAY only */
 	int lateJoin;		/* MP_MODE_LATEJOIN_* */
-	int countdown;		/* 1 = a 3-2-1 before each round */
+
+	/* Pre-game wait and countdown. All zero = off (Take a Ride): the match is
+	 * live as soon as the session starts, no wait, no 3-2-1.
+	 *
+	 * waitMinPlayers:      sit in WAITING until this many players are present
+	 *                      (0 = do not wait on a head-count).
+	 * waitForCars:         1 = also wait until every present player has picked
+	 *                      a car. A joiner without a car holds the gate, and a
+	 *                      countdown already running goes back to WAITING.
+	 * firstCountdownSec:   once per map load, after the wait, an N..1 count
+	 *                      then GO (0 = skip). Later rounds on the same map
+	 *                      never use this.
+	 * roundCountdownSec:   before every later round, a one-second GET READY
+	 *                      (the start cluster) then an N..1 count then GO
+	 *                      (0 = go LIVE the moment the wait ends, when no
+	 *                      first-load count applies).
+	 *
+	 * Fox N Hounds and Car Bomb Tag opt in (2 players, wait for cars, 5 s on
+	 * a fresh map, 3 s each later round). Take a Ride stays off. A new mode
+	 * copies those four numbers, or leaves them 0. */
+	int waitMinPlayers;
+	int waitForCars;
+	int firstCountdownSec;
+	int roundCountdownSec;
+
 	int carChangeLocked;	/* 1 = no car change once a round is running */
 	int carPool;		/* MP_MODE_CARPOOL_* */
 	int spawn;		/* MP_MODE_SPAWN_* */
@@ -132,7 +158,12 @@ const char*         MpModeDisplayName(int id);		/* "-" for an unknown id */
 int         MpModeRespawnPolicy(int mode);		/* MP_MODE_RESPAWN_* */
 int         MpModeLateJoinPolicy(int mode);		/* MP_MODE_LATEJOIN_* */
 int         MpModeSpawnRule(int mode);			/* MP_MODE_SPAWN_* */
-int         MpModeWantsCountdown(int mode);
+int         MpModeWantsCountdown(int mode);	/* 1 = a first-load or per-round count is set */
+int         MpModeWaitMinPlayers(int mode);
+int         MpModeWaitForCars(int mode);
+int         MpModeFirstCountdownSec(int mode);
+int         MpModeRoundCountdownSec(int mode);
+int         MpModeHasPreGame(int mode);		/* 1 = any wait or countdown is set */
 int         MpModeAllowsMapCycle(int mode);
 int         MpModeTimerKind(int mode);			/* MP_MODE_TIMER_* */
 int         MpModeUsesTimer(int mode);			/* 1 = marked player + clock (JPMK) */

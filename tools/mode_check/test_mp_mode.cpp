@@ -43,7 +43,10 @@ static void CheckTakeARideDescriptor(void)
 	CHECK(d->respawn == MP_MODE_RESPAWN_INSTANT);
 	CHECK(d->respawnDelayFrames == 0);
 	CHECK(d->lateJoin == MP_MODE_LATEJOIN_LIVE);
-	CHECK(d->countdown == 0);
+	CHECK(d->waitMinPlayers == 0 && d->waitForCars == 0);
+	CHECK(d->firstCountdownSec == 0 && d->roundCountdownSec == 0);
+	CHECK(MpModeHasPreGame(MP_GAMEMODE_TAKEADRIDE) == 0);
+	CHECK(MpModeWaitMinPlayers(MP_GAMEMODE_TAKEADRIDE) == 0);
 	CHECK(d->carChangeLocked == 0);
 	CHECK(d->carPool == MP_MODE_CARPOOL_ALL);
 	CHECK(d->spawn == MP_MODE_SPAWN_SESSION);
@@ -83,9 +86,13 @@ static void CheckMarkModes(void)
 		CHECK(d->teamCount == 0 && d->teamColours == 0);
 		CHECK(d->respawn == MP_MODE_RESPAWN_INSTANT);	/* instant respawn, as Take a Ride */
 		CHECK(d->lateJoin == MP_MODE_LATEJOIN_LIVE);
-		/* the round start: wait for every car, cluster on a road, 3-2-1, GO */
+		/* the round start: wait for 2 and every car, 5-4-3-2-1 first map, 3-2-1 later, GO */
 		CHECK(d->spawn == MP_MODE_SPAWN_CLUSTER && MpModeSpawnRule(kRows[i].id) == MP_MODE_SPAWN_CLUSTER);
-		CHECK(d->countdown == 1 && MpModeWantsCountdown(kRows[i].id) == 1);
+		CHECK(d->waitMinPlayers == 2 && MpModeWaitMinPlayers(kRows[i].id) == 2);
+		CHECK(d->waitForCars == 1 && MpModeWaitForCars(kRows[i].id) == 1);
+		CHECK(d->firstCountdownSec == 5 && MpModeFirstCountdownSec(kRows[i].id) == 5);
+		CHECK(d->roundCountdownSec == 3 && MpModeRoundCountdownSec(kRows[i].id) == 3);
+		CHECK(MpModeHasPreGame(kRows[i].id) == 1 && MpModeWantsCountdown(kRows[i].id) == 1);
 		CHECK(d->carChangeLocked == 0 && d->mapCycle == 0);
 		CHECK(MpModeCarChangeRefusal(kRows[i].id, 1) == NULL);
 	}
@@ -251,7 +258,7 @@ int main(void)
 
 		for (i = 0; i < MpModeCount(); i++)
 			printf("MODEROW %d %d %d %d\n", MpModeAt(i)->id, MpModeAt(i)->timer, MpModeAt(i)->music,
-				MpModeAt(i)->countdown);
+				MpModeWantsCountdown(MpModeAt(i)->id));
 	}
 
 	printf("mp_mode: %d check(s), %d failure(s)\n", gChecks, gFails);

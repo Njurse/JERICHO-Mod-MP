@@ -464,17 +464,15 @@ static void MpClientRoundCheck(void)
  * arrow over the marked car (never over our own); and the mode's music while live.
  * Take a Ride never reaches any of it: MpModeUsesTimer is 0 for mode 0.
  *
- * THE PRE-GAME LOBBY (once per map load, both timer modes): MpMarkReset at START (and
- * a referee whose players all left) runs LOBBY first: 5, 4, 3, 2, 1, free driving,
- * nothing ticks. Rounds after an intermission on the same map skip it.
- *
- * THE ROUND START (MpModeWantsCountdown, both timer modes): the referee waits until
- * every present player has picked a car (MpPlayerCarReady -> MpMarkReady), then
- * goes COUNTDOWN. Every machine -- listen host, its clients, a dedicated server's
- * clients alike -- then puts ITS OWN car in the start cluster (MpMarkClusterTick:
- * cars are owner-authoritative, so nobody else can place them) and shows GET READY,
- * 3, 2, 1 with the driving pad held (MpRoundStartHoldsCar); GO is the referee's
- * LIVE. No clock, tag, arrow or forced music before GO. */
+ * PRE-GAME (modes that opt in: waitMinPlayers, waitForCars, firstCountdownSec,
+ * roundCountdownSec in mp_mode.h): one WAITING stage until the wait is satisfied,
+ * then one COUNTDOWN. A fresh map uses firstCountdownSec as N..1 then GO (the
+ * start cluster is placed from the beginning of that count). Later rounds on the
+ * same map use GET READY (the cluster) plus roundCountdownSec as N..1 then GO.
+ * A joiner who arrives before GO is not a mid-round (live) join: they pick a car
+ * and are counted in the wait. Only a join after GO uses mid-round placement.
+ * Take a Ride leaves the four fields at 0 and never waits. No clock, tag, arrow
+ * or forced music before GO. */
 #define MP_MARK_PANEL_SLOT	5	/* jer_hud_panel slot for the clock */
 #define MP_MARK_ARROW_SLOT	0	/* jer_arrow slot for the marked car */
 #define MP_MARK_RELAY_RADIUS	1800	/* host view of a reported contact: twice MP_HIT_RADIUS
@@ -484,7 +482,9 @@ static unsigned gMpMarkRng;		/* host: the referee's random picks */
 static unsigned gMpMarkSentRev;		/* host: the revision last broadcast */
 static unsigned gMpMarkMsAcc;		/* host: 30 Hz frames -> ms, without drift */
 static unsigned gMpMarkApplyFrame;	/* client: the frame the last snapshot landed */
+static int gMpSawPreLive;		/* 1 = we already saw a pre-GO phase this join */
 static int gMpMarkRefusedLogged;
+static void MpSessionAdoptLiveJoin(void);
 
 /* what this machine last PRESENTED, so a notice fires once per change */
 static int gMpMarkShownSeq = -1;
@@ -594,16 +594,14 @@ static void MpHostMarkTick(void)
 
 	ev = MpMarkTick(ms, MpMarkRand());
 
-	if ((ev & MP_MARK_EV_LOBBY) && gMpCtx != NULL)
-		gMpCtx->jer_log(gMpCtx, "[mp] mark: map loaded - pre-game 5-4-3-2-1 (%d ms) before the first round\n",
-			MP_MARK_LOBBY_MS);
-
 	if ((ev & MP_MARK_EV_COUNTDOWN) && gMpCtx != NULL)
 	{
 		int ready = 0, n = MpMarkCountWaiting(&ready);
 
-		gMpCtx->jer_log(gMpCtx, "[mp] mark: all %d/%d cars in - countdown %d ms to round %d\n",
-			ready, n, MP_MARK_COUNTDOWN_MS, MpRoundNumber() + 1);
+		gMpCtx->jer_log(gMpCtx, "[mp] mark: wait satisfied (%d/%d cars) - %s countdown %d ms to round %d\n",
+			ready, n,
+			MpMarkCountdownIsFirst() ? "first-load" : "round",
+			MpMarkCountdownTotalMs(), MpRoundNumber() + 1);
 	}
 
 	if (ev & MP_MARK_EV_BEGIN)
@@ -626,8 +624,8 @@ static void MpHostMarkTick(void)
 	}
 
 	if (MpMarkRevision() != gMpMarkSentRev ||
-		(gMp.frame % ((MpMarkPhase() == MP_MARK_PHASE_LIVE || MpMarkPhase() == MP_MARK_PHASE_COUNTDOWN ||
-			MpMarkPhase() == MP_MARK_PHASE_LOBBY) ? 30 : 120)) == 0)
+		(gMp.frame % ((MpMarkPhase() == MP_MARK_PHASE_LIVE || MpMarkPhase() == MP_MARK_PHASE_COUNTDOWN)
+			? 30 : 120)) == 0)
 		MpHostSendMark(-1);
 }
 
@@ -691,6 +689,43 @@ static void MpHandleMark(int connIndex, const unsigned char* p, int len)
 	}
 
 	gMpMarkApplyFrame = gMp.frame;
+	MpSessionAdoptLiveJoin();
+}
+
+/* A join during WAITING / COUNTDOWN / ENDED is not mid-round: the joiner picks a
+ * car and is counted in the wait. Only a first snapshot that is already LIVE
+ * (and any later one, if we never saw a pre-GO phase) arms mid-round placement.
+ * Take a Ride has no pre-game and keeps the welcome-time liveJoin. */
+static void MpSessionAdoptLiveJoin(void)
+{
+	if (!MpModeHasPreGame(gMp.gamemode))
+		return;
+
+	if (!MpMarkHaveState())
+	{
+		gMp.liveJoin = 0;
+		return;
+	}
+
+	if (MpMarkPhase() == MP_MARK_PHASE_LIVE)
+	{
+		if (!gMpSawPreLive && !gMp.liveJoin)
+		{
+			gMp.liveJoin = 1;
+			if (!gMp.localPlaced)
+			{
+				gMpPlaceSelfTry = 0;
+				gMpPlaceSelfFrames = MP_PLACE_SELF_SETTLE;
+			}
+			if (gMpCtx != NULL)
+				gMpCtx->jer_log(gMpCtx,
+					"[mp] live join: round is already LIVE - our car will be placed on a clear road\n");
+		}
+		return;
+	}
+
+	gMpSawPreLive = 1;
+	gMp.liveJoin = 0;
 }
 
 static const char* MpMarkName(int id)
@@ -746,16 +781,16 @@ static void MpMarkNotices(int me, int since)
 	int go = gMpMarkShownPhase == MP_MARK_PHASE_COUNTDOWN;	/* LIVE straight out of the 3-2-1 */
 	char line[JER_NOTIFY_TEXT_MAX];
 
-	/* THE TWO COUNTDOWNS, the engine's own golden notice, one a second, each shown
-	 * once; a client runs the time on from its last snapshot, as it does the clocks.
-	 *   LOBBY     (once per map load): 5, 4, 3, 2, 1 -- the pre-game lobby;
-	 *   COUNTDOWN (every round): GET READY while the cluster is placed, then 3, 2, 1,
-	 *             and GO below. */
-	if (phase == MP_MARK_PHASE_COUNTDOWN || phase == MP_MARK_PHASE_LOBBY)
+	/* ONE COUNTDOWN, the engine's own golden notice, one a second, each shown once;
+	 * a client runs the time on from its last snapshot, as it does the clocks.
+	 *   first-load: firstCountdownSec as N..1, then GO below;
+	 *   later rounds: GET READY while the cluster is placed, then N..1, then GO. */
+	if (phase == MP_MARK_PHASE_COUNTDOWN)
 	{
 		int left = MpMarkCountdownMs(since);
-		int count = (phase == MP_MARK_PHASE_COUNTDOWN && left > MP_MARK_COUNTDOWN_MS - MP_MARK_COUNTDOWN_SPAWN_MS)
-			? 4 : (left + 999) / 1000;
+		int first = MpMarkCountdownIsFirst();
+		int spawn = !first && left > MpMarkCountdownTotalMs() - MP_MARK_COUNTDOWN_SPAWN_MS;
+		int count = spawn ? 4 : (left + 999) / 1000;
 
 		if (gMpMarkShownPhase != phase)
 			gMpMarkShownCount = -1;	/* a fresh countdown (or one restarted) */
@@ -764,7 +799,7 @@ static void MpMarkNotices(int me, int since)
 		 * put a "3" back after the "2" at a boundary */
 		if (count > 0 && (gMpMarkShownCount < 0 || count < gMpMarkShownCount))
 		{
-			if (phase == MP_MARK_PHASE_COUNTDOWN && count >= 4)
+			if (spawn && count >= 4)
 				snprintf(line, sizeof(line), "GET READY");
 			else
 				snprintf(line, sizeof(line), "%d", count);
@@ -840,10 +875,11 @@ static int MpHudLerp(int cur, int tgt)
 	return cur + step;
 }
 
-/* Car Bomb Tag only, while LIVE: a 3D tick from the holder's car. Interval
- * shrinks as the clock runs down (1 s -> 200 ms approaching 10 s), then
- * 100 ms at or under 10 s, and every other frame under 5 s. */
-static void MpMarkTickBomb(CAR_DATA* cp, int remMs, int fullMs)
+/* Car Bomb Tag only, while LIVE: a 3D beep (SBK_ID_COUNTDOWN sample 0, not
+ * the mission-23 clock tick) from the holder's car. Interval shrinks as the
+ * clock runs down (1 s -> 200 ms approaching 10 s), then 100 ms at or under
+ * 10 s, and every other frame under 5 s so the short beeps smear into a tone. */
+static void MpMarkBeepBomb(CAR_DATA* cp, int remMs, int fullMs)
 {
 	int interval, pitch;
 
@@ -880,7 +916,7 @@ static void MpMarkTickBomb(CAR_DATA* cp, int remMs, int fullMs)
 	if (pitch > 5120)
 		pitch = 5120;
 
-	Start3DSoundVolPitch(-1, jer_carexplode_bank(), jer_carexplode_tick_sample(),
+	Start3DSoundVolPitch(-1, jer_carexplode_bank(), jer_carexplode_beep_sample(),
 		cp->hd.where.t[0], cp->hd.where.t[1], cp->hd.where.t[2],
 		-1500, pitch);
 }
@@ -965,14 +1001,18 @@ static void MpMarkPresentTick(void)
 	else
 		gMpClusterState = 0;
 
-	if (phase == MP_MARK_PHASE_LOBBY)
+	if (phase == MP_MARK_PHASE_COUNTDOWN && MpMarkCountdownIsFirst())
 		snprintf(text, sizeof(text), "PRE-GAME %d", (MpMarkCountdownMs(since) + 999) / 1000);
 	else if (phase == MP_MARK_PHASE_WAITING)
 	{
 		int ready = 0, n = MpMarkCountWaiting(&ready);
+		int need = MpModeWaitMinPlayers(gMp.gamemode);
 
-		/* two are here but somebody is still in the car select: say so */
-		if (n >= 2 && MpModeWantsCountdown(gMp.gamemode) && ready < n)
+		if (need < 1)
+			need = 2;
+
+		/* enough people are here but somebody is still in the car select: say so */
+		if (n >= need && MpModeWaitForCars(gMp.gamemode) && ready < n)
 			snprintf(text, sizeof(text), "WAITING FOR CARS %d/%d", ready, n);
 		else
 			snprintf(text, sizeof(text), "WAITING FOR PLAYERS");
@@ -1073,7 +1113,7 @@ static void MpMarkPresentTick(void)
 			if (full < 15000)
 				full = 15000;
 
-			MpMarkTickBomb(markedCar, rem, full);
+			MpMarkBeepBomb(markedCar, rem, full);
 		}
 		else
 			gMpMarkTickFrame = -1;
@@ -1189,6 +1229,7 @@ void MpSessionReset(void)
 	gMp.modsMatched = 1;
 	gMp.localPlaced = 0;
 	gMp.liveJoin = 0;
+	gMpSawPreLive = 0;
 	gMp.gameStarted = 0;
 	gMpPlaceSelfFrames = 0;
 	gMpPlaceSelfTry = 0;
@@ -4214,28 +4255,48 @@ static void MpHandleWelcome(const unsigned char* p, int len)
 
 	MpJoinStateSet(MP_JOIN_READY);	/* the "Connecting..." row goes away */
 
-	/* the match is already live: adopt the host's config and launch so we
-	 * spawn into the running game (the LAN browser only lists live games). */
+	/* the session is already up: adopt the host's config and launch so we
+	 * load the same level (the LAN browser lists sessions that have started).
+	 * "Session up" is not "round LIVE": in a pre-game mode a join during
+	 * WAITING / COUNTDOWN / ENDED still goes through car selection and is
+	 * counted in the wait. Mid-round placement is armed by MpSessionAdoptLiveJoin
+	 * once a JPMK snapshot shows LIVE. Take a Ride has no pre-game, so a join
+	 * into a running session is mid-round as before. */
 	if (w.running)
 	{
 		gMp.running = 1;
 		gMp.subGame = w.subGame;
 
-		/* WE JOINED A MATCH ALREADY IN PROGRESS. That is a different placement
-		 * problem from both machines launching together: the level places our car
-		 * on its own start, which is where the host came in, and the old
-		 * client-side gather would then drop us beside the first peer it heard
-		 * from. Mark the join so the gather is skipped and MpPlaceSelfTick owns
-		 * the spawn. Cleared by MpSessionReset. */
-		gMp.liveJoin = 1;
+		if (MpModeHasPreGame(gMp.gamemode))
+		{
+			gMp.liveJoin = 0;
+			gMpSawPreLive = 0;
+			MpSessionAdoptLiveJoin();
+			if (gMpCtx != NULL && !gMp.liveJoin)
+				gMpCtx->jer_log(gMpCtx,
+					"[mp] joined a session already up - pick a car; mid-round placement waits until GO\n");
+		}
+		else
+		{
+			/* WE JOINED A MATCH ALREADY IN PROGRESS. That is a different placement
+			 * problem from both machines launching together: the level places our car
+			 * on its own start, which is where the host came in, and the old
+			 * client-side gather would then drop us beside the first peer it heard
+			 * from. Mark the join so the gather is skipped and MpPlaceSelfTick owns
+			 * the spawn. Cleared by MpSessionReset. */
+			gMp.liveJoin = 1;
+
+			if (gMpCtx != NULL)
+				gMpCtx->jer_log(gMpCtx, "[mp] live join: not gathering beside a peer - our car will be placed on a clear road\n");
+
+			gMpPlaceSelfTry = 0;
+			gMpPlaceSelfFrames = MP_PLACE_SELF_SETTLE;
+		}
 
 		/* ...so a peer the pre-welcome roster named no car for is ON FOOT, not in a
 		 * lobby: the same rule MpHandleRoster applies once running. Without it the
 		 * net spawn seats them in a phantom car at the level start (A1). */
 		MpMarkRosterNoCarOnFoot((int)w.playerId);
-
-		if (gMpCtx != NULL)
-			gMpCtx->jer_log(gMpCtx, "[mp] live join: not gathering beside a peer - our car will be placed on a clear road\n");
 
 		/* adopt the host's level so we load the same map, then let the
 		 * joining player pick their own vehicle -- the car select's START
@@ -4249,10 +4310,7 @@ static void MpHandleWelcome(const unsigned char* p, int len)
 			wantedWeather = gMp.weather;
 
 		if (gMpCtx)
-			gMpCtx->jer_log(gMpCtx, "[mp] joined a LIVE match - pick a car\n");
-
-		gMpPlaceSelfTry = 0;
-		gMpPlaceSelfFrames = MP_PLACE_SELF_SETTLE;	/* our car starts on the level start = on the host: move it */
+			gMpCtx->jer_log(gMpCtx, "[mp] joined a session already up - pick a car\n");
 
 		if (gMp.autoSession)
 		{

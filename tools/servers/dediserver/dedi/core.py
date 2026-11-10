@@ -804,8 +804,7 @@ class Dedicated:
             try:
                 if self._mark_step(ms):
                     self.broadcast_round_if_changed()
-                every = (MARK_SEND_LIVE_S if self.mark.phase in (m.MARK_PHASE_LIVE, m.MARK_PHASE_COUNTDOWN,
-                                                                 m.MARK_PHASE_LOBBY)
+                every = (MARK_SEND_LIVE_S if self.mark.phase in (m.MARK_PHASE_LIVE, m.MARK_PHASE_COUNTDOWN)
                          else MARK_SEND_IDLE_S)
                 if self.broadcast_mark_if_due(force=now - last_send >= every):
                     last_send = now
@@ -1529,8 +1528,7 @@ class Dedicated:
                 m.mode_name(self.mark.gamemode), self.mark.minutes,
                 {m.MARK_PHASE_WAITING: "waiting", m.MARK_PHASE_LIVE: "live",
                  m.MARK_PHASE_ENDED: "ended",
-                 m.MARK_PHASE_COUNTDOWN: "countdown",
-                 m.MARK_PHASE_LOBBY: "pre-game lobby"}.get(self.mark.phase, "?"),
+                 m.MARK_PHASE_COUNTDOWN: "countdown"}.get(self.mark.phase, "?"),
                 self.mark.marked if self.mark.marked >= 0 else "nobody")
         ] if self.mark.active else []) + [
             "rules:     %s" % rules_text(int(self.cfg["rules"])),

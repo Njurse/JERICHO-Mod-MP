@@ -842,17 +842,15 @@ typedef struct MP_ROUND
  * per present player in ascending id; Car Bomb Tag's rows carry 0. */
 enum
 {
-	MP_MARK_PHASE_WAITING = 0,	/* fewer than two players, or (a countdown mode)
-					 * someone has not picked a car: nothing ticks */
+	MP_MARK_PHASE_WAITING = 0,	/* the mode's pre-game wait is not yet satisfied
+					 * (or the referee is idle): nothing ticks */
 	MP_MARK_PHASE_LIVE = 1,		/* a round is being played */
 	MP_MARK_PHASE_ENDED = 2,	/* won / blown up; the next round starts shortly */
-	MP_MARK_PHASE_COUNTDOWN = 3,	/* every player has a car: 3-2-1 before LIVE.
-					 * Nothing ticks, nothing tags. Added in the
-					 * same byte (a v23 peer that predates it shows
-					 * a frozen clock, then LIVE as before). */
-	MP_MARK_PHASE_LOBBY = 4		/* a map was just loaded: the pre-game 5-4-3-2-1
-					 * (countdownDs), once per map, before WAITING.
+	MP_MARK_PHASE_COUNTDOWN = 3,	/* the wait is satisfied: first-load N..1 or
+					 * later-round GET READY + N..1, then LIVE.
 					 * Nothing ticks, nothing tags. */
+	MP_MARK_PHASE_LOBBY = 4		/* retired: unused on the wire (proto 23 keeps
+					 * the value so old peers still parse the byte). */
 };
 
 /* MP_MARK_ENTRY.flags */

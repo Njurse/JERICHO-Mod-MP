@@ -16,18 +16,28 @@
 #define JER_CAREXPLODE_TUMBLE_LAUNCH	(0x18000 * 5)
 #define JER_CAREXPLODE_TUMBLE_SPIN	(0x100000 * 50)
 
-#define JER_CAREXPLODE_TICK	0
-#define JER_CAREXPLODE_BANG	1
-#define JER_CAREXPLODE_FALLBACK_TICK	1	/* smashable thud, always in SFX */
+/* The stock clock tick is mission 23 sample 0 (DoMissionSound, mc_snd.c:503).
+ * The beep is a different lump: SBK_ID_COUNTDOWN (gamesnd.h), two short 8 kHz
+ * samples in VOICES2.BLK lump 44. Nothing in this tree currently loads or
+ * plays it (DrawTimer is visual-only, mdraw.c:22); the enum is the stock
+ * name for that lump. Sample 0 is the short beep; sample 1 is a longer
+ * variant. Mission 23's other samples are the bang (1) and two long clips
+ * (2, 3) -- not beeps. */
+#define JER_CAREXPLODE_BEEP		0	/* COUNTDOWN lump sample 0 */
+#define JER_CAREXPLODE_BANG		1	/* MISSION_23 lump sample 1 */
+#define JER_CAREXPLODE_FALLBACK_BEEP	1	/* smashable thud, always in SFX */
 #define JER_CAREXPLODE_FALLBACK_BANG	6	/* heaviest crash, always in SFX */
 
-static int gLumpSlot = -1;
+static int gBeepSlot = -1;
+static int gBangSlot = -1;
 static unsigned char gLatched[MAX_CARS];
 
 void jer_carexplode_request_banks(void)
 {
-	if (gLumpSlot < 0)
-		gLumpSlot = jer_sound_request_lump(SOUND_BANK_SFX, SBK_ID_MISSION_23, 2);
+	if (gBeepSlot < 0)
+		gBeepSlot = jer_sound_request_lump(SOUND_BANK_SFX, SBK_ID_COUNTDOWN, 2);
+	if (gBangSlot < 0)
+		gBangSlot = jer_sound_request_lump(SOUND_BANK_SFX, SBK_ID_MISSION_23, 2);
 }
 
 int jer_carexplode_bank(void)
@@ -35,35 +45,35 @@ int jer_carexplode_bank(void)
 	return SOUND_BANK_SFX;
 }
 
-static int JerCarExplodeBase(void)
+static int JerCarExplodeLumpBase(int slot, int need)
 {
 	int base;
 
-	if (gLumpSlot < 0)
+	if (slot < 0)
 		return -1;
 
-	base = jer_sound_lump_base(gLumpSlot);
-	if (base < 0 || jer_sound_lump_count(gLumpSlot) <= 0)
+	base = jer_sound_lump_base(slot);
+	if (base < 0 || jer_sound_lump_count(slot) < need)
 		return -1;
 
 	return base;
 }
 
-int jer_carexplode_tick_sample(void)
+int jer_carexplode_beep_sample(void)
 {
-	int base = JerCarExplodeBase();
+	int base = JerCarExplodeLumpBase(gBeepSlot, 1);
 
-	if (base >= 0 && jer_sound_lump_count(gLumpSlot) >= 1)
-		return base + JER_CAREXPLODE_TICK;
+	if (base >= 0)
+		return base + JER_CAREXPLODE_BEEP;
 
-	return JER_CAREXPLODE_FALLBACK_TICK;
+	return JER_CAREXPLODE_FALLBACK_BEEP;
 }
 
 int jer_carexplode_bang_sample(void)
 {
-	int base = JerCarExplodeBase();
+	int base = JerCarExplodeLumpBase(gBangSlot, 2);
 
-	if (base >= 0 && jer_sound_lump_count(gLumpSlot) >= 2)
+	if (base >= 0)
 		return base + JER_CAREXPLODE_BANG;
 
 	return JER_CAREXPLODE_FALLBACK_BANG;
@@ -71,7 +81,8 @@ int jer_carexplode_bang_sample(void)
 
 int jer_carexplode_samples_loaded(void)
 {
-	return (JerCarExplodeBase() >= 0 && jer_sound_lump_count(gLumpSlot) >= 2) ? 1 : 0;
+	return (JerCarExplodeLumpBase(gBeepSlot, 1) >= 0 &&
+		JerCarExplodeLumpBase(gBangSlot, 2) >= 0) ? 1 : 0;
 }
 
 static void JerCarExplodeLock(CAR_DATA* cp)
