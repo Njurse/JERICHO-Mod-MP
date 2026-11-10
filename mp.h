@@ -21,6 +21,7 @@
 #define MP_H
 
 #include "mp_proto.h"
+#include "mp_mode.h"	/* the game-mode registry and its decision points */
 
 #ifdef __cplusplus
 extern "C" {
@@ -649,6 +650,11 @@ const char* MpCarCityName(int city);
  * rules such as cops never rename it. Paired with the tools' mode_name() in mp_test.py. */
 void MpFormatPlayerId(const unsigned char* id, char* out);	/* dashed UUID, out >= 37 chars */
 const char* MpModeName(int gamemode);	/* MP_GAMEMODE_* -> display name */
+
+/* The HOST's lobby choice of game mode (the mp.host page's Game Mode row). Only a
+ * selectable mode is taken and only before the match runs -- a running session keeps
+ * the mode it was launched with. Returns the mode now in force for the session. */
+int MpSetSessionGamemode(int gamemode);
 
 /* The city name for a row of SOMEONE ELSE'S server: the engine's name, or "-"
  * when the engine has no row for that city. Not MpCarCityName, which says "the

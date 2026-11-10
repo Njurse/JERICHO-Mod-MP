@@ -42,7 +42,8 @@ supervisor (or a test) can pipe commands in.
 --city N             GameLevel the clients should load (0..3)
 --arena N            which of that city's two multiplayer maps (0 or 1; the game's
                      -mp 0 / -mp 1). Default 0
---gamemode N
+--gamemode N         the session's game mode id (default 0 = TAKE A RIDE, the only
+                     one so far; see "gamemode" below)
 --max-players N      slots 1..N-1 are given to clients (0 belongs to the server)
 --beacon / --no-beacon
 --beacon-ms N        beacon cadence (default 1000)
@@ -95,7 +96,11 @@ existing file). Updates and `git pull` therefore leave your settings alone.
   "arena": 0,               // which of the city's two multiplayer maps (0/1;
                             // the game's -mp 0 / -mp 1). The server hosts the
                             // multiplayer map, never the full single-player city
-  "gamemode": 0,
+  "gamemode": 0,            // the game mode id, MP_GAMEMODE_* (mp_proto.h). 0 =
+                            // TAKE A RIDE, the only mode so far. Optional: a file
+                            // without it runs mode 0. Sent in the welcome, the
+                            // start, the beacon and the master advert; see
+                            // ../../../docs/GAMEMODES.md
   "max_players": 16,        // 16 is the protocol cap (MP_MAX_PLAYERS); slot 0 is the server
   "motd": "Welcome to JERICHO - drive safe, mind the traffic.",
                             // said to each joiner as a SERVER chat line. One line only:
@@ -213,6 +218,10 @@ not delete yours (keep your own names; `example_hello.py` is overwritten).
 "plugins_disabled": ["example"], // ... minus these
 "plugins_dir": "plugins"
 ```
+
+Built-ins that are off by default: `modes` (the game-mode skeleton: logs the
+session's `gamemode` and adds a read-only `!mode`; it changes nothing yet -- see
+`docs/GAMEMODES.md`). Name it in `"plugins"` to load it.
 
 `"plugins": ["commands", "admin", "mine"]` loads exactly those, in that order. A
 plugin that fails to import or raises is logged and disabled; the server keeps
@@ -366,4 +375,12 @@ master restart, and unregister-on-shutdown — no game, no assets:
 
 ```sh
 python JERICHO/MODS/mp/tools/servers/rigs/test_e2e.py
+```
+
+`test_modes.py` covers the game-mode scaffold: `gamemode` defaults to 0 (TAKE A
+RIDE), a config without the key still loads, no mode keys were added to the
+defaults, and the `modes` plugin stays off unless named:
+
+```sh
+python JERICHO/MODS/mp/tools/servers/dediserver/test_modes.py
 ```

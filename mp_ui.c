@@ -206,6 +206,22 @@ static void LblCopDiff(void* ud, char* o, int n) { (void)ud; snprintf(o, n, "Cop
 static void LblInvuln(void* ud, char* o, int n)  { (void)ud; snprintf(o, n, "Invulnerability: < %s >", gMp.config.invuln ? "On" : "Off"); }
 static void LblImmune(void* ud, char* o, int n)  { (void)ud; snprintf(o, n, "Immunity: < %s >", gMp.config.immune ? "On" : "Off"); }
 
+/* GAME MODE: the session's mode, cycled over the SELECTABLE registry entries only
+ * (mp_mode.c). Today that is Take a Ride alone, so the row shows it and left/right
+ * stays on it. Not saved to the config: the mode is a per-session choice, reset to
+ * Take a Ride by every MpSessionReset, and rides the WELCOME / START / beacon byte. */
+static void LblGameMode(void* ud, char* o, int n) { (void)ud; snprintf(o, n, "Game mode: < %s >", MpModeName(gMp.gamemode)); }
+
+static int AdjGameMode(void* ud, int dir)
+{
+	(void)ud;
+
+	if (dir != 0)
+		MpSetSessionGamemode(MpModeNextSelectable(gMp.gamemode, dir));
+
+	return 1;
+}
+
 static int AdjCops(void* ud, int dir)   { (void)ud; gMp.config.cops = (gMp.config.cops + dir + 2) & 1; MpConfigSave(); return 1; }
 static int AdjInvuln(void* ud, int dir) { (void)ud; gMp.config.invuln = (gMp.config.invuln + dir + 2) & 1; MpConfigSave(); return 1; }
 static int AdjImmune(void* ud, int dir) { (void)ud; gMp.config.immune = (gMp.config.immune + dir + 2) & 1; MpConfigSave(); return 1; }
@@ -657,6 +673,7 @@ static const JER_FE_ITEM kHostItems[] =
 
 	/* SESSION RULES first: these are the host's gameplay settings for the match
 	 * about to be set up, and they apply to everyone who joins it. */
+	{ NULL, LblGameMode, NULL, NULL, AdjGameMode, -1, 0 },
 	{ NULL, LblCops,    NULL, NULL, AdjCops,    -1, 0 },
 	{ NULL, LblCopDiff, NULL, NULL, AdjCopDiff, -1, 0 },
 	{ NULL, LblImmune,  NULL, NULL, AdjImmune,  -1, 0 },
@@ -665,7 +682,7 @@ static const JER_FE_ITEM kHostItems[] =
 	{ "Take a Ride", NULL, NULL, ActTakeARide, NULL, -1, 0 },
 	{ "Back",        NULL, NULL, NULL,         NULL, -1, 1 },
 };
-static const JER_FE_MENU kHostMenu = { "mp.host", kHostItems, 8, NULL, NULL };
+static const JER_FE_MENU kHostMenu = { "mp.host", kHostItems, 9, NULL, NULL };
 
 static const JER_FE_ITEM kHostSetItems[] =
 {
@@ -2071,11 +2088,15 @@ static int MpProjectWorldToScreen(int wx, int wy, int wz, int* sx, int* sy, int*
  * suit colours which are dark). */
 static void MpNameTagColour(const MP_PLAYER* p, unsigned char* r, unsigned char* g, unsigned char* b)
 {
-	if (p->colorOn)
+	int cr, cg, cb;
+
+	/* the game mode's colour override (a team colour); in Take a Ride there are no
+	 * teams and this hands back the player's own colour and on/off untouched */
+	if (MpModePlayerColour(gMp.gamemode, p->id, p->colorOn, p->colorR, p->colorG, p->colorB, &cr, &cg, &cb))
 	{
-		*r = (unsigned char)p->colorR;
-		*g = (unsigned char)p->colorG;
-		*b = (unsigned char)p->colorB;
+		*r = (unsigned char)cr;
+		*g = (unsigned char)cg;
+		*b = (unsigned char)cb;
 	}
 	else
 	{

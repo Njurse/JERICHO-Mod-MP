@@ -436,14 +436,24 @@ colour") was missing *exactly* in multiplayer and present in single player. Both
 branches now splice it. A two-player split-screen match had the same hole.
 
 In single player the START press opens the engine pause, which freezes the
-simulation. In a network session that freezes only THIS machine while everyone else
-keeps driving, so the two states disagree the moment play resumes. mp therefore
-claims the press in a live match (the `JER_EVENT_PAUSE_MENU` hook, returning
-`JER_RESULT_STOP` -- the same mechanism the sandbox overlay uses), so the engine
-pause never opens and `pauseflag` is never set: the world keeps running.
+simulation. In a network session that would freeze only THIS machine while everyone
+else keeps driving, so the two states would disagree the moment play resumes.
 
-The press toggles mp's own non-freezing player list instead: a small status panel
-down the left, one line per player.
+mp does **not** claim START for this (it used to; an earlier version of this section
+still said so). In a live match the `JER_EVENT_PAUSE_MENU` hook (`MpOnPauseMenu`,
+mp.c) returns `JER_RESULT_CONTINUE` and lets the ENGINE'S pause menu open, so the
+player gets the menu they expect, with the JERICHO Addons tree in it. It only
+records `gMpPauseOpened = 1`. The world keeps running because `MpOnDrawOverlay`,
+which fires on every drawn frame including while paused, calls the exported
+`StepSim()` itself while `gMp.running && pauseflag != 0`, and undoes the engine's
+audio pause once on the way in (`UnPauseSound`). It does not call the lockstep again:
+`StepSim` fires `JER_EVENT_PRE_SIM`, which runs it, and a second call advanced the
+pausing machine two frames per frame. START is still claimed in exactly one case:
+while the chat prompt is open, where START is the player's RETURN.
+
+On top of that menu, and only on the engine's PAUSE screen (`gMpPauseOpened &&
+gDrawPauseMenus`, not game over, mission complete or a pad error), mp draws its
+non-freezing player list: a small status panel down the left, one line per player.
 
 **It is drawn at HALF SIZE, and that is what makes one line per player possible.**
 At the default 0.275 only about 33 characters fit across the 320-px screen, which is

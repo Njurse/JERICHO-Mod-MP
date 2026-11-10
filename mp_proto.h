@@ -263,7 +263,9 @@ enum
 };
 
 /* Gamemode ids for the lobby (module-side; the engine GAMETYPE is mapped
- * separately). Take a Ride is the only one implemented for now. */
+ * separately). Take a Ride is the only one implemented for now. Each id is a row
+ * in the game-mode registry (mp_mode.c, docs/GAMEMODES.md); the Python mirror is
+ * tools/mp_test.py GAMEMODE_NAMES. */
 enum
 {
 	MP_GAMEMODE_TAKEADRIDE = 0,

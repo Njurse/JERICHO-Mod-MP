@@ -61,7 +61,8 @@ GAMEMODE_NAMES = {0: "TAKE A RIDE"}      # MP_GAMEMODE_* (mp_proto.h)
 
 def mode_name(gamemode):
     """The name a browser shows for a server's gamemode id. Session rules (cops
-    on/off) never rename the mode. Keep in step with MpModeName (mp_session.c)."""
+    on/off) never rename the mode. Keep in step with kModes[] (mp_mode.c);
+    tools/mode_check/run_mode_check.py fails when they differ."""
     return GAMEMODE_NAMES.get(gamemode, "-")
 
 

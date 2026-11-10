@@ -237,6 +237,55 @@ void MpNoteLocalPad(int pad)
 static void MpFailsafeReset(void);
 static void MpFailsafeNoteCar(int slot);
 
+/* GAME-MODE DECISION POINTS that ask for something this build cannot do yet say so
+ * ONCE per kind, then the session carries on with its own behaviour. Mode 0 never asks
+ * for anything but that behaviour, so for Take a Ride this never logs. */
+enum
+{
+	MP_MODE_FALLBACK_RESPAWN = 0,
+	MP_MODE_FALLBACK_LATEJOIN,
+	MP_MODE_FALLBACK_SPAWN,
+	MP_MODE_FALLBACK_KINDS
+};
+
+static int gMpModeFallbackLogged[MP_MODE_FALLBACK_KINDS];
+
+static void MpModeFallbackOnce(int kind, const char* what, int asked)
+{
+	if (kind < 0 || kind >= MP_MODE_FALLBACK_KINDS || gMpModeFallbackLogged[kind])
+		return;
+
+	gMpModeFallbackLogged[kind] = 1;
+
+	if (gMpCtx != NULL)
+		gMpCtx->jer_log(gMpCtx,
+			"[mp] mode %d (%s): %s %d is not implemented in this build - using the session default\n",
+			gMp.gamemode, MpModeName(gMp.gamemode), what, asked);
+}
+
+/* An id adopted from the host (WELCOME / START): kept as-is for naming, played as
+ * Take a Ride when this build does not know it (MpModeBehaviour). */
+static void MpModeNoteAdopted(int gamemode, const char* how)
+{
+	if (MpModeFind(gamemode) == NULL && gMpCtx != NULL)
+		gMpCtx->jer_log(gMpCtx,
+			"[mp] gamemode %d from %s is not known to this build - playing it as %s\n",
+			gamemode, how, MpModeName(MP_GAMEMODE_TAKEADRIDE));
+}
+
+int MpSetSessionGamemode(int gamemode)
+{
+	if (MpIsHost() && !gMp.running && MpModeIsSelectable(gamemode) && gMp.gamemode != gamemode)
+	{
+		gMp.gamemode = gamemode;
+
+		if (gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx, "[mp] lobby game mode: %d (%s)\n", gamemode, MpModeName(gamemode));
+	}
+
+	return gMp.gamemode;
+}
+
 void MpSessionReset(void)
 {
 	/* a session that is over must not stay on the board: the unregister is what
@@ -272,6 +321,7 @@ void MpSessionReset(void)
 	gMpLocalAppliedPad = -1;
 	MpFailsafeReset();
 	gMp.gamemode = MP_GAMEMODE_TAKEADRIDE;
+	memset(gMpModeFallbackLogged, 0, sizeof(gMpModeFallbackLogged));
 	gMp.city = 0;
 	gMp.timeOfDay = -1;
 	gMp.weather = -1;
@@ -1460,6 +1510,22 @@ void MpSpawnLateJoiners(void)
 	{
 		gMp.pendingSpawn = 1;
 		return;
+	}
+
+	/* GAME-MODE DECISION POINTS. Take a Ride seats a late joiner at once
+	 * (LATEJOIN_LIVE) at the session's own placement below (SPAWN_SESSION: the level
+	 * start / a per-player road spot, x/z only, the engine resolving the ground).
+	 * Spectating until the next round and mode-chosen spawns (arenas) need state this
+	 * build does not have yet; such a mode gets the session behaviour and one log line. */
+	{
+		int late = MpModeLateJoinPolicy(gMp.gamemode);
+		int rule = MpModeSpawnRule(gMp.gamemode);
+
+		if (late != MP_MODE_LATEJOIN_LIVE)
+			MpModeFallbackOnce(MP_MODE_FALLBACK_LATEJOIN, "late-join policy", late);
+
+		if (rule != MP_MODE_SPAWN_SESSION)
+			MpModeFallbackOnce(MP_MODE_FALLBACK_SPAWN, "spawn rule", rule);
 	}
 
 	for (id = 0; id < MP_MAX_PLAYERS; id++)
@@ -2680,8 +2746,13 @@ void MpSendChat(const char* text)
 
 	if (MpIsHost())
 	{
-		MpConsoleChat(gMp.config.playerName, gMp.config.colorOn,
-			gMp.config.colorR, gMp.config.colorG, gMp.config.colorB, c.text, NULL);
+		int r, g, b;
+		int on = MpModePlayerColour(gMp.gamemode, gMp.localPlayerId, gMp.config.colorOn,
+			gMp.config.colorR, gMp.config.colorG, gMp.config.colorB, &r, &g, &b);
+
+		/* the name's ink goes through the game mode's colour seam (unchanged in
+		 * Take a Ride: no teams, so the player's own colour) */
+		MpConsoleChat(gMp.config.playerName, on, r, g, b, c.text, NULL);
 		MpHostBroadcast(MP_TAG_CHAT, MP_FLAG_RELIABLE, &c, sizeof(c));
 	}
 	else
@@ -2749,10 +2820,15 @@ static void MpHandleChat(int connIndex, const unsigned char* p, int len)
 			char tagged[MP_NAME_MAX + 8];
 			int admin = (c.reserved[0] == MP_CHAT_MARK_ADMIN && c.reserved[1] == 0 && c.reserved[2] == 0);
 
+			int r, g, b;
+			int on = MpModePlayerColour(gMp.gamemode, pl->id, pl->colorOn,
+				pl->colorR, pl->colorG, pl->colorB, &r, &g, &b);
+
 			if (admin)
 				snprintf(tagged, sizeof(tagged), "[Admin] %s", pl->name);
 
-			MpConsoleChat(admin ? tagged : pl->name, pl->colorOn, pl->colorR, pl->colorG, pl->colorB, c.text, ink);
+			/* the speaker's ink through the game mode's colour seam (see above) */
+			MpConsoleChat(admin ? tagged : pl->name, on, r, g, b, c.text, ink);
 		}
 		else
 			MpConsoleChat(NULL, 0, 0, 0, 0, c.text, ink);
@@ -3181,6 +3257,7 @@ static void MpHandleWelcome(const unsigned char* p, int len)
 	gMp.localPlayerId = w.playerId;
 	gMp.modsMatched = w.modsMatched ? 1 : 0;
 	gMp.gamemode = w.gamemode;
+	MpModeNoteAdopted(gMp.gamemode, "the welcome");
 	gMp.city = w.city;
 	gMp.timeOfDay = w.timeOfDay;
 	gMp.weather = w.weather;
@@ -3472,6 +3549,7 @@ static void MpHandleStart(const unsigned char* p, int len)
 	}
 
 	gMp.gamemode = st.session.gamemode;
+	MpModeNoteAdopted(gMp.gamemode, "the start");
 	gMp.city = st.session.city;
 	gMp.timeOfDay = st.session.timeOfDay;
 	gMp.weather = st.session.weather;
@@ -3543,6 +3621,16 @@ int MpOnNetSpawn(void* userdata, void* args)
 
 	if (!MpIsActive() || gMp.playerCount <= 1)
 		return JER_RESULT_CONTINUE;
+
+	/* GAME-MODE DECISION POINT: where the level-load cars go. Take a Ride uses the
+	 * session's own line-up below (the level start record, +900 x per slot, y left to
+	 * the engine). Any other rule falls back to it until arenas exist. */
+	{
+		int rule = MpModeSpawnRule(gMp.gamemode);
+
+		if (rule != MP_MODE_SPAWN_SESSION)
+			MpModeFallbackOnce(MP_MODE_FALLBACK_SPAWN, "spawn rule", rule);
+	}
 
 	slot = sp->numPlayers;
 
@@ -8869,13 +8957,9 @@ const char* MpCarCityName(int city)
  * tools' mode_name() (mp_test.py). */
 const char* MpModeName(int gamemode)
 {
-	switch (gamemode)
-	{
-	case MP_GAMEMODE_TAKEADRIDE:
-		return "TAKE A RIDE";
-	default:
-		return "-";
-	}
+	/* The registry owns the names now (mp_mode.c); "-" for an id it does not know,
+	 * exactly as before. */
+	return MpModeDisplayName(gamemode);
 }
 
 /* The city name for a ROW of somebody else's server: the engine's own name, or
@@ -9566,8 +9650,9 @@ int MpCarQuerySlots(int city, int* slots, int* models, int max)
 }
 
 /* The car list a city may be offered: what the car mods say, or failing that the engine's
- * own frontend table - see mp.h for why that table is the wrong question IN A SESSION. */
-int MpCarListForCity(int city, int* slots, int* models, int max)
+ * own frontend table - see mp.h for why that table is the wrong question IN A SESSION.
+ * The game mode then narrows it (MpCarListForCity, below). */
+static int MpCarListForCityAll(int city, int* slots, int* models, int max)
 {
 	extern int CarAvailability[CITY_COUNT][10];    /* grown with the registry */
 	extern char carNumLookup[CITY_COUNT][10];
@@ -9599,6 +9684,19 @@ int MpCarListForCity(int city, int* slots, int* models, int max)
 	}
 
 	return n;
+}
+
+/* GAME-MODE DECISION POINT: the ONE list the pause picker and the test rigs read, so a
+ * mode's car pool (C&R: police / not police) is applied once, here. Take a Ride's pool
+ * is "everything", and the filter returns the list untouched. */
+int MpCarListForCity(int city, int* slots, int* models, int max)
+{
+	int n = MpCarListForCityAll(city, slots, models, max);
+
+	if (n <= 0)
+		return n;
+
+	return MpModeFilterCarPool(gMp.gamemode, city, slots, models, n);
 }
 
 /* Tell whoever keeps the session's car identity (carhacks) how a switch ended: the local
@@ -9702,6 +9800,23 @@ static int MpChangeCarRun(int city, int model, int isRetry);
 
 int MpChangeCar(int city, int model)
 {
+	/* GAME-MODE DECISION POINT: a mode may lock the car while a round runs. Take a
+	 * Ride never does, so this is a no-op there. Checked here, at the one public door
+	 * (the pause Apply row and every test lever come through it), and not in the
+	 * retry, which only finishes a change this already allowed. */
+	{
+		const char* why = MpModeCarChangeRefusal(gMp.gamemode, gMp.running);
+
+		if (why != NULL)
+		{
+			if (gMpCtx != NULL)
+				gMpCtx->jer_log(gMpCtx, "[mp] change car refused: %s model %d - %s\n",
+					MpCarCityName(city), model, why);
+
+			return 0;
+		}
+	}
+
 	return MpChangeCarRun(city, model, 0);
 }
 
@@ -10474,6 +10589,18 @@ int MpRespawnAfterDeath(void)
 
 	if (!gMp.running)
 		return 0;
+
+	/* GAME-MODE DECISION POINT: the mode chooses HOW a death is answered, never
+	 * WHETHER -- whatever it says, the game over below is refused. Take a Ride asks
+	 * for an instant respawn, which is the placement that follows. A delayed or
+	 * disabled respawn needs the round state (docs/GAMEMODES.md); until it exists
+	 * such a mode is respawned instantly too, and the log says so once. */
+	{
+		int policy = MpModeRespawnPolicy(gMp.gamemode);
+
+		if (policy != MP_MODE_RESPAWN_INSTANT)
+			MpModeFallbackOnce(MP_MODE_FALLBACK_RESPAWN, "respawn policy", policy);
+	}
 
 	me = MpLocalPlayer();
 

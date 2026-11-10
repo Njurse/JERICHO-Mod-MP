@@ -2149,12 +2149,11 @@ static int MpOnDrawOverlay(void* userdata, void* args)
 }
 
 /* JERICHO-HOOK: the engine pause freezes the simulation -- which in a network
- * session freezes only THIS machine. Everyone else keeps driving, so the moment
- * play resumes the two disagree. In a live match the START press must therefore
- * not open it: claim the press (JER_RESULT_STOP, so the engine pause never
- * opens and pauseflag is never set) and toggle our own non-freezing player list.
- * A press while a session is only being set up, and stock single-player, keep
- * the normal pause. */
+ * session would freeze only THIS machine while everyone else keeps driving. In a
+ * live match the engine pause still OPENS (this returns JER_RESULT_CONTINUE): the
+ * world keeps running because MpOnDrawOverlay steps it while pauseflag is set, and
+ * the player list rides on the engine's menu. START is claimed only while the chat
+ * prompt is up. See docs/ARCHITECTURE.md section 8. */
 /* ------------------------------------------------------------------ */
 /* The MP pause menu.                                                  */
 /*                                                                     */
@@ -2189,7 +2188,7 @@ static int MpMenuWriteDiag(void* userdata, int direction)
 static int MpOnPedDraw(void* userdata, void* args)
 {
 	JER_ARGS_PED_DRAW* a = (JER_ARGS_PED_DRAW*)args;
-	int i, on = 0, r = 0, g = 0, b = 0;
+	int i, on = 0, r = 0, g = 0, b = 0, who = -1;
 
 	(void)userdata;
 
@@ -2210,6 +2209,7 @@ static int MpOnPedDraw(void* userdata, void* args)
 		r = gMp.config.colorR;
 		g = gMp.config.colorG;
 		b = gMp.config.colorB;
+		who = gMp.localPlayerId;
 	}
 	else
 	{
@@ -2226,10 +2226,15 @@ static int MpOnPedDraw(void* userdata, void* args)
 				r = p->colorR;
 				g = p->colorG;
 				b = p->colorB;
+				who = p->id;
 				break;
 			}
 		}
 	}
+
+	/* GAME-MODE DECISION POINT: a team colour would replace the suit colour here.
+	 * Take a Ride has no teams, so on/r/g/b come back exactly as they went in. */
+	on = MpModePlayerColour(gMp.gamemode, who, on, r, g, b, &r, &g, &b);
 
 	if (!on)
 	{
@@ -3680,7 +3685,11 @@ JER_MODULE_ENTRY(jer_module_mp_entry)(JERICHO_CONTEXT* ctx)
 	 * to be unattended needs a human to click OK. Same dump, no dialog. */
 	MpSuppressCrashDialogs();
 
-	ctx->jer_register_module(ctx, "mp", "Multiplayer", "0.1.0", "JERICHO",
+	/* The version is mod.toml's (0.18.0). The core lets the manifest win over this
+	 * argument (jerCtxRegisterModule), so this is only the fallback; it is kept equal
+	 * to mod.toml rather than a stale "0.1.0" so the two never disagree in a log. Bump
+	 * both together. */
+	ctx->jer_register_module(ctx, "mp", "Multiplayer", "0.18.0", "JERICHO",
 		"LAN multiplayer: host/join, UDP discovery, JERICHO addon net bridge, "
 		"owner-authoritative car sync (each machine drives its own car and "
 		"broadcasts its state; peers adopt it verbatim), and in-match chat.",
