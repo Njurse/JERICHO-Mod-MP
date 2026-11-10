@@ -104,6 +104,63 @@ static void CheckMarkModes(void)
 	CHECK(MpModeWantsCountdown(77) == 0 && MpModeSpawnRule(77) == MP_MODE_SPAWN_SESSION);	/* unknown -> mode 0 */
 }
 
+/* Cops n Robbers (0.23.0): one getaway on a shared clock, everyone else a cop;
+ * role cars, the chase spawn, scores kept across rounds. */
+static void CheckCopsRobbers(void)
+{
+	const MP_MODE_DESC* d = MpModeFind(MP_GAMEMODE_COPSROBBERS);
+
+	CHECK(MP_GAMEMODE_COPSROBBERS == 3 && MP_GAMEMODE_COUNT == 4);
+	CHECK(d != NULL);
+	if (d == NULL)
+		return;
+
+	CHECK(strcmp(d->name, "COPS N ROBBERS") == 0 && d->selectable == 1);
+	CHECK(d->timer == MP_MODE_TIMER_GETAWAY && MpModeTimerKind(MP_GAMEMODE_COPSROBBERS) == MP_MODE_TIMER_GETAWAY);
+	CHECK(MpModeUsesTimer(MP_GAMEMODE_COPSROBBERS) == 1);
+	CHECK(MpModeMusic(MP_GAMEMODE_COPSROBBERS) == MP_MODE_MUSIC_PURSUIT);
+	CHECK(d->carPool == MP_MODE_CARPOOL_ROLE && d->spawn == MP_MODE_SPAWN_CHASE);
+	CHECK(MpModeSpawnRule(MP_GAMEMODE_COPSROBBERS) == MP_MODE_SPAWN_CHASE);
+	CHECK(d->waitMinPlayers == 2 && d->waitForCars == 1);
+	CHECK(d->firstCountdownSec == 5 && d->roundCountdownSec == 3);
+	CHECK(MpModeKeepsScore(MP_GAMEMODE_COPSROBBERS) == 1);
+	CHECK(MpModeKeepsScore(MP_GAMEMODE_FOXHOUNDS) == 0 && MpModeKeepsScore(MP_GAMEMODE_TAKEADRIDE) == 0);
+	CHECK(MpModeKeepsScore(77) == 0);
+	CHECK(MpModeCarPoolWantsPolice(MP_GAMEMODE_COPSROBBERS, 1) == 0);	/* the getaway */
+	CHECK(MpModeCarPoolWantsPolice(MP_GAMEMODE_COPSROBBERS, 0) == 1);	/* a cop */
+	CHECK(MpModeCarPoolWantsPolice(MP_GAMEMODE_BOMBTAG, 0) == -1);
+	CHECK(MpModeCarPoolWantsPolice(77, 1) == -1);
+	CHECK(MpModeCarChangeRefusal(MP_GAMEMODE_COPSROBBERS, 1) == NULL);
+
+	/* the role pool: model 0 is the police car */
+	{
+		int slots[5] = { 0, 1, 2, 3, 4 };
+		int models[5] = { 1, 2, 0, 3, 4 };
+		int s2[5], m2[5];
+
+		memcpy(s2, slots, sizeof(slots));
+		memcpy(m2, models, sizeof(models));
+		CHECK(MpModeFilterCarPoolRole(MP_GAMEMODE_COPSROBBERS, 0, s2, m2, 5) == 1);
+		CHECK(s2[0] == 2 && m2[0] == 0);				/* a cop: the police car */
+
+		memcpy(s2, slots, sizeof(slots));
+		memcpy(m2, models, sizeof(models));
+		CHECK(MpModeFilterCarPoolRole(MP_GAMEMODE_COPSROBBERS, 1, s2, m2, 5) == 4);
+		CHECK(m2[0] == 1 && m2[1] == 2 && m2[2] == 3 && m2[3] == 4 && s2[2] == 3);	/* the getaway */
+
+		memcpy(s2, slots, sizeof(slots));
+		memcpy(m2, models, sizeof(models));
+		m2[2] = 9;							/* no police car offered */
+		CHECK(MpModeFilterCarPoolRole(MP_GAMEMODE_COPSROBBERS, 0, s2, m2, 5) == 5 && m2[2] == 9);
+
+		memcpy(s2, slots, sizeof(slots));
+		memcpy(m2, models, sizeof(models));
+		CHECK(MpModeFilterCarPoolRole(MP_GAMEMODE_FOXHOUNDS, 0, s2, m2, 5) == 5);
+		CHECK(memcmp(m2, models, sizeof(models)) == 0);
+		CHECK(MpModeFilterCarPoolRole(MP_GAMEMODE_COPSROBBERS, 0, s2, m2, 0) == 0);
+	}
+}
+
 /* Every id the registry knows, plus ids it does not, keep the table well formed. */
 static void CheckTable(void)
 {
@@ -123,7 +180,7 @@ static void CheckTable(void)
 	}
 
 	/* Every row in the table is selectable: Take a Ride and the v23 POC modes. */
-	CHECK(MpModeCount() == 3);
+	CHECK(MpModeCount() == 4);
 	for (i = 0; i < MpModeCount(); i++)
 		CHECK(MpModeAt(i)->selectable == 1);
 }
@@ -194,12 +251,14 @@ static void CheckLobby(void)
 	CHECK(MpModeIsSelectable(MP_GAMEMODE_TAKEADRIDE));
 	CHECK(MpModeIsSelectable(MP_GAMEMODE_FOXHOUNDS));
 	CHECK(MpModeIsSelectable(MP_GAMEMODE_BOMBTAG));
+	CHECK(MpModeIsSelectable(MP_GAMEMODE_COPSROBBERS));
 	CHECK(!MpModeIsSelectable(MP_GAMEMODE_COUNT));
 	CHECK(!MpModeIsSelectable(-1));
 	CHECK(MpModeNextSelectable(MP_GAMEMODE_TAKEADRIDE, 1) == MP_GAMEMODE_FOXHOUNDS);
 	CHECK(MpModeNextSelectable(MP_GAMEMODE_FOXHOUNDS, 1) == MP_GAMEMODE_BOMBTAG);
-	CHECK(MpModeNextSelectable(MP_GAMEMODE_BOMBTAG, 1) == MP_GAMEMODE_TAKEADRIDE);
-	CHECK(MpModeNextSelectable(MP_GAMEMODE_TAKEADRIDE, -1) == MP_GAMEMODE_BOMBTAG);
+	CHECK(MpModeNextSelectable(MP_GAMEMODE_BOMBTAG, 1) == MP_GAMEMODE_COPSROBBERS);
+	CHECK(MpModeNextSelectable(MP_GAMEMODE_COPSROBBERS, 1) == MP_GAMEMODE_TAKEADRIDE);
+	CHECK(MpModeNextSelectable(MP_GAMEMODE_TAKEADRIDE, -1) == MP_GAMEMODE_COPSROBBERS);
 	CHECK(MpModeNextSelectable(MP_GAMEMODE_TAKEADRIDE, 0) == MP_GAMEMODE_TAKEADRIDE);
 	CHECK(MpModeNextSelectable(200, 1) == MP_GAMEMODE_TAKEADRIDE);	/* unknown -> a selectable one */
 }
@@ -208,6 +267,7 @@ int main(void)
 {
 	CheckTakeARideDescriptor();
 	CheckTable();
+	CheckCopsRobbers();
 	CheckAnswersAreToday(MP_GAMEMODE_TAKEADRIDE, "TAKE A RIDE");
 
 	/* an id this build does not know: named "-", plays as Take a Ride (as before) */

@@ -29,7 +29,7 @@ import time
 
 PROTO = 23                    # mp_proto.h MP_PROTO_VERSION (23: the marked-player state, MP_TAG_MARK "JPMK", MP_MARK + MP_MARK_ENTRY, Fox N Hounds / Car Bomb Tag; 22: the round state, MP_TAG_ROUND "JPRD", MP_ROUND + MP_ROUND_ENTRY; 21: a car's city byte past the stock rows is a bank NAME code 0x80..0xFE; 20: MP_ROSTER_ENTRY carries leftModel/leftModelCity, 32 bytes; 19: dynamic JMPPED entries on top of 18's ped model id) -- the game drops any frame whose envelope version differs
 SDK = 3                       # JERICHO_SDK_VERSION
-MP_VER = "0.22.3"             # JERICHO/MODS/mp/mod.toml version -- always advertised (0.20.0 came with proto 23; 0.21.0: the timer modes' round start; 0.22.0: bomb tick/wreck/HUD/glow; 0.22.1: countdown beep, centred glow, framework pre-game; 0.22.2: countdown-start respawn and wreck-lock clear; 0.22.3: local bomb-beep without doppler, halved beep pace, same proto)
+MP_VER = "0.23.0"             # JERICHO/MODS/mp/mod.toml version -- always advertised (0.20.0 came with proto 23; 0.21.0: the timer modes' round start; 0.22.0: bomb tick/wreck/HUD/glow; 0.22.1: countdown beep, centred glow, framework pre-game; 0.22.2: countdown-start respawn and wreck-lock clear; 0.22.3: local bomb-beep without doppler, halved beep pace, same proto; 0.23.0: Cops n Robbers, mode id 3, same proto)
 NUL = bytes([0])
 
 # Shared protocol constants, mirrored from mp_proto.h so the tools never hard-code
@@ -56,28 +56,36 @@ CITY_WIRE_CODE_LAST = 0xFE
 MP_RULE_COPS = 0x1            # 1 = police cars spawn
 
 
-GAMEMODE_NAMES = {0: "TAKE A RIDE", 1: "FOX N HOUNDS", 2: "CAR BOMB TAG"}      # MP_GAMEMODE_* (mp_proto.h)
+GAMEMODE_NAMES = {0: "TAKE A RIDE", 1: "FOX N HOUNDS", 2: "CAR BOMB TAG", 3: "COPS N ROBBERS"}      # MP_GAMEMODE_* (mp_proto.h)
 GAMEMODE_FOXHOUNDS = 1        # mp_proto.h MP_GAMEMODE_FOXHOUNDS
 GAMEMODE_BOMBTAG = 2          # mp_proto.h MP_GAMEMODE_BOMBTAG
+GAMEMODE_COPSROBBERS = 3      # mp_proto.h MP_GAMEMODE_COPSROBBERS
 # mp_mode.c kModes[].timer / .music for each id (MP_MODE_TIMER_*, MP_MODE_MUSIC_*);
 # tools/mode_check checks this against the C table.
-MODE_TIMER_NONE, MODE_TIMER_PERSONAL, MODE_TIMER_SHARED = 0, 1, 2
+MODE_TIMER_NONE, MODE_TIMER_PERSONAL, MODE_TIMER_SHARED, MODE_TIMER_GETAWAY = 0, 1, 2, 3
 MODE_MUSIC_AUTO, MODE_MUSIC_CALM, MODE_MUSIC_PURSUIT = 0, 1, 2
-GAMEMODE_TIMER = {0: MODE_TIMER_NONE, 1: MODE_TIMER_PERSONAL, 2: MODE_TIMER_SHARED}
-GAMEMODE_MUSIC = {0: MODE_MUSIC_AUTO, 1: MODE_MUSIC_PURSUIT, 2: MODE_MUSIC_PURSUIT}
+GAMEMODE_TIMER = {0: MODE_TIMER_NONE, 1: MODE_TIMER_PERSONAL, 2: MODE_TIMER_SHARED, 3: MODE_TIMER_GETAWAY}
+GAMEMODE_MUSIC = {0: MODE_MUSIC_AUTO, 1: MODE_MUSIC_PURSUIT, 2: MODE_MUSIC_PURSUIT, 3: MODE_MUSIC_PURSUIT}
+# mp_mode.c kModes[].keepScore: 1 = scores run across rounds (MpModeKeepsScore)
+GAMEMODE_KEEP_SCORE = {3: 1}
 # mp_mode.c kModes[] pre-game: 0 = off (Take a Ride). Fox/Bomb wait for 2 players
 # and a car each, then 5 s on a fresh map and 3 s on later rounds.
-GAMEMODE_WAIT_MIN = {0: 0, 1: 2, 2: 2}
-GAMEMODE_WAIT_CARS = {0: 0, 1: 1, 2: 1}
-GAMEMODE_FIRST_COUNTDOWN = {0: 0, 1: 5, 2: 5}
-GAMEMODE_ROUND_COUNTDOWN = {0: 0, 1: 3, 2: 3}
+GAMEMODE_WAIT_MIN = {0: 0, 1: 2, 2: 2, 3: 2}
+GAMEMODE_WAIT_CARS = {0: 0, 1: 1, 2: 1, 3: 1}
+GAMEMODE_FIRST_COUNTDOWN = {0: 0, 1: 5, 2: 5, 3: 5}
+GAMEMODE_ROUND_COUNTDOWN = {0: 0, 1: 3, 2: 3, 3: 3}
 # 1 = a first-load or per-round count is set (MpModeWantsCountdown)
-GAMEMODE_COUNTDOWN = {0: 0, 1: 1, 2: 1}
+GAMEMODE_COUNTDOWN = {0: 0, 1: 1, 2: 1, 3: 1}
 
 
 def mode_timer(gamemode):
     """MpModeTimerKind: an unknown id behaves as Take a Ride (no timer)."""
     return GAMEMODE_TIMER.get(gamemode, MODE_TIMER_NONE)
+
+
+def mode_keeps_score(gamemode):
+    """MpModeKeepsScore: 1 = MpRoundBegin keeps each player's score."""
+    return GAMEMODE_KEEP_SCORE.get(gamemode, 0)
 
 
 def mode_countdown(gamemode):

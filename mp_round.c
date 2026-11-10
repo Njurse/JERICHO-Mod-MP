@@ -85,7 +85,8 @@ void MpRoundBegin(int mode)
 			continue;
 
 		p->state = MP_ROUND_PLAYER_PLAYING;
-		p->score = 0;
+		if (!MpModeKeepsScore(mode))
+			p->score = 0;	/* Cops n Robbers keeps the match total */
 		p->team = MpRoundTeamFor(mode, i);
 	}
 
@@ -100,6 +101,31 @@ void MpRoundEnd(void)
 	gRound.have = 1;
 	gRound.phase = MP_ROUND_PHASE_ENDED;
 	gRound.revision++;
+}
+
+int MpRoundAddScore(int playerId, int points)
+{
+	MP_ROUND_PLAYER* p;
+	long long v;
+
+	if (playerId < 0 || playerId >= MP_MAX_PLAYERS || points == 0)
+		return 0;
+
+	p = &gRound.players[playerId];
+
+	if (!p->present)
+		return 0;
+
+	v = (long long)p->score + points;
+	if (v > 0x7FFFFFFF)
+		v = 0x7FFFFFFF;
+	if (v < -0x7FFFFFFF)
+		v = -0x7FFFFFFF;
+
+	p->score = (int)v;
+	gRound.have = 1;
+	gRound.revision++;
+	return 1;
 }
 
 int MpRoundSyncPresent(const int* present, int mode)

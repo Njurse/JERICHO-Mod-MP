@@ -245,12 +245,46 @@ static void PrintCanonical(void)
 	printf("\n");
 }
 
+/* Cops n Robbers: points are added as they are earned and run across rounds;
+ * every other mode starts each round at 0. */
+static void CheckScoreAdds(void)
+{
+	int present[MP_MAX_PLAYERS];
+	int ids[] = { 1, 4 };
+	unsigned rev;
+
+	MpRoundReset();
+	SetPresent(present, ids, 2);
+	MpRoundSyncPresent(present, MP_GAMEMODE_COPSROBBERS);
+	MpRoundBegin(MP_GAMEMODE_COPSROBBERS);
+
+	rev = MpRoundRevision();
+	CHECK(MpRoundAddScore(1, 100) == 1 && MpRoundRevision() != rev);
+	CHECK(MpRoundAddScore(4, 15) == 1 && MpRoundAddScore(4, 10) == 1);
+	CHECK(MpRoundAddScore(2, 5) == 0);			/* not present */
+	CHECK(MpRoundAddScore(-1, 5) == 0 && MpRoundAddScore(MP_MAX_PLAYERS, 5) == 0);
+	CHECK(MpRoundAddScore(1, 0) == 0);
+	CHECK(MpRoundPlayerScore(1) == 100 && MpRoundPlayerScore(4) == 25);
+
+	MpRoundEnd();
+	MpRoundBegin(MP_GAMEMODE_COPSROBBERS);			/* kept */
+	CHECK(MpRoundPlayerScore(1) == 100 && MpRoundPlayerScore(4) == 25);
+
+	CHECK(MpRoundAddScore(1, 0x7FFFFFFF) == 1 && MpRoundPlayerScore(1) == 0x7FFFFFFF);	/* clamps */
+
+	MpRoundEnd();
+	MpRoundBegin(MP_GAMEMODE_BOMBTAG);			/* not kept */
+	CHECK(MpRoundPlayerScore(1) == 0 && MpRoundPlayerScore(4) == 0);
+	MpRoundReset();
+}
+
 int main(void)
 {
 	CheckTag();
 	CheckDefaults();
 	CheckTakeARideLifecycle();
 	CheckApply();
+	CheckScoreAdds();
 	CheckDefaults();	/* a reset forgets everything */
 	PrintCanonical();
 

@@ -627,6 +627,23 @@ static int RunScript(void)
 			int b = atoi(strtok(NULL, " \t\r\n"));
 			ev = MpMarkContact(a, b);
 		}
+		else if (strcmp(tok, "hit") == 0)
+		{
+			int a = atoi(strtok(NULL, " \t\r\n"));
+			int b = atoi(strtok(NULL, " \t\r\n"));
+			int strength = atoi(strtok(NULL, " \t\r\n"));
+			int hev = 0;
+			int pts = MpMarkHit(a, b, strength, &hev);
+			ev = pts * 256 + hev;	/* points and the event, one number */
+		}
+		else if (strcmp(tok, "drive") == 0)
+		{
+			int ms = atoi(strtok(NULL, " \t\r\n"));
+			int speed = atoi(strtok(NULL, " \t\r\n"));
+			ev = MpMarkDrive(ms, speed);
+		}
+		else if (strcmp(tok, "escape") == 0)
+			ev = MpMarkEscape();
 		else
 			continue;
 

@@ -94,7 +94,7 @@ def mark_scripts():
     """Referee scripts both twins run. Fixed ones for the rules, then seeded random
     ones so an ordering slip in either twin shows up as a byte difference."""
     import random
-    fox, bomb = "1", "2"
+    fox, bomb, cnr = "1", "2", "3"
     everyone = " ".join(str(i) for i in range(16))
     scripts = [
         # The round start: two present but a car not picked -> no start; every car
@@ -144,13 +144,31 @@ def mark_scripts():
         ["reset %s 1" % bomb, "ready %s" % everyone, "sync 0 1 4", "tick 0 0",
          "tick 4000 0", "tick 2000 0", "contact 1 4",
          "contact 1 4", "tick 1000 0", "sync 0 1 4 9", "tick 57000 0", "tick 10000 3"],
+        # Cops n Robbers: the getaway is named at the COUNTDOWN (random first, kept
+        # across an abort), no tags, hits score with a per-cop cooldown and fill the
+        # heat meter, drive points carry their remainder, 0:00 = the getaway wins,
+        # then the next id in turn; a bust; an escape; the getaway leaving.
+        ["reset %s 1" % cnr, "ready %s" % everyone, "sync 0 2 5 7", "tick 0 77", "sync 0 2 5 7 9",
+         "tick 33 0", "ready 2 5 7", "tick 33 0", "tick 33 0", "ready %s" % everyone, "tick 33 0",
+         "tick 4999 5", "hit 2 5 9", "tick 1 6", "contact 2 5", "contact 5 7", "drive 1000 0",
+         "drive 1000 300", "drive 333 150", "drive 333 150", "drive 334 150", "hit 2 5 9",
+         "hit 5 7 30", "hit 7 5 20", "hit 7 5 20", "hit 2 9 0", "tick 999 0", "hit 7 5 20",
+         "tick 1 0", "hit 5 7 20", "escape", "tick 60000 0", "drive 100 0", "tick 9999 0",
+         "tick 1 0", "tick 3000 3", "tick 33 0"],
+        ["reset %s 1" % cnr, "ready %s" % everyone, "sync 0 1 4", "tick 0 0", "tick 5000 0",
+         "hit 1 4 20", "tick 1000 0", "hit 1 4 20", "tick 1000 0", "hit 4 1 20", "tick 1000 0",
+         "hit 1 4 20", "tick 1000 0", "hit 1 4 20", "tick 1000 0", "hit 1 4 20", "tick 1000 0",
+         "hit 1 4 20", "tick 1000 0", "hit 1 4 20", "tick 1000 0", "hit 1 4 20", "tick 1000 0",
+         "hit 1 4 20", "hit 1 4 20", "tick 10000 0", "tick 3000 0", "escape", "tick 1000 0",
+         "sync 0 1 4 6", "tick 33 0", "tick 10000 0", "tick 3000 0", "sync 0 1 6", "tick 33 0",
+         "sync 0 1 4 6", "tick 10000 0", "tick 3000 0"],
         # Take a Ride: inert; and the minutes clamp.
         ["reset 0 3", "sync 0 0 1 2", "tick 1000 0", "contact 0 1"],
         ["reset %s 0" % fox, "reset %s 9" % bomb, "sync 0 3 4", "tick 1 0"],
     ]
     rng = random.Random(0x7A6)
     for n in range(40):
-        mode = rng.choice([fox, bomb])
+        mode = rng.choice([fox, bomb, cnr])
         steps = ["reset %s %d" % (mode, rng.randint(0, 6))]
         ids = set()
         ready = set(rng.sample(range(6), rng.randint(0, 6)))
@@ -165,6 +183,12 @@ def mark_scripts():
                 steps.append("ready %s" % " ".join(str(i) for i in sorted(ready)))
             elif r < 0.45:
                 steps.append("contact %d %d" % (rng.randrange(0, 6), rng.randrange(0, 6)))
+            elif mode == cnr and r < 0.55:
+                steps.append("hit %d %d %d" % (rng.randrange(0, 6), rng.randrange(0, 6), rng.randrange(-2, 30)))
+            elif mode == cnr and r < 0.62:
+                steps.append("drive %d %d" % (rng.choice([0, 33, 34, 500, 1000]), rng.randrange(-10, 400)))
+            elif mode == cnr and r < 0.63:
+                steps.append("escape")
             else:
                 steps.append("tick %d %d" % (rng.choice([0, 33, 34, 500, 1000, 2000, 3999, 4000, 5000, 15000, 61000]), rng.randrange(1000)))
         scripts.append(steps)
@@ -189,6 +213,13 @@ def python_mark_run(steps):
             ev = ref.tick(int(t[1]), int(t[2]))
         elif t[0] == "contact":
             ev = 1 if ref.contact(int(t[1]), int(t[2])) else 0
+        elif t[0] == "hit":
+            pts, hev = ref.hit(int(t[1]), int(t[2]), int(t[3]))
+            ev = pts * 256 + hev
+        elif t[0] == "drive":
+            ev = ref.drive(int(t[1]), int(t[2]))
+        elif t[0] == "escape":
+            ev = ref.escape()
         out.append("STEP %d %d %s" % (n, ev, ref.to_bytes().hex()))
     return out
 
@@ -204,7 +235,14 @@ def check_mark_constants():
              "MP_MARK_LOBBY_MS": markref.LOBBY_MS,
              "MP_MARK_EV_LOBBY": markref.EV_LOBBY,
              "MP_MARK_EV_BEGIN": markref.EV_BEGIN, "MP_MARK_EV_END": markref.EV_END,
-             "MP_MARK_EV_MOVED": markref.EV_MOVED, "MP_MARK_EV_COUNTDOWN": markref.EV_COUNTDOWN}
+             "MP_MARK_EV_MOVED": markref.EV_MOVED, "MP_MARK_EV_COUNTDOWN": markref.EV_COUNTDOWN,
+             "MP_MARK_CNR_HIT_COOLDOWN_MS": markref.CNR_HIT_COOLDOWN_MS,
+             "MP_MARK_CNR_HIT_MAX": markref.CNR_HIT_MAX, "MP_MARK_CNR_HIT_POINTS": markref.CNR_HIT_POINTS,
+             "MP_MARK_CNR_BUST_POINTS": markref.CNR_BUST_POINTS,
+             "MP_MARK_CNR_DRIVE_BASE": markref.CNR_DRIVE_BASE, "MP_MARK_CNR_DRIVE_BONUS": markref.CNR_DRIVE_BONUS,
+             "MP_MARK_CNR_DRIVE_TOPSPEED": markref.CNR_DRIVE_TOPSPEED,
+             "MP_MARK_CNR_ESCAPE_DIST": markref.CNR_ESCAPE_DIST,
+             "MP_MARK_CNR_ESCAPE_HOLD_MS": markref.CNR_ESCAPE_HOLD_MS}
     ok = True
     for name, py in pairs.items():
         mm = re.search(r"#define\s+%s\s+(0x[0-9A-Fa-f]+|\d+)\b" % name, h)

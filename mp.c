@@ -1699,6 +1699,7 @@ static u_char MpInk(int v)
 #define MP_COL_RX		164
 #define MP_COL_TX		206
 #define MP_COL_LOSS		250
+#define MP_COL_PTS		280	/* a timer mode's points (MpRoundPlayerScore) */
 
 #define MP_PANEL_Y_TITLE	6
 #define MP_PANEL_Y_IDENT	15
@@ -1770,6 +1771,9 @@ static void MpDrawPlayerList(void)
 	MpPanelText("RX",     MP_COL_RX,   MP_PANEL_Y_HEAD);
 	MpPanelText("TX",     MP_COL_TX,   MP_PANEL_Y_HEAD);
 	MpPanelText("LOSS",   MP_COL_LOSS, MP_PANEL_Y_HEAD);
+
+	if (MpModeUsesTimer(gMp.gamemode))
+		MpPanelText("PTS", MP_COL_PTS, MP_PANEL_Y_HEAD);
 
 	for (id = 0; id < MP_MAX_PLAYERS; id++)
 	{
@@ -1885,6 +1889,16 @@ static void MpDrawPlayerList(void)
 			SetTextColour(MP_INK(MP_PANEL_LABEL_R, MP_PANEL_LABEL_G, MP_PANEL_LABEL_B));
 
 		MpPanelText(loss, MP_COL_LOSS, y);
+
+		/* the mode's points, from the round state (the host's JPRD) */
+		if (MpModeUsesTimer(gMp.gamemode))
+		{
+			char pts[16];
+
+			snprintf(pts, sizeof(pts), "%d", MpRoundPlayerScore(p->id));
+			SetTextColour(MP_INK(MP_PANEL_LABEL_R, MP_PANEL_LABEL_G, MP_PANEL_LABEL_B));
+			MpPanelText(pts, MP_COL_PTS, y);
+		}
 
 		/* so the list can be checked without eyes on the screen */
 		if (MpDebugOn() && gMpCtx != NULL)
@@ -3696,14 +3710,15 @@ JER_MODULE_ENTRY(jer_module_mp_entry)(JERICHO_CONTEXT* ctx)
 	 * to be unattended needs a human to click OK. Same dump, no dialog. */
 	MpSuppressCrashDialogs();
 
-	/* The version is mod.toml's (0.22.3: local bomb-beep without doppler, halved beep pace on proto 23;
+	/* The version is mod.toml's (0.23.0: Cops n Robbers, game mode 3, on proto 23;
+	 * 0.22.3 was local bomb-beep without doppler, halved beep pace;
 	 * 0.22.2 was countdown-start respawn and wreck-lock clear;
 	 * 0.22.1 was countdown beep, centred glow, framework pre-game;
 	 * 0.21.0 was the timer modes' round start; 0.20.0 came with MP_PROTO_VERSION 23).
 	 * The core lets the manifest win over this argument (jerCtxRegisterModule), so
 	 * this is only the fallback; it is kept equal to mod.toml rather than a stale
 	 * "0.1.0" so the two never disagree in a log. Bump both together. */
-	ctx->jer_register_module(ctx, "mp", "Multiplayer", "0.22.3", "JERICHO",
+	ctx->jer_register_module(ctx, "mp", "Multiplayer", "0.23.0", "JERICHO",
 		"LAN multiplayer: host/join, UDP discovery, JERICHO addon net bridge, "
 		"owner-authoritative car sync (each machine drives its own car and "
 		"broadcasts its state; peers adopt it verbatim), and in-match chat.",

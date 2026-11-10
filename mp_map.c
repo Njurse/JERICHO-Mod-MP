@@ -9,6 +9,7 @@
 #include "driver2.h"
 #include "cars.h"
 #include "overmap.h"
+#include "camera.h"	/* CameraCnt: the getaway blip's red/blue beat */
 
 #include <string.h>
 #include <stdio.h>
@@ -27,6 +28,7 @@ int MpOnDrawMap(void* userdata, void* args)
 	u_char g = 0;
 	int i, drawn = 0;
 	int firstId = -1, firstVx = 0, firstVz = 0;
+	int getaway, flashRed;
 
 	(void)userdata;
 
@@ -39,6 +41,11 @@ int MpOnDrawMap(void* userdata, void* args)
 	 * local player has NO marker at all on the map -- which is worse. The remote
 	 * players are added by the loop below; ours is the engine's. */
 	m->suppressStockBlip = 0;
+
+	/* Cops n Robbers: the getaway's blip flashes red/blue, the felony beat
+	 * (overmap.c's ptab runs on CameraCnt & 0xf) */
+	getaway = MpMarkChaseGetaway();
+	flashRed = (CameraCnt & 8) == 0;
 
 	if (MpDebugOn() && gMpCtx != NULL)
 	{
@@ -69,6 +76,17 @@ int MpOnDrawMap(void* userdata, void* args)
 		 * player -- us included -- reads in the colour the others see us in. */
 		if (p->isLocal || p->id == gMp.localPlayerId)
 		{
+			if (p->id == getaway)
+			{
+				target.vx = cp->hd.where.t[0];
+				target.vy = 0;
+				target.vz = cp->hd.where.t[2];
+				m->suppressStockBlip = 1;
+				DrawPlayerDot(&target, (short)-cp->hd.direction,
+					flashRed ? 255 : 0, 0, flashRed ? 0 : 255, m->flags);
+				continue;
+			}
+
 			if (!gMp.config.colorOn)
 				continue;
 
@@ -106,7 +124,10 @@ int MpOnDrawMap(void* userdata, void* args)
 
 		/* each player's arrow in their preferred colour (the same one their name
 		 * is drawn in, in chat); the stock red ramp only when they have none */
-		if (p->colorOn)
+		if (p->id == getaway)
+			DrawPlayerDot(&target, (short)-cp->hd.direction,
+				flashRed ? 255 : 0, 0, flashRed ? 0 : 255, m->flags);
+		else if (p->colorOn)
 			DrawPlayerDot(&target, (short)-cp->hd.direction,
 				p->colorR, p->colorG, p->colorB, m->flags);
 		else

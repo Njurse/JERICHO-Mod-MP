@@ -301,6 +301,8 @@ enum
 	MP_GAMEMODE_TAKEADRIDE = 0,
 	MP_GAMEMODE_FOXHOUNDS = 1,	/* v23: tag the fox to become it; first clock to 0:00 wins */
 	MP_GAMEMODE_BOMBTAG = 2,	/* v23: pass the bomb; its holder at 0:00 loses */
+	MP_GAMEMODE_COPSROBBERS = 3,	/* v23 (no bump): one getaway driver (JPMK `marked`), the rest
+					 * are player cops; scores ride JPRD MP_ROUND_ENTRY.score */
 	MP_GAMEMODE_COUNT
 };
 

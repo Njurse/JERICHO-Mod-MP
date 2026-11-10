@@ -53,6 +53,21 @@ extern "C" {
 					 * The phase MP_MARK_PHASE_LOBBY is retired;
 					 * the first-load count runs as COUNTDOWN. */
 
+/* Cops n Robbers (MP_MODE_TIMER_GETAWAY). The host's caller measures; these
+ * decide. A HIT is a contact between the getaway and a cop that the host
+ * accepted (the same contacts Fox N Hounds tags with); its strength is the
+ * contact's push in whole units/frame (mp_session.c MpContactPush: 60% of the
+ * closing speed, capped at 20; dedi: the same from two carstates). */
+#define MP_MARK_CNR_HIT_COOLDOWN_MS	1000	/* per cop: one scored hit a second */
+#define MP_MARK_CNR_HIT_MAX		20	/* strength cap (= MP_HIT_MAX_PUSH) */
+#define MP_MARK_CNR_HIT_POINTS		5	/* points per unit of strength: 5..100 a hit */
+#define MP_MARK_CNR_BUST_POINTS		1000	/* the cops' damage meter: full = busted */
+#define MP_MARK_CNR_DRIVE_BASE		10	/* the getaway's points per second alive */
+#define MP_MARK_CNR_DRIVE_BONUS		5	/* + up to this many per second at speed */
+#define MP_MARK_CNR_DRIVE_TOPSPEED	300	/* whole units/frame (~90 mph) for the full bonus */
+#define MP_MARK_CNR_ESCAPE_DIST		32000	/* x/z units from EVERY cop (~2x draw distance) */
+#define MP_MARK_CNR_ESCAPE_HOLD_MS	5000	/* ...held this long (the host's caller) */
+
 /* Event bits returned by MpMarkSync / MpMarkTick. */
 #define MP_MARK_EV_BEGIN	0x01	/* a round went live: MpRoundBegin */
 #define MP_MARK_EV_END		0x02	/* the round ended: MpRoundEnd */
@@ -86,6 +101,22 @@ int  MpMarkTick(int ms, unsigned rnd);
  * cooldown is over), 0 when it was not a tag. */
 int  MpMarkContact(int a, int b);
 
+/* Cops n Robbers, host. A hit between players `a` and `b` (one the getaway, one a
+ * cop) of `strength` (above): returns the points the COP earned (0 = not a scored
+ * hit: not live, two cops, the cop's cooldown) and adds them to the heat meter;
+ * a full meter ends the round, busted (*outEv = MP_MARK_EV_END, winner none). */
+int  MpMarkHit(int a, int b, int strength, int* outEv);
+
+/* Cops n Robbers, host: `ms` more alive at `speed` whole units/frame. Returns the
+ * whole points the GETAWAY earned (MP_MARK_CNR_DRIVE_BASE a second, plus up to
+ * MP_MARK_CNR_DRIVE_BONUS a second scaled by speed); the remainder carries. */
+int  MpMarkDrive(int ms, int speed);
+
+/* Cops n Robbers, host: the getaway is clear of every cop (the caller held
+ * MP_MARK_CNR_ESCAPE_DIST for MP_MARK_CNR_ESCAPE_HOLD_MS). Ends the round with
+ * the getaway as the winner: MP_MARK_EV_END, or 0 when not live. */
+int  MpMarkEscape(void);
+
 int  MpMarkBuild(unsigned char* out, int cap);	/* bytes written, 0 = too small */
 unsigned MpMarkRevision(void);		/* bumped on every change except a tick */
 
@@ -103,6 +134,7 @@ unsigned MpMarkSeq(void);
 int  MpMarkPresent(int playerId);
 int  MpMarkPlayerReady(int playerId);	/* present and has picked a car */
 int  MpMarkCountWaiting(int* outReady);	/* present players; *outReady = how many have a car */
+int  MpMarkHeat(void);			/* Cops n Robbers: the damage meter, 0..BUST; else 0 */
 
 /* COUNTDOWN: ms until GO; 0 otherwise. `sinceMs` is run on like MpMarkClockMs. */
 int  MpMarkCountdownMs(int sinceMs);

@@ -40,6 +40,11 @@ void MpRoundBegin(int mode);
 
 void MpRoundEnd(void);			/* phase ENDED; players and scores are kept */
 
+/* Add `points` to a present player's score (host only; a mode's referee says how
+ * many). Returns 1 when the row exists. MpRoundBegin zeroes scores unless the
+ * mode keeps them (MpModeKeepsScore: Cops n Robbers). */
+int MpRoundAddScore(int playerId, int points);
+
 /* Make the present-set match `present[id]` (MP_MAX_PLAYERS entries, nonzero =
  * in the session). A player who arrives gets a row: during a LIVE round the state
  * the mode's late-join policy gives (Take a Ride: playing), otherwise WAITING.

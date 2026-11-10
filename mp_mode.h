@@ -59,19 +59,33 @@ typedef enum
  * plain data; MpModeFilterCarPool owns what each id means. */
 typedef enum
 {
-	MP_MODE_CARPOOL_ALL = 0		/* everything the car mods offer (Take a Ride) */
+	MP_MODE_CARPOOL_ALL = 0,	/* everything the car mods offer (Take a Ride) */
+	MP_MODE_CARPOOL_ROLE = 1	/* by round role: the marked player (the getaway) gets
+					 * non-police cars, everyone else police cars
+					 * (MpModeCarPoolWantsPolice, MpModeFilterCarPoolRole) */
 } MP_MODE_CARPOOL;
+
+/* The police car's model number: Driver 2's own rule (FEmain.c carNumLookup
+ * lists it as model 0 in every city; the cop the engine pings in is resident
+ * model slot 3, residentModels[3] == 0). A car mod's imported police car with
+ * another number is not recognised as one. */
+#define MP_MODE_POLICE_MODEL	0
 
 /* Where a player's car is placed. */
 typedef enum
 {
 	MP_MODE_SPAWN_SESSION = 0,	/* the session's own placement: the level start, the
 					 * per-player road spot, x/z only (Take a Ride) */
-	MP_MODE_SPAWN_CLUSTER = 1	/* seated as SESSION, then at every round start
+	MP_MODE_SPAWN_CLUSTER = 1,	/* seated as SESSION, then at every round start
 					 * (MP_MARK_PHASE_COUNTDOWN) each machine puts its own
 					 * car on a road near one anchor car, clear of the
-					 * others, facing a random way (mp_session.c
+					 * others, facing along its lane (mp_session.c
 					 * MpMarkClusterTick) */
+	MP_MODE_SPAWN_CHASE = 2		/* at every round start the MARKED player (the getaway)
+					 * lands on a random road anywhere on the map, facing
+					 * along it; everyone else lands on the same road
+					 * BEHIND it at random distances, facing the same way
+					 * (mp_session.c MpMarkChaseTick) */
 } MP_MODE_SPAWN;
 
 /* What a mode's clock does (Fox N Hounds / Car Bomb Tag, mp_mark.c). */
@@ -80,7 +94,12 @@ typedef enum
 	MP_MODE_TIMER_NONE = 0,		/* no clock, nobody marked (Take a Ride) */
 	MP_MODE_TIMER_PERSONAL,		/* a clock per player, ticking only while that player
 					 * is marked; the first to 0:00 wins (Fox N Hounds) */
-	MP_MODE_TIMER_SHARED		/* one clock; whoever is marked at 0:00 loses (Car Bomb Tag) */
+	MP_MODE_TIMER_SHARED,		/* one clock; whoever is marked at 0:00 loses (Car Bomb Tag) */
+	MP_MODE_TIMER_GETAWAY		/* one clock; the marked player is the getaway driver,
+					 * chosen at the countdown (random first, then each
+					 * player in turn); no tags. 0:00 or an escape = the
+					 * getaway wins; the cops' damage meter full = busted
+					 * (Cops n Robbers, mp_mark.c) */
 } MP_MODE_TIMER;
 
 /* The music a mode holds while its round is live. Same numbers as jer_music.h's
@@ -142,6 +161,9 @@ typedef struct MP_MODE_DESC
 	int mapCycle;		/* 1 = the lobby may offer map cycling */
 	int timer;		/* MP_MODE_TIMER_*: the marked-player clock (v23) */
 	int music;		/* MP_MODE_MUSIC_*: held while a round is live */
+	int keepScore;		/* 1 = scores carry from round to round for the whole
+				 * match (MpRoundBegin keeps them); 0 = each round
+				 * starts at 0 (every mode before Cops n Robbers) */
 } MP_MODE_DESC;
 
 /* ---- the registry ------------------------------------------------------- */
@@ -168,6 +190,12 @@ int         MpModeAllowsMapCycle(int mode);
 int         MpModeTimerKind(int mode);			/* MP_MODE_TIMER_* */
 int         MpModeUsesTimer(int mode);			/* 1 = marked player + clock (JPMK) */
 int         MpModeMusic(int mode);			/* MP_MODE_MUSIC_* while live */
+int         MpModeKeepsScore(int mode);		/* 1 = scores carry across rounds */
+
+/* MP_MODE_CARPOOL_ROLE: 1 = this role drives police cars, 0 = non-police cars;
+ * -1 = the mode has no role pool (any car). `isMarked` = the player is the
+ * marked one (the getaway driver). */
+int         MpModeCarPoolWantsPolice(int mode, int isMarked);
 
 /* NULL = the change may go ahead; otherwise the reason, for the log/notice.
  * `roundRunning` is whether a round is live (a session that is running). */
@@ -176,6 +204,12 @@ const char* MpModeCarChangeRefusal(int mode, int roundRunning);
 /* Narrow a picker's (slot, model) list in place; returns the new count. Mode 0
  * returns `count` untouched. */
 int MpModeFilterCarPool(int mode, int city, int* slots, int* models, int count);
+
+/* MP_MODE_CARPOOL_ROLE: keep only the cars for this role (police for a cop,
+ * anything else for the getaway), in place, order kept. A list the filter would
+ * EMPTY (no police car offered) comes back untouched: the session then swaps the
+ * car itself at the round start. Other pools: untouched. Returns the count. */
+int MpModeFilterCarPoolRole(int mode, int isMarked, int* slots, int* models, int count);
 
 /* The team a player is on, -1 for none. Read from the round state (mp_round.h,
  * MP_TAG_ROUND); always -1 for a mode with no teams, such as Take a Ride, and for

@@ -1,6 +1,6 @@
 id = "mp"
 name = "Multiplayer"
-version = "0.22.3"
+version = "0.23.0"
 # the JERICHO interface (SDK) this mod is built against
 interface = 3
 author = "JERICHO"

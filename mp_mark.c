@@ -36,6 +36,13 @@ static struct
 	int present[MP_MAX_PLAYERS];
 	int ready[MP_MAX_PLAYERS];	/* has picked a car (MpMarkReady) */
 	int remainMs[MP_MAX_PLAYERS];
+	/* MP_MODE_TIMER_GETAWAY (Cops n Robbers), host-side except `heat` */
+	int lastGetaway;	/* the getaway of the last round that went live, -1 = none yet */
+	int firstPick;		/* the random first getaway, kept across an aborted countdown */
+	int heat;		/* the cops' damage meter, 0..MP_MARK_CNR_BUST_POINTS (on the
+				 * wire as the getaway's MP_MARK_ENTRY.remainDs) */
+	long driveAcc;		/* the getaway's drive points, in 1/(1000*TOPSPEED) */
+	long hitUntil[MP_MAX_PLAYERS];	/* per cop: no scored hit before this */
 } gMark;
 
 static int MpMarkIdOk(int id)
@@ -103,7 +110,39 @@ void MpMarkReset(int mode, int minutes)
 	gMark.minutes = MpMarkClampMinutes(minutes);
 	gMark.marked = -1;
 	gMark.winner = -1;
+	gMark.lastGetaway = -1;
+	gMark.firstPick = -1;
 	gMark.have = gMark.timer != MP_MODE_TIMER_NONE;
+}
+
+static int MpMarkOneClock(void)
+{
+	return gMark.timer == MP_MODE_TIMER_SHARED || gMark.timer == MP_MODE_TIMER_GETAWAY;
+}
+
+/* Cops n Robbers: who drives the getaway next. The first is random (kept if a
+ * countdown is aborted, so a retry does not re-roll); then the next present id
+ * after the last getaway, wrapping, so every player gets a turn. */
+static int MpMarkNextGetaway(unsigned rnd)
+{
+	int i;
+
+	if (gMark.lastGetaway < 0)
+	{
+		if (!MpMarkIdOk(gMark.firstPick) || !gMark.present[gMark.firstPick])
+			gMark.firstPick = MpMarkPick(rnd);
+		return gMark.firstPick;
+	}
+
+	for (i = 1; i <= MP_MAX_PLAYERS; i++)
+	{
+		int id = (gMark.lastGetaway + i) % MP_MAX_PLAYERS;
+
+		if (gMark.present[id])
+			return id;
+	}
+
+	return -1;
 }
 
 /* Every present player's clock full again (Fox N Hounds), or the one shared clock. */
@@ -114,7 +153,7 @@ static void MpMarkFreshClocks(void)
 	for (i = 0; i < MP_MAX_PLAYERS; i++)
 		gMark.remainMs[i] = (gMark.present[i] && gMark.timer == MP_MODE_TIMER_PERSONAL) ? MpMarkFullMs() : 0;
 
-	gMark.sharedMs = gMark.timer == MP_MODE_TIMER_SHARED ? MpMarkFullMs() : 0;
+	gMark.sharedMs = MpMarkOneClock() ? MpMarkFullMs() : 0;
 }
 
 /* May a round start now? The mode's wait: enough players, and if waitForCars
@@ -150,7 +189,20 @@ static void MpMarkBegin(unsigned rnd)
 	gMark.countdownFirst = 0;
 	gMark.firstMap = 0;	/* GO: later rounds on this map use the per-round count */
 	MpMarkFreshClocks();
-	gMark.marked = MpMarkPick(rnd);
+
+	if (gMark.timer == MP_MODE_TIMER_GETAWAY)
+	{
+		/* the getaway named at the countdown, unless they left since */
+		if (!MpMarkIdOk(gMark.marked) || !gMark.present[gMark.marked])
+			gMark.marked = MpMarkNextGetaway(rnd);
+		gMark.lastGetaway = gMark.marked;
+		gMark.heat = 0;
+		gMark.driveAcc = 0;
+		memset(gMark.hitUntil, 0, sizeof(gMark.hitUntil));
+	}
+	else
+		gMark.marked = MpMarkPick(rnd);
+
 	gMark.cooldownUntil = gMark.clockMs + MP_MARK_TAG_COOLDOWN_MS;
 	gMark.seq = (gMark.seq + 1) & 0xFFFF;
 	gMark.revision++;
@@ -160,12 +212,15 @@ static void MpMarkBegin(unsigned rnd)
  * N..1; later rounds use GET READY + roundCountdownSec. firstMap is only
  * cleared at GO, so an aborted first-load count is retried, not replaced by
  * the shorter per-round count. */
-static void MpMarkCountdown(int first)
+static void MpMarkCountdown(int first, unsigned rnd)
 {
 	int ms;
 
 	gMark.phase = MP_MARK_PHASE_COUNTDOWN;
-	gMark.marked = -1;
+	/* Cops n Robbers names the getaway NOW: every machine needs it for the
+	 * chase spawn and the role car before GO. Nobody else is marked here. */
+	gMark.marked = gMark.timer == MP_MODE_TIMER_GETAWAY ? MpMarkNextGetaway(rnd) : -1;
+	gMark.heat = 0;
 	gMark.winner = -1;
 	gMark.countdownFirst = first ? 1 : 0;
 
@@ -189,7 +244,7 @@ static int MpMarkStart(unsigned rnd)
 
 	if (first || gMark.roundSec > 0)
 	{
-		MpMarkCountdown(first);
+		MpMarkCountdown(first, rnd);
 		if (gMark.countdownMs > 0)
 			return MP_MARK_EV_COUNTDOWN;
 	}
@@ -231,7 +286,12 @@ int MpMarkSync(const int* present, unsigned rnd)
 			markedLeft = 1;
 	}
 
-	if (markedLeft && gMark.phase == MP_MARK_PHASE_LIVE)
+	if (markedLeft && gMark.phase == MP_MARK_PHASE_LIVE && gMark.timer == MP_MODE_TIMER_GETAWAY)
+	{
+		MpMarkEnd(-1);		/* the getaway left: the round is over, nobody won it */
+		ev |= MP_MARK_EV_END;
+	}
+	else if (markedLeft && gMark.phase == MP_MARK_PHASE_LIVE)
 	{
 		gMark.marked = MpMarkPick(rnd);
 		gMark.cooldownUntil = gMark.clockMs + MP_MARK_TAG_COOLDOWN_MS;
@@ -310,6 +370,7 @@ int MpMarkTick(int ms, unsigned rnd)
 		if (!MpMarkStartable())
 		{
 			gMark.phase = MP_MARK_PHASE_WAITING;
+			gMark.marked = -1;	/* Cops n Robbers' named getaway waits too */
 			gMark.countdownMs = 0;
 			gMark.countdownTotalMs = 0;
 			gMark.countdownFirst = 0;
@@ -353,7 +414,9 @@ int MpMarkTick(int ms, unsigned rnd)
 			if (gMark.sharedMs <= 0)
 			{
 				gMark.sharedMs = 0;
-				MpMarkEnd(-1);		/* the holder (still `marked`) loses */
+				/* Car Bomb Tag: the holder (still `marked`) loses.
+				 * Cops n Robbers: the getaway lasted the clock and wins. */
+				MpMarkEnd(gMark.timer == MP_MODE_TIMER_GETAWAY ? gMark.marked : -1);
 				return MP_MARK_EV_END;
 			}
 		}
@@ -382,8 +445,9 @@ int MpMarkContact(int a, int b)
 {
 	int to;
 
-	if (gMark.phase != MP_MARK_PHASE_LIVE || gMark.timer == MP_MODE_TIMER_NONE)
-		return 0;
+	if (gMark.phase != MP_MARK_PHASE_LIVE || gMark.timer == MP_MODE_TIMER_NONE ||
+		gMark.timer == MP_MODE_TIMER_GETAWAY)
+		return 0;	/* Cops n Robbers never moves the getaway: see MpMarkHit */
 	if (!MpMarkIdOk(a) || !MpMarkIdOk(b) || a == b)
 		return 0;
 	if (!gMark.present[a] || !gMark.present[b])
@@ -404,6 +468,83 @@ int MpMarkContact(int a, int b)
 	gMark.seq = (gMark.seq + 1) & 0xFFFF;
 	gMark.revision++;
 	return 1;
+}
+
+int MpMarkHit(int a, int b, int strength, int* outEv)
+{
+	int cop, pts;
+
+	if (outEv != NULL)
+		*outEv = 0;
+
+	if (gMark.phase != MP_MARK_PHASE_LIVE || gMark.timer != MP_MODE_TIMER_GETAWAY)
+		return 0;
+	if (!MpMarkIdOk(a) || !MpMarkIdOk(b) || a == b || !gMark.present[a] || !gMark.present[b])
+		return 0;
+
+	if (gMark.marked == a)
+		cop = b;
+	else if (gMark.marked == b)
+		cop = a;
+	else
+		return 0;	/* two cops bumping: nothing */
+
+	if (strength <= 0 || gMark.clockMs < gMark.hitUntil[cop])
+		return 0;
+
+	if (strength > MP_MARK_CNR_HIT_MAX)
+		strength = MP_MARK_CNR_HIT_MAX;
+
+	pts = strength * MP_MARK_CNR_HIT_POINTS;
+	gMark.hitUntil[cop] = gMark.clockMs + MP_MARK_CNR_HIT_COOLDOWN_MS;
+	gMark.heat += pts;
+	gMark.revision++;
+
+	if (gMark.heat >= MP_MARK_CNR_BUST_POINTS)
+	{
+		gMark.heat = MP_MARK_CNR_BUST_POINTS;
+		MpMarkEnd(-1);		/* busted: the cops win the round */
+		if (outEv != NULL)
+			*outEv = MP_MARK_EV_END;
+	}
+
+	return pts;
+}
+
+int MpMarkDrive(int ms, int speed)
+{
+	long den = 1000L * MP_MARK_CNR_DRIVE_TOPSPEED;
+	int pts;
+
+	if (gMark.phase != MP_MARK_PHASE_LIVE || gMark.timer != MP_MODE_TIMER_GETAWAY ||
+		!MpMarkIdOk(gMark.marked) || ms <= 0)
+		return 0;
+
+	if (speed < 0)
+		speed = 0;
+	if (speed > MP_MARK_CNR_DRIVE_TOPSPEED)
+		speed = MP_MARK_CNR_DRIVE_TOPSPEED;
+
+	gMark.driveAcc += (long)ms * (MP_MARK_CNR_DRIVE_BASE * MP_MARK_CNR_DRIVE_TOPSPEED +
+		MP_MARK_CNR_DRIVE_BONUS * speed);
+	pts = (int)(gMark.driveAcc / den);
+	gMark.driveAcc %= den;
+	return pts;
+}
+
+int MpMarkEscape(void)
+{
+	if (gMark.phase != MP_MARK_PHASE_LIVE || gMark.timer != MP_MODE_TIMER_GETAWAY ||
+		!MpMarkIdOk(gMark.marked))
+		return 0;
+
+	MpMarkEnd(gMark.marked);	/* clear of every cop: the getaway wins now */
+	return MP_MARK_EV_END;
+}
+
+int MpMarkHeat(void)
+{
+	return gMark.timer == MP_MODE_TIMER_GETAWAY ? gMark.heat : 0;
 }
 
 static unsigned MpMarkDs(int ms)
@@ -451,6 +592,8 @@ int MpMarkBuild(unsigned char* out, int cap)
 		e.playerId = (uint8_t)i;
 		e.flags = (uint8_t)(gMark.ready[i] ? MP_MARK_ENTRY_F_READY : 0);
 		e.remainDs = (uint16_t)MpMarkDs(gMark.remainMs[i]);
+		if (gMark.timer == MP_MODE_TIMER_GETAWAY)
+			e.remainDs = (uint16_t)(i == gMark.marked ? gMark.heat : 0);	/* the heat meter */
 		memcpy(out + sizeof(h) + (size_t)n * sizeof(e), &e, sizeof(e));
 		n++;
 	}
@@ -521,6 +664,7 @@ int MpMarkApply(const unsigned char* p, int len)
 	memset(gMark.present, 0, sizeof(gMark.present));
 	memset(gMark.ready, 0, sizeof(gMark.ready));
 	memset(gMark.remainMs, 0, sizeof(gMark.remainMs));
+	gMark.heat = 0;
 
 	for (i = 0; i < h.count; i++)
 	{
@@ -534,6 +678,13 @@ int MpMarkApply(const unsigned char* p, int len)
 		gMark.present[e.playerId] = 1;
 		gMark.ready[e.playerId] = (e.flags & MP_MARK_ENTRY_F_READY) ? 1 : 0;
 		gMark.remainMs[e.playerId] = (int)e.remainDs * 100;
+
+		if (gMark.timer == MP_MODE_TIMER_GETAWAY)
+		{
+			gMark.remainMs[e.playerId] = 0;
+			if (e.playerId == gMark.marked)
+				gMark.heat = e.remainDs;
+		}
 	}
 
 	gMark.revision++;
@@ -608,7 +759,7 @@ int MpMarkClockMs(int playerId, int sinceMs)
 	if (playerId < 0)
 	{
 		ms = gMark.sharedMs;
-		ticking = gMark.timer == MP_MODE_TIMER_SHARED;
+		ticking = MpMarkOneClock();
 	}
 	else
 	{

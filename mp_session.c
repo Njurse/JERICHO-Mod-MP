@@ -34,6 +34,7 @@
 #include "civ_ai.h"	/* reservedSlots: the array PingInCivCar's free-slot scan reads */
 #include "cop_ai.h"	/* requestCopCar: a cop is waiting for a slot (the cop slot hold) */
 #include "felony.h"	/* felonyRating / pedestrianFelony: what a restart clears */
+#include "overmap.h"	/* gJerMapForceFlash: Cops n Robbers' red/blue map flash */
 extern int gBootMpLevel;	/* main.c: 1 = the small multiplayer map, 0 = the full city */
 extern int gBootMpArena;	/* main.c: which multiplayer map (0/1) */
 extern int gWantNight;		/* glaunch.c: 1 = the night take-a-ride level variant */
@@ -505,7 +506,22 @@ static int gMpClusterState;		/* 0 = not in a countdown, 1 = placing, 2 = done / 
 static unsigned gMpClusterFrom;		/* the frame this machine saw the countdown start */
 static int gMpClusterTries;
 static void MpMarkClusterTick(void);
+static void MpMarkChaseTick(void);
 static void MpMarkRoundReset(void);
+static void MpCnrRoleCar(void);
+
+/* Cops n Robbers (MP_MODE_TIMER_GETAWAY) on THIS machine */
+static int gMpChaseFromX, gMpChaseFromZ;	/* the getaway's pose when the countdown began */
+static int gMpCnrPending;		/* host: the getaway's drive points not yet in the round */
+static int gMpCnrEscapeMs;		/* host: how long the getaway has been clear of every cop */
+static int gMpRadioChan = -1;		/* the police radio's voice (one line at a time, per listener) */
+static int gMpRadioPlaying = -1;	/* the channel the current line plays on, -1 = quiet */
+static int gMpRadioFollow;		/* the heading clip still to say after it, 0 = none */
+static int gMpRadioFollowCar = -1;	/* ...from this car slot */
+static unsigned gMpRadioNext;		/* no new line before this frame */
+static int gMpRadioHeat;		/* the heat meter last heard */
+static int gMpRadioSaidGo;
+static void MpCnrRadioClear(void);
 
 static unsigned MpMarkRand(void)
 {
@@ -529,10 +545,22 @@ static void MpMarkHostSync(void)
 		ready[id] = p != NULL && MpPlayerCarReady(p);
 	}
 
-	if (MpMarkSync(present, MpMarkRand()) & MP_MARK_EV_MOVED)
 	{
-		if (gMpCtx != NULL)
+		int ev = MpMarkSync(present, MpMarkRand());
+
+		if ((ev & MP_MARK_EV_MOVED) && gMpCtx != NULL)
 			gMpCtx->jer_log(gMpCtx, "[mp] mark: the marked player left - player %d is marked now\n", MpMarkMarked());
+
+		/* Cops n Robbers: the getaway left mid-round -- over, nobody won it */
+		if (ev & MP_MARK_EV_END)
+		{
+			gMpCnrPending = 0;
+			MpRoundEnd();
+
+			if (gMpCtx != NULL)
+				gMpCtx->jer_log(gMpCtx, "[mp] mark: the getaway (player %d) left - round %d over\n",
+					MpMarkMarked(), MpRoundNumber());
+		}
 	}
 
 	MpMarkReady(ready);
@@ -579,6 +607,90 @@ static void MpHostMarkBegin(void)
 	MpHostSendMark(-1);
 }
 
+/* Cops n Robbers, host: the getaway's points banked into the round (once a second,
+ * so JPRD is not sent every frame for a score that moves every frame). */
+static void MpHostCnrFlush(void)
+{
+	if (gMpCnrPending > 0 && MpMarkMarked() >= 0)
+		MpRoundAddScore(MpMarkMarked(), gMpCnrPending);
+
+	gMpCnrPending = 0;
+}
+
+/* Cops n Robbers, host, once a frame while live: the getaway's drive points and
+ * the escape -- clear of EVERY cop by MP_MARK_CNR_ESCAPE_DIST (x/z) for
+ * MP_MARK_CNR_ESCAPE_HOLD_MS. dedi/core.py _getaway_step is the server's twin. */
+static int MpHostCnrTick(int ms)
+{
+	MP_PLAYER* gp;
+	CAR_DATA* gc = NULL;
+	int ev = 0, id, cops = 0, clear = 1, speed = 0;
+
+	if (MpModeTimerKind(gMp.gamemode) != MP_MODE_TIMER_GETAWAY || MpMarkPhase() != MP_MARK_PHASE_LIVE)
+	{
+		gMpCnrEscapeMs = 0;
+		return 0;
+	}
+
+	gp = MpGetPlayer(MpMarkMarked());
+
+	if (gp != NULL && gp->carId >= 0 && gp->carId < MAX_CARS)
+		gc = &car_data[gp->carId];	/* on foot: no car, no drive bonus, no escape */
+
+	if (gc != NULL)
+	{
+		/* whole units/frame: the velocity is 1 unit/frame << 12 (MP_FIXEDH) */
+		double vx = (double)gc->st.n.linearVelocity[0] / 4096.0;
+		double vz = (double)gc->st.n.linearVelocity[2] / 4096.0;
+
+		speed = (int)sqrt(vx * vx + vz * vz);
+	}
+
+	gMpCnrPending += MpMarkDrive(ms, speed);
+
+	for (id = 0; gc != NULL && id < MP_MAX_PLAYERS; id++)
+	{
+		MP_PLAYER* p;
+		long long dx, dz;
+
+		if (id == MpMarkMarked() || !MpMarkPresent(id))
+			continue;
+
+		p = MpGetPlayer(id);
+
+		if (p == NULL || p->carId < 0 || p->carId >= MAX_CARS)
+			continue;
+
+		cops++;
+		dx = (long long)car_data[p->carId].hd.where.t[0] - gc->hd.where.t[0];
+		dz = (long long)car_data[p->carId].hd.where.t[2] - gc->hd.where.t[2];
+
+		if (dx * dx + dz * dz < (long long)MP_MARK_CNR_ESCAPE_DIST * MP_MARK_CNR_ESCAPE_DIST)
+			clear = 0;
+	}
+
+	if (gc != NULL && cops > 0 && clear)
+		gMpCnrEscapeMs += ms;
+	else
+		gMpCnrEscapeMs = 0;
+
+	if (gMpCnrEscapeMs >= MP_MARK_CNR_ESCAPE_HOLD_MS)
+	{
+		gMpCnrEscapeMs = 0;
+		MpHostCnrFlush();
+		ev = MpMarkEscape();
+
+		if ((ev & MP_MARK_EV_END) && gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx, "[mp] mark: player %d got away - %d units clear of every cop for %d ms\n",
+				MpMarkMarked(), MP_MARK_CNR_ESCAPE_DIST, MP_MARK_CNR_ESCAPE_HOLD_MS);
+	}
+
+	if ((gMp.frame % 30) == 0)
+		MpHostCnrFlush();
+
+	return ev;
+}
+
 /* Host, once a frame in a match. */
 static void MpHostMarkTick(void)
 {
@@ -595,6 +707,11 @@ static void MpHostMarkTick(void)
 
 	ev = MpMarkTick(ms, MpMarkRand());
 
+	if (ev & MP_MARK_EV_END)
+		MpHostCnrFlush();	/* the clock ran out on the getaway: bank its last points first */
+
+	ev |= MpHostCnrTick((ev & MP_MARK_EV_BEGIN) ? 0 : ms);
+
 	if ((ev & MP_MARK_EV_COUNTDOWN) && gMpCtx != NULL)
 	{
 		int ready = 0, n = MpMarkCountWaiting(&ready);
@@ -609,6 +726,8 @@ static void MpHostMarkTick(void)
 	{
 		MpRoundHostSync();
 		MpRoundBegin(gMp.gamemode);
+		gMpCnrPending = 0;
+		gMpCnrEscapeMs = 0;
 
 		if (gMpCtx != NULL)
 			gMpCtx->jer_log(gMpCtx, "[mp] mark: round %d live, player %d is marked (%d min)\n",
@@ -634,7 +753,7 @@ static void MpHostMarkTick(void)
  * engine or the probe and is taken as seen; a client's report (MP_HIT) is checked
  * against where the host sees both cars, with room for the two links' lag. A
  * client never moves the mark itself -- it only reports, and this decides. */
-static void MpMarkHostReport(int a, int b, int checkDistance)
+static void MpMarkHostReport(int a, int b, int checkDistance, int strength)
 {
 	if (!MpIsHost() || !MpModeUsesTimer(gMp.gamemode) || MpMarkPhase() != MP_MARK_PHASE_LIVE)
 		return;
@@ -659,6 +778,37 @@ static void MpMarkHostReport(int a, int b, int checkDistance)
 				gMpCtx->jer_log(gMpCtx, "[mp] mark: contact %d-%d refused (too far apart here)\n", a, b);
 			return;
 		}
+	}
+
+	/* Cops n Robbers: a contact is a HIT, the cop's points, and the heat meter */
+	if (MpModeTimerKind(gMp.gamemode) == MP_MODE_TIMER_GETAWAY)
+	{
+		int hev = 0;
+		int pts = MpMarkHit(a, b, strength, &hev);
+		int cop = (a == MpMarkMarked()) ? b : a;
+
+		if (pts <= 0)
+			return;
+
+		MpRoundAddScore(cop, pts);
+
+		if (gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx, "[mp] mark: player %d hit the getaway for %d (strength %d), heat %d/%d\n",
+				cop, pts, strength, MpMarkHeat(), MP_MARK_CNR_BUST_POINTS);
+
+		if (hev & MP_MARK_EV_END)
+		{
+			MpHostCnrFlush();
+			MpRoundEnd();
+
+			if (gMpCtx != NULL)
+				gMpCtx->jer_log(gMpCtx, "[mp] mark: round %d over - player %d busted\n",
+					MpRoundNumber(), MpMarkMarked());
+		}
+
+		MpHostSendMark(-1);
+		MpHostSendRound(-1);
+		return;
 	}
 
 	if (MpMarkContact(a, b))
@@ -763,6 +913,17 @@ static void MpMarkPresentClear(void)
 	gMpHudB = 64;
 	jer_carexplode_reset(-1);
 	jer_carglow_clear();
+	gJerMapForceFlash = 0;
+	MpCnrRadioClear();
+}
+
+int MpMarkChaseGetaway(void)
+{
+	if (!gMp.running || MpModeTimerKind(gMp.gamemode) != MP_MODE_TIMER_GETAWAY ||
+		!MpMarkHaveState() || MpMarkMode() != gMp.gamemode || MpMarkPhase() != MP_MARK_PHASE_LIVE)
+		return -1;
+
+	return MpMarkMarked();
 }
 
 /* JERICHO round start: is the local player held still for the 3-2-1? See mp.h. Only
@@ -779,6 +940,7 @@ static void MpMarkNotices(int me, int since)
 {
 	int seq = (int)MpMarkSeq(), phase = MpMarkPhase(), marked = MpMarkMarked();
 	int bomb = MpModeTimerKind(gMp.gamemode) == MP_MODE_TIMER_SHARED;
+	int cnr = MpModeTimerKind(gMp.gamemode) == MP_MODE_TIMER_GETAWAY;
 	int go = gMpMarkShownPhase == MP_MARK_PHASE_COUNTDOWN;	/* LIVE straight out of the 3-2-1 */
 	char line[JER_NOTIFY_TEXT_MAX];
 
@@ -820,7 +982,26 @@ static void MpMarkNotices(int me, int since)
 	{
 		line[0] = '\0';
 
-		if (!bomb && MpMarkWinner() >= 0)
+		if (cnr)
+		{
+			/* the getaway wins by the clock or by getting clear; a full heat
+			 * meter is a bust; no winner and no bust = the getaway left */
+			if (MpMarkWinner() >= 0)
+			{
+				if (MpMarkWinner() == me)
+					snprintf(line, sizeof(line), "You got away!");
+				else
+					snprintf(line, sizeof(line), "%s got away!", MpMarkName(MpMarkWinner()));
+			}
+			else if (MpMarkHeat() >= MP_MARK_CNR_BUST_POINTS && marked >= 0)
+			{
+				if (marked == me)
+					snprintf(line, sizeof(line), "BUSTED!");
+				else
+					snprintf(line, sizeof(line), "%s is busted!", MpMarkName(marked));
+			}
+		}
+		else if (!bomb && MpMarkWinner() >= 0)
 		{
 			if (MpMarkWinner() == me)
 				snprintf(line, sizeof(line), "You won the match!");
@@ -843,7 +1024,14 @@ static void MpMarkNotices(int me, int since)
 	{
 		const char* lead = go ? "GO! " : "";	/* one line: the GO and who is marked */
 
-		if (bomb)
+		if (cnr)
+		{
+			if (marked == me)
+				snprintf(line, sizeof(line), "%sLose the cops!", lead);
+			else
+				snprintf(line, sizeof(line), "%sBust %s!", lead, MpMarkName(marked));
+		}
+		else if (bomb)
 		{
 			if (marked == me)
 				snprintf(line, sizeof(line), "%sYou have the bomb! Get rid of it!", lead);
@@ -989,6 +1177,207 @@ static void MpMarkGlowFor(int marked, int myId, int bomb)
 	jer_carglow_set(&car_data[mp->carId], r, g, b);
 }
 
+/* ------------------------------------------------------------------ */
+/* COPS N ROBBERS: THE POLICE RADIO                                     */
+/*                                                                      */
+/* The engine's own cop lines (SOUND_BANK_VOICES: the host city's phrase */
+/* bank, loaded by LoadLevelSFX, gamesnd.c), said from the cop PLAYERS' */
+/* cars, on the engine's own cues (cop_ai.c ControlCops, felony.c):     */
+/*   GO             10 or 11, "suspect picked up", + the heading clip;   */
+/*   a scored hit   6 (the heat meter went up: the damage line);        */
+/*   chatter        15..17 + heading, no repeat, no sooner than the      */
+/*                  engine's own TimeSinceLastSpeech > 720 frames.       */
+/* The heading clip (sample direction + 1, GetCarDirectionOfTravel of   */
+/* the getaway) follows exactly where CopSay plays one (gamesnd.c: 10   */
+/* for cop banks 2/3, 15 for 1/4; cop_bank = mission % 4 + 1).          */
+/* The speaker is the cop car nearest the getaway on this machine, 3D   */
+/* from that car (non-positional when it is our own car).               */
+/* NOBODY TALKS OVER ANYBODY: one line at a time per listener -- a new  */
+/* line waits for the last (and its heading clip) to finish, and for    */
+/* the engine's own speech queue (an AI cop's CopSay) to be quiet.      */
+/* Presentation only: nothing on the wire, each machine its own.        */
+/* Which bank: the host city's, the one the level loaded. There is no   */
+/* regional police-radio setting in this source tree to follow.         */
+/* ------------------------------------------------------------------ */
+#define MP_RADIO_CHATTER_FRAMES	720	/* cop_ai.c: TimeSinceLastSpeech > 720 */
+#define MP_RADIO_CHATTER_JITTER	300
+#define MP_RADIO_DAMAGE_FRAMES	90	/* a damage line at most every 3 s */
+#define MP_RADIO_MIN_SAMPLES	18	/* the phrase bank reaches sample 17 */
+
+extern int gDoCopSpeech;	/* gamesnd.c: 0 on the gang missions */
+
+static void MpCnrRadioClear(void)
+{
+	if (gMpRadioChan >= 0)
+		jer_sound_unlock(gMpRadioChan);
+
+	gMpRadioChan = -1;
+	gMpRadioPlaying = -1;
+	gMpRadioFollow = 0;
+	gMpRadioFollowCar = -1;
+	gMpRadioNext = 0;
+	gMpRadioHeat = 0;
+	gMpRadioSaidGo = 0;
+}
+
+static void MpCnrRadioSay(int carSlot, int sample, int local)
+{
+	CAR_DATA* cp = &car_data[carSlot];
+	int ch = jer_sound_ensure(&gMpRadioChan);
+
+	if (local)
+		ch = StartSound(ch, SOUND_BANK_VOICES, sample, -1500, 4096);
+	else
+	{
+		ch = Start3DSoundVolPitch(ch, SOUND_BANK_VOICES, sample,
+			cp->hd.where.t[0], cp->hd.where.t[1], cp->hd.where.t[2], -1500, 4096);
+
+		if (ch >= 0)
+			SetChannelPosition3(ch, (VECTOR*)cp->hd.where.t,
+				(LONGVECTOR3*)cp->st.n.linearVelocity, -1500, 4096, 0);
+	}
+
+	gMpRadioPlaying = ch;
+}
+
+static void MpCnrRadioTick(int on, int marked, int myId)
+{
+	static unsigned rnd = 0x51u;
+	static int lastChatter = -1, saidNoBank;
+	static unsigned lastLine;
+	MP_PLAYER* gp;
+	CAR_DATA* gc;
+	int id, best = -1, bank, phrase = 0, heading, follow = 0;
+	long long bestD = 0;
+
+	if (!on)
+	{
+		gMpRadioSaidGo = 0;
+		gMpRadioFollow = 0;
+		gMpRadioHeat = 0;
+		return;
+	}
+
+	if (!gDoCopSpeech || GetSoundBankSampleCount(SOUND_BANK_VOICES) < MP_RADIO_MIN_SAMPLES)
+	{
+		if (!saidNoBank && gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx, "[mp] cops n robbers: no police radio here (cop speech %d, %d voice sample(s))\n",
+				gDoCopSpeech, GetSoundBankSampleCount(SOUND_BANK_VOICES));
+		saidNoBank = 1;
+		return;
+	}
+
+	/* one line at a time: the last one (and its heading clip) first */
+	if (gMpRadioPlaying >= 0 && jer_sound_channel_busy(gMpRadioPlaying))
+		return;
+
+	gMpRadioPlaying = -1;
+
+	if (gMpRadioFollow != 0)
+	{
+		if (gMpRadioFollowCar >= 0 && gMpRadioFollowCar < MAX_CARS &&
+			car_data[gMpRadioFollowCar].controlType != CONTROL_TYPE_NONE)
+		{
+			MP_PLAYER* me = MpLocalPlayer();
+
+			MpCnrRadioSay(gMpRadioFollowCar, gMpRadioFollow,
+				me != NULL && me->carId == gMpRadioFollowCar);
+		}
+
+		gMpRadioFollow = 0;
+		return;
+	}
+
+	/* ...and never over the engine's own cop speech */
+	if (gSpeechQueue.is_playing || gSpeechQueue.count > 0)
+		return;
+
+	gp = MpGetPlayer(marked);
+
+	if (gp == NULL || gp->carId < 0 || gp->carId >= MAX_CARS)
+		return;
+
+	gc = &car_data[gp->carId];
+
+	for (id = 0; id < MP_MAX_PLAYERS; id++)
+	{
+		MP_PLAYER* p;
+		long long dx, dz, d;
+
+		if (id == marked || !MpMarkPresent(id))
+			continue;
+
+		p = MpGetPlayer(id);
+
+		if (p == NULL || p->carId < 0 || p->carId >= MAX_CARS ||
+			car_data[p->carId].controlType == CONTROL_TYPE_NONE)
+			continue;
+
+		dx = (long long)car_data[p->carId].hd.where.t[0] - gc->hd.where.t[0];
+		dz = (long long)car_data[p->carId].hd.where.t[2] - gc->hd.where.t[2];
+		d = dx * dx + dz * dz;
+
+		if (best < 0 || d < bestD)
+		{
+			best = p->carId;
+			bestD = d;
+		}
+	}
+
+	if (best < 0)
+		return;
+
+	rnd = rnd * 1103515245u + 12345u;
+	heading = GetCarDirectionOfTravel(gc);
+	bank = gCurrentMissionNumber % 4 + 1;
+
+	if (!gMpRadioSaidGo)
+	{
+		phrase = 10 + (int)((rnd >> 16) & 1);
+		gMpRadioSaidGo = 1;
+		gMpRadioHeat = MpMarkHeat();
+		gMpRadioNext = gMp.frame + MP_RADIO_CHATTER_FRAMES / 2;
+	}
+	else if (MpMarkHeat() > gMpRadioHeat)
+	{
+		gMpRadioHeat = MpMarkHeat();
+
+		if (gMp.frame - lastLine >= (unsigned)MP_RADIO_DAMAGE_FRAMES)
+			phrase = 6;
+	}
+	else if (gMp.frame >= gMpRadioNext)
+	{
+		int pick = (int)((rnd >> 16) % 3);
+
+		if (pick == lastChatter)
+			pick = (pick + 1) % 3;
+
+		lastChatter = pick;
+		phrase = 15 + pick;
+	}
+
+	if (phrase == 0)
+		return;
+
+	if ((phrase == 10 && (bank == 2 || bank == 3)) || (phrase == 15 && (bank == 1 || bank == 4)))
+		follow = heading + 1;
+
+	{
+		MP_PLAYER* me = MpLocalPlayer();
+
+		MpCnrRadioSay(best, phrase, me != NULL && me->id != marked && me->carId == best);
+	}
+
+	gMpRadioFollow = follow;
+	gMpRadioFollowCar = best;
+	lastLine = gMp.frame;
+
+	if (phrase != 6)
+		gMpRadioNext = gMp.frame + MP_RADIO_CHATTER_FRAMES + (int)((rnd >> 8) % MP_RADIO_CHATTER_JITTER);
+
+	(void)myId;
+}
+
 /* Every machine, once a frame in a match. */
 static void MpMarkPresentTick(void)
 {
@@ -1014,9 +1403,13 @@ static void MpMarkPresentTick(void)
 
 	MpMarkNotices(myId, since);
 
-	/* the round-start cluster: this machine places its own car once per countdown */
-	if (phase == MP_MARK_PHASE_COUNTDOWN && MpModeSpawnRule(gMp.gamemode) == MP_MODE_SPAWN_CLUSTER)
+	/* the round-start cluster / chase: this machine places its own car once per
+	 * countdown */
+	if (phase == MP_MARK_PHASE_COUNTDOWN && (MpModeSpawnRule(gMp.gamemode) == MP_MODE_SPAWN_CLUSTER ||
+		MpModeSpawnRule(gMp.gamemode) == MP_MODE_SPAWN_CHASE))
 	{
+		int chase = MpModeSpawnRule(gMp.gamemode) == MP_MODE_SPAWN_CHASE;
+
 		if (gMpClusterState == 0)
 		{
 			/* WAITING is already satisfied: COUNTDOWN has just begun.
@@ -1026,10 +1419,31 @@ static void MpMarkPresentTick(void)
 			gMpClusterFrom = gMp.frame;
 			gMpClusterTries = 0;
 			MpMarkRoundReset();
+
+			if (chase)
+			{
+				MP_PLAYER* gp = MpGetPlayer(marked);
+
+				MpCnrRoleCar();	/* a police car for a cop, any other for the getaway */
+				gMpWideRegion = -1;	/* a fresh map-wide pick every round */
+				gMpWideTries = 0;
+				gMpChaseFromX = gMpChaseFromZ = 0;
+
+				if (gp != NULL && gp->carId >= 0 && gp->carId < MAX_CARS)
+				{
+					gMpChaseFromX = car_data[gp->carId].hd.where.t[0];
+					gMpChaseFromZ = car_data[gp->carId].hd.where.t[2];
+				}
+			}
 		}
 
 		if (gMpClusterState == 1)
-			MpMarkClusterTick();
+		{
+			if (chase)
+				MpMarkChaseTick();
+			else
+				MpMarkClusterTick();
+		}
 	}
 	else
 		gMpClusterState = 0;
@@ -1050,6 +1464,14 @@ static void MpMarkPresentTick(void)
 		else
 			snprintf(text, sizeof(text), "WAITING FOR PLAYERS");
 	}
+	else if (MpModeTimerKind(gMp.gamemode) == MP_MODE_TIMER_GETAWAY)
+	{
+		/* one clock; the cops' damage meter beside it */
+		ms = MpMarkClockMs(-1, since);
+		snprintf(text, sizeof(text), "%s %d:%02d DMG %d%%", marked == myId ? "GETAWAY" : "COP",
+			(ms + 999) / 1000 / 60, (ms + 999) / 1000 % 60,
+			MpMarkHeat() * 100 / MP_MARK_CNR_BUST_POINTS);
+	}
 	else if (MpModeTimerKind(gMp.gamemode) == MP_MODE_TIMER_SHARED)
 	{
 		ms = MpMarkClockMs(-1, since);
@@ -1063,8 +1485,9 @@ static void MpMarkPresentTick(void)
 			(ms + 999) / 1000 / 60, (ms + 999) / 1000 % 60);
 	}
 
-	/* own clock, top-right: cream while it is running, mid grey if this
-	 * viewer is a frozen hound, red and flashing while they hold the bomb */
+	/* own clock, top centre (0.23.0: back from the top right): cream while it is
+	 * running, mid grey if this viewer is a frozen hound, red and flashing while
+	 * they hold the bomb */
 	{
 		int bombKind = (MpModeTimerKind(gMp.gamemode) == MP_MODE_TIMER_SHARED);
 		int live = (phase == MP_MARK_PHASE_LIVE);
@@ -1080,7 +1503,8 @@ static void MpMarkPresentTick(void)
 			tb = 0;
 			flashOff = ((CameraCnt / period) & 1) != 0;
 		}
-		else if (!bombKind && live && myId >= 0 && marked != myId)
+		else if (!bombKind && live && myId >= 0 && marked != myId &&
+			MpModeTimerKind(gMp.gamemode) == MP_MODE_TIMER_PERSONAL)
 		{
 			tr = 128;
 			tg = 128;
@@ -1096,7 +1520,7 @@ static void MpMarkPresentTick(void)
 		gMpHudR = MpHudLerp(gMpHudR, tr);
 		gMpHudG = MpHudLerp(gMpHudG, tg);
 		gMpHudB = MpHudLerp(gMpHudB, tb);
-		jer_hud_panel(MP_MARK_PANEL_SLOT, JER_HUD_ANCHOR_TOP_RIGHT,
+		jer_hud_panel(MP_MARK_PANEL_SLOT, JER_HUD_ANCHOR_TOP_CENTRE,
 			flashOff ? "" : text, gMpHudR, gMpHudG, gMpHudB);
 		gMpMarkPanelOn = 1;
 	}
@@ -1159,16 +1583,33 @@ static void MpMarkPresentTick(void)
 			jer_carexplode_hold(markedCar);
 		}
 
+		int cnrKind = (MpModeTimerKind(gMp.gamemode) == MP_MODE_TIMER_GETAWAY);
+
 		if (live && marked >= 0)
-			MpMarkGlowFor(marked, myId, bombKind);
+			MpMarkGlowFor(marked, myId, bombKind || cnrKind);	/* the getaway glows red */
 		else
 			jer_carglow_clear();
+
+		/* Cops n Robbers: the map's red/blue felony flash for the whole chase, on
+		 * every machine (overmap.c gJerMapForceFlash), and the cops' radio */
+		gJerMapForceFlash = (cnrKind && live) ? 1 : 0;
+		MpCnrRadioTick(cnrKind && live, marked, myId);
 
 		gMpFoxLinesOn = 0;
 		gMpFoxLine1[0] = '\0';
 		gMpFoxLine2[0] = '\0';
 
-		if (!bombKind && live && marked >= 0)
+		if (cnrKind && marked >= 0 && (live || phase == MP_MARK_PHASE_COUNTDOWN))
+		{
+			/* who is who, from the countdown on (the getaway is named there) */
+			gMpFoxLinesOn = 1;
+
+			if (marked == myId)
+				snprintf(gMpFoxLine1, sizeof(gMpFoxLine1), "You're the getaway!");
+			else
+				snprintf(gMpFoxLine1, sizeof(gMpFoxLine1), "%s is the getaway!", MpMarkName(marked));
+		}
+		else if (!bombKind && live && marked >= 0)
 		{
 			gMpFoxLinesOn = 1;
 
@@ -5089,8 +5530,9 @@ static int MpContactPush(MP_PLAYER* me, MP_PLAYER* pl, int localHalf, const char
 
 	pl->lastHitFrame = gMp.frame;
 
-	/* a timer mode: the host's own contact is a tag report, taken as seen */
-	MpMarkHostReport(me->id, pl->id, 0);
+	/* a timer mode: the host's own contact is a tag report, taken as seen; its
+	 * push (whole units/frame) is a Cops n Robbers hit's strength */
+	MpMarkHostReport(me->id, pl->id, 0, (int)push);
 
 	if (MpIsHost())
 	{
@@ -5342,7 +5784,12 @@ static void MpHandleHit(int connIndex, const unsigned char* p, int len)
 
 	/* A timer mode: a client's contact report is a tag CLAIM. The host checks it
 	 * against its own view of both cars before the referee may act on it. */
-	MpMarkHostReport(from, (int)h.targetId, 1);
+	{
+		/* the push back out of the impulse (normal * push << 12): a hit's strength */
+		double ix = h.impulse[0], iy = h.impulse[1], iz = h.impulse[2];
+
+		MpMarkHostReport(from, (int)h.targetId, 1, (int)(sqrt(ix * ix + iy * iy + iz * iz) / MP_FIXEDH));
+	}
 
 	if (me != NULL && h.targetId == me->id && me->carId >= 0 && me->carId < MAX_CARS)
 	{
@@ -10673,7 +11120,17 @@ int MpCarListForCity(int city, int* slots, int* models, int max)
 	if (n <= 0)
 		return n;
 
-	return MpModeFilterCarPool(gMp.gamemode, city, slots, models, n);
+	n = MpModeFilterCarPool(gMp.gamemode, city, slots, models, n);
+
+	/* Cops n Robbers: the role's cars (police for a cop, the rest for the getaway) */
+	{
+		MP_PLAYER* me = MpLocalPlayer();
+
+		if (gMp.running && me != NULL && MpMarkHaveState() && MpMarkMode() == gMp.gamemode)
+			n = MpModeFilterCarPoolRole(gMp.gamemode, MpMarkMarked() == me->id, slots, models, n);
+	}
+
+	return n;
 }
 
 /* Tell whoever keeps the session's car identity (carhacks) how a switch ended: the local
@@ -11902,25 +12359,32 @@ static int MpWarpStreamTo(int x, int z)
 #define MP_ROAD_PROBES		12	/* points probed around each ring */
 #define MP_ROAD_AXIS_PROBE	500	/* how far along a road the heading test looks */
 
-/* The heading a car should face to be pointing ALONG the road at (x,z).
+/* The heading a car should face to DRIVE the road at (x,z): along it, the way
+ * the traffic in that lane goes.
  *
- * Two answers, best first:
- *   1. the SEGMENT's own angle (a straight carries one in the same 0..4095 space
- *      hd.direction uses; a curve has only its end tangents, so it gets `start`);
- *   2. failing that, ask the ROAD ITSELF which way it runs: a direction with road
- *      AHEAD and road BEHIND is the axis of the road through the point.
+ * The answer is the engine's own civ-car rule (civ_ai.c InitCivState, the
+ * targetRoute[0].dir it gives a car it places on a road):
+ *   straight: the lane under the point (GetLaneByPositionOnRoad, dr2roads.c),
+ *             then straight->angle, or angle + 2048 when ROAD_LANE_DIR says that
+ *             lane runs the other way;
+ *   curve:    the TANGENT at the point -- ratan2 of the point about the curve's
+ *             centre, +1024 or -1024 by the lane's direction.
  *
- * (2) exists because (1) frequently cannot answer: measured on CHICAGO, RoadInCell
- * says "no road" at a spawn point where JerRoadAt says there is road, so every
- * joiner fell through. The first fallback was "the search probe came in radially,
- * so face tangentially" -- which is right only when the road runs past the point,
- * and 90 degrees wrong when it runs away from it (reported as "some spawn at a
- * right angle to the intended direction"). Probing the road is not a guess. */
-static int MpRoadHeadingAt(int x, int y, int z, int* outDir)
+ * What this replaced (0.23.0): the
+ * bare straight->angle (the lane's direction ignored, so half the spawns faced
+ * the oncoming traffic), curve->start (a radial START angle, not the tangent
+ * where the car is, so a car on a bend sat across it), and an axis probe that
+ * took the FIRST of eight directions with road both ways -- on a wide road or a
+ * junction every direction has road both ways, so that was simply 0 (north).
+ *
+ * Returns 2 for a lane heading, 1 for the road's AXIS only (a junction or a cell
+ * RoadInCell cannot read: the direction along the axis is not known, and the
+ * caller may flip it), 0 for nothing. */
+static int MpRoadLaneHeading(int x, int y, int z, int* outDir)
 {
 	VECTOR p;
 	DRIVER2_ROAD_INFO info;
-	int surf, i;
+	int surf, lane;
 
 	p.vx = x;
 	p.vy = y;
@@ -11933,45 +12397,109 @@ static int MpRoadHeadingAt(int x, int y, int z, int* outDir)
 
 	surf = RoadInCell(&p);
 
-	if (surf >= 0 && IS_ROAD_SURFACE(surf))
+	if (surf < 0 || !IS_ROAD_SURFACE(surf))
+		return 0;
+
+	memset(&info, 0, sizeof(info));
+
+	if (!GetSurfaceRoadInfo(&info, surf))
+		return 0;
+
+	if (IS_STRAIGHT_SURFACE(surf) && info.straight != NULL)
 	{
-		memset(&info, 0, sizeof(info));
+		lane = GetLaneByPositionOnRoad(&info, &p);
 
-		if (GetSurfaceRoadInfo(&info, surf))
-		{
-			if (IS_STRAIGHT_SURFACE(surf) && info.straight != NULL)
-			{
-				*outDir = info.straight->angle & 0xfff;
-				return 1;
-			}
+		if (lane < 0)
+			lane = 0;
 
-			if (IS_CURVED_SURFACE(surf) && info.curve != NULL)
-			{
-				*outDir = info.curve->start & 0xfff;
-				return 1;
-			}
-		}
+		*outDir = ROAD_LANE_DIR(&info, lane) ? ((info.straight->angle + 2048) & 0xfff)
+			: (info.straight->angle & 0xfff);
+		return 1;
 	}
 
-	/* Which way does the road run? Road on both sides = that is the axis. */
+	if (IS_CURVED_SURFACE(surf) && info.curve != NULL)
 	{
-		int probe = MP_ROAD_AXIS_PROBE;
+		int radial = ratan2(x - info.curve->Midx, z - info.curve->Midz) & 0xfff;
 
-		for (i = 0; i < 8; i++)
-		{
-			int ang = (i * 4096) / 8;
-			int fx = (int)(((long)rsin(ang) * probe) >> 12);
-			int fz = (int)(((long)rcos(ang) * probe) >> 12);
+		lane = GetLaneByPositionOnRoad(&info, &p);
 
-			if (JerRoadAt(x + fx, y, z + fz) && JerRoadAt(x - fx, y, z - fz))
-			{
-				*outDir = ang;
-				return 1;
-			}
-		}
+		if (lane < 0)
+			lane = 0;
+
+		*outDir = (ROAD_LANE_DIR(&info, lane) == 0 ? radial + 1024 : radial - 1024) & 0xfff;
+		return 1;
 	}
 
 	return 0;
+}
+
+#define MP_ROAD_AXIS_DIRS	16	/* directions the axis probe tries */
+#define MP_ROAD_AXIS_STEPS	6	/* ...each out to MP_ROAD_AXIS_PROBE * this, both ways */
+
+static int MpRoadHeadingAt(int x, int y, int z, int* outDir)
+{
+	int i, best = -1, bestRun = 0, bestSum = 0;
+
+	if (MpRoadLaneHeading(x, y, z, outDir))
+		return 2;
+
+	/* No segment under the point (a junction, or a cell RoadInCell cannot read --
+	 * measured on CHICAGO at spawn points JerRoadAt calls road). The road's AXIS is
+	 * the direction it runs FURTHEST both ways: on a junction or a wide road every
+	 * direction has road at 500 units, so the first such direction is no answer. */
+	for (i = 0; i < MP_ROAD_AXIS_DIRS / 2; i++)
+	{
+		int ang = (i * 4096) / MP_ROAD_AXIS_DIRS;
+		int fwd = 0, back = 0, k, run;
+
+		for (k = 1; k <= MP_ROAD_AXIS_STEPS; k++)
+		{
+			int fx = (int)(((long)rsin(ang) * MP_ROAD_AXIS_PROBE * k) >> 12);
+			int fz = (int)(((long)rcos(ang) * MP_ROAD_AXIS_PROBE * k) >> 12);
+
+			if (fwd == k - 1 && JerRoadAt(x + fx, y, z + fz))
+				fwd = k;
+			if (back == k - 1 && JerRoadAt(x - fx, y, z - fz))
+				back = k;
+		}
+
+		run = fwd < back ? fwd : back;
+
+		if (run > bestRun || (run == bestRun && run > 0 && fwd + back > bestSum))
+		{
+			best = ang;
+			bestRun = run;
+			bestSum = fwd + back;
+		}
+	}
+
+	if (best < 0)
+		return 0;
+
+	/* The axis is known; its direction is the lane's of the nearest SEGMENT along
+	 * it (out of the junction, at the same side offset, so the same lane). */
+	{
+		int k, sgn;
+
+		for (k = 2; k <= MP_ROAD_AXIS_STEPS; k += 2)
+		{
+			for (sgn = 1; sgn >= -1; sgn -= 2)
+			{
+				int fx = sgn * (int)(((long)rsin(best) * MP_ROAD_AXIS_PROBE * k) >> 12);
+				int fz = sgn * (int)(((long)rcos(best) * MP_ROAD_AXIS_PROBE * k) >> 12);
+				int lane;
+
+				if (MpRoadLaneHeading(x + fx, y, z + fz, &lane))
+				{
+					*outDir = lane;
+					return 2;
+				}
+			}
+		}
+	}
+
+	*outDir = best;
+	return 1;
 }
 
 /* A landable road point near (cx, cz). `pickRandom` chooses among the road points
@@ -12056,8 +12584,6 @@ static int MpFindRoadSpotNear(int cx, int cy, int cz, int seed,
 	return 0;
 }
 
-/* The road's heading at (x, z), turned to whichever of its two directions is
- * closer to `want` (a car already pointing down the road keeps its way). */
 /* A RESPAWN goes somewhere else, not back onto the road you just crashed on: a road
  * point in a ring around the car, roughly 60-150 m out (12000-30000 world units; a car
  * is about 1000 units long), clear of every other player's car, facing along the road.
@@ -12165,12 +12691,18 @@ static int MpFindRespawnSpot(int cx, int cz, int* outX, int* outZ, int* outDir)
 	return 0;
 }
 
+/* The road's heading at (x, z): its lane's when known; otherwise the axis,
+ * turned to whichever of its two directions is closer to `want`. */
 static int MpRoadHeadingNear(int x, int z, int want)
 {
-	int dir;
+	int dir, how = MpRoadHeadingAt(x, 0, z, &dir);
 
-	if (!MpRoadHeadingAt(x, 0, z, &dir))
+	if (how == 0)
 		return want;
+
+	/* a lane heading is THE answer: the car drives with its lane's traffic */
+	if (how == 2)
+		return dir;
 
 	if (((dir - want + 4096 + 1024) & 0xfff) >= 2048)
 		dir = (dir + 2048) & 0xfff;
@@ -13014,7 +13546,8 @@ int MpRespawnOnRoad(void)
 /*     a road spot within MP_CLUSTER_RADIUS of the anchor and           */
 /*     MP_JOIN_CLEAR of every other car, streams it (MpWarpStreamTo)    */
 /*     and lands on it (MpPlaceOnGround);                               */
-/*   - every car faces its OWN random heading (0..4095), stopped and    */
+/*   - every car faces along its road's lane (random only where the     */
+/*     road gives no heading), stopped and                              */
 /*     repaired, wanted level cleared, as the Respawn row does.         */
 /*                                                                     */
 /* The distances are the join spawn's, not a new unit system: the slot  */
@@ -13158,13 +13691,15 @@ static void MpMarkClusterTick(void)
 	rnd = gMp.seed ^ (unsigned int)MpNowMs() ^ (unsigned int)((me->id + 11) * 2654435761u) ^ (unsigned int)gMpClusterTries;
 	rnd = rnd * 1103515245u + 12345u;
 
-	/* THE ANCHOR: onto the nearest road, its own random heading */
+	/* THE ANCHOR: onto the nearest road, facing along its lane */
 	if (anchorId == me->id)
 	{
 		int x = 0, z = 0, dir = -1, ring = 0;
 
+		/* the road's lane heading (MpRoadHeadingAt); random only when the road
+		 * gave none (before 0.23.0 it was always random, `dir` ignored) */
 		if (MpFindRoadSpotNear(cp->hd.where.t[0], cp->hd.where.t[1], cp->hd.where.t[2], -1, &x, &z, &dir, &ring) &&
-			MpClusterPlace(me, cp, x, z, (int)((rnd >> 8) & 0xfff), me->id, "anchor, nearest road"))
+			MpClusterPlace(me, cp, x, z, dir >= 0 ? dir : (int)((rnd >> 8) & 0xfff), me->id, "anchor, nearest road"))
 		{
 			gMpClusterState = 2;
 			return;
@@ -13224,7 +13759,7 @@ static void MpMarkClusterTick(void)
 
 		rnd = rnd * 1103515245u + 12345u;
 
-		if (MpClusterPlace(me, cp, x, z, (int)((rnd >> 8) & 0xfff), anchorId, "start cluster"))
+		if (MpClusterPlace(me, cp, x, z, dir >= 0 ? dir : (int)((rnd >> 8) & 0xfff), anchorId, "start cluster"))
 		{
 			gMpClusterState = 2;
 			return;
@@ -13247,6 +13782,283 @@ static void MpMarkClusterTick(void)
 			MP_CLUSTER_RADIUS, anchorId, ax, az, me->id);
 
 	gMpClusterState = 2;
+}
+
+/* ------------------------------------------------------------------ */
+/* COPS N ROBBERS: THE CHASE START (MP_MODE_SPAWN_CHASE)                */
+/*                                                                      */
+/* Every round happens somewhere else. At COUNTDOWN, each machine puts  */
+/* its OWN car:                                                         */
+/*  - the getaway: a random road anywhere on the map -- the map-wide   */
+/*    join spawn (MpFindRoadSpotWide: one random data-bearing region,   */
+/*    streamed once, up to 8 random centres in it), facing along its   */
+/*    lane (MpRoadHeadingAt);                                           */
+/*  - a cop: on the same road BEHIND the getaway, facing the same way. */
+/*    It waits for the getaway's new pose to arrive (moved more than    */
+/*    MP_CHASE_MOVED from where it was, or MP_CHASE_WAIT_FRAMES), then  */
+/*    walks back from it along the road in MP_CHASE_STEP steps, taking  */
+/*    the road's heading at each step (the way closer to the getaway's),*/
+/*    so a bend is followed. Distance behind, by the cop's place among  */
+/*    the cops (rank 0, 1, 2 ... by id):                                */
+/*        MP_CHASE_FIRST + rank * MP_CHASE_GAP + random(0..MP_CHASE_JITTER) */
+/*      = 4000-5500 for the first cop, 7000-8500 the second, 10000-11500 */
+/*        the third, and so on (a car is ~1000 long; the bands never    */
+/*        overlap, so two cops never pick the same spot);              */
+/*    a spot not clear of other players walks on, at most              */
+/*    MP_CHASE_EXTRA further. A dead end (no road within MP_CHASE_SNAP  */
+/*    of the next step) stops the walk where it is.                     */
+/* Failing all that by MP_CHASE_GIVEUP_FRAMES: the start cluster's      */
+/* fallback (the pause menu's warp beside the getaway), then where the  */
+/* car is.                                                              */
+/* ------------------------------------------------------------------ */
+#define MP_CHASE_FIRST		4000
+#define MP_CHASE_GAP		3000
+#define MP_CHASE_JITTER		1500
+#define MP_CHASE_EXTRA		6000
+#define MP_CHASE_STEP		1000
+#define MP_CHASE_SNAP		1800	/* a step off the road snaps back this far, at most */
+#define MP_CHASE_MOVED		2000
+#define MP_CHASE_WAIT_FRAMES	60	/* 2 s at 30 Hz */
+#define MP_CHASE_GIVEUP_FRAMES	105	/* 3.5 s: inside the 4 s round countdown */
+
+/* the road's heading at (x,z), turned to the way closer to `want` -- along the
+ * ROUTE the getaway took, whatever the lane under this point says */
+static int MpChaseHeading(int x, int z, int want)
+{
+	int dir;
+
+	if (!MpRoadHeadingAt(x, 0, z, &dir))
+		return want;
+
+	if (((dir - want + 4096 + 1024) & 0xfff) >= 2048)
+		dir = (dir + 2048) & 0xfff;
+
+	return dir;
+}
+
+static void MpMarkChaseTick(void)
+{
+	MP_PLAYER* me = MpLocalPlayer();
+	CAR_DATA* cp;
+	int marked = MpMarkMarked();
+
+	if (me == NULL || !gMp.running)
+		return;
+
+	if (me->carId < 0 || me->carId >= MAX_CARS || player[0].playerType == PLAYER_TYPE_PEDESTRIAN)
+	{
+		if (gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx, "[mp] chase start: player %d is on foot - not placed\n", me->id);
+		gMpClusterState = 2;
+		return;
+	}
+
+	cp = &car_data[me->carId];
+	gMpClusterTries++;
+
+	/* THE GETAWAY: a random road anywhere on the map, along its lane */
+	if (marked == me->id)
+	{
+		int x = 0, z = 0, dir = -1;
+
+		if (MpFindRoadSpotWide(me->carId, &x, &z, &dir))
+		{
+			unsigned rnd = (unsigned)MpNowMs() * 1103515245u + 12345u;
+
+			if (MpClusterPlace(me, cp, x, z, dir >= 0 ? dir : (int)((rnd >> 8) & 0xfff), me->id,
+				"getaway, a random road on the map"))
+			{
+				gMpClusterState = 2;
+				return;
+			}
+		}
+		else if (gMpWideTries >= MP_JOIN_WIDE_TRIES)
+		{
+			gMpWideRegion = -1;	/* that region had no clear road: another one */
+			gMpWideTries = 0;
+		}
+
+		if (gMp.frame - gMpClusterFrom >= (unsigned)MP_CHASE_GIVEUP_FRAMES)
+		{
+			int ring = 0;
+
+			if (!(MpFindRoadSpotNear(cp->hd.where.t[0], cp->hd.where.t[1], cp->hd.where.t[2], -1, &x, &z, &dir, &ring) &&
+				MpClusterPlace(me, cp, x, z, dir >= 0 ? dir : cp->hd.direction, me->id, "getaway, nearest road (no map-wide spot)")) &&
+				gMpCtx != NULL)
+				gMpCtx->jer_log(gMpCtx, "[mp] chase start: getaway player %d found no road - starts where it is\n", me->id);
+			gMpClusterState = 2;
+		}
+		return;
+	}
+
+	/* A COP: behind the getaway, once its new pose is here */
+	{
+		MP_PLAYER* gp = MpGetPlayer(marked);
+		CAR_DATA* gc;
+		int gx, gz, h, rank = 0, id, want, walked = 0, x, z;
+		unsigned rnd;
+		long long mx, mz;
+
+		if (gp == NULL || gp->carId < 0 || gp->carId >= MAX_CARS ||
+			car_data[gp->carId].controlType == CONTROL_TYPE_NONE)
+		{
+			if (gMp.frame - gMpClusterFrom >= (unsigned)MP_CHASE_GIVEUP_FRAMES)
+			{
+				if (gMpCtx != NULL)
+					gMpCtx->jer_log(gMpCtx, "[mp] chase start: no getaway car (player %d) here - player %d starts where it is\n",
+						marked, me->id);
+				gMpClusterState = 2;
+			}
+			return;
+		}
+
+		gc = &car_data[gp->carId];
+		gx = gc->hd.where.t[0];
+		gz = gc->hd.where.t[2];
+		mx = (long long)gx - gMpChaseFromX;
+		mz = (long long)gz - gMpChaseFromZ;
+
+		if (mx * mx + mz * mz < (long long)MP_CHASE_MOVED * MP_CHASE_MOVED &&
+			gMp.frame - gMpClusterFrom < (unsigned)MP_CHASE_WAIT_FRAMES)
+			return;		/* the getaway has not landed yet (on this machine) */
+
+		for (id = 0; id < me->id && id < MP_MAX_PLAYERS; id++)
+			if (id != marked && MpMarkPresent(id))
+				rank++;
+
+		if (gMpClusterTries == 1 || (gMpClusterTries % 15) == 0)
+			MpWarpStreamTo(gx, gz);
+
+		rnd = gMp.seed ^ (unsigned)MpNowMs() ^ (unsigned)((me->id + 7) * 2654435761u);
+		rnd = rnd * 1103515245u + 12345u;
+		want = MP_CHASE_FIRST + rank * MP_CHASE_GAP + (int)((rnd >> 8) % (unsigned)(MP_CHASE_JITTER + 1));
+
+		h = MpChaseHeading(gx, gz, gc->hd.direction & 0xfff);
+		x = gx;
+		z = gz;
+
+		while (walked < want + MP_CHASE_EXTRA)
+		{
+			int nx = x - (int)(((long)rsin(h) * MP_CHASE_STEP) >> 12);
+			int nz = z - (int)(((long)rcos(h) * MP_CHASE_STEP) >> 12);
+
+			if (!JerRoadAt(nx, 0, nz))
+			{
+				int sx = 0, sz = 0;
+				long long ddx, ddz;
+
+				if (!MpFindRoadSpotNear(nx, 0, nz, -1, &sx, &sz, NULL, NULL))
+					break;
+
+				ddx = (long long)sx - nx;
+				ddz = (long long)sz - nz;
+
+				if (ddx * ddx + ddz * ddz > (long long)MP_CHASE_SNAP * MP_CHASE_SNAP)
+					break;	/* a dead end: the road does not go on behind */
+
+				nx = sx;
+				nz = sz;
+			}
+
+			x = nx;
+			z = nz;
+			h = MpChaseHeading(x, z, h);
+			walked += MP_CHASE_STEP;
+
+			if (walked >= want && MpWarpSpotOk(x, z) && MpJoinSpotClearOfPlayers(x, z, me->id, me->carId))
+			{
+				if (MpClusterPlace(me, cp, x, z, h, marked, "cop, behind the getaway"))
+				{
+					if (gMpCtx != NULL)
+						gMpCtx->jer_log(gMpCtx, "[mp] chase start: player %d is %d units behind the getaway (rank %d, wanted %d)\n",
+							me->id, walked, rank, want);
+					gMpClusterState = 2;
+					return;
+				}
+			}
+		}
+
+		/* the walk found nothing (a dead end close behind, or the road not
+		 * resident yet): a spot this far behind in a straight line, facing the
+		 * getaway's way */
+		if (walked < want)
+		{
+			int bx = gx - (int)(((long)rsin(h) * want) >> 12);
+			int bz = gz - (int)(((long)rcos(h) * want) >> 12);
+			int dir = -1;
+
+			if (MpFindRoadSpotNear(bx, 0, bz, me->id + gMpClusterTries * 64, &x, &z, &dir, NULL) &&
+				MpJoinSpotClearOfPlayers(x, z, me->id, me->carId) &&
+				MpClusterPlace(me, cp, x, z, MpChaseHeading(x, z, gc->hd.direction & 0xfff), marked,
+					"cop, near the road behind the getaway"))
+			{
+				gMpClusterState = 2;
+				return;
+			}
+		}
+
+		if (gMp.frame - gMpClusterFrom < (unsigned)MP_CHASE_GIVEUP_FRAMES)
+			return;
+
+		if (MpWarpToPlayer(marked))
+		{
+			if (gMpCtx != NULL)
+				gMpCtx->jer_log(gMpCtx, "[mp] chase start: no road behind player %d - warped beside them instead\n", marked);
+		}
+		else if (gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx, "[mp] chase start: no road behind player %d - player %d starts where it is\n",
+				marked, me->id);
+
+		gMpClusterState = 2;
+	}
+}
+
+/* Cops n Robbers, at COUNTDOWN: the role's car. A cop drives the level's own
+ * police car (model MP_MODE_POLICE_MODEL), the getaway anything else -- the
+ * first of the level's own resident cars that is not the police car. Through
+ * the same door the pause picker uses (MpChangeCarRun), so the change travels
+ * as any other. Nothing to do when the car already fits the role. */
+static void MpCnrRoleCar(void)
+{
+	MP_PLAYER* me = MpLocalPlayer();
+	int want, slot, police;
+
+	if (me == NULL || me->carId < 0 || me->carId >= MAX_CARS || player[0].playerType == PLAYER_TYPE_PEDESTRIAN)
+		return;
+
+	want = MpModeCarPoolWantsPolice(gMp.gamemode, MpMarkMarked() == me->id);
+
+	if (want < 0)
+		return;
+
+	slot = car_data[me->carId].ap.model;
+	police = slot >= 0 && slot < MAX_CAR_RESIDENT_MODELS && residentCarModels[slot] == MP_MODE_POLICE_MODEL;
+
+	if (want == 1 && !police)
+	{
+		if (gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx, "[mp] cops n robbers: player %d is a cop - into the police car\n", me->id);
+		MpChangeCarRun(-1, MP_MODE_POLICE_MODEL, 0);
+		return;
+	}
+
+	if (want == 0 && police)
+	{
+		int s2;
+
+		for (s2 = 0; s2 < MAX_CAR_RESIDENT_MODELS; s2++)
+		{
+			if (residentCarModels[s2] < 0 || residentCarModels[s2] == MP_MODE_POLICE_MODEL ||
+				GetCarModelSourceCity(s2) >= 0 || !JerCarSlotUsable(s2))
+				continue;
+
+			if (gMpCtx != NULL)
+				gMpCtx->jer_log(gMpCtx, "[mp] cops n robbers: player %d is the getaway - out of the police car (model %d)\n",
+					me->id, (int)residentCarModels[s2]);
+			MpChangeCarRun(-1, residentCarModels[s2], 0);
+			return;
+		}
+	}
 }
 
 /* A player is on foot and this machine has no body for the car they left: build

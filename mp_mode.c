@@ -74,6 +74,26 @@ static const MP_MODE_DESC kModes[] =
 		MP_MODE_TIMER_SHARED,	/* one clock; the holder at 0:00 loses */
 		MP_MODE_MUSIC_PURSUIT
 	},
+	{
+		MP_GAMEMODE_COPSROBBERS,	/* id */
+		"COPS N ROBBERS",	/* name */
+		1,			/* selectable */
+
+		0,			/* teamCount: roles ride JPMK (`marked` = the getaway), not teams */
+		{ { "", 0, 0, 0 } },	/* teams */
+		0,			/* teamColours */
+
+		MP_MODE_RESPAWN_INSTANT, 0,
+		MP_MODE_LATEJOIN_LIVE,	/* a late joiner drives at once, as a cop — only after GO */
+		2, 1, 5, 3,		/* wait for 2, wait for cars, 5-4-3-2-1 first map, 3-2-1 later */
+		0,			/* carChangeLocked: the role swap at the countdown needs a change */
+		MP_MODE_CARPOOL_ROLE,	/* cops: police cars; the getaway: anything else */
+		MP_MODE_SPAWN_CHASE,	/* getaway anywhere on the map, cops behind it on its road */
+		0,			/* mapCycle */
+		MP_MODE_TIMER_GETAWAY,	/* getaway time = the lobby's 1-5 minutes */
+		MP_MODE_MUSIC_PURSUIT,
+		1			/* keepScore: everyone gets a turn as the getaway */
+	},
 };
 
 #define MP_MODE_ROWS	((int)(sizeof(kModes) / sizeof(kModes[0])))
@@ -236,6 +256,19 @@ int MpModeMusic(int mode)
 	return MpModeBehaviour(mode)->music;
 }
 
+int MpModeKeepsScore(int mode)
+{
+	return MpModeBehaviour(mode)->keepScore;
+}
+
+int MpModeCarPoolWantsPolice(int mode, int isMarked)
+{
+	if (MpModeBehaviour(mode)->carPool != MP_MODE_CARPOOL_ROLE)
+		return -1;
+
+	return isMarked ? 0 : 1;
+}
+
 const char* MpModeCarChangeRefusal(int mode, int roundRunning)
 {
 	const MP_MODE_DESC* d = MpModeBehaviour(mode);
@@ -258,6 +291,36 @@ int MpModeFilterCarPool(int mode, int city, int* slots, int* models, int count)
 	default:
 		return count;
 	}
+}
+
+int MpModeFilterCarPoolRole(int mode, int isMarked, int* slots, int* models, int count)
+{
+	int want = MpModeCarPoolWantsPolice(mode, isMarked);
+	int i, n = 0;
+
+	if (want < 0 || slots == NULL || models == NULL || count <= 0)
+		return count;
+
+	for (i = 0; i < count; i++)
+		if ((models[i] == MP_MODE_POLICE_MODEL) == (want == 1))
+			n++;
+
+	if (n == 0)
+		return count;	/* nothing for this role: leave it to the round-start swap */
+
+	n = 0;
+
+	for (i = 0; i < count; i++)
+	{
+		if ((models[i] == MP_MODE_POLICE_MODEL) != (want == 1))
+			continue;
+
+		slots[n] = slots[i];
+		models[n] = models[i];
+		n++;
+	}
+
+	return n;
 }
 
 int MpModePlayerTeam(int mode, int playerId)
