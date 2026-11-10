@@ -103,20 +103,40 @@ static void JerCarGlowTris(const CAR_POLY* src, int num, int nverts, u_int rgb)
 	int Z, otz;
 	int indices;
 	const SVECTOR *v0, *v1, *v2;
+	const TEXTURE_DETAILS* tex;
 	u_int u0, u1, u2;
 
 	if (src == NULL || num <= 0 || current == NULL || current->primptr == NULL)
 		return;
 
-	/* one pair of smoke UVs, animated a little so the material loops */
-	u0 = ((u_int)smoke_texture.clutid << 16) |
-		((u_int)(u_char)(smoke_texture.coords.u0 + (CameraCnt & 15))) |
-		((u_int)(u_char)(smoke_texture.coords.v0 + ((CameraCnt * 2) & 15)) << 8);
-	u1 = ((u_int)(smoke_texture.tpageid | 0x20) << 16) |
-		((u_int)(u_char)(smoke_texture.coords.u1 + (CameraCnt & 15))) |
-		((u_int)(u_char)(smoke_texture.coords.v1 + ((CameraCnt * 2) & 15)) << 8);
-	u2 = ((u_int)(u_char)(smoke_texture.coords.u2 + (CameraCnt & 15))) |
-		((u_int)(u_char)(smoke_texture.coords.v2 + ((CameraCnt * 2) & 15)) << 8);
+	/* The material: the level's SMOKE texture (InitDebrisNames, debris.c). A level
+	 * whose texture names have no SMOKE leaves it at GetTextureDetails' miss value
+	 * (tpage 0, clut 0 -- texture.c), which draws whatever sits at VRAM 0,0; use the
+	 * LIGHT halo then, and draw nothing when neither is there. */
+	tex = &smoke_texture;
+
+	if (tex->tpageid == 0 && tex->clutid == 0)
+		tex = &light_texture;
+
+	if (tex->tpageid == 0 && tex->clutid == 0)
+	{
+		static int saidNoTexture;
+
+		if (!saidNoTexture)
+			printInfo("[jer_carglow] no SMOKE or LIGHT texture in this level - no glow\n");
+		saidNoTexture = 1;
+		return;
+	}
+
+	/* one pair of UVs, animated a little so the material loops */
+	u0 = ((u_int)tex->clutid << 16) |
+		((u_int)(u_char)(tex->coords.u0 + (CameraCnt & 15))) |
+		((u_int)(u_char)(tex->coords.v0 + ((CameraCnt * 2) & 15)) << 8);
+	u1 = ((u_int)(tex->tpageid | 0x20) << 16) |
+		((u_int)(u_char)(tex->coords.u1 + (CameraCnt & 15))) |
+		((u_int)(u_char)(tex->coords.v1 + ((CameraCnt * 2) & 15)) << 8);
+	u2 = ((u_int)(u_char)(tex->coords.u2 + (CameraCnt & 15))) |
+		((u_int)(u_char)(tex->coords.v2 + ((CameraCnt * 2) & 15)) << 8);
 
 	while (num > 0)
 	{

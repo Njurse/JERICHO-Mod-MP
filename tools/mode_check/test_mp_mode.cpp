@@ -132,32 +132,58 @@ static void CheckCopsRobbers(void)
 	CHECK(MpModeCarPoolWantsPolice(77, 1) == -1);
 	CHECK(MpModeCarChangeRefusal(MP_GAMEMODE_COPSROBBERS, 1) == NULL);
 
-	/* the role pool: model 0 is the police car */
+	/* role cars: a patrol car, then a getaway car */
+	CHECK(MpModeRoleSlotCount(MP_GAMEMODE_COPSROBBERS) == 2);
+	CHECK(strcmp(MpModeRoleSlotTitle(MP_GAMEMODE_COPSROBBERS, 0), "PATROL CAR") == 0);
+	CHECK(strcmp(MpModeRoleSlotTitle(MP_GAMEMODE_COPSROBBERS, 1), "GETAWAY CAR") == 0);
+	CHECK(MpModeRoleSlotPool(MP_GAMEMODE_COPSROBBERS, 0) == MP_MODE_POOL_POLICE);
+	CHECK(MpModeRoleSlotPool(MP_GAMEMODE_COPSROBBERS, 1) == MP_MODE_POOL_CIVILIAN);
+	CHECK(MpModeRoleSlotPool(MP_GAMEMODE_COPSROBBERS, 2) == MP_MODE_POOL_ANY);
+	CHECK(MpModeRoleSlotTitle(MP_GAMEMODE_COPSROBBERS, 2) == NULL);
+	CHECK(MpModeRoleSlotFor(MP_GAMEMODE_COPSROBBERS, 1) == 1);	/* the getaway */
+	CHECK(MpModeRoleSlotFor(MP_GAMEMODE_COPSROBBERS, 0) == 0);	/* a cop */
+	CHECK(MpModeRoleSlotCount(MP_GAMEMODE_FOXHOUNDS) == 0 && MpModeRoleSlotFor(MP_GAMEMODE_FOXHOUNDS, 1) == -1);
+	CHECK(MpModeRoleSlotCount(MP_GAMEMODE_TAKEADRIDE) == 0 && MpModeRoleSlotCount(77) == 0);
+	CHECK(MpModeRoleSlotTitle(MP_GAMEMODE_BOMBTAG, 0) == NULL);
+	CHECK(MpModePoolKeeps(MP_MODE_POOL_ANY, 0) && MpModePoolKeeps(MP_MODE_POOL_ANY, 1));
+	CHECK(MpModePoolKeeps(MP_MODE_POOL_POLICE, 1) && !MpModePoolKeeps(MP_MODE_POOL_POLICE, 0));
+	CHECK(MpModePoolKeeps(MP_MODE_POOL_CIVILIAN, 0) && !MpModePoolKeeps(MP_MODE_POOL_CIVILIAN, 1));
+
+	/* the role pool: the police flags are the engine's (isPolice[], parallel) --
+	 * here slot 2 (model 0) and slot 4 (an imported cop, model 4) */
 	{
 		int slots[5] = { 0, 1, 2, 3, 4 };
 		int models[5] = { 1, 2, 0, 3, 4 };
-		int s2[5], m2[5];
+		int police[5] = { 0, 0, 1, 0, 1 };
+		int s2[5], m2[5], p2[5];
 
-		memcpy(s2, slots, sizeof(slots));
-		memcpy(m2, models, sizeof(models));
-		CHECK(MpModeFilterCarPoolRole(MP_GAMEMODE_COPSROBBERS, 0, s2, m2, 5) == 1);
-		CHECK(s2[0] == 2 && m2[0] == 0);				/* a cop: the police car */
+#define RESET() (memcpy(s2, slots, sizeof(slots)), memcpy(m2, models, sizeof(models)), memcpy(p2, police, sizeof(police)))
+		RESET();
+		CHECK(MpModeFilterCarPoolRole(MP_GAMEMODE_COPSROBBERS, 0, s2, m2, p2, 5) == 2);
+		CHECK(s2[0] == 2 && m2[0] == 0 && s2[1] == 4 && m2[1] == 4 && p2[0] == 1 && p2[1] == 1);	/* a cop */
 
-		memcpy(s2, slots, sizeof(slots));
-		memcpy(m2, models, sizeof(models));
-		CHECK(MpModeFilterCarPoolRole(MP_GAMEMODE_COPSROBBERS, 1, s2, m2, 5) == 4);
-		CHECK(m2[0] == 1 && m2[1] == 2 && m2[2] == 3 && m2[3] == 4 && s2[2] == 3);	/* the getaway */
+		RESET();
+		CHECK(MpModeFilterCarPoolRole(MP_GAMEMODE_COPSROBBERS, 1, s2, m2, p2, 5) == 3);
+		CHECK(m2[0] == 1 && m2[1] == 2 && m2[2] == 3 && s2[2] == 3 && p2[2] == 0);	/* the getaway */
 
-		memcpy(s2, slots, sizeof(slots));
-		memcpy(m2, models, sizeof(models));
-		m2[2] = 9;							/* no police car offered */
-		CHECK(MpModeFilterCarPoolRole(MP_GAMEMODE_COPSROBBERS, 0, s2, m2, 5) == 5 && m2[2] == 9);
+		RESET();
+		p2[2] = 0;
+		p2[4] = 0;							/* no police car offered */
+		CHECK(MpModeFilterCarPoolRole(MP_GAMEMODE_COPSROBBERS, 0, s2, m2, p2, 5) == 5 && m2[2] == 0);
 
-		memcpy(s2, slots, sizeof(slots));
-		memcpy(m2, models, sizeof(models));
-		CHECK(MpModeFilterCarPoolRole(MP_GAMEMODE_FOXHOUNDS, 0, s2, m2, 5) == 5);
+		RESET();
+		CHECK(MpModeFilterCarPoolRole(MP_GAMEMODE_FOXHOUNDS, 0, s2, m2, p2, 5) == 5);
 		CHECK(memcmp(m2, models, sizeof(models)) == 0);
-		CHECK(MpModeFilterCarPoolRole(MP_GAMEMODE_COPSROBBERS, 0, s2, m2, 0) == 0);
+		CHECK(MpModeFilterCarPoolRole(MP_GAMEMODE_COPSROBBERS, 0, s2, m2, p2, 0) == 0);
+		CHECK(MpModeFilterCarPoolRole(MP_GAMEMODE_COPSROBBERS, 0, s2, m2, NULL, 5) == 5);
+
+		/* the generic filter the join car select uses, step by step */
+		RESET();
+		CHECK(MpModeFilterPool(MP_MODE_POOL_ANY, s2, m2, p2, 5) == 5);
+		CHECK(MpModeFilterPool(MP_MODE_POOL_POLICE, s2, m2, p2, 5) == 2 && m2[0] == 0 && m2[1] == 4);
+		RESET();
+		CHECK(MpModeFilterPool(MP_MODE_POOL_CIVILIAN, s2, m2, p2, 5) == 3 && m2[0] == 1 && m2[2] == 3);
+#undef RESET
 	}
 }
 
@@ -174,6 +200,19 @@ static void CheckTable(void)
 		CHECK(d->name != NULL && d->name[0] != '\0');
 		CHECK(d->teamCount >= 0 && d->teamCount <= MP_MODE_MAX_TEAMS);
 		CHECK(!d->teamColours || d->teamCount > 0);
+
+		/* role cars: in range, titled, pooled, and the two drivers name real slots */
+		CHECK(d->roleSlotCount >= 0 && d->roleSlotCount <= MP_MODE_ROLE_SLOTS_MAX);
+		for (j = 0; j < d->roleSlotCount; j++)
+		{
+			CHECK(d->roleSlots[j].title != NULL && d->roleSlots[j].title[0] != '\0');
+			CHECK(strlen(d->roleSlots[j].title) < 24);	/* JER_CARQ_ROLE_TITLE_MAX */
+			CHECK(d->roleSlots[j].pool >= MP_MODE_POOL_ANY && d->roleSlots[j].pool <= MP_MODE_POOL_CIVILIAN);
+		}
+		if (d->roleSlotCount > 0)
+			CHECK(d->roleSlotMarked >= 0 && d->roleSlotMarked < d->roleSlotCount &&
+				d->roleSlotOther >= 0 && d->roleSlotOther < d->roleSlotCount);
+		CHECK(d->carPool != MP_MODE_CARPOOL_ROLE || d->roleSlotCount > 0);
 
 		for (j = i + 1; j < MpModeCount(); j++)
 			CHECK(MpModeAt(j)->id != d->id);	/* ids unique */

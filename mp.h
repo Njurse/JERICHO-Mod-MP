@@ -712,6 +712,10 @@ int MpCarQuerySlots(int city, int* slots, int* models, int max);
  * the FRONTEND car screen and a session started with -host/-join never opens it. So polling
  * it in game is what made the picker offer four cars a city. */
 int MpCarListForCity(int city, int* slots, int* models, int max);
+/* Role cars (jer_carquery.h JER_CARQ_ROLES / JER_CARQ_ROLEPICK): the join car
+ * select asks how many cars the mode wants and reports each pick (mp_session.c). */
+int MpOnCarqRoles(void* userdata, void* args);
+int MpOnCarqRolePick(void* userdata, void* args);
 
 /* The multiplayer meaning of Restart: put this player back at the level's own
  * start, in their car, repaired, with no felony, and KEEP the session (the

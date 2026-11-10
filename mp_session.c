@@ -34,7 +34,9 @@
 #include "civ_ai.h"	/* reservedSlots: the array PingInCivCar's free-slot scan reads */
 #include "cop_ai.h"	/* requestCopCar: a cop is waiting for a slot (the cop slot hold) */
 #include "felony.h"	/* felonyRating / pedestrianFelony: what a restart clears */
-#include "overmap.h"	/* gJerMapForceFlash: Cops n Robbers' red/blue map flash */
+#include "overmap.h"	/* gJerMapForceFlash / gJerMapCopCars: the maps' flash and player cop cones */
+#include "models.h"	/* JerCarIsPolice / JerCarSlotIsPolice: the engine's police-car answer */
+#include "jer_config.h"	/* the role-car picks, kept per mode in mp's config */
 extern int gBootMpLevel;	/* main.c: 1 = the small multiplayer map, 0 = the full city */
 extern int gBootMpArena;	/* main.c: which multiplayer map (0/1) */
 extern int gWantNight;		/* glaunch.c: 1 = the night take-a-ride level variant */
@@ -508,7 +510,8 @@ static int gMpClusterTries;
 static void MpMarkClusterTick(void);
 static void MpMarkChaseTick(void);
 static void MpMarkRoundReset(void);
-static void MpCnrRoleCar(void);
+static void MpRoleCarApply(void);
+static void MpMapCopsTick(void);
 
 /* Cops n Robbers (MP_MODE_TIMER_GETAWAY) on THIS machine */
 static int gMpChaseFromX, gMpChaseFromZ;	/* the getaway's pose when the countdown began */
@@ -914,7 +917,48 @@ static void MpMarkPresentClear(void)
 	jer_carexplode_reset(-1);
 	jer_carglow_clear();
 	gJerMapForceFlash = 0;
+	gJerMapCopCars = 0;
 	MpCnrRadioClear();
+}
+
+/* The map's cop sight cones for PLAYER cops (overmap.c gJerMapCopCars). The
+ * engine draws a cone only for its own cops (CONTROL_TYPE_PURSUER_AI, or
+ * CONTROL_FLAG_COP), and a remote player's car is CONTROL_TYPE_PLAYER with
+ * no cop flag, so a player in a police car never showed one. Every frame:
+ * each OTHER player's car that is a police car (JerCarSlotIsPolice, the
+ * engine's own answer, imported police cars included), and in Cops n Robbers
+ * every other player but the getaway while the round runs. Our own car never
+ * draws one (the map is centred on it). Drawing only. */
+static void MpMapCopsTick(void)
+{
+	MP_PLAYER* me = MpLocalPlayer();
+	unsigned mask = 0;
+	int id, cnr, marked = -1;
+
+	cnr = MpModeTimerKind(gMp.gamemode) == MP_MODE_TIMER_GETAWAY && MpMarkHaveState() &&
+		MpMarkMode() == gMp.gamemode && MpMarkPhase() == MP_MARK_PHASE_LIVE;
+
+	if (cnr)
+		marked = MpMarkMarked();
+
+	for (id = 0; id < MP_MAX_PLAYERS; id++)
+	{
+		MP_PLAYER* p = MpGetPlayer(id);
+		int car;
+
+		if (p == NULL || p == me || p->carId < 0 || p->carId >= MAX_CARS || p->carId >= 32)
+			continue;
+
+		car = p->carId;
+
+		if (car_data[car].controlType == CONTROL_TYPE_NONE)
+			continue;
+
+		if (JerCarSlotIsPolice(car_data[car].ap.model) || (cnr && id != marked))
+			mask |= 1u << car;
+	}
+
+	gJerMapCopCars = mask;
 }
 
 int MpMarkChaseGetaway(void)
@@ -1243,7 +1287,7 @@ static void MpCnrRadioSay(int carSlot, int sample, int local)
 static void MpCnrRadioTick(int on, int marked, int myId)
 {
 	static unsigned rnd = 0x51u;
-	static int lastChatter = -1, saidNoBank;
+	static int lastChatter = -1, saidNoBank, saidBank;
 	static unsigned lastLine;
 	MP_PLAYER* gp;
 	CAR_DATA* gc;
@@ -1265,6 +1309,16 @@ static void MpCnrRadioTick(int on, int marked, int myId)
 				gDoCopSpeech, GetSoundBankSampleCount(SOUND_BANK_VOICES));
 		saidNoBank = 1;
 		return;
+	}
+
+	/* ...and say once that it is there: the playtest log is where "the MP map
+	 * loaded the cop voices" is proven (LoadLevelSFX loads them for every
+	 * take-a-ride mission, M50..M65 and the +440 arenas, gamesnd.c) */
+	if (!saidBank && gMpCtx != NULL)
+	{
+		saidBank = 1;
+		gMpCtx->jer_log(gMpCtx, "[mp] cops n robbers: police radio on (%d voice sample(s), mission %d, cop bank %d)\n",
+			GetSoundBankSampleCount(SOUND_BANK_VOICES), gCurrentMissionNumber, gCurrentMissionNumber % 4 + 1);
 	}
 
 	/* one line at a time: the last one (and its heading clip) first */
@@ -1420,11 +1474,14 @@ static void MpMarkPresentTick(void)
 			gMpClusterTries = 0;
 			MpMarkRoundReset();
 
+			/* the car of the role this player has this round (role-car modes) */
+			if (MpModeRoleSlotCount(gMp.gamemode) > 0)
+				MpRoleCarApply();
+
 			if (chase)
 			{
 				MP_PLAYER* gp = MpGetPlayer(marked);
 
-				MpCnrRoleCar();	/* a police car for a cop, any other for the getaway */
 				gMpWideRegion = -1;	/* a fresh map-wide pick every round */
 				gMpWideTries = 0;
 				gMpChaseFromX = gMpChaseFromZ = 0;
@@ -7160,6 +7217,9 @@ void MpLockstepFrame(void)
 	/* ...and what this machine shows of a timer mode (nothing in Take a Ride) */
 	MpMarkPresentTick();
 
+	/* the other players' cop cars draw their sight cones on the maps */
+	MpMapCopsTick();
+
 	/* the same cadence, and for the same reason: a machine that joins late or
 	 * misses one still ends up with everybody's colour */
 	if (MpIsHost() && (gMp.frame % 120) == 0)
@@ -11122,15 +11182,201 @@ int MpCarListForCity(int city, int* slots, int* models, int max)
 
 	n = MpModeFilterCarPool(gMp.gamemode, city, slots, models, n);
 
-	/* Cops n Robbers: the role's cars (police for a cop, the rest for the getaway) */
+	/* Cops n Robbers: the role's cars (police for a cop, the rest for the getaway).
+	 * Which car is a police car is the engine's answer for THIS city's model
+	 * (JerCarIsPolice: model 0 in a Driver 2 city, the bake's cop flags in a car
+	 * mod's bank), so an imported police car counts. */
 	{
 		MP_PLAYER* me = MpLocalPlayer();
 
 		if (gMp.running && me != NULL && MpMarkHaveState() && MpMarkMode() == gMp.gamemode)
-			n = MpModeFilterCarPoolRole(gMp.gamemode, MpMarkMarked() == me->id, slots, models, n);
+		{
+			int police[MP_CAR_LIST_MAX];
+			int i, m = (n < MP_CAR_LIST_MAX) ? n : MP_CAR_LIST_MAX;
+
+			for (i = 0; i < m; i++)
+				police[i] = JerCarIsPolice(city, models[i]);
+
+			n = MpModeFilterCarPoolRole(gMp.gamemode, MpMarkMarked() == me->id, slots, models, police, m);
+		}
 	}
 
 	return n;
+}
+
+/* ------------------------------------------------------------------ */
+/* ROLE CARS (0.23.1): one car per role, picked on join                 */
+/*                                                                      */
+/* A mode with role slots (mp_mode.h MP_MODE_ROLE_SLOT; Cops n Robbers: */
+/* PATROL CAR from the police cars, GETAWAY CAR from the rest) asks the */
+/* join car select for one pick per slot (jer_carquery.h JER_CARQ_ROLES; */
+/* carhacks' menu walks them, each step's roster filtered to its pool), */
+/* and is told each pick (JER_CARQ_ROLEPICK). Only the LAST step        */
+/* launches, so a player is not "car ready" for waitForCars           */
+/* (MpPlayerCarReady / carConfirmed) until every role has a car.        */
+/* The picks are this player's own: kept for the session and saved in  */
+/* mp's config per mode and slot (role_m<mode>_s<slot>_car / _city /    */
+/* _palette), so the next join offers them again. At every round's     */
+/* COUNTDOWN MpRoleCarApply puts the player in the car of the role they */
+/* have this round, through the pause picker's own change-car door.    */
+/* A Change car pick made in the pause menu becomes that role's pick.  */
+/* ------------------------------------------------------------------ */
+typedef struct MP_ROLE_PICK
+{
+	int set;
+	int city;	/* the roster city the car was picked from */
+	int model;
+	int palette;
+} MP_ROLE_PICK;
+
+static MP_ROLE_PICK gMpRolePick[MP_MODE_ROLE_SLOTS_MAX];
+static int gMpRolePickMode = -1;	/* the mode whose picks gMpRolePick holds */
+
+/* jer_carquery.h's pools are mp_mode.h's: one id space on both sides */
+typedef char MpRolePoolAny[(JER_CARQ_POOL_ANY == MP_MODE_POOL_ANY) ? 1 : -1];
+typedef char MpRolePoolPolice[(JER_CARQ_POOL_POLICE == MP_MODE_POOL_POLICE) ? 1 : -1];
+typedef char MpRolePoolCivilian[(JER_CARQ_POOL_CIVILIAN == MP_MODE_POOL_CIVILIAN) ? 1 : -1];
+typedef char MpRoleSlotsFit[(MP_MODE_ROLE_SLOTS_MAX <= JER_CARQ_ROLES_MAX) ? 1 : -1];
+
+static void MpRolePickKey(char* out, int max, int mode, int slot, const char* what)
+{
+	snprintf(out, max, "role_m%d_s%d_%s", mode, slot, what);
+}
+
+/* The picks for `mode`, from the config the first time it is asked about. */
+static void MpRolePicksFor(int mode)
+{
+	char key[48];
+	int i;
+
+	if (gMpRolePickMode == mode)
+		return;
+
+	gMpRolePickMode = mode;
+
+	for (i = 0; i < MP_MODE_ROLE_SLOTS_MAX; i++)
+	{
+		MP_ROLE_PICK* r = &gMpRolePick[i];
+
+		memset(r, 0, sizeof(*r));
+
+		if (i >= MpModeRoleSlotCount(mode))
+			continue;
+
+		MpRolePickKey(key, sizeof(key), mode, i, "car");
+		r->model = jer_config_get_int("mp", key, -1);
+		MpRolePickKey(key, sizeof(key), mode, i, "city");
+		r->city = jer_config_get_int("mp", key, -1);
+		MpRolePickKey(key, sizeof(key), mode, i, "palette");
+		r->palette = jer_config_get_int("mp", key, 0);
+
+		if (r->palette < 0 || r->palette > 5)
+			r->palette = 0;
+
+		r->set = (r->model >= 0 && r->city >= 0 && r->city < CITY_COUNT);
+	}
+}
+
+/* Keep (city, model) as `slot`'s car when the slot's pool allows it. */
+static int MpRolePickStore(int mode, int slot, int city, int model, int palette, const char* from)
+{
+	char key[48];
+	int police, pool;
+	MP_ROLE_PICK* r;
+
+	if (slot < 0 || slot >= MpModeRoleSlotCount(mode) || model < 0 || city < 0 || city >= CITY_COUNT)
+		return 0;
+
+	MpRolePicksFor(mode);
+	pool = MpModeRoleSlotPool(mode, slot);
+	police = JerCarIsPolice(city, model);
+
+	if (!MpModePoolKeeps(pool, police))
+	{
+		if (gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx, "[mp] role car: %s %s model %d refused for %s (%s car, wants %s) - %s\n",
+				from, MpCarCityName(city), model, MpModeRoleSlotTitle(mode, slot),
+				police ? "a police" : "not a police",
+				pool == MP_MODE_POOL_POLICE ? "police" : "non-police", "the round picks one");
+		return 0;
+	}
+
+	r = &gMpRolePick[slot];
+	r->set = 1;
+	r->city = city;
+	r->model = model;
+	r->palette = (palette >= 0 && palette <= 5) ? palette : 0;
+
+	MpRolePickKey(key, sizeof(key), mode, slot, "car");
+	jer_config_set_int("mp", key, model);
+	MpRolePickKey(key, sizeof(key), mode, slot, "city");
+	jer_config_set_int("mp", key, city);
+	MpRolePickKey(key, sizeof(key), mode, slot, "palette");
+	jer_config_set_int("mp", key, r->palette);
+
+	if (gMpCtx != NULL)
+		gMpCtx->jer_log(gMpCtx, "[mp] role car: %s = %s model %d palette %d (%s, %s car)\n",
+			MpModeRoleSlotTitle(mode, slot), MpCarCityName(city), model, r->palette, from,
+			police ? "police" : "non-police");
+
+	return 1;
+}
+
+/* JER_CARQ_ROLES: the join car select asks how many cars to ask for. */
+int MpOnCarqRoles(void* userdata, void* args)
+{
+	JER_CARQ_ROLES_ARGS* a = (JER_CARQ_ROLES_ARGS*)args;
+	MP_PLAYER* me;
+	int i, n, mode = gMp.gamemode, launch;
+
+	(void)userdata;
+
+	if (a == NULL || !MpIsActive())
+		return JER_RESULT_CONTINUE;
+
+	n = MpModeRoleSlotCount(mode);
+
+	if (n <= 0)
+		return JER_RESULT_CONTINUE;	/* one ordinary pick */
+
+	if (n > JER_CARQ_ROLES_MAX)
+		n = JER_CARQ_ROLES_MAX;
+
+	for (i = 0; i < n; i++)
+	{
+		snprintf(a->roles[i].title, sizeof(a->roles[i].title), "%s", MpModeRoleSlotTitle(mode, i));
+		a->roles[i].pool = MpModeRoleSlotPool(mode, i);
+	}
+
+	/* the level loads with the car of the role this player has now: the marked
+	 * one's when they already are (a rejoin mid-match), everyone else's otherwise
+	 * (the getaway is only named at the countdown, which swaps it in) */
+	me = MpLocalPlayer();
+	launch = MpModeRoleSlotFor(mode, me != NULL && MpMarkHaveState() && MpMarkMode() == mode &&
+		MpMarkMarked() == me->id);
+
+	a->count = n;
+	a->launch = (launch >= 0 && launch < n) ? launch : 0;
+
+	if (gMpCtx != NULL)
+		gMpCtx->jer_log(gMpCtx, "[mp] role car: the car select asks for %d car(s) (%s), launching with %s\n",
+			n, MpModeDisplayName(mode), a->roles[a->launch].title);
+
+	return JER_RESULT_CONTINUE;
+}
+
+/* JER_CARQ_ROLEPICK: one role's pick, from the join car select. */
+int MpOnCarqRolePick(void* userdata, void* args)
+{
+	JER_CARQ_ROLEPICK_ARGS* a = (JER_CARQ_ROLEPICK_ARGS*)args;
+
+	(void)userdata;
+
+	if (a == NULL || !MpIsActive())
+		return JER_RESULT_CONTINUE;
+
+	a->ok = MpRolePickStore(gMp.gamemode, a->role, a->city, a->model, a->palette, "car select");
+	return JER_RESULT_CONTINUE;
 }
 
 /* Tell whoever keeps the session's car identity (carhacks) how a switch ended: the local
@@ -11249,6 +11495,19 @@ int MpChangeCar(int city, int model)
 
 			return 0;
 		}
+	}
+
+	/* A mode with role cars: the pick is the car of the role this player has now
+	 * (MpCarListForCity already offered only that role's pool). Kept before the
+	 * change runs, so a change that waits for an import still counts. */
+	if (gMp.running && MpModeRoleSlotCount(gMp.gamemode) > 0 && city >= 0)
+	{
+		MP_PLAYER* me = MpLocalPlayer();
+		extern u_char defaultPlayerPalette;
+		int slot = MpModeRoleSlotFor(gMp.gamemode, me != NULL && MpMarkHaveState() &&
+			MpMarkMode() == gMp.gamemode && MpMarkMarked() == me->id);
+
+		MpRolePickStore(gMp.gamemode, slot, city, model, (int)defaultPlayerPalette, "pause Change car");
 	}
 
 	return MpChangeCarRun(city, model, 0);
@@ -14013,48 +14272,75 @@ static void MpMarkChaseTick(void)
 	}
 }
 
-/* Cops n Robbers, at COUNTDOWN: the role's car. A cop drives the level's own
- * police car (model MP_MODE_POLICE_MODEL), the getaway anything else -- the
- * first of the level's own resident cars that is not the police car. Through
- * the same door the pause picker uses (MpChangeCarRun), so the change travels
- * as any other. Nothing to do when the car already fits the role. */
-static void MpCnrRoleCar(void)
+/* A mode with role cars, at every COUNTDOWN: the car of the role this player
+ * has this round (Cops n Robbers: the patrol car for a cop, the getaway car for
+ * the getaway). The player's own pick for that role first (ROLE CARS, above);
+ * without one, the role's pool decides: a cop goes into the level's police car
+ * (Driver 2's model 0), the getaway into the first of the level's own cars that
+ * is not a police car. Through the pause picker's own door (MpChangeCarRun),
+ * so an import waits and retries and the change travels as any other. Nothing
+ * to do when the car already fits. */
+static void MpRoleCarApply(void)
 {
 	MP_PLAYER* me = MpLocalPlayer();
-	int want, slot, police;
+	int mode = gMp.gamemode, roleSlot, pool, slot, police;
+	extern u_char defaultPlayerPalette;
 
 	if (me == NULL || me->carId < 0 || me->carId >= MAX_CARS || player[0].playerType == PLAYER_TYPE_PEDESTRIAN)
 		return;
 
-	want = MpModeCarPoolWantsPolice(gMp.gamemode, MpMarkMarked() == me->id);
+	roleSlot = MpModeRoleSlotFor(mode, MpMarkMarked() == me->id);
 
-	if (want < 0)
+	if (roleSlot < 0)
 		return;
 
+	MpRolePicksFor(mode);
+	pool = MpModeRoleSlotPool(mode, roleSlot);
 	slot = car_data[me->carId].ap.model;
-	police = slot >= 0 && slot < MAX_CAR_RESIDENT_MODELS && residentCarModels[slot] == MP_MODE_POLICE_MODEL;
 
-	if (want == 1 && !police)
+	if (gMpRolePick[roleSlot].set)
 	{
+		MP_ROLE_PICK* r = &gMpRolePick[roleSlot];
+		int want = MpResidentSlotForCar(r->city, r->model);
+
+		if (want >= 0 && want == slot)
+			return;		/* already in it */
+
 		if (gMpCtx != NULL)
-			gMpCtx->jer_log(gMpCtx, "[mp] cops n robbers: player %d is a cop - into the police car\n", me->id);
-		MpChangeCarRun(-1, MP_MODE_POLICE_MODEL, 0);
+			gMpCtx->jer_log(gMpCtx, "[mp] role car: player %d -> %s (%s model %d)\n",
+				me->id, MpModeRoleSlotTitle(mode, roleSlot), MpCarCityName(r->city), r->model);
+
+		defaultPlayerPalette = (u_char)r->palette;	/* the paint picked with it (MpAdoptRemoteCar reads it) */
+		MpChangeCarRun(r->city, r->model, 0);
 		return;
 	}
 
-	if (want == 0 && police)
+	police = JerCarSlotIsPolice(slot);
+
+	if (MpModePoolKeeps(pool, police))
+		return;
+
+	if (pool == MP_MODE_POOL_POLICE)
+	{
+		if (gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx, "[mp] role car: player %d has no %s pick - into the level's police car\n",
+				me->id, MpModeRoleSlotTitle(mode, roleSlot));
+		MpChangeCarRun(-1, 0, 0);	/* Driver 2's police body, model 0 */
+		return;
+	}
+
 	{
 		int s2;
 
 		for (s2 = 0; s2 < MAX_CAR_RESIDENT_MODELS; s2++)
 		{
-			if (residentCarModels[s2] < 0 || residentCarModels[s2] == MP_MODE_POLICE_MODEL ||
+			if (residentCarModels[s2] < 0 || JerCarSlotIsPolice(s2) ||
 				GetCarModelSourceCity(s2) >= 0 || !JerCarSlotUsable(s2))
 				continue;
 
 			if (gMpCtx != NULL)
-				gMpCtx->jer_log(gMpCtx, "[mp] cops n robbers: player %d is the getaway - out of the police car (model %d)\n",
-					me->id, (int)residentCarModels[s2]);
+				gMpCtx->jer_log(gMpCtx, "[mp] role car: player %d has no %s pick - out of the police car (model %d)\n",
+					me->id, MpModeRoleSlotTitle(mode, roleSlot), (int)residentCarModels[s2]);
 			MpChangeCarRun(-1, residentCarModels[s2], 0);
 			return;
 		}
