@@ -205,6 +205,7 @@ page to it with ten rows:
 | `Invincibility` | on/off: you take no damage |
 | `Immunity` | on/off: the police leave you alone |
 | `Super Turbo` | on/off, saved to `mp.ini` as `super_turbo`. The same local switch as JMP Options: left/right or Cross. Multiplies this machine's own car thrust by 10. Not a host session rule and not on the wire |
+| `Join/leave sounds` | on/off, saved to `mp.ini` as `join_leave_sounds`. The same local switch as JMP Options. Plays the frontend's accept sample when a player joins and its back sample when one leaves; quiet for players coming back after a server city change |
 | `Kick player` | (host) remove a peer from the session |
 | `Reload all cars` | releases and rebuilds every imported car slot through carhacks (`chkImportReloadAll`): pins, pool pages, palette rows, geometry and the city buffers whose last live user went, then re-reads and hot-loads each slot. Stock/level cars are untouched. It also arms a quick re-announce. For when an imported car looks wonky |
 | `Write diagnostics now` | writes `mp_diag.txt` next to the game |
@@ -233,6 +234,7 @@ no wanted level, and the session carries on.
 | `mod_check` | `0` | host lobby mod policy: 0 off, 1 by id, 2 by id+version |
 | `strict_version` | `0` | host lobby setting: 1 also requires an identical build hash (off by default, because that hash tracks `git describe`) |
 | `super_turbo` | `0` | JMP Options and the pause menu's **Multiplayer** page, **Super Turbo**: `1` multiplies this machine's own car thrust by 10. Local only — not a host session rule and not on the wire, so other cars are not rescaled. Off leaves thrust untouched. The engine stores thrust as a short (`JER_EVENT_CAR_ENGINE` in `ProcessCarPad`), so the product is clamped to ±32767 instead of wrapping into reverse; a stock ~4915 accel becomes the largest force that field can hold |
+| `join_leave_sounds` | `1` | JMP Options and the pause menu's **Multiplayer** page, **Join/leave sounds**: `1` plays the frontend menu's accept sample (`JER_MENU_SFX_ACCEPT`) when a player joins the running match and its back sample (`JER_MENU_SFX_BACK`) when one leaves. Never for our own join, the players already in a match we join, or players coming back after a server city change (`MP_KICK_FLAG_REJOIN`). Local only, not on the wire |
 | `master_url` | `http://jerichomp.animetiddi.es:8100` | the discovery server: `host`, `host:port` or `http://host:port`. It is BOTH what the `Online` screen lists and where a hosted game lists itself (see below). Empty = LAN-only: no listing, no advertisement, the beacon still works. Resolved on the first frame that needs it -- never at startup -- so an edit takes effect on the next launch and a launch that never opens the `Online` screen never speaks to the master at all |
 
 **The ini's port is the base; the command line can move it -- but not under the shipped

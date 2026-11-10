@@ -190,7 +190,20 @@ typedef struct MP_MODE_DESC
 	MP_MODE_ROLE_SLOT roleSlots[MP_MODE_ROLE_SLOTS_MAX];
 	int               roleSlotMarked;	/* the slot the marked player drives */
 	int               roleSlotOther;	/* the slot everyone else drives */
+
+	/* RESPAWN HOLD (0.23.3): the referee phases (MP_MARK_PHASE_*, as
+	 * MP_MODE_RESPAWN_HOLD_BIT bits) in which the session's NORMAL respawn is
+	 * held: the death respawn (a wreck, a drowning, a fall) and the pause
+	 * menu's Respawn / Restart. A held death is still no game over: the car
+	 * stays where it is until the phase ends, and the countdown's own respawn
+	 * (MpMarkRoundReset) puts everyone back. 0 = never held (Take a Ride, and
+	 * every mode before 0.23.3). The round modes hold ENDED (the result and
+	 * the intermission) and COUNTDOWN (the start cluster places the cars). */
+	int               respawnHold;
 } MP_MODE_DESC;
+
+/* A respawnHold bit for one referee phase (MP_MARK_PHASE_*, mp_proto.h). */
+#define MP_MODE_RESPAWN_HOLD_BIT(phase)	(1 << (phase))
 
 /* ---- the registry ------------------------------------------------------- */
 int                 MpModeCount(void);			/* rows in the table */
@@ -217,6 +230,10 @@ int         MpModeTimerKind(int mode);			/* MP_MODE_TIMER_* */
 int         MpModeUsesTimer(int mode);			/* 1 = marked player + clock (JPMK) */
 int         MpModeMusic(int mode);			/* MP_MODE_MUSIC_* while live */
 int         MpModeKeepsScore(int mode);		/* 1 = scores carry across rounds */
+
+/* 1 = the mode holds the normal respawn while the referee is in `phase`
+ * (MP_MARK_PHASE_*). Mode 0 and an unknown id: never. */
+int         MpModeRespawnHeld(int mode, int phase);
 
 /* MP_MODE_CARPOOL_ROLE: 1 = this role drives police cars, 0 = non-police cars;
  * -1 = the mode has no role pool (any car). `isMarked` = the player is the

@@ -53,6 +53,36 @@ static void CheckTakeARideDescriptor(void)
 	CHECK(d->mapCycle == 0);
 	CHECK(d->timer == MP_MODE_TIMER_NONE);		/* no clock, nobody marked */
 	CHECK(d->music == MP_MODE_MUSIC_AUTO);		/* the engine's own music */
+	CHECK(d->respawnHold == 0);			/* the normal respawn is never held */
+}
+
+/* RESPAWN HOLD (0.23.3): the round modes hold the normal respawn at the end of a
+ * round and through the countdown, never while live or waiting; Take a Ride and
+ * an unknown id never hold it. */
+static void CheckRespawnHold(void)
+{
+	static const int roundModes[] = { MP_GAMEMODE_FOXHOUNDS, MP_GAMEMODE_BOMBTAG, MP_GAMEMODE_COPSROBBERS };
+	int i, ph;
+
+	for (ph = -1; ph <= MP_MARK_PHASE_LOBBY + 1; ph++)
+	{
+		CHECK(MpModeRespawnHeld(MP_GAMEMODE_TAKEADRIDE, ph) == 0);
+		CHECK(MpModeRespawnHeld(MP_GAMEMODE_COUNT, ph) == 0);
+		CHECK(MpModeRespawnHeld(77, ph) == 0);
+	}
+
+	for (i = 0; i < (int)(sizeof(roundModes) / sizeof(roundModes[0])); i++)
+	{
+		int m = roundModes[i];
+
+		CHECK(MpModeRespawnHeld(m, MP_MARK_PHASE_ENDED) == 1);
+		CHECK(MpModeRespawnHeld(m, MP_MARK_PHASE_COUNTDOWN) == 1);
+		CHECK(MpModeRespawnHeld(m, MP_MARK_PHASE_LIVE) == 0);
+		CHECK(MpModeRespawnHeld(m, MP_MARK_PHASE_WAITING) == 0);
+		CHECK(MpModeRespawnHeld(m, MP_MARK_PHASE_LOBBY) == 0);
+		CHECK(MpModeRespawnHeld(m, -1) == 0);
+		CHECK(MpModeRespawnHeld(m, 31) == 0);
+	}
 }
 
 /* The proof-of-concept rows (v23): Fox N Hounds and Car Bomb Tag. Everything but
@@ -305,6 +335,7 @@ static void CheckLobby(void)
 int main(void)
 {
 	CheckTakeARideDescriptor();
+	CheckRespawnHold();
 	CheckTable();
 	CheckCopsRobbers();
 	CheckAnswersAreToday(MP_GAMEMODE_TAKEADRIDE, "TAKE A RIDE");

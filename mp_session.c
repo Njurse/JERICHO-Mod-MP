@@ -510,6 +510,9 @@ static int gMpClusterTries;
 static void MpMarkClusterTick(void);
 static void MpMarkChaseTick(void);
 static void MpMarkRoundReset(void);
+static void MpRespawnHoldTick(void);
+static int gMpRespawnDeferred;		/* RESPAWN HOLD: a held death waits for the hold to end */
+static int gMpRespawnHeldLogged;	/* one log line per hold, not one per engine ask */
 static void MpRoleCarApply(void);
 static void MpRolePicksForget(const char* why);
 static void MpMapCopsTick(void);
@@ -1441,6 +1444,8 @@ static void MpMarkPresentTick(void)
 	int phase, marked, since, ms, want;
 	char text[32];
 
+	MpRespawnHoldTick();
+
 	if (!MpModeUsesTimer(gMp.gamemode) || !MpMarkHaveState() || MpMarkMode() != gMp.gamemode)
 	{
 		MpMarkPresentClear();
@@ -1779,6 +1784,10 @@ void MpSessionReset(void)
 	/* ...and the role-car picks: they belong to this connection (ROLE CARS, below). A
 	 * server city change's own leave keeps them - the rejoin is the same connection. */
 	MpRolePicksForget("the session is over");
+
+	/* ...and a death the mode's respawn hold kept: it belonged to that match */
+	gMpRespawnDeferred = 0;
+	gMpRespawnHeldLogged = 0;
 
 	/* the palette-correction log is throttled per reported value; clear that
 	 * memory so a fresh session reports its first correction */
@@ -4372,6 +4381,143 @@ int MpRejoinActive(void)
 	return gMpRejoin.active;
 }
 
+/* JOIN / LEAVE SOUNDS (0.23.3). The frontend's own menu samples, which mp asks
+ * the core to keep resident in game (jer_sound_request_menu_bank, mp.c):
+ * JER_MENU_SFX_ACCEPT (the frontend's Cross, FEmain.c FESound(2)) when a player
+ * joins, JER_MENU_SFX_BACK (its Triangle, FESound(0)) when one leaves.
+ *
+ * Quiet for a server CITY CHANGE: the dedicated server kicks everyone with
+ * MP_KICK_FLAG_REJOIN and every client comes back by itself. So:
+ *   - our own rejoin (MpRejoinActive, then settling) and anything before the
+ *     match is running on this machine (the roster batch a joiner receives is
+ *     the players already there) never sound;
+ *   - the names that were in the match when the REJOIN kick came are kept
+ *     (gMpRejoinQuiet) and each one's first return within MP_REJOIN_QUIET_MS
+ *     is silent - they reach the new city at different times;
+ *   - a leave waits MP_JOINLEAVE_LEAVE_DELAY_MS: the server kicks the players
+ *     one after another, so the ones it kicked first can drop off this
+ *     machine's roster just before our own kick arrives, which cancels it. */
+#define MP_REJOIN_QUIET_MS		(MP_REJOIN_FIRST_MS + MP_REJOIN_WINDOW_MS + 30000)
+#define MP_JOINLEAVE_LEAVE_DELAY_MS	1000
+
+static struct
+{
+	char name[MP_MAX_PLAYERS][MP_NAME_MAX];
+	int  count;
+	unsigned long untilMs;
+} gMpRejoinQuiet;
+
+static unsigned long gMpLeaveSoundDueMs;	/* 0 = no leave sound pending */
+
+static void MpRejoinQuietArm(void)
+{
+	int i;
+
+	memset(&gMpRejoinQuiet, 0, sizeof(gMpRejoinQuiet));
+
+	for (i = 0; i < MP_MAX_PLAYERS; i++)
+	{
+		const MP_PLAYER* pl = &gMp.players[i];
+
+		if (!pl->active || pl->isLocal || pl->name[0] == '\0')
+			continue;
+
+		snprintf(gMpRejoinQuiet.name[gMpRejoinQuiet.count], MP_NAME_MAX, "%s", pl->name);
+		gMpRejoinQuiet.count++;
+	}
+
+	gMpRejoinQuiet.untilMs = MpNowMs() + MP_REJOIN_QUIET_MS;
+	gMpLeaveSoundDueMs = 0;	/* the leaves this kick is part of */
+}
+
+/* 1 = `name` was in the match before the city change and this is its return:
+ * the entry is used up, so a real leave and join later still sound. */
+static int MpRejoinQuietTake(const char* name)
+{
+	int i;
+
+	if (gMpRejoinQuiet.count <= 0)
+		return 0;
+
+	if ((long)(MpNowMs() - gMpRejoinQuiet.untilMs) >= 0)
+	{
+		gMpRejoinQuiet.count = 0;
+		return 0;
+	}
+
+	for (i = 0; i < gMpRejoinQuiet.count; i++)
+	{
+		if (strcmp(gMpRejoinQuiet.name[i], name) != 0)
+			continue;
+
+		gMpRejoinQuiet.count--;
+		if (i != gMpRejoinQuiet.count)
+			memcpy(gMpRejoinQuiet.name[i], gMpRejoinQuiet.name[gMpRejoinQuiet.count], MP_NAME_MAX);
+		return 1;
+	}
+
+	return 0;
+}
+
+static int MpJoinLeaveQuiet(void)
+{
+	return !gMp.config.joinLeaveSounds || !gMp.running || gMp.leaving ||
+		gMpRejoin.active || gMpRejoin.settling;
+}
+
+void MpJoinLeaveNote(int joined, const char* name)
+{
+	if (name == NULL)
+		name = "";
+
+	if (joined)
+	{
+		/* used up even when quiet for another reason: it was this return */
+		int back = MpRejoinQuietTake(name);
+
+		if (MpJoinLeaveQuiet())
+			return;
+
+		if (back)
+		{
+			if (gMpCtx != NULL)
+				gMpCtx->jer_log(gMpCtx, "[mp] '%s' is back after the city change - no join sound\n", name);
+			return;
+		}
+
+		if (jer_sound_menu_play(JER_MENU_SFX_ACCEPT) < 0 && gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx, "[mp] join sound for '%s' not played (menu samples not resident or no voice)\n", name);
+		return;
+	}
+
+	if (MpJoinLeaveQuiet())
+		return;
+
+	gMpLeaveSoundDueMs = MpNowMs() + MP_JOINLEAVE_LEAVE_DELAY_MS;
+	if (gMpLeaveSoundDueMs == 0)
+		gMpLeaveSoundDueMs = 1;
+}
+
+void MpJoinLeaveTick(void)
+{
+	if (gMpLeaveSoundDueMs == 0)
+		return;
+
+	if (MpJoinLeaveQuiet())
+	{
+		gMpLeaveSoundDueMs = 0;
+		return;
+	}
+
+	if ((long)(MpNowMs() - gMpLeaveSoundDueMs) < 0)
+		return;
+
+	gMpLeaveSoundDueMs = 0;
+
+	if (jer_sound_menu_play(JER_MENU_SFX_BACK) < 0 && gMpCtx != NULL)
+		gMpCtx->jer_log(gMpCtx, "[mp] leave sound not played (menu samples not resident or no voice)\n");
+}
+
 static void MpRejoinEnd(void)
 {
 	if (gMpRejoin.active || gMpRejoin.settling)
@@ -4434,6 +4580,8 @@ static void MpRejoinArm(void)
 		gMpRejoin.carCity = gMp.city;
 		gMpRejoin.carModel = car_data[me->carId].ap.model;
 	}
+
+	MpRejoinQuietArm();	/* the players coming back after this change stay quiet */
 
 	gMpRejoin.prevAuto = gMp.autoSession;
 	gMpRejoin.nextMs = MpNowMs() + MP_REJOIN_FIRST_MS;
@@ -12257,6 +12405,51 @@ static int MpRespawnOnFoot(MP_PLAYER* me)
 	return 0;
 }
 
+/* RESPAWN HOLD (0.23.3). A round mode holds the normal respawn while the round
+ * is over or counting down (MP_MODE_DESC.respawnHold, MpModeRespawnHeld): the
+ * bomb holder's wreck at 0:00 set the car's damage to the limit, the engine's
+ * death route asked for a game over, and the death respawn put that player back
+ * on a road in the middle of the result screen. Held, a death is still refused
+ * but the car stays where it is; MpMarkRoundReset repairs it when the next
+ * countdown begins, and a death still pending when the hold ends without one
+ * (ENDED back to WAITING) is respawned then, by MpRespawnHoldTick. The phase is
+ * the referee's (the host's, or this client's JPMK mirror), so every machine
+ * decides for its own car with nothing new on the wire. */
+static int MpRespawnHeldNow(void)
+{
+	if (!MpModeUsesTimer(gMp.gamemode) || !MpMarkHaveState() || MpMarkMode() != gMp.gamemode)
+		return 0;
+
+	return MpModeRespawnHeld(gMp.gamemode, MpMarkPhase());
+}
+
+/* Every frame in a match (MpMarkPresentTick). */
+static void MpRespawnHoldTick(void)
+{
+	if (!gMp.running)
+	{
+		gMpRespawnDeferred = 0;
+		gMpRespawnHeldLogged = 0;
+		return;
+	}
+
+	if (MpRespawnHeldNow())
+		return;
+
+	gMpRespawnHeldLogged = 0;
+
+	if (!gMpRespawnDeferred)
+		return;
+
+	gMpRespawnDeferred = 0;
+
+	if (gMpCtx != NULL)
+		gMpCtx->jer_log(gMpCtx, "[mp] respawn hold over (phase %d) - the held death respawns now\n",
+			MpMarkPhase());
+
+	MpRespawnAfterDeath();
+}
+
 /* IN A SESSION, DYING IS A RESPAWN, NOT A GAME OVER.
  *
  * The engine asks (JER_PAUSE_GAMEOVER) just before it arms the game-over pause - the death
@@ -12301,6 +12494,23 @@ int MpRespawnAfterDeath(void)
 
 		if (policy != MP_MODE_RESPAWN_INSTANT)
 			MpModeFallbackOnce(MP_MODE_FALLBACK_RESPAWN, "respawn policy", policy);
+	}
+
+	/* GAME-MODE DECISION POINT: the mode may HOLD the respawn (the round is over
+	 * or counting down). Still no game over: the death state is cleared and the
+	 * car is left where it is, wreck latch and all, for the round reset. */
+	if (MpRespawnHeldNow())
+	{
+		MpClearDeathState();
+		gMpRespawnDeferred = 1;
+
+		if (!gMpRespawnHeldLogged && gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx,
+				"[mp] death in a session while mode %d holds respawn (phase %d) - game over refused, no respawn until the round resets\n",
+				gMp.gamemode, MpMarkPhase());
+		gMpRespawnHeldLogged = 1;
+
+		return 1;
 	}
 
 	me = MpLocalPlayer();
@@ -13665,6 +13875,18 @@ int MpRespawnOnRoad(void)
 
 	me = MpLocalPlayer();
 
+	/* The mode holds the respawn (the round is over or counting down): the
+	 * countdown's own respawn places everyone. */
+	if (MpRespawnHeldNow())
+	{
+		MpNotify("Respawn: not until the next round starts");
+
+		if (gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx, "[mp] respawn (pause menu / Restart row / test) refused: mode %d holds respawn in phase %d\n",
+				gMp.gamemode, MpMarkPhase());
+		return 0;
+	}
+
 	/* ON FOOT: back in the parked car, else the nearest road. */
 	if (player[0].playerType == PLAYER_TYPE_PEDESTRIAN)
 	{
@@ -13873,6 +14095,9 @@ static void MpMarkRoundReset(void)
 
 	if (player[0].playerType == PLAYER_TYPE_PEDESTRIAN)
 		return;
+
+	/* a death the hold kept (MpRespawnAfterDeath) is answered by this reset */
+	gMpRespawnDeferred = 0;
 
 	cp = &car_data[me->carId];
 	MpMarkResetCarState(cp);

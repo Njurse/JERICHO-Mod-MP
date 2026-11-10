@@ -54,6 +54,13 @@ typedef struct MP_CONFIG
 	 * 1 = multiply the local player's engine thrust by 10 (JER_EVENT_CAR_ENGINE). */
 	int  superTurbo;
 
+	/* JMP Options and the pause Multiplayer page, this machine only (0.23.3).
+	 * 1 = a player joining or leaving the match plays a frontend menu sample
+	 * (join: JER_MENU_SFX_ACCEPT, leave: JER_MENU_SFX_BACK), except for the
+	 * players coming back after a server city change. [mp] join_leave_sounds,
+	 * default 1. */
+	int  joinLeaveSounds;
+
 	/* SESSION RULES -- the host's per-session gameplay settings, chosen in the
 	 * Host Game menu and applied on EVERY machine (they ride the wire: see
 	 * MP_RULES_* / MP_WELCOME.rules). This is where the host's defaults for the
@@ -660,6 +667,13 @@ void MpRejoinTick(void);
 void MpPlaceSelfTick(void);	/* live join: move our car off the level start */
 int  MpRejoinActive(void);
 void MpRejoinCancel(const char* why);
+
+/* JOIN / LEAVE SOUNDS (0.23.3, mp_session.c). mp_players.c reports every remote
+ * row that is added new (joined 1) or removed (joined 0); the tick plays a
+ * pending leave. Quiet unless gMp.config.joinLeaveSounds, outside a running
+ * match, and for the players coming back after a server city change. */
+void MpJoinLeaveNote(int joined, const char* name);
+void MpJoinLeaveTick(void);
 
 /* A city's display name (a 0..3 index, or -1 for the session's own city). */
 const char* MpCarCityName(int city);

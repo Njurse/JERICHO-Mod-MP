@@ -426,6 +426,8 @@ void MpConfigLoad(void)
 
 	gMp.config.strictVersion = jer_config_get_int("mp", "strict_version", 0);
 	gMp.config.superTurbo = jer_config_get_int("mp", "super_turbo", 0) ? 1 : 0;
+	/* on unless the player turned it off: a config without the key gets the sounds */
+	gMp.config.joinLeaveSounds = jer_config_get_int("mp", "join_leave_sounds", 1) ? 1 : 0;
 
 	/* SESSION RULES. Defaults are the game's own behaviour -- cops on, the
 	 * engine's default difficulty (1), nothing invulnerable -- so a host who
@@ -505,6 +507,7 @@ void MpConfigSave(void)
 	jer_config_set_int("mp", "car_is_slot", gMp.config.carIsSlot);
 	jer_config_set_int("mp", "strict_version", gMp.config.strictVersion);
 	jer_config_set_int("mp", "super_turbo", gMp.config.superTurbo);
+	jer_config_set_int("mp", "join_leave_sounds", gMp.config.joinLeaveSounds);
 	jer_config_set_int("mp", "cops", gMp.config.cops);
 	jer_config_set_int("mp", "cop_difficulty", gMp.config.copDifficulty);
 	jer_config_set_int("mp", "invuln", gMp.config.invuln);

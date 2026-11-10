@@ -36,7 +36,10 @@ Robbers: a patrol car, then a getaway car); a car mod's police car counts as
 police; and other players' police cars get their sight cones on the map.
 0.23.2 (same protocol) keeps the role-car picks for the connection only: every
 round and a server city change keep them, a disconnect forgets them, and
-nothing is saved to the config.
+nothing is saved to the config. 0.23.3 (same protocol) lets a mode hold the
+normal respawn by referee phase (`respawnHold`): the three round modes hold it
+at the round end and through the countdown, so nobody respawns onto the result
+screen, and the countdown's own respawn puts everyone back.
 Everything below "Not yet" is design, not code.
 
 ## The model
@@ -52,6 +55,7 @@ A game mode is a row in one table, `kModes[]` in `mp_mode.c`. The row is an
 | `teamCount`, `teams[4]` | 0 = free for all, else 1..4 teams, each with a name and an r,g,b | 0 |
 | `teamColours` | name tag, suit and chat ink forced to the team colour | 0 |
 | `respawn`, `respawnDelayFrames` | `MP_MODE_RESPAWN_INSTANT` / `_DELAY` / `_NONE` | instant |
+| `respawnHold` | `MP_MODE_RESPAWN_HOLD_BIT(MP_MARK_PHASE_*)` bits: the phases in which the death respawn and the pause Respawn / Restart are held (the death is still no game over; the car waits for the countdown's respawn, or for the hold to end) | 0: never held |
 | `lateJoin` | `MP_MODE_LATEJOIN_LIVE` / `_SPECTATE` | live |
 | `waitMinPlayers` | sit in WAITING until this many players are present (0 = off) | 0 |
 | `waitForCars` | 1 = also wait until every present player has picked a car | 0 |
@@ -94,6 +98,7 @@ and passes `gMp.gamemode`:
 | decision point | question | mode 0 answer |
 | --- | --- | --- |
 | `MpRespawnAfterDeath` (mp_session.c) | `MpModeRespawnPolicy` | instant: the existing respawn |
+| `MpRespawnAfterDeath`, `MpRespawnOnRoad` | `MpModeRespawnHeld` (the referee phase) | 0: never held |
 | `MpChangeCar` | `MpModeCarChangeRefusal` | NULL: never refused |
 | `MpCarListForCity` | `MpModeFilterCarPool` | the list, untouched |
 | `MpNameTagColour` (mp_ui.c), `MpOnPedDraw` (mp.c), chat ink (`MpSendChat`, `MpHandleChat`) | `MpModePlayerColour` | the player's own colour and on/off |

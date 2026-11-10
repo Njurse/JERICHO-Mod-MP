@@ -149,6 +149,7 @@ static unsigned long gJoinScanStart;	/* when the browse began (0 = not browsing)
 static void LblEnforce(void* ud, char* o, int n) { (void)ud; snprintf(o, n, "Enforce Mods: < %s >", kModCheckNames[gMp.config.modCheck % 3]); }
 static void LblStrict(void* ud, char* o, int n)  { (void)ud; snprintf(o, n, "Strict Version: < %s >", gMp.config.strictVersion ? "On" : "Off"); }
 static void LblSuperTurbo(void* ud, char* o, int n) { (void)ud; snprintf(o, n, "Super Turbo: < %s >", gMp.config.superTurbo ? "On" : "Off"); }
+static void LblJoinLeaveSounds(void* ud, char* o, int n) { (void)ud; snprintf(o, n, "Join/leave sounds: < %s >", gMp.config.joinLeaveSounds ? "On" : "Off"); }
 static void LblPort(void* ud, char* o, int n)    { (void)ud; snprintf(o, n, "Port: %d", gMp.config.port); }
 static void LblManualGo(void* ud, char* o, int n) { (void)ud; snprintf(o, n, "Connect to %s", gManualIp); }
 
@@ -173,6 +174,10 @@ static int AdjStrict(void* ud, int dir) { (void)ud; gMp.config.strictVersion = (
  * same way Strict Version does. The pause Multiplayer page
  * (MpOptToggleSuperTurbo) writes this same field. The ×10 itself is MpOnCarEngine. */
 static int AdjSuperTurbo(void* ud, int dir) { (void)ud; gMp.config.superTurbo = (gMp.config.superTurbo + dir + 2) & 1; MpConfigSave(); return 1; }
+
+/* Local, like Super Turbo: the menu sample when a player joins or leaves
+ * (MpJoinLeaveNote). The pause Multiplayer page writes the same field. */
+static int AdjJoinLeaveSounds(void* ud, int dir) { (void)ud; gMp.config.joinLeaveSounds = (gMp.config.joinLeaveSounds + dir + 2) & 1; MpConfigSave(); return 1; }
 
 static int AdjPort(void* ud, int dir)
 {
@@ -791,10 +796,11 @@ static JER_FE_ITEM kJmpOptionsItems[] ={
 	{ NULL, LblEnforce, NULL, NULL, AdjEnforce, -1,       0 },
 	{ NULL, LblStrict,  NULL, NULL, AdjStrict,  -1,       0 },
 	{ NULL, LblSuperTurbo, NULL, NULL, AdjSuperTurbo, -1, 0 },
+	{ NULL, LblJoinLeaveSounds, NULL, NULL, AdjJoinLeaveSounds, -1, 0 },
 	{ NULL, LblPort,    NULL, NULL, AdjPort,    -1,       0 },
 	{ "Back",           NULL, NULL, NULL,       NULL,      -1,     1 },
 };
-static const JER_FE_MENU kJmpOptionsMenu = { "mp.jmpoptions", kJmpOptionsItems, 7, NULL, NULL };
+static const JER_FE_MENU kJmpOptionsMenu = { "mp.jmpoptions", kJmpOptionsItems, 8, NULL, NULL };
 
 /* Resolve every mp menu by id and point the submenu rows at what they got. The
  * item arrays are written with -1 and wired HERE, because the registered index

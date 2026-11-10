@@ -53,7 +53,11 @@ static const MP_MODE_DESC kModes[] =
 		MP_MODE_SPAWN_CLUSTER,	/* the round starts with everyone close together */
 		0,			/* mapCycle */
 		MP_MODE_TIMER_PERSONAL,	/* your clock runs while you are the fox */
-		MP_MODE_MUSIC_PURSUIT	/* the chase is on */
+		MP_MODE_MUSIC_PURSUIT,	/* the chase is on */
+		0,			/* keepScore */
+		0, { { NULL, 0 } }, 0, 0,	/* no role cars */
+		MP_MODE_RESPAWN_HOLD_BIT(MP_MARK_PHASE_ENDED) |	/* respawnHold: nobody respawns at */
+			MP_MODE_RESPAWN_HOLD_BIT(MP_MARK_PHASE_COUNTDOWN)	/* the end or into the count */
 	},
 	{
 		MP_GAMEMODE_BOMBTAG,	/* id */
@@ -72,7 +76,11 @@ static const MP_MODE_DESC kModes[] =
 		MP_MODE_SPAWN_CLUSTER,
 		0,			/* mapCycle */
 		MP_MODE_TIMER_SHARED,	/* one clock; the holder at 0:00 loses */
-		MP_MODE_MUSIC_PURSUIT
+		MP_MODE_MUSIC_PURSUIT,
+		0,			/* keepScore */
+		0, { { NULL, 0 } }, 0, 0,	/* no role cars */
+		MP_MODE_RESPAWN_HOLD_BIT(MP_MARK_PHASE_ENDED) |	/* respawnHold: nobody respawns at */
+			MP_MODE_RESPAWN_HOLD_BIT(MP_MARK_PHASE_COUNTDOWN)	/* the end or into the count */
 	},
 	{
 		MP_GAMEMODE_COPSROBBERS,	/* id */
@@ -99,7 +107,9 @@ static const MP_MODE_DESC kModes[] =
 			{ "GETAWAY CAR", MP_MODE_POOL_CIVILIAN }
 		},
 		1,			/* roleSlotMarked: the getaway drives the getaway car */
-		0			/* roleSlotOther: every cop the patrol car */
+		0,			/* roleSlotOther: every cop the patrol car */
+		MP_MODE_RESPAWN_HOLD_BIT(MP_MARK_PHASE_ENDED) |	/* respawnHold: nobody respawns at */
+			MP_MODE_RESPAWN_HOLD_BIT(MP_MARK_PHASE_COUNTDOWN)	/* the end or into the count */
 	},
 };
 
@@ -266,6 +276,14 @@ int MpModeMusic(int mode)
 int MpModeKeepsScore(int mode)
 {
 	return MpModeBehaviour(mode)->keepScore;
+}
+
+int MpModeRespawnHeld(int mode, int phase)
+{
+	if (phase < 0 || phase > 30)
+		return 0;
+
+	return (MpModeBehaviour(mode)->respawnHold & MP_MODE_RESPAWN_HOLD_BIT(phase)) ? 1 : 0;
 }
 
 int MpModeRoleSlotCount(int mode)
