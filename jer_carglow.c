@@ -46,25 +46,58 @@ void jer_carglow_clear(void)
 	gGlowCar = NULL;
 }
 
-/* Scale about model-space -cog, the point DrawCarObject places on the car
- * position. Then the same trans path (pos, then + R*cog) keeps the shell
- * centred on the body. */
-static void JerCarGlowCopyVerts(CAR_DATA* cp, int scale, SVECTOR cog)
+/* Scale the LOW-LOD template verts about model-space -cog, the point
+ * DrawCarObject places on the car position. Then the same trans path
+ * (pos, then + R*cog) keeps the shell centred on the body.
+ *
+ * The verts must be NewLowCarModel.vlist, not gTempCarVertDump.
+ * DrawCar (cars.c:4400-4433) remaps only the HI-LOD NewCarModel.vlist
+ * (and both nlists) to the dent dump; the low model keeps its own vlist
+ * and plotNewCarModel draws pFT3/pGT3/pB3 from that vlist
+ * (cars.c:2678-2703). The dump is the hi-LOD dented mesh. Feeding it to
+ * low-LOD poly indices is the mangled holo: the triangles name the
+ * wrong points. */
+static int JerCarGlowCopyVerts(CAR_MODEL* mdl, int model, int scale, SVECTOR cog)
 {
-	int i;
-	const SVECTOR* src = gTempCarVertDump[cp->id];
-	int cx = -cog.vx, cy = -cog.vy, cz = -cog.vz;
+	int i, n;
+	const SVECTOR* src;
+	int cx, cy, cz;
+	MODEL* low;
 
-	for (i = 0; i < MAX_DENTING_VERTS; i++)
+	if (mdl == NULL || mdl->vlist == NULL)
+		return 0;
+
+	src = mdl->vlist;
+	n = 0;
+	if (model >= 0 && model < MAX_CAR_RESIDENT_MODELS)
+	{
+		low = gCarLowModelPtr[model];
+		if (low != NULL)
+			n = low->num_vertices;
+	}
+
+	if (n <= 0)
+		return 0;
+
+	if (n > MAX_DENTING_VERTS)
+		n = MAX_DENTING_VERTS;
+
+	cx = -cog.vx;
+	cy = -cog.vy;
+	cz = -cog.vz;
+
+	for (i = 0; i < n; i++)
 	{
 		gGlowVerts[i].vx = (short)(cx + (((src[i].vx - cx) * scale) >> 12));
 		gGlowVerts[i].vy = (short)(cy + (((src[i].vy - cy) * scale) >> 12));
 		gGlowVerts[i].vz = (short)(cz + (((src[i].vz - cz) * scale) >> 12));
 		gGlowVerts[i].pad = src[i].pad;
 	}
+
+	return n;
 }
 
-static void JerCarGlowTris(const CAR_POLY* src, int num, u_int rgb)
+static void JerCarGlowTris(const CAR_POLY* src, int num, int nverts, u_int rgb)
 {
 	POLY_FT3* prim;
 	int Z, otz;
@@ -92,10 +125,10 @@ static void JerCarGlowTris(const CAR_POLY* src, int num, u_int rgb)
 		v1 = gGlowVerts + ((indices >> 8) & 0xff);
 		v2 = gGlowVerts + ((indices >> 16) & 0xff);
 
-		/* stay inside the dent dump; a bad index would walk off the copy */
-		if ((indices & 0xff) >= MAX_DENTING_VERTS ||
-		    ((indices >> 8) & 0xff) >= MAX_DENTING_VERTS ||
-		    ((indices >> 16) & 0xff) >= MAX_DENTING_VERTS)
+		/* stay inside the copied low-LOD verts */
+		if ((indices & 0xff) >= nverts ||
+		    ((indices >> 8) & 0xff) >= nverts ||
+		    ((indices >> 16) & 0xff) >= nverts)
 		{
 			num--;
 			src++;
@@ -137,7 +170,7 @@ int jer_carglow_on_draw_world(void* userdata, void* args)
 	VECTOR pos;
 	MATRIX workmatrix;
 	CAR_MODEL* mdl;
-	int model, wave, scale, pulse, r, g, b;
+	int model, wave, scale, pulse, r, g, b, nverts;
 	u_int rgb;
 
 	(void)userdata;
@@ -211,9 +244,16 @@ int jer_carglow_on_draw_world(void* userdata, void* args)
 		/* packed B<<16 | G<<8 | R, same as DrawExplosion */
 		rgb = ((u_int)b << 16) | ((u_int)g << 8) | (u_int)r;
 
-		JerCarGlowCopyVerts(cp, scale, cog);
-		JerCarGlowTris(mdl->pFT3, mdl->numFT3, rgb);
-		JerCarGlowTris(mdl->pGT3, mdl->numGT3, rgb);
+		nverts = JerCarGlowCopyVerts(mdl, model, scale, cog);
+		if (!nverts)
+			return JER_RESULT_CONTINUE;
+
+		/* same lists plotNewCarModel walks, in the same vindices format
+		 * (plotCarPolyFT3/GT3/B3: three bytes in vindices). pB3 is the
+		 * wheel-arc / underbody fill, so the silhouette is a whole car. */
+		JerCarGlowTris(mdl->pFT3, mdl->numFT3, nverts, rgb);
+		JerCarGlowTris(mdl->pGT3, mdl->numGT3, nverts, rgb);
+		JerCarGlowTris(mdl->pB3, mdl->numB3, nverts, rgb);
 	}
 
 	return JER_RESULT_CONTINUE;

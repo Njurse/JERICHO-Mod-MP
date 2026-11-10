@@ -24,7 +24,9 @@ path, the bomb wreck latch is cleared, and the start cluster is placed then,
 not during waiting and not mid-count. 0.22.3 (still protocol 23) plays the
 bomb beep without doppler when you hold it (`StartSound`, no 3D velocity)
 and halves the beep pace (1 s to 400 ms approaching 10 s, then 200 ms, then
-every 4 frames under 5 s). Everything below "Not yet" is design, not code.
+every 4 frames under 5 s). The fox/bomb holo is a slightly scaled low-LOD
+body (NewLowCarModel vlist + those polys), not the hi-LOD dent dump fed
+to low-LOD indices. Everything below "Not yet" is design, not code.
 
 ## The model
 
@@ -350,9 +352,13 @@ contacts, and the host originates every state.
   through `ENDED` and any following `WAITING` (that is the wreck). They are
   cleared by the countdown-start respawn above, not only at session teardown.
 - A glowing body shell (`jer_carglow`) on the marked car while live: a slightly
-  scaled low-LOD copy, drawn semi-transparent with the explosion smoke texture
-  and pulsed. The fox uses the player's colour if they have one set, otherwise
-  cyan; the bomb car is always red.
+  scaled low-LOD copy of the car body (the same `NewLowCarModel` vlist
+  `plotNewCarModel` uses, scaled about model-space `-cog`, with the same
+  DrawCarObject trans path), drawn semi-transparent with the explosion smoke
+  texture and pulsed. It does not use `gTempCarVertDump` — that dump is the
+  hi-LOD dented mesh, and pairing it with low-LOD polys mangled the holo.
+  The fox uses the player's colour if they have one set, otherwise cyan; the
+  bomb car is always red.
 
 ## Choosing a mode
 
