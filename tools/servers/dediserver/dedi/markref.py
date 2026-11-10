@@ -12,8 +12,10 @@ a car arrives; the same gate after intermission. PHASE_LOBBY is retired (the
 wire value is unused). Take a Ride leaves the four fields at 0 and this
 referee stays inert.
 
-The server has no world, so it only referees the countdown: each game puts its OWN car
-in the round-start cluster when it sees COUNTDOWN (mp_session.c MpMarkClusterTick).
+The server has no world, so it only referees the countdown: each game runs the
+round-reset respawn and puts its OWN car in the start cluster the moment it
+sees COUNTDOWN begin (mp_session.c MpMarkRoundReset / MpMarkClusterTick), not
+during WAITING and not mid-count. That path also clears the bomb wreck latch.
 
 The Python twin of mp_mark.c's host half, step for step: Fox N Hounds (a clock per
 player that ticks only while they are the fox; first to 0:00 wins) and Car Bomb Tag

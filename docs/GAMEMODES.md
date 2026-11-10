@@ -17,8 +17,12 @@ cyan) and on the bomb car (always red). 0.22.1 (still protocol 23) folds the
 pre-game wait and countdown into the framework: a mode opts in with four fields
 on its `MP_MODE_DESC` row; Fox N Hounds and Car Bomb Tag opt in, Take a Ride
 stays off; waiting-for-players and the old pre-game lobby are one WAITING
-stage, then one COUNTDOWN; a join before GO is not a mid-round join. Everything
-below "Not yet" is design, not code.
+stage, then one COUNTDOWN; a join before GO is not a mid-round join. 0.22.2
+(still protocol 23) fires a real respawn the moment WAITING is satisfied and
+COUNTDOWN begins: every player is repaired and unlocked through the round-reset
+path, the bomb wreck latch is cleared, and the start cluster is placed then,
+not during waiting and not mid-count. Everything below "Not yet" is design,
+not code.
 
 ## The model
 
@@ -179,10 +183,11 @@ reaches 0:00 loses, and everyone else wins.
   first-load count again. When the wait is satisfied the referee goes
   `COUNTDOWN` once. On a fresh map that is `firstCountdownSec` (5 for Fox and
   Bomb) as `5`, `4`, `3`, `2`, `1` (golden `jer_notify`, priority 4, 1 s each);
-  the panel says `PRE-GAME n`; the start cluster is placed from the beginning of
-  this count; the pads are held. Later rounds on the same map skip the first-load
-  count and use a 1 s `GET READY` (the cluster) plus `roundCountdownSec` (3) as
-  `3`, `2`, `1`. Nobody is marked, clocks show their full time and do not tick,
+  the panel says `PRE-GAME n`; the pads are held; every player is respawned as
+  this count begins (see the start cluster below). Later rounds on the same map
+  skip the first-load count and use a 1 s `GET READY` plus `roundCountdownSec`
+  (3) as `3`, `2`, `1`, with the same countdown-start respawn. Nobody is marked,
+  clocks show their full time and do not tick,
   no tag, no arrow, no forced music. The first-load flag is only cleared at GO,
   so a countdown aborted by a joiner without a car is retried as the same kind
   (first-load if GO has not happened yet). `MP_MARK_PHASE_LOBBY` (4) is retired
@@ -193,20 +198,29 @@ reaches 0:00 loses, and everyone else wins.
 - A joiner who arrives during `WAITING` or `COUNTDOWN` (or `ENDED`, before the
   next GO) is not a mid-round join: they go through car selection and are
   counted in the wait. Only a join after GO uses mid-round placement.
-- **The start cluster** (`MpMarkClusterTick`, `MP_MODE_SPAWN_CLUSTER`). Cars are
-  owner-authoritative, so each machine places only its own car; a dedicated
-  server has no world and places nothing. The anchor is the lowest present id
-  (the `JPMK` rows) whose car this machine can see. The anchor moves to the
-  nearest road (`MpFindRoadSpotNear`). Everyone else waits 0.5 s for that move to
-  arrive, then searches from a slot on a ring around the anchor: one slot per
-  player, 8 per ring, rings 3200 units apart (`MP_JOIN_CLEAR` + 1200, the join
-  spawn's retry step). A spot must be on a road, within 9600 units of the anchor,
-  and `MP_JOIN_CLEAR` (2000) from every other player's car; it is streamed
-  (`MpWarpStreamTo`) and landed on (`MpPlaceOnGround`). Each car faces its own
-  random heading (0..4095), stopped and repaired, with no wanted level. If no
-  spot qualifies within 2 s, the pause-menu warp beside the anchor
-  (`MpWarpToPlayer`) is the fallback; failing that the car starts where it is,
-  and the log says why. A player on foot is not placed.
+- **The start cluster** (`MpMarkRoundReset`, `MpMarkClusterTick`,
+  `MP_MODE_SPAWN_CLUSTER`). When WAITING is satisfied and COUNTDOWN begins,
+  every machine runs a real respawn on its own car at that moment, not during
+  waiting and not mid-count: the wreck latch is cleared on every slot
+  (`jer_carexplode_reset`), the local car is repaired (damage, dents, hubcaps),
+  handbrake / thrust / wheelspin and death state are dropped, the wanted level
+  is cleared, and `JER_EVENT_RESET_CAR` is fired. Cars are owner-authoritative,
+  so each machine places only its own car; a dedicated server has no world and
+  places nothing. The same tick, the anchor (the lowest present id in the
+  `JPMK` rows whose car this machine can see) moves to the nearest road
+  (`MpFindRoadSpotNear`). Everyone else searches from a slot on a ring around
+  the anchor's current pose: one slot per player, 8 per ring, rings 3200 units
+  apart (`MP_JOIN_CLEAR` + 1200, the join spawn's retry step). A spot must be
+  on a road, within 9600 units of the anchor, and `MP_JOIN_CLEAR` (2000) from
+  every other player's car; it is streamed (`MpWarpStreamTo`) and landed on
+  (`MpPlaceOnGround`). Each car faces its own random heading (0..4095), stopped
+  and repaired. If the ground is still streaming, placement retries for up to
+  2 s, then the pause-menu warp beside the anchor (`MpWarpToPlayer`) is the
+  fallback; failing that the already-reset car starts where it is, and the log
+  says why. A player on foot is not placed. The wreck latch is not left until
+  session teardown: that used to keep a bomb holder locked after the next GO
+  (`InitCarPhysics` does not clear handbrake, and `jer_carexplode_hold` would
+  re-apply the lock if they were marked again).
 - A tag is a contact between two player cars, one of them marked; traffic and
   on-foot players never count. The mark moves to the other car, and no further
   tag is accepted for 2 s (`MP_MARK_TAG_COOLDOWN_MS`), so one bump cannot bounce
@@ -326,7 +340,9 @@ contacts, and the host originates every state.
 - When the bomb clock ends: `jer_carexplode` on the bomb car — a wrecked dent,
   a tumble, locked controls, three visual-only big bangs (no blast damage),
   and bank 54 sample 1 (or SFX 6). Fired once; a dedicated server never runs
-  this C. The files have no link to Caine's Crossfire.
+  this C. The files have no link to Caine's Crossfire. The latch and lock stay
+  through `ENDED` and any following `WAITING` (that is the wreck). They are
+  cleared by the countdown-start respawn above, not only at session teardown.
 - A glowing body shell (`jer_carglow`) on the marked car while live: a slightly
   scaled low-LOD copy, drawn semi-transparent with the explosion smoke texture
   and pulsed. The fox uses the player's colour if they have one set, otherwise

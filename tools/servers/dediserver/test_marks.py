@@ -400,8 +400,11 @@ def check_bombtag(tmp):
         pick(c)
         check("Cat's pick lands", wait_ready(server, 3))
         server._mark_step(33)
+        # COUNTDOWN here is the session's respawn gate (MpMarkRoundReset): wreck
+        # latch, repair, and the start cluster fire on this transition, not mid-count.
         check("...then the same countdown", server.mark.phase == m.MARK_PHASE_COUNTDOWN and
-              server.mark.shared_ms == 60000 and server.round.number == 1)
+              server.mark.shared_ms == 60000 and server.round.number == 1 and
+              server.mark.marked == -1)
         server._mark_step(4000)
         check("after the countdown, round 2", server.round.number == 2 and
               server.mark.phase == m.MARK_PHASE_LIVE and server.mark.shared_ms == 60000)
