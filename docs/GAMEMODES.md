@@ -21,8 +21,10 @@ stage, then one COUNTDOWN; a join before GO is not a mid-round join. 0.22.2
 (still protocol 23) fires a real respawn the moment WAITING is satisfied and
 COUNTDOWN begins: every player is repaired and unlocked through the round-reset
 path, the bomb wreck latch is cleared, and the start cluster is placed then,
-not during waiting and not mid-count. Everything below "Not yet" is design,
-not code.
+not during waiting and not mid-count. 0.22.3 (still protocol 23) plays the
+bomb beep without doppler when you hold it (`StartSound`, no 3D velocity)
+and halves the beep pace (1 s to 400 ms approaching 10 s, then 200 ms, then
+every 4 frames under 5 s). Everything below "Not yet" is design, not code.
 
 ## The model
 
@@ -333,10 +335,14 @@ contacts, and the host originates every state.
   `JER_MUSIC_AUTO` otherwise. Take a Ride never forces music. The engine also
   releases the force and the arrows when it leaves a level, and MP asserts them
   again every frame.
-- Car Bomb Tag, while live: a 3D tick from the holder's car (bank 54 sample 0
-  when the lump is loaded into SFX, otherwise an always-loaded SFX fallback).
-  The interval shrinks as the clock counts down, becomes a rapid beep at or
-  under 10 seconds, and a near-solid tone under 5 seconds.
+- Car Bomb Tag, while live: a beep from the holder's car (`SBK_ID_COUNTDOWN`
+  sample 0, otherwise an always-loaded SFX fallback). The interval shrinks
+  from 1 s to 400 ms approaching 10 s, then 200 ms at or under 10 s, and
+  every 4 frames under 5 s. A local holder plays it through `StartSound`
+  (no position, so `ComputeDoppler` never runs and the `DoDopplerSFX`
+  update loop skips it). A remote holder stays positional:
+  `Start3DSoundVolPitch` plus `SetChannelPosition3` on the live car pose
+  and `linearVelocity`, so source velocity is not left at `dummylong`.
 - When the bomb clock ends: `jer_carexplode` on the bomb car — a wrecked dent,
   a tumble, locked controls, three visual-only big bangs (no blast damage),
   and bank 54 sample 1 (or SFX 6). Fired once; a dedicated server never runs

@@ -29,7 +29,7 @@ import time
 
 PROTO = 23                    # mp_proto.h MP_PROTO_VERSION (23: the marked-player state, MP_TAG_MARK "JPMK", MP_MARK + MP_MARK_ENTRY, Fox N Hounds / Car Bomb Tag; 22: the round state, MP_TAG_ROUND "JPRD", MP_ROUND + MP_ROUND_ENTRY; 21: a car's city byte past the stock rows is a bank NAME code 0x80..0xFE; 20: MP_ROSTER_ENTRY carries leftModel/leftModelCity, 32 bytes; 19: dynamic JMPPED entries on top of 18's ped model id) -- the game drops any frame whose envelope version differs
 SDK = 3                       # JERICHO_SDK_VERSION
-MP_VER = "0.22.2"             # JERICHO/MODS/mp/mod.toml version -- always advertised (0.20.0 came with proto 23; 0.21.0: the timer modes' round start; 0.22.0: bomb tick/wreck/HUD/glow; 0.22.1: countdown beep, centred glow, framework pre-game; 0.22.2: countdown-start respawn and wreck-lock clear, same proto)
+MP_VER = "0.22.3"             # JERICHO/MODS/mp/mod.toml version -- always advertised (0.20.0 came with proto 23; 0.21.0: the timer modes' round start; 0.22.0: bomb tick/wreck/HUD/glow; 0.22.1: countdown beep, centred glow, framework pre-game; 0.22.2: countdown-start respawn and wreck-lock clear; 0.22.3: local bomb-beep without doppler, halved beep pace, same proto)
 NUL = bytes([0])
 
 # Shared protocol constants, mirrored from mp_proto.h so the tools never hard-code

@@ -3696,13 +3696,14 @@ JER_MODULE_ENTRY(jer_module_mp_entry)(JERICHO_CONTEXT* ctx)
 	 * to be unattended needs a human to click OK. Same dump, no dialog. */
 	MpSuppressCrashDialogs();
 
-	/* The version is mod.toml's (0.22.2: countdown-start respawn and wreck-lock clear on proto 23;
+	/* The version is mod.toml's (0.22.3: local bomb-beep without doppler, halved beep pace on proto 23;
+	 * 0.22.2 was countdown-start respawn and wreck-lock clear;
 	 * 0.22.1 was countdown beep, centred glow, framework pre-game;
 	 * 0.21.0 was the timer modes' round start; 0.20.0 came with MP_PROTO_VERSION 23).
 	 * The core lets the manifest win over this argument (jerCtxRegisterModule), so
 	 * this is only the fallback; it is kept equal to mod.toml rather than a stale
 	 * "0.1.0" so the two never disagree in a log. Bump both together. */
-	ctx->jer_register_module(ctx, "mp", "Multiplayer", "0.22.2", "JERICHO",
+	ctx->jer_register_module(ctx, "mp", "Multiplayer", "0.22.3", "JERICHO",
 		"LAN multiplayer: host/join, UDP discovery, JERICHO addon net bridge, "
 		"owner-authoritative car sync (each machine drives its own car and "
 		"broadcasts its state; peers adopt it verbatim), and in-match chat.",
