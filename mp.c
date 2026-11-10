@@ -25,6 +25,7 @@
 #include "jer_carexplode.h"	/* request bank 54 at entry; wreck is driven from the session */
 #include "jer_carglow.h"	/* JER_EVENT_DRAW_WORLD: the fox / bomb-car glow */
 #include "jer_carquery.h"	/* JER_CARQ_ROLES / _ROLEPICK: mp answers the join car select */
+#include "jer_sound.h"		/* jer_sound_request_menu_bank: the join/leave sounds */
 
 /* The chat key needs PsyX's debug-key hook, but NOT its header: PsyX_public.h and
  * SDL_scancode.h both pull in math/SDL defines that collide with the game's in
@@ -1157,6 +1158,7 @@ static int MpOnFrame(void* userdata, void* args)
 	MpChatGrabKeyboard((gMp.chatOpen || MpUiManualEditing()) ? 1 : 0);
 	jer_input_block(gMp.chatOpen);	/* typing never drives the car, horn, camera or pause */
 	MpRejoinTick();		/* a server city change: rejoin, then restore our car */
+	MpJoinLeaveTick();	/* a pending leave sound */
 
 	/* Test lever: MP_TEST_CITYCONFIRM=<secs>[,<gameType>[,<role>]] fires the
 	 * take-a-ride CITY CONFIRM the way the frontend does (CutSceneCitySelectScreen
@@ -3581,6 +3583,28 @@ static int MpOptToggleSuperTurbo(void* ud, int dir)
 	return JER_PAUSE_QUIT_NONE;
 }
 
+/* Same field the JMP Options row writes (AdjJoinLeaveSounds in mp_ui.c). */
+static void MpOptLabelJoinLeaveSounds(void* ud, char* out, int max)
+{
+	(void)ud;
+	snprintf(out, max, "Join/leave sounds: < %s >", gMp.config.joinLeaveSounds ? "On" : "Off");
+}
+
+static int MpOptToggleJoinLeaveSounds(void* ud, int dir)
+{
+	(void)ud;
+	(void)dir;
+
+	gMp.config.joinLeaveSounds = gMp.config.joinLeaveSounds ? 0 : 1;
+	MpConfigSave();
+
+	if (gMpCtx != NULL)
+		gMpCtx->jer_log(gMpCtx, "[mp] player option: join/leave sounds %s\n",
+			gMp.config.joinLeaveSounds ? "On" : "Off");
+
+	return JER_PAUSE_QUIT_NONE;
+}
+
 static int MpOptRepair(void* ud, int dir)
 {
 	(void)ud;
@@ -3637,6 +3661,7 @@ static const JER_PAUSE_MENU_ITEM mpPauseItems[] =
 	{ NULL, MpOptLabelInvincible, MpOptToggleInvincible, NULL, NULL, 0 },
 	{ NULL, MpOptLabelImmune, MpOptToggleImmune, NULL, NULL, 0 },
 	{ NULL, MpOptLabelSuperTurbo, MpOptToggleSuperTurbo, NULL, NULL, 1 },
+	{ NULL, MpOptLabelJoinLeaveSounds, MpOptToggleJoinLeaveSounds, NULL, NULL, 1 },
 	{ "Kick player", NULL, NULL, NULL, &mpKickMenu, 0 },
 	{ "Reload all cars", NULL, MpMenuReloadCars, NULL, NULL, 0 },
 	{ "Write diagnostics now", NULL, MpMenuWriteDiag, NULL, NULL, 0 },
@@ -3711,7 +3736,8 @@ JER_MODULE_ENTRY(jer_module_mp_entry)(JERICHO_CONTEXT* ctx)
 	 * to be unattended needs a human to click OK. Same dump, no dialog. */
 	MpSuppressCrashDialogs();
 
-	/* The version is mod.toml's (0.23.2: role-car picks kept per connection, not saved;
+	/* The version is mod.toml's (0.23.3: respawn hold at round end/countdown, join/leave sounds;
+	 * 0.23.2 was role-car picks kept per connection, not saved;
 	 * 0.23.1 was role cars at join, imported police cars, remote cop cones;
 	 * 0.23.0 was Cops n Robbers, game mode 3, on proto 23;
 	 * 0.22.3 was local bomb-beep without doppler, halved beep pace;
@@ -3721,7 +3747,7 @@ JER_MODULE_ENTRY(jer_module_mp_entry)(JERICHO_CONTEXT* ctx)
 	 * The core lets the manifest win over this argument (jerCtxRegisterModule), so
 	 * this is only the fallback; it is kept equal to mod.toml rather than a stale
 	 * "0.1.0" so the two never disagree in a log. Bump both together. */
-	ctx->jer_register_module(ctx, "mp", "Multiplayer", "0.23.2", "JERICHO",
+	ctx->jer_register_module(ctx, "mp", "Multiplayer", "0.23.3", "JERICHO",
 		"LAN multiplayer: host/join, UDP discovery, JERICHO addon net bridge, "
 		"owner-authoritative car sync (each machine drives its own car and "
 		"broadcasts its state; peers adopt it verbatim), and in-match chat.",
@@ -3748,6 +3774,10 @@ JER_MODULE_ENTRY(jer_module_mp_entry)(JERICHO_CONTEXT* ctx)
 	/* Mission 23's tick and bang, appended to SFX before the car-import memtop.
 	 * Asked here so any later timer-mode session has the samples. */
 	jer_carexplode_request_banks();
+
+	/* The frontend menu samples (VOICES2.BLK lump 0, the four JER_MENU_SFX_*),
+	 * appended to SFX at every level load: the join/leave sounds play them. */
+	jer_sound_request_menu_bank();
 
 	ctx->jer_register_hook(ctx, JER_EVENT_BOOT, MpOnBoot, NULL, 0);
 	ctx->jer_register_hook(ctx, JER_EVENT_SHUTDOWN, MpOnShutdown, NULL, 0);

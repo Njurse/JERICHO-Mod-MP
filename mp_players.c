@@ -103,6 +103,10 @@ MP_PLAYER* MpAddPlayer(int id, const char* name, int isLocal)
 				p->carCity = -1;
 				p->id = id;
 				gMp.playerCount++;
+
+				/* a NEW remote row: the join sound (MpJoinLeaveNote decides) */
+				if (!isLocal)
+					MpJoinLeaveNote(1, name != NULL ? name : "Player");
 				break;
 			}
 		}
@@ -128,7 +132,10 @@ void MpRemovePlayer(int id)
 
 	/* let the player know who left (never ourselves) */
 	if (!p->isLocal)
+	{
 		MpConsoleLine("%s left", p->name);
+		MpJoinLeaveNote(0, p->name);
+	}
 
 	/* take their car out of the world so it does not sit there parked with
 	 * nobody driving it; the slot is recycled by the engine.
