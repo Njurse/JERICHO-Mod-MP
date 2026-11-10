@@ -511,6 +511,7 @@ static void MpMarkClusterTick(void);
 static void MpMarkChaseTick(void);
 static void MpMarkRoundReset(void);
 static void MpRoleCarApply(void);
+static void MpRolePicksForget(const char* why);
 static void MpMapCopsTick(void);
 
 /* Cops n Robbers (MP_MODE_TIMER_GETAWAY) on THIS machine */
@@ -1775,6 +1776,10 @@ void MpSessionReset(void)
 	 * be under the player there. */
 	MpCarChangeWaitForget();
 
+	/* ...and the role-car picks: they belong to this connection (ROLE CARS, below). A
+	 * server city change's own leave keeps them - the rejoin is the same connection. */
+	MpRolePicksForget("the session is over");
+
 	/* the palette-correction log is throttled per reported value; clear that
 	 * memory so a fresh session reports its first correction */
 	memset(gPaletteLogged, 0, sizeof(gPaletteLogged));
@@ -1927,6 +1932,7 @@ void MpLeaveSession(void)
 	/* ...and a Change car still waiting for a spare slot: the world it was waiting on
 	 * is going away, so the wait is not ours to keep. */
 	MpCarChangeWaitForget();
+	MpRolePicksForget("left the session");
 
 	gMp.role = MP_ROLE_NONE;
 	gMp.connected = 0;
@@ -4393,6 +4399,7 @@ void MpRejoinCancel(const char* why)
 	}
 
 	MpRejoinEnd();
+	MpRolePicksForget("the city-change rejoin was cancelled");
 }
 
 static void MpRejoinArm(void)
@@ -4459,6 +4466,18 @@ void MpRejoinTick(void)
 		if (!gMp.running || me == NULL || me->carId < 0)
 			return;
 
+		/* A role-car mode: the picks were kept across the switch (ROLE CARS), so the
+		 * car is the one of this player's role, not whatever was on the road. */
+		if (MpModeRoleSlotCount(gMp.gamemode) > 0)
+		{
+			if (gMpCtx != NULL)
+				gMpCtx->jer_log(gMpCtx, "[mp] rejoin: role cars kept - into this round's role car\n");
+
+			MpRoleCarApply();
+			MpRejoinEnd();
+			return;
+		}
+
 		if (gMpRejoin.carModel >= 0)
 		{
 			int city = gMpRejoin.carCity, model = gMpRejoin.carModel;
@@ -4499,6 +4518,7 @@ void MpRejoinTick(void)
 	{
 		jer_error("Could not reconnect to %s:%d", gMpRejoin.host, gMpRejoin.port);
 		MpRejoinEnd();
+		MpRolePicksForget("the city-change rejoin gave up");
 		return;
 	}
 
@@ -11214,12 +11234,16 @@ int MpCarListForCity(int city, int* slots, int* models, int max)
 /* and is told each pick (JER_CARQ_ROLEPICK). Only the LAST step        */
 /* launches, so a player is not "car ready" for waitForCars           */
 /* (MpPlayerCarReady / carConfirmed) until every role has a car.        */
-/* The picks are this player's own: kept for the session and saved in  */
-/* mp's config per mode and slot (role_m<mode>_s<slot>_car / _city /    */
-/* _palette), so the next join offers them again. At every round's     */
-/* COUNTDOWN MpRoleCarApply puts the player in the car of the role they */
-/* have this round, through the pause picker's own change-car door.    */
-/* A Change car pick made in the pause menu becomes that role's pick.  */
+/* The picks are this player's own and live in memory for THIS        */
+/* CONNECTION only (0.23.2): every round and a server city change (the  */
+/* MP_KICK_FLAG_REJOIN leave + auto-rejoin) keep them; leaving, a lost  */
+/* connection, a kick, the host ending the match, or a rejoin that      */
+/* gives up forgets them (MpRolePicksForget), so the next join asks for */
+/* every role again. Nothing is written to mp's config. At every       */
+/* round's COUNTDOWN MpRoleCarApply puts the player in the car of the   */
+/* role they have this round, through the pause picker's own change-car */
+/* door. A Change car pick made in the pause menu becomes that role's   */
+/* pick.                                                                */
 /* ------------------------------------------------------------------ */
 typedef struct MP_ROLE_PICK
 {
@@ -11238,49 +11262,40 @@ typedef char MpRolePoolPolice[(JER_CARQ_POOL_POLICE == MP_MODE_POOL_POLICE) ? 1 
 typedef char MpRolePoolCivilian[(JER_CARQ_POOL_CIVILIAN == MP_MODE_POOL_CIVILIAN) ? 1 : -1];
 typedef char MpRoleSlotsFit[(MP_MODE_ROLE_SLOTS_MAX <= JER_CARQ_ROLES_MAX) ? 1 : -1];
 
-static void MpRolePickKey(char* out, int max, int mode, int slot, const char* what)
-{
-	snprintf(out, max, "role_m%d_s%d_%s", mode, slot, what);
-}
-
-/* The picks for `mode`, from the config the first time it is asked about. */
+/* The picks for `mode`: another mode's picks name other roles, so a change of
+ * mode starts from none. In memory only. */
 static void MpRolePicksFor(int mode)
 {
-	char key[48];
-	int i;
-
 	if (gMpRolePickMode == mode)
 		return;
 
 	gMpRolePickMode = mode;
+	memset(gMpRolePick, 0, sizeof(gMpRolePick));
+}
+
+/* The connection is over: forget every pick, so the next join asks again. Kept
+ * while a server city change's rejoin is pending (MpRejoinActive): that leave
+ * and join are one connection to the player. */
+static void MpRolePicksForget(const char* why)
+{
+	int i, had = 0;
+
+	if (MpRejoinActive())
+		return;
 
 	for (i = 0; i < MP_MODE_ROLE_SLOTS_MAX; i++)
-	{
-		MP_ROLE_PICK* r = &gMpRolePick[i];
+		had |= gMpRolePick[i].set;
 
-		memset(r, 0, sizeof(*r));
+	memset(gMpRolePick, 0, sizeof(gMpRolePick));
+	gMpRolePickMode = -1;
 
-		if (i >= MpModeRoleSlotCount(mode))
-			continue;
-
-		MpRolePickKey(key, sizeof(key), mode, i, "car");
-		r->model = jer_config_get_int("mp", key, -1);
-		MpRolePickKey(key, sizeof(key), mode, i, "city");
-		r->city = jer_config_get_int("mp", key, -1);
-		MpRolePickKey(key, sizeof(key), mode, i, "palette");
-		r->palette = jer_config_get_int("mp", key, 0);
-
-		if (r->palette < 0 || r->palette > 5)
-			r->palette = 0;
-
-		r->set = (r->model >= 0 && r->city >= 0 && r->city < CITY_COUNT);
-	}
+	if (had && gMpCtx != NULL)
+		gMpCtx->jer_log(gMpCtx, "[mp] role car: picks forgotten (%s) - the next join asks again\n", why);
 }
 
 /* Keep (city, model) as `slot`'s car when the slot's pool allows it. */
 static int MpRolePickStore(int mode, int slot, int city, int model, int palette, const char* from)
 {
-	char key[48];
 	int police, pool;
 	MP_ROLE_PICK* r;
 
@@ -11306,13 +11321,6 @@ static int MpRolePickStore(int mode, int slot, int city, int model, int palette,
 	r->city = city;
 	r->model = model;
 	r->palette = (palette >= 0 && palette <= 5) ? palette : 0;
-
-	MpRolePickKey(key, sizeof(key), mode, slot, "car");
-	jer_config_set_int("mp", key, model);
-	MpRolePickKey(key, sizeof(key), mode, slot, "city");
-	jer_config_set_int("mp", key, city);
-	MpRolePickKey(key, sizeof(key), mode, slot, "palette");
-	jer_config_set_int("mp", key, r->palette);
 
 	if (gMpCtx != NULL)
 		gMpCtx->jer_log(gMpCtx, "[mp] role car: %s = %s model %d palette %d (%s, %s car)\n",

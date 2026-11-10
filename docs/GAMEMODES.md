@@ -34,6 +34,9 @@ the felony flash on the multiplayer maps. 0.23.1 (same protocol) adds role
 cars: a mode may ask for one car per role at the join car select (Cops n
 Robbers: a patrol car, then a getaway car); a car mod's police car counts as
 police; and other players' police cars get their sight cones on the map.
+0.23.2 (same protocol) keeps the role-car picks for the connection only: every
+round and a server city change keep them, a disconnect forgets them, and
+nothing is saved to the config.
 Everything below "Not yet" is design, not code.
 
 ## The model
@@ -372,7 +375,7 @@ contacts, and the host originates every state.
   The fox uses the player's colour if they have one set, otherwise cyan; the
   bomb car is always red.
 
-## Cops n Robbers (mode 3, mp 0.23.0, role cars 0.23.1)
+## Cops n Robbers (mode 3, mp 0.23.0, role cars 0.23.1, per connection 0.23.2)
 
 One player drives the getaway; everyone else is a cop. The referee is the same
 `mp_mark.c` / `dedi/markref.py` pair, timer kind `MP_MODE_TIMER_GETAWAY`, kept in
@@ -425,9 +428,13 @@ carries the cops' damage meter (0..1000 points; every other row 0).
   for the roles (`JER_CARQ_ROLES`, core `jer_carquery.h`), shows the menu once
   per role with the role as the heading and the roster cut to the role's pool,
   reads `Next` until the last role, and steps back a role on Triangle. Each
-  pick is reported (`JER_CARQ_ROLEPICK`); mp checks its pool and keeps it for
-  the session and in `[mp] role_m3_s<slot>_{city,model,palette}`, so the next
-  join offers nothing new to decide but the same menu. The last pick launches,
+  pick is reported (`JER_CARQ_ROLEPICK`); mp checks its pool and keeps it in
+  memory for this connection (0.23.2; 0.23.1 also wrote `[mp]
+  role_m3_s<slot>_*`, which is no longer read or written). Every round and a
+  server city change (the `MP_KICK_FLAG_REJOIN` leave and auto-rejoin, whose
+  settle puts the player in their role's car) keep the picks; leaving, a lost
+  connection, a kick, the host ending the match, or a rejoin that gives up
+  forgets them (`MpRolePicksForget`), so the next join asks for every role. The last pick launches,
   with the patrol car (the getaway is not named until COUNTDOWN), so the
   `waitForCars` gate (`MpPlayerCarReady`) is passed only once both are picked.
   At every COUNTDOWN `MpRoleCarApply` puts each machine's player in its role's
