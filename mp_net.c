@@ -1467,6 +1467,8 @@ void MpConnLineText(char* out, int cap, int part)
 			(now - gConn[idx].lastEventMs) / 1000UL);
 }
 
+static int gMpConnEventNoConsole;	/* MpDropConn: log the drop, no console echo */
+
 void MpConnEvent(const char* ev, int idx, const char* why)
 {
 	char peer[80];
@@ -1525,6 +1527,9 @@ void MpConnEvent(const char* ev, int idx, const char* why)
 	 * call is what puts "connected to <ip>", "WELCOME received" and stage changes
 	 * on the bottom-left stream -- in the frontend AND in-game. The live
 	 * HOST/CLIENT block stays separate; `~` hides both together. */
+	if (gMpConnEventNoConsole)
+		return;	/* a player's drop: MpRemovePlayer's "<name> left" says it (mp 0.23.4) */
+
 	if (peer[0] != 0 && peer[0] != '(')
 		jer_console_log("[mp] %s  %s", ev != NULL ? ev : "?", peer);
 	else
@@ -1562,7 +1567,14 @@ static void MpDropConn(int idx, const char* why)
 	/* Report it BEFORE the teardown below clears the connection, otherwise the
 	 * most important line in the log is the one that cannot say who it was about. */
 	if (gMpCtx != NULL)
+	{
+		/* a running match's player: the log keeps the whole line, the console
+		 * gets only the "<name> left" (mp_players.c MpRemovePlayer) */
+		gMpConnEventNoConsole = gMp.running && gConn[idx].used && gConn[idx].hostSide &&
+			gConn[idx].playerId >= 0;
 		MpConnEvent("DROPPED", idx, why);
+		gMpConnEventNoConsole = 0;
+	}
 
 	/* on a client, losing the server connection is worth telling the player
 	 * about -- and it means the match is over, so go back to the frontend.

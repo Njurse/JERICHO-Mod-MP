@@ -43,6 +43,11 @@ static struct
 				 * wire as the getaway's MP_MARK_ENTRY.remainDs) */
 	long driveAcc;		/* the getaway's drive points, in 1/(1000*TOPSPEED) */
 	long hitUntil[MP_MAX_PLAYERS];	/* per cop: no scored hit before this */
+	int dmgLive;		/* this round's meter follows reported damage (MpMarkDamage) */
+	int dmgLast;		/* the getaway's damage at its last report */
+	long dmgAcc;		/* damage * BUST not yet a whole point, in 1/maxDamage */
+	int lastCop;		/* the last cop in contact with the getaway, -1 = none */
+	long lastCopMs;		/* ...at this clockMs */
 } gMark;
 
 static int MpMarkIdOk(int id)
@@ -112,6 +117,7 @@ void MpMarkReset(int mode, int minutes)
 	gMark.winner = -1;
 	gMark.lastGetaway = -1;
 	gMark.firstPick = -1;
+	gMark.lastCop = -1;
 	gMark.have = gMark.timer != MP_MODE_TIMER_NONE;
 }
 
@@ -199,6 +205,11 @@ static void MpMarkBegin(unsigned rnd)
 		gMark.heat = 0;
 		gMark.driveAcc = 0;
 		memset(gMark.hitUntil, 0, sizeof(gMark.hitUntil));
+		gMark.dmgLive = 0;	/* the countdown repaired the car: damage 0 at GO */
+		gMark.dmgLast = 0;
+		gMark.dmgAcc = 0;
+		gMark.lastCop = -1;
+		gMark.lastCopMs = 0;
 	}
 	else
 		gMark.marked = MpMarkPick(rnd);
@@ -291,10 +302,28 @@ int MpMarkSync(const int* present, unsigned rnd)
 		MpMarkEnd(-1);		/* the getaway left: the round is over, nobody won it */
 		ev |= MP_MARK_EV_END;
 	}
+	else if (markedLeft && gMark.phase == MP_MARK_PHASE_LIVE && MpMarkCount() < 2)
+	{
+		/* the fox / the bomb holder left and nobody is left to play against:
+		 * the round is void -- nobody is marked, so nobody's bomb goes off */
+		gMark.marked = -1;
+		MpMarkEnd(-1);
+		ev |= MP_MARK_EV_END;
+	}
 	else if (markedLeft && gMark.phase == MP_MARK_PHASE_LIVE)
 	{
 		gMark.marked = MpMarkPick(rnd);
 		gMark.cooldownUntil = gMark.clockMs + MP_MARK_TAG_COOLDOWN_MS;
+
+		/* Car Bomb Tag: the new holder did not take it from anyone -- a grace
+		 * in which it can neither be passed on nor go off */
+		if (gMark.timer == MP_MODE_TIMER_SHARED)
+		{
+			gMark.cooldownUntil = gMark.clockMs + MP_MARK_BOMB_GRACE_MS;
+			if (gMark.sharedMs < MP_MARK_BOMB_GRACE_MS)
+				gMark.sharedMs = MP_MARK_BOMB_GRACE_MS;
+		}
+
 		gMark.seq = (gMark.seq + 1) & 0xFFFF;
 		ev |= MP_MARK_EV_MOVED;
 	}
@@ -389,7 +418,12 @@ int MpMarkTick(int ms, unsigned rnd)
 	case MP_MARK_PHASE_LIVE:
 		if (n < 2)
 		{
-			MpMarkEnd(-1);	/* nobody left to play against: no winner */
+			/* nobody left to play against: no winner. Not the clock, so no
+			 * bomb goes off and no fox is crowned: nobody stays marked
+			 * (Cops n Robbers keeps its getaway named for the end line). */
+			if (gMark.timer != MP_MODE_TIMER_GETAWAY)
+				gMark.marked = -1;
+			MpMarkEnd(-1);
 			return MP_MARK_EV_END;
 		}
 
@@ -489,7 +523,16 @@ int MpMarkHit(int a, int b, int strength, int* outEv)
 	else
 		return 0;	/* two cops bumping: nothing */
 
-	if (strength <= 0 || gMark.clockMs < gMark.hitUntil[cop])
+	if (strength <= 0)
+		return 0;
+
+	/* who touched the getaway last: the cop the damage that follows is credited to */
+	gMark.lastCop = cop;
+	gMark.lastCopMs = gMark.clockMs;
+
+	/* the meter follows the getaway's reported damage this round: a contact
+	 * only names the cop (MpMarkDamage scores it) */
+	if (gMark.dmgLive || gMark.clockMs < gMark.hitUntil[cop])
 		return 0;
 
 	if (strength > MP_MARK_CNR_HIT_MAX)
@@ -509,6 +552,68 @@ int MpMarkHit(int a, int b, int strength, int* outEv)
 	}
 
 	return pts;
+}
+
+int MpMarkDamage(int from, int damage, int maxDamage, int* outCop, int* outEv)
+{
+	int delta, pts;
+
+	if (outCop != NULL)
+		*outCop = -1;
+	if (outEv != NULL)
+		*outEv = 0;
+
+	if (gMark.phase != MP_MARK_PHASE_LIVE || gMark.timer != MP_MODE_TIMER_GETAWAY ||
+		!MpMarkIdOk(from) || from != gMark.marked || maxDamage <= 0)
+		return 0;
+
+	if (damage < 0)
+		damage = 0;
+	if (damage > maxDamage)
+		damage = maxDamage;
+
+	gMark.dmgLive = 1;
+	delta = damage - gMark.dmgLast;
+	gMark.dmgLast = damage;
+
+	if (delta <= 0)
+		return 0;	/* repaired / respawned: the meter keeps what it has */
+
+	gMark.dmgAcc += (long)delta * MP_MARK_CNR_BUST_POINTS;
+	pts = (int)(gMark.dmgAcc / maxDamage);
+	gMark.dmgAcc %= maxDamage;
+
+	/* fully wrecked is a full meter, whatever the rounding left */
+	if (damage >= maxDamage && gMark.heat + pts < MP_MARK_CNR_BUST_POINTS)
+		pts = MP_MARK_CNR_BUST_POINTS - gMark.heat;
+
+	if (gMark.heat + pts > MP_MARK_CNR_BUST_POINTS)
+		pts = MP_MARK_CNR_BUST_POINTS - gMark.heat;
+
+	if (pts <= 0)
+		return 0;
+
+	gMark.heat += pts;
+	gMark.revision++;
+
+	if (outCop != NULL && MpMarkIdOk(gMark.lastCop) && gMark.present[gMark.lastCop] &&
+		gMark.lastCop != gMark.marked && gMark.clockMs - gMark.lastCopMs <= MP_MARK_CNR_CREDIT_MS)
+		*outCop = gMark.lastCop;
+
+	if (gMark.heat >= MP_MARK_CNR_BUST_POINTS)
+	{
+		gMark.heat = MP_MARK_CNR_BUST_POINTS;
+		MpMarkEnd(-1);		/* wrecked: busted, the cops win the round */
+		if (outEv != NULL)
+			*outEv = MP_MARK_EV_END;
+	}
+
+	return pts;
+}
+
+int MpMarkDamageLive(void)
+{
+	return gMark.timer == MP_MODE_TIMER_GETAWAY && gMark.dmgLive;
 }
 
 int MpMarkDrive(int ms, int speed)

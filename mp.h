@@ -295,11 +295,12 @@ void MpCarReadinessTick(void);
  * session's import set: it takes a resident slot nobody drives. */
 int MpLocalCarChosen(void);
 
-/* JERICHO round start (Fox N Hounds / Car Bomb Tag): 1 while the referee's 3-2-1 is
- * running (MP_MARK_PHASE_COUNTDOWN) in a mode that wants one -- the local pad and
- * on-foot pad are held (mp.c MpOnNetInput / MpOnPedInput) and released on GO. Always
- * 0 in Take a Ride and outside a match. */
-int MpRoundStartHoldsCar(void);
+/* JERICHO round hold (the timer modes with a countdown): 1 while the referee's 3-2-1
+ * (MP_MARK_PHASE_COUNTDOWN) or the result screen (MP_MARK_PHASE_ENDED) runs -- the
+ * local car is stopped the engine's way and the on-foot pad held (mp.c MpOnNetInput
+ * / MpOnPedInput), released on GO. 0 in the WAITING lobby, in Take a Ride and
+ * outside a match. (mp 0.23.4; was MpRoundStartHoldsCar, COUNTDOWN only) */
+int MpRoundHoldsCar(void);
 
 /* Cops n Robbers: the getaway driver's id while a round is live, else -1 (the
  * map flashes their blip red/blue, mp_map.c). */
@@ -674,6 +675,7 @@ void MpRejoinCancel(const char* why);
  * match, and for the players coming back after a server city change. */
 void MpJoinLeaveNote(int joined, const char* name);
 void MpJoinLeaveTick(void);
+void MpJoinLeaveLeftLine(const char* name);	/* "<name> left": once, delayed, none for a rejoin kick */
 
 /* A city's display name (a 0..3 index, or -1 for the session's own city). */
 const char* MpCarCityName(int city);

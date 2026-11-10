@@ -51,6 +51,8 @@ CNR_DRIVE_BONUS = 5
 CNR_DRIVE_TOPSPEED = 300
 CNR_ESCAPE_DIST = 32000
 CNR_ESCAPE_HOLD_MS = 5000
+CNR_CREDIT_MS = 2000         # mp_mark.h MP_MARK_CNR_CREDIT_MS: a contact earns the damage after it
+BOMB_GRACE_MS = 12000        # mp_mark.h MP_MARK_BOMB_GRACE_MS: a new holder after a leave
 
 
 def clamp_minutes(minutes):
@@ -99,6 +101,11 @@ class MarkReferee:
         self.heat = 0
         self.drive_acc = 0
         self.hit_until = {}
+        self.dmg_live = False        # this round's meter follows reported damage
+        self.dmg_last = 0
+        self.dmg_acc = 0
+        self.last_cop = -1           # the last cop in contact with the getaway
+        self.last_cop_ms = 0
 
     @property
     def active(self):
@@ -155,6 +162,11 @@ class MarkReferee:
             self.heat = 0
             self.drive_acc = 0
             self.hit_until = {}
+            self.dmg_live = False               # the countdown repaired the car
+            self.dmg_last = 0
+            self.dmg_acc = 0
+            self.last_cop = -1
+            self.last_cop_ms = 0
         else:
             self.marked = self._pick(rnd)
         self.cooldown_until = self.clock_ms + TAG_COOLDOWN_MS
@@ -216,9 +228,17 @@ class MarkReferee:
         if marked_left and self.phase == m.MARK_PHASE_LIVE and self.timer == m.MODE_TIMER_GETAWAY:
             self._end(-1)                       # the getaway left: nobody won it
             ev |= EV_END
+        elif marked_left and self.phase == m.MARK_PHASE_LIVE and len(self.present) < 2:
+            self.marked = -1                    # nobody to play against: void, no bomb goes off
+            self._end(-1)
+            ev |= EV_END
         elif marked_left and self.phase == m.MARK_PHASE_LIVE:
             self.marked = self._pick(rnd)
             self.cooldown_until = self.clock_ms + TAG_COOLDOWN_MS
+            if self.timer == m.MODE_TIMER_SHARED:   # bomb: a grace for the new holder
+                self.cooldown_until = self.clock_ms + BOMB_GRACE_MS
+                if self.shared_ms < BOMB_GRACE_MS:
+                    self.shared_ms = BOMB_GRACE_MS
             self.seq = (self.seq + 1) & 0xFFFF
             ev |= EV_MOVED
         elif marked_left:
@@ -276,6 +296,8 @@ class MarkReferee:
             return EV_BEGIN
         if self.phase == m.MARK_PHASE_LIVE:
             if n < 2:
+                if self.timer != m.MODE_TIMER_GETAWAY:
+                    self.marked = -1                # not the clock: nobody stays marked
                 self._end(-1)
                 return EV_END
             if self.timer == m.MODE_TIMER_PERSONAL:
@@ -338,7 +360,11 @@ class MarkReferee:
             cop = a
         else:
             return 0, 0
-        if strength <= 0 or self.clock_ms < self.hit_until.get(cop, 0):
+        if strength <= 0:
+            return 0, 0
+        self.last_cop = cop                     # the cop the damage after this is credited to
+        self.last_cop_ms = self.clock_ms
+        if self.dmg_live or self.clock_ms < self.hit_until.get(cop, 0):
             return 0, 0
         strength = min(strength, CNR_HIT_MAX)
         pts = strength * CNR_HIT_POINTS
@@ -350,6 +376,39 @@ class MarkReferee:
             self._end(-1)                       # busted: the cops win
             return pts, EV_END
         return pts, 0
+
+    def damage(self, frm, damage, max_damage):
+        """MpMarkDamage: the getaway's own damage report -> (points, credited cop, EV_*)."""
+        if self.phase != m.MARK_PHASE_LIVE or self.timer != m.MODE_TIMER_GETAWAY:
+            return 0, -1, 0
+        if not 0 <= frm < m.MAX_PLAYERS or frm != self.marked or max_damage <= 0:
+            return 0, -1, 0
+        damage = max(0, min(int(damage), int(max_damage)))
+        self.dmg_live = True
+        delta = damage - self.dmg_last
+        self.dmg_last = damage
+        if delta <= 0:
+            return 0, -1, 0
+        self.dmg_acc += delta * CNR_BUST_POINTS
+        pts = self.dmg_acc // max_damage
+        self.dmg_acc %= max_damage
+        if damage >= max_damage and self.heat + pts < CNR_BUST_POINTS:
+            pts = CNR_BUST_POINTS - self.heat
+        if self.heat + pts > CNR_BUST_POINTS:
+            pts = CNR_BUST_POINTS - self.heat
+        if pts <= 0:
+            return 0, -1, 0
+        self.heat += pts
+        self.revision += 1
+        cop = -1
+        if (0 <= self.last_cop < m.MAX_PLAYERS and self.last_cop in self.present and
+                self.last_cop != self.marked and self.clock_ms - self.last_cop_ms <= CNR_CREDIT_MS):
+            cop = self.last_cop
+        if self.heat >= CNR_BUST_POINTS:
+            self.heat = CNR_BUST_POINTS
+            self._end(-1)                       # wrecked: busted
+            return pts, cop, EV_END
+        return pts, cop, 0
 
     def drive(self, ms, speed):
         """MpMarkDrive: the getaway's whole points for `ms` alive at `speed`."""

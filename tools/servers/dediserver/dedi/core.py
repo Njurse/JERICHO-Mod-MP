@@ -104,6 +104,7 @@ MAP_MODE_MP = "mp"
 # key -- minutes, 1..5 -- deliberately NOT in DEFAULTS, so upgrade_config never writes
 # it into an operator's file; missing or unreadable means 3 (mode_minutes).
 MARK_TICK_S = 0.1          # how often the referee is stepped
+REJOIN_QUIET_S = 55.0      # mp_session.c MP_REJOIN_QUIET_MS (52.5 s): a city-change rejoin is no join/leave
 MARK_SEND_LIVE_S = 1.0     # JPMK cadence while a round is live (the host: 30 frames)
 MARK_SEND_IDLE_S = 4.0     # ...and otherwise (the host: 120 frames)
 TAG_RADIUS = 900           # mp_session.c MP_HIT_RADIUS: car body scale, world units
@@ -469,6 +470,9 @@ class Dedicated:
         self.mark_rng = random.Random()
         self.car_seen = {}       # playerId -> monotonic time its carstate row arrived
         self.joined_at = {}      # playerId -> monotonic time it joined (the tag arm)
+        # name -> monotonic deadline: kicked to rejoin (a city change), so its leave
+        # and its return are not announced (the game's MP_REJOIN_QUIET_MS, ~52 s)
+        self.rejoin_quiet = {}
 
         # Reported by the console. The beacon can be turned off from there (a LAN
         # you do not want to appear on) without stopping anything else, so the
@@ -849,6 +853,38 @@ class Dedicated:
         if ev & markref.EV_END:
             self.round.end()
             self.log.info("mark: round %d over - busted" % self.round.number)
+        return True
+
+    def mark_damage_report(self, pid, payload):
+        """Cops n Robbers: the getaway's own JPDM (its engine's totalDamage and wreck
+        point). The meter follows it (markref.damage), the cop in contact within
+        CNR_CREDIT_MS scores the points; a getaway that never sends one is scored by
+        contact strength as before (mp_session.c MpMarkHostDamage)."""
+        if len(payload) < m.DAMAGE.size:
+            return False
+        frm, _flags, _seq, damage, max_damage = m.DAMAGE.unpack_from(payload, 0)
+        if frm != pid or max_damage <= 0 or max_damage > (1 << 20):
+            return False
+        with self.lock:
+            if self.mark.timer != m.MODE_TIMER_GETAWAY or self.mark.phase != m.MARK_PHASE_LIVE:
+                return False
+            first = not self.mark.dmg_live
+            pts, cop, ev = self.mark.damage(pid, damage, max_damage)
+            if first and self.mark.dmg_live:
+                self.log.info("mark: getaway %d reports its own damage (max %d) - the meter follows it"
+                              % (pid, max_damage))
+            if not pts:
+                return False
+            if cop >= 0:
+                self.round.add_score(cop, pts)
+            self.log.info("mark: getaway %d damage %d/%d -> meter +%d = %d/%d, %s"
+                          % (pid, damage, max_damage, pts, self.mark.heat, markref.CNR_BUST_POINTS,
+                             ("player %d scores" % cop) if cop >= 0 else "no cop in contact (no points)"))
+            if ev & markref.EV_END:
+                self.round.end()
+                self.log.info("mark: round %d over - busted (wrecked)" % self.round.number)
+        self.broadcast_mark_if_due()
+        self.broadcast_round_if_changed()
         return True
 
     def broadcast_mark_if_due(self, force=False):
@@ -1361,6 +1397,10 @@ class Dedicated:
                     relay.round_state(self, conn, pid, payload)
                 elif tag == m.TAG["mark"]:
                     relay.mark_state(self, conn, pid, payload)
+                elif tag == m.TAG["damage"]:
+                    # optional (mp 0.23.4): the getaway's own damage; never relayed
+                    if self.mark.active:
+                        self.mark_damage_report(pid, payload)
                 elif tag == m.TAG["leave"]:
                     break
         finally:
@@ -1689,6 +1729,9 @@ class Dedicated:
         # rejoin: KICK reserved[0] flag -- new clients reconnect on their own (and
         # keep their car); old ones just see the kick text.
         payload = m.KICK.pack(pid, m.KICK_FLAG_REJOIN if rejoin else 0, 0, 0)
+        if rejoin:
+            with self.lock:
+                self.rejoin_quiet[c["name"]] = time.monotonic() + REJOIN_QUIET_S
         if reason:
             payload += self.kick_text(by, reason).encode("utf-8").ljust(m.KICK_TEXT_LEN, b"\0")
         try:

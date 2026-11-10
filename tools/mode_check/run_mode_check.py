@@ -162,6 +162,31 @@ def mark_scripts():
          "hit 1 4 20", "hit 1 4 20", "tick 10000 0", "tick 3000 0", "escape", "tick 1000 0",
          "sync 0 1 4 6", "tick 33 0", "tick 10000 0", "tick 3000 0", "sync 0 1 6", "tick 33 0",
          "sync 0 1 4 6", "tick 10000 0", "tick 3000 0"],
+        # 0.23.4 Cops n Robbers on real damage: contacts before the first report
+        # still score (an older getaway build), the first report switches the
+        # meter to damage/maxDamage, a contact names the cop credited within
+        # CREDIT_MS, a repair keeps the meter, a full wreck is a bust.
+        ["reset %s 1" % cnr, "ready %s" % everyone, "sync 0 1 4 6", "tick 0 0", "tick 5000 0",
+         "hit 4 1 10", "damage 4 0 30000", "damage 1 0 30000", "hit 1 4 10", "tick 500 0",
+         "damage 1 3000 30000", "tick 2500 0", "damage 1 4500 30000", "hit 6 1 3",
+         "damage 1 4510 30000", "damage 1 2000 0", "damage 1 1000 30000", "tick 1000 0",
+         "damage 1 1100 30000", "hit 1 6 20", "damage 1 29000 30000", "hit 1 4 20",
+         "damage 1 30000 30000", "tick 10000 0", "damage 1 100 30000"],
+        ["reset %s 1" % cnr, "ready %s" % everyone, "sync 0 2 5", "tick 0 0", "tick 5000 0",
+         "damage 2 12345 30000", "hit 5 2 4", "damage 2 99999 30000", "tick 1 0"],
+        # 0.23.4 Car Bomb Tag leavers: the holder leaving with 2+ left -> a random
+        # new holder with a 12 s grace (no pass, the clock raised to 12 s); with
+        # fewer than 2 left -> the round is void, nobody marked (no bomb goes off);
+        # a non-holder leaving the holder alone -> void too.
+        ["reset %s 1" % bomb, "ready %s" % everyone, "sync 0 1 4 6", "tick 0 0", "tick 5000 0",
+         "tick 55000 0", "sync 7 4 6", "tick 3000 0", "contact 4 6", "contact 6 4",
+         "tick 9000 0", "contact 4 6", "contact 6 4", "tick 1 0", "contact 4 6", "contact 6 4",
+         "tick 12000 0", "tick 10000 0", "tick 4000 0", "sync 3 4", "tick 33 0", "tick 10000 0"],
+        ["reset %s 1" % bomb, "ready %s" % everyone, "sync 0 1 4", "tick 0 0", "tick 5000 0",
+         "tick 1000 0", "sync 0 1", "tick 33 0", "sync 0 1 4", "tick 10000 0", "tick 4000 0",
+         "sync 0 4", "tick 33 0"],
+        ["reset %s 2" % fox, "ready %s" % everyone, "sync 0 2 5", "tick 0 0", "tick 5000 0",
+         "sync 0 5", "tick 33 0"],
         # Take a Ride: inert; and the minutes clamp.
         ["reset 0 3", "sync 0 0 1 2", "tick 1000 0", "contact 0 1"],
         ["reset %s 0" % fox, "reset %s 9" % bomb, "sync 0 3 4", "tick 1 0"],
@@ -189,6 +214,9 @@ def mark_scripts():
                 steps.append("drive %d %d" % (rng.choice([0, 33, 34, 500, 1000]), rng.randrange(-10, 400)))
             elif mode == cnr and r < 0.63:
                 steps.append("escape")
+            elif mode == cnr and r < 0.70:
+                steps.append("damage %d %d %d" % (rng.randrange(0, 6), rng.choice([0, 1, 500, 3333, 15000, 29999, 30000, 40000]),
+                                                 rng.choice([0, 1000, 30000])))
             else:
                 steps.append("tick %d %d" % (rng.choice([0, 33, 34, 500, 1000, 2000, 3999, 4000, 5000, 15000, 61000]), rng.randrange(1000)))
         scripts.append(steps)
@@ -220,6 +248,9 @@ def python_mark_run(steps):
             ev = ref.drive(int(t[1]), int(t[2]))
         elif t[0] == "escape":
             ev = ref.escape()
+        elif t[0] == "damage":
+            pts, cop, dev = ref.damage(int(t[1]), int(t[2]), int(t[3]))
+            ev = pts * 65536 + (cop + 1) * 256 + dev
         out.append("STEP %d %d %s" % (n, ev, ref.to_bytes().hex()))
     return out
 
@@ -242,7 +273,9 @@ def check_mark_constants():
              "MP_MARK_CNR_DRIVE_BASE": markref.CNR_DRIVE_BASE, "MP_MARK_CNR_DRIVE_BONUS": markref.CNR_DRIVE_BONUS,
              "MP_MARK_CNR_DRIVE_TOPSPEED": markref.CNR_DRIVE_TOPSPEED,
              "MP_MARK_CNR_ESCAPE_DIST": markref.CNR_ESCAPE_DIST,
-             "MP_MARK_CNR_ESCAPE_HOLD_MS": markref.CNR_ESCAPE_HOLD_MS}
+             "MP_MARK_CNR_ESCAPE_HOLD_MS": markref.CNR_ESCAPE_HOLD_MS,
+             "MP_MARK_CNR_CREDIT_MS": markref.CNR_CREDIT_MS,
+             "MP_MARK_BOMB_GRACE_MS": markref.BOMB_GRACE_MS}
     ok = True
     for name, py in pairs.items():
         mm = re.search(r"#define\s+%s\s+(0x[0-9A-Fa-f]+|\d+)\b" % name, h)

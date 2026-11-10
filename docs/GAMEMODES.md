@@ -39,7 +39,16 @@ round and a server city change keep them, a disconnect forgets them, and
 nothing is saved to the config. 0.23.3 (same protocol) lets a mode hold the
 normal respawn by referee phase (`respawnHold`): the three round modes hold it
 at the round end and through the countdown, so nobody respawns onto the result
-screen, and the countdown's own respawn puts everyone back.
+screen, and the countdown's own respawn puts everyone back. 0.23.4 (same
+protocol) holds the cars still through the countdown and the result screen
+(the engine's own handbrake/brake stop; the WAITING lobby drives free), fully
+repairs each car after the round's role-car swap, keeps one centre line at a
+time, ends a round void when the fox or the bomb holder leaves with fewer than
+two left (two or more left: a random new holder with a 12 s grace), sets the
+bomb off only at 0:00, scores Cops n Robbers from the getaway's own reported
+damage (the optional `JPDM`; an older getaway falls back to contact strength),
+rotates the police radio among the cops near the getaway, and draws the Fox N
+Hounds clocks in the mission-timer digits.
 Everything below "Not yet" is design, not code.
 
 ## The model
@@ -104,7 +113,7 @@ and passes `gMp.gamemode`:
 | `MpNameTagColour` (mp_ui.c), `MpOnPedDraw` (mp.c), chat ink (`MpSendChat`, `MpHandleChat`) | `MpModePlayerColour` | the player's own colour and on/off |
 | `MpSpawnLateJoiners`, `MpOnNetSpawn` | `MpModeLateJoinPolicy`, `MpModeSpawnRule` | live, the session's own placement (`CLUSTER` seats the same way) |
 | `MpMarkPresentTick` -> `MpMarkClusterTick` | `MpModeSpawnRule` == `CLUSTER` | never reached (no `JPMK` in mode 0) |
-| referee gate (`mp_mark.c`, `markref.py`), `MpRoundStartHoldsCar` | `MpModeHasPreGame` / `MpModeWantsCountdown` and the four wait/countdown fields | 0: no wait, no countdown, no pad hold |
+| referee gate (`mp_mark.c`, `markref.py`), `MpRoundHoldsCar` | `MpModeHasPreGame` / `MpModeWantsCountdown` and the four wait/countdown fields | 0: no wait, no countdown, no pad hold |
 
 Rules every mode keeps:
 

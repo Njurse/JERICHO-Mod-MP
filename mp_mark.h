@@ -67,6 +67,17 @@ extern "C" {
 #define MP_MARK_CNR_DRIVE_TOPSPEED	300	/* whole units/frame (~90 mph) for the full bonus */
 #define MP_MARK_CNR_ESCAPE_DIST		32000	/* x/z units from EVERY cop (~2x draw distance) */
 #define MP_MARK_CNR_ESCAPE_HOLD_MS	5000	/* ...held this long (the host's caller) */
+/* 0.23.4: the meter follows the getaway's REAL damage when its owner reports it
+ * (MP_TAG_DAMAGE, optional: a build that does not send it keeps the contact
+ * strength above). The meter is damage / maxDamage of BUST_POINTS, so a full
+ * meter is a fully wrecked car; the points go to the last cop that touched the
+ * getaway within CREDIT_MS (none: the meter still fills, nobody scores). */
+#define MP_MARK_CNR_CREDIT_MS		2000	/* a cop's contact earns the damage that follows it */
+
+/* Car Bomb Tag (0.23.4): the holder left and two or more are still in -- a random
+ * new holder, who cannot pass it on, and whose bomb cannot go off, for this long
+ * (the shared clock is raised to it if less is left). */
+#define MP_MARK_BOMB_GRACE_MS		12000
 
 /* Event bits returned by MpMarkSync / MpMarkTick. */
 #define MP_MARK_EV_BEGIN	0x01	/* a round went live: MpRoundBegin */
@@ -106,6 +117,17 @@ int  MpMarkContact(int a, int b);
  * hit: not live, two cops, the cop's cooldown) and adds them to the heat meter;
  * a full meter ends the round, busted (*outEv = MP_MARK_EV_END, winner none). */
 int  MpMarkHit(int a, int b, int strength, int* outEv);
+
+/* Cops n Robbers, host: the getaway `from` reports its own car's damage (its
+ * totalDamage out of `maxDamage`, MP_TAG_DAMAGE, or the host's own car). From the
+ * first report of a round the contacts above stop scoring and only mark who
+ * touched the getaway; the meter moves by the damage it gained since the last
+ * report, scaled to BUST_POINTS per maxDamage, and fills when the car is wrecked.
+ * Returns the points the meter rose by; *outCop = the cop credited (-1 = none,
+ * MP_MARK_CNR_CREDIT_MS); *outEv = MP_MARK_EV_END on a bust. 0 for a report that
+ * is not the live getaway's, or one that did not add damage. */
+int  MpMarkDamage(int from, int damage, int maxDamage, int* outCop, int* outEv);
+int  MpMarkDamageLive(void);		/* host: this round's meter follows reported damage */
 
 /* Cops n Robbers, host: `ms` more alive at `speed` whole units/frame. Returns the
  * whole points the GETAWAY earned (MP_MARK_CNR_DRIVE_BASE a second, plus up to

@@ -130,10 +130,11 @@ void MpRemovePlayer(int id)
 	if (p == NULL)
 		return;
 
-	/* let the player know who left (never ourselves) */
+	/* let the player know who left (never ourselves): ONE line, and not for a
+	 * city change's rejoin kick (MpJoinLeaveLeftLine decides, mp 0.23.4) */
 	if (!p->isLocal)
 	{
-		MpConsoleLine("%s left", p->name);
+		MpJoinLeaveLeftLine(p->name);
 		MpJoinLeaveNote(0, p->name);
 	}
 

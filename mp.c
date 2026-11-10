@@ -2946,12 +2946,15 @@ static int MpOnNetInput(void* userdata, void* args)
 				in->pad = 0;
 				in->handled = 1;
 			}
-			else if (MpRoundStartHoldsCar())
+			else if (MpRoundHoldsCar())
 			{
-				/* ...and the ROUND START holds everyone on the line for the 3-2-1
-				 * (Fox N Hounds / Car Bomb Tag; never Take a Ride). The same swallow,
-				 * bot included; GO (the referee's LIVE) gives the pad back. */
-				in->pad = 0;
+				/* ...and the ROUND holds everyone still through the 3-2-1 and the
+				 * result screen (the timer modes; never Take a Ride, never the
+				 * WAITING lobby). Not a zeroed pad, which lets a moving car roll:
+				 * the engine's own stop (handling.c's "can't drive" lock) --
+				 * the handbrake, or the brake while the wheels still turn fast.
+				 * Bot included; GO (the referee's LIVE) gives the pad back. */
+				in->pad = (car_data[carId].hd.wheel_speed > 36864) ? CAR_PAD_BRAKE : CAR_PAD_HANDBRAKE;
 				in->handled = 1;
 			}
 			else if (MpBotEnabled())
@@ -3101,10 +3104,11 @@ static int MpOnPedInput(void* userdata, void* args)
 	/* The pause menu owns the pad while it is up: hold the ped still too, so
 	 * menu navigation never walks the player. The chat prompt owns the KEYBOARD the
 	 * same way -- the ped pad comes from the same raw keyboard state -- so typing a
-	 * line must not walk us either, and the round-start 3-2-1 holds us on the line.
+	 * line must not walk us either, and the round hold (the 3-2-1 and the result
+	 * screen, MpRoundHoldsCar) keeps us standing.
 	 * (No `handled` field on this hook, so zeroing
 	 * the bits is the swallow.) */
-	if ((pauseflag != 0 || gMp.chatOpen || MpRoundStartHoldsCar()) && (PLAYER*)in->player == &player[0])
+	if ((pauseflag != 0 || gMp.chatOpen || MpRoundHoldsCar()) && (PLAYER*)in->player == &player[0])
 	{
 		in->pad = 0;
 		return JER_RESULT_CONTINUE;
@@ -3736,7 +3740,9 @@ JER_MODULE_ENTRY(jer_module_mp_entry)(JERICHO_CONTEXT* ctx)
 	 * to be unattended needs a human to click OK. Same dump, no dialog. */
 	MpSuppressCrashDialogs();
 
-	/* The version is mod.toml's (0.23.3: respawn hold at round end/countdown, join/leave sounds;
+	/* The version is mod.toml's (0.23.4: round hold, pre-round repair, one centre line,
+	 * the getaway's own damage (optional JPDM), Fox N Hounds digit timers, radio rotation;
+	 * 0.23.3 was respawn hold at round end/countdown, join/leave sounds;
 	 * 0.23.2 was role-car picks kept per connection, not saved;
 	 * 0.23.1 was role cars at join, imported police cars, remote cop cones;
 	 * 0.23.0 was Cops n Robbers, game mode 3, on proto 23;
@@ -3747,7 +3753,7 @@ JER_MODULE_ENTRY(jer_module_mp_entry)(JERICHO_CONTEXT* ctx)
 	 * The core lets the manifest win over this argument (jerCtxRegisterModule), so
 	 * this is only the fallback; it is kept equal to mod.toml rather than a stale
 	 * "0.1.0" so the two never disagree in a log. Bump both together. */
-	ctx->jer_register_module(ctx, "mp", "Multiplayer", "0.23.3", "JERICHO",
+	ctx->jer_register_module(ctx, "mp", "Multiplayer", "0.23.4", "JERICHO",
 		"LAN multiplayer: host/join, UDP discovery, JERICHO addon net bridge, "
 		"owner-authoritative car sync (each machine drives its own car and "
 		"broadcasts its state; peers adopt it verbatim), and in-match chat.",
