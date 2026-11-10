@@ -14,7 +14,8 @@
  *
  * The mode id is the session's existing `gamemode` byte (MP_GAMEMODE_*, mp_proto.h),
  * which already rides MP_WELCOME, MP_SESSION (inside JPST), MP_BEACON and the master
- * listing. Nothing here changes the wire.
+ * listing. Nothing here changes the wire; what a player is doing in a round (state,
+ * score, team) rides MP_TAG_ROUND and lives in mp_round.h.
  *
  * An id this build does not know (a newer server) is NAMED "-" and BEHAVES as mode 0:
  * that is exactly what an unknown id did before this file, because nothing read it.
@@ -117,8 +118,9 @@ const char* MpModeCarChangeRefusal(int mode, int roundRunning);
  * returns `count` untouched. */
 int MpModeFilterCarPool(int mode, int city, int* slots, int* models, int count);
 
-/* The team a player is on, -1 for none. Team membership does not travel yet, so
- * this is -1 for everybody until the round state lands (docs/GAMEMODES.md). */
+/* The team a player is on, -1 for none. Read from the round state (mp_round.h,
+ * MP_TAG_ROUND); always -1 for a mode with no teams, such as Take a Ride, and for
+ * a team index the mode does not have. */
 int MpModePlayerTeam(int mode, int playerId);
 
 /* THE colour seam: the colour a player's name and suit are DRAWN in. In: the

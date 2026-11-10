@@ -38,7 +38,16 @@
 extern "C" {
 #endif
 
-#define MP_PROTO_VERSION	21	/* 21: every car CITY byte (MP_CAR.city, roster/carstate
+#define MP_PROTO_VERSION	22	/* 22: the ROUND STATE carrier, MP_TAG_ROUND ('JPRD'):
+				 *     round number + phase, and per player the
+				 *     state (playing/spectating/waiting), score and
+				 *     team. A new host-authored message rather than a
+				 *     field anywhere else: MP_ROSTER_ENTRY, MP_WELCOME,
+				 *     MP_SESSION, MP_BEACON and the rules byte are
+				 *     unchanged. Bumped because a v21 peer has no
+				 *     handler for it and would play a mode's round as
+				 *     free roam; mp module 0.19.0.
+				 * 21: every car CITY byte (MP_CAR.city, roster/carstate
 				 *     modelCity + leftModelCity, traffic modelCity) past the
 				 *     stock rows 0..10 is a bank NAME code 0x80..0xFE
 				 *     (jer_carquery.h JER_CARQ_CITYWIRE), not the sender's
@@ -229,6 +238,10 @@ typedef struct MP_ROSTER
 #define MP_TAG_STATS	"JPSX"	/* host -> all: each player's link to the host (rx/tx/loss).
 				 * OPTIONAL: a peer that does not know it ignores it (unknown
 				 * tags are dropped), so it needs no protocol bump. */
+#define MP_TAG_ROUND	"JPRD"	/* host -> all: the round and every player's round state
+				 * (MP_ROUND + MP_ROUND_ENTRY rows; v22). Only the host -- a
+				 * listen host or a dedicated server -- writes it; a client
+				 * applies it and never sends one. */
 
 /* Envelope flags */
 #define MP_FLAG_RELIABLE	0x01	/* sender wants an ordered/reliable channel */
@@ -751,6 +764,54 @@ typedef struct MP_STATS
 	uint8_t  reserved[3];
 } MP_STATS;	/* header only: the entries follow */
 
+/* THE ROUND STATE (v22, 'JPRD'). The carrier every game mode reads: which round
+ * this is, whether it is running, and for each player whether they are in it,
+ * their score and their team. Identity stays on the roster (MP_ROSTER_ENTRY has no
+ * spare byte and is not touched); this message only says what a player is DOING
+ * in the round, keyed by the same player id.
+ *
+ * Host-authored, like the roster. The host sends it after a WELCOME (so a joiner
+ * has it before it plays), on START, whenever it changes, and on the roster's
+ * 120-frame cadence so a lost one is repaired. A client replaces its whole copy
+ * with each one. A player with no row, or a client that has had no snapshot yet,
+ * reads as Take a Ride: playing, no team, score 0 (mp_round.c).
+ *
+ * Header + `count` rows, like MP_STATS: only present players are on the wire. */
+enum
+{
+	MP_ROUND_PHASE_IDLE = 0,	/* no round yet: the lobby, before START */
+	MP_ROUND_PHASE_LIVE = 1,	/* the round is being played (Take a Ride: always, once started) */
+	MP_ROUND_PHASE_ENDED = 2	/* the round is over and the next has not started */
+};
+
+enum
+{
+	MP_ROUND_PLAYER_PLAYING = 0,	/* driving in this round. 0 on purpose: a zeroed or
+					 * missing row reads as "playing", the Take a Ride answer */
+	MP_ROUND_PLAYER_SPECTATING = 1,	/* out of this round, watching */
+	MP_ROUND_PLAYER_WAITING = 2	/* in the session, not in a round (lobby, or until the next) */
+};
+
+#define MP_ROUND_TEAM_NONE	0xFF	/* not on a team (every Take a Ride player) */
+
+typedef struct MP_ROUND_ENTRY
+{
+	uint8_t  playerId;
+	uint8_t  state;		/* MP_ROUND_PLAYER_* */
+	uint8_t  team;		/* 0..MP_MODE_MAX_TEAMS-1, MP_ROUND_TEAM_NONE = none */
+	uint8_t  reserved;
+	int32_t  score;		/* this round's score, starts at 0 */
+} MP_ROUND_ENTRY;		/* 8 bytes */
+
+typedef struct MP_ROUND
+{
+	uint8_t  gamemode;	/* MP_GAMEMODE_*: the mode the host is refereeing */
+	uint8_t  phase;		/* MP_ROUND_PHASE_* */
+	uint16_t round;		/* 1 = the first round of the match, 0 = none yet */
+	uint8_t  count;		/* MP_ROUND_ENTRY rows that follow, <= MP_MAX_PLAYERS */
+	uint8_t  reserved[3];
+} MP_ROUND;			/* 8 bytes: header only, the rows follow */
+
 typedef struct MP_HIT
 {
 	uint8_t  targetId;	/* the player whose car should receive the impulse */
@@ -796,6 +857,8 @@ static_assert(sizeof(MP_CARSTATE) == 8, "MP_CARSTATE layout");
 static_assert(sizeof(MP_TRAFFIC_ENTRY) == 56, "MP_TRAFFIC_ENTRY layout");
 static_assert(sizeof(MP_TRAFFIC) == 8, "MP_TRAFFIC layout");
 static_assert(sizeof(MP_CHANNEL) == 26, "MP_CHANNEL layout");
+static_assert(sizeof(MP_ROUND) == 8, "MP_ROUND layout");		/* v22 */
+static_assert(sizeof(MP_ROUND_ENTRY) == 8, "MP_ROUND_ENTRY layout");	/* v22 */
 
 #endif
 

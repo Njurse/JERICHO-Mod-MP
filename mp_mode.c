@@ -3,9 +3,11 @@
  * See mp_mode.h for the contract and docs/GAMEMODES.md for how to add a mode.
  *
  * Kept free of engine and session headers so it builds on its own: the standalone
- * check (tools/mode_check/test_mp_mode.cpp) compiles this file and nothing else.
+ * check (tools/mode_check/test_mp_mode.cpp) compiles this file with mp_round.c
+ * (the round state, which is equally pure) and nothing else.
  */
 #include "mp_mode.h"
+#include "mp_round.h"	/* team membership: the round state */
 #include "mp_proto.h"	/* MP_GAMEMODE_*: the ids are the wire's, not this file's */
 
 #include <stddef.h>
@@ -175,13 +177,22 @@ int MpModeFilterCarPool(int mode, int city, int* slots, int* models, int count)
 
 int MpModePlayerTeam(int mode, int playerId)
 {
-	(void)mode;
-	(void)playerId;
+	const MP_MODE_DESC* d = MpModeBehaviour(mode);
+	int team;
 
-	/* Team membership does not travel yet (it arrives with the round state), so
-	 * nobody is on a team -- which is also the only right answer for a mode with
-	 * teamCount 0, such as Take a Ride. */
-	return -1;
+	/* A mode without teams (Take a Ride) has nobody on one, whatever a snapshot
+	 * says: the round state cannot put a free-for-all player on a team. */
+	if (d->teamCount <= 0)
+		return -1;
+
+	/* Membership travels in the round state (MP_TAG_ROUND, mp_round.c). A team
+	 * index the mode does not have reads as none. */
+	team = MpRoundPlayerTeam(playerId);
+
+	if (team < 0 || team >= d->teamCount || team >= MP_MODE_MAX_TEAMS)
+		return -1;
+
+	return team;
 }
 
 int MpModePlayerColour(int mode, int playerId, int on, int r, int g, int b,

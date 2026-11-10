@@ -201,6 +201,12 @@ def main():
     third = got(5, 1.0)
     check("the roster cadence also PINGs the client", third is not None and third[0] == m.TAG["ping"]
           and len(third[1]) == 4, repr(third))
+    fourth = got(5, 1.0)
+    parsed = m.parse_round(fourth[1]) if fourth is not None and fourth[0] == m.TAG["round"] else None
+    check("the roster cadence also sends the round state (MP_TAG_ROUND): round 1 live, all playing",
+          parsed is not None and parsed[1] == m.ROUND_PHASE_LIVE and parsed[2] == 1
+          and [r[0] for r in parsed[3]] == [4, 5, 6]
+          and all(r[1:] == (m.ROUND_PLAYER_PLAYING, -1, 0) for r in parsed[3]), repr(parsed))
     # the client echoes the tick in a PONG; the round trip becomes its roster ping
     import struct as _st
     from dedi import core as _core

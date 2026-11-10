@@ -27,9 +27,9 @@ import sys
 import threading
 import time
 
-PROTO = 21                    # mp_proto.h MP_PROTO_VERSION (21: a car's city byte past the stock rows is a bank NAME code 0x80..0xFE; 20: MP_ROSTER_ENTRY carries leftModel/leftModelCity, 32 bytes; 19: dynamic JMPPED entries on top of 18's ped model id) -- the game drops any frame whose envelope version differs
+PROTO = 22                    # mp_proto.h MP_PROTO_VERSION (22: the round state, MP_TAG_ROUND "JPRD", MP_ROUND + MP_ROUND_ENTRY; 21: a car's city byte past the stock rows is a bank NAME code 0x80..0xFE; 20: MP_ROSTER_ENTRY carries leftModel/leftModelCity, 32 bytes; 19: dynamic JMPPED entries on top of 18's ped model id) -- the game drops any frame whose envelope version differs
 SDK = 3                       # JERICHO_SDK_VERSION
-MP_VER = "0.17.0"             # JERICHO/MODS/mp/mod.toml version -- always advertised
+MP_VER = "0.19.0"             # JERICHO/MODS/mp/mod.toml version -- always advertised (0.19.0 came with proto 22)
 NUL = bytes([0])
 
 # Shared protocol constants, mirrored from mp_proto.h so the tools never hard-code
@@ -78,7 +78,7 @@ TAG = {
     "channel": b"JPCH", "leave": b"JPLV", "kick": b"JPKK", "chat": b"JPCX",
     "roster": b"JPRS", "car": b"JPCC",
     "ped": b"JPPD", "traffic": b"JPTF", "hit": b"JPHI", "color": b"JPCL",
-    "stats": b"JPSX",
+    "stats": b"JPSX", "round": b"JPRD",
 }
 # NOTE: no "session" entry. 'JPSS' was retired from mp_proto.h -- it was reserved for
 # a standalone session/lobby broadcast that nothing ever sent or handled. Keep this
@@ -153,6 +153,48 @@ ROSTER_FLAG_HOST = 1          # mp_proto.h MP_ROSTER_FLAG_HOST
 ROSTER_FLAG_CAR_READY = 2     # mp_proto.h MP_ROSTER_FLAG_CAR_READY
 ROSTER = struct.Struct("<4B")          # count, reserved[3] = 4
 ROSTER_ENTRY = struct.Struct("<6B2H2B20s")  # id, carId, model, modelCity, flags, pedModel, ping, palette, leftModel, leftModelCity, name[20] = 32 (model 0xFF = on foot)
+
+# The round state (JPRD, proto 22). Host-authored like the roster: the host -- the
+# game's listen host or the dedicated server (dedi/roundstate.py) -- is the only
+# writer; a client replaces its copy with each one. Header + `count` rows, present
+# players only, ascending id. A missing row / no snapshot reads as Take a Ride:
+# playing, no team, score 0.
+ROUND = struct.Struct("<BBHB3x")        # gamemode, phase, round, count, reserved[3] = 8
+ROUND_ENTRY = struct.Struct("<BBBxi")   # playerId, state, team (0xFF none), reserved, int32 score = 8
+ROUND_PHASE_IDLE = 0                    # mp_proto.h MP_ROUND_PHASE_*
+ROUND_PHASE_LIVE = 1
+ROUND_PHASE_ENDED = 2
+ROUND_PLAYER_PLAYING = 0                # mp_proto.h MP_ROUND_PLAYER_*
+ROUND_PLAYER_SPECTATING = 1
+ROUND_PLAYER_WAITING = 2
+ROUND_TEAM_NONE = 0xFF                  # mp_proto.h MP_ROUND_TEAM_NONE
+
+
+def build_round(gamemode, phase, round_no, rows):
+    """MP_ROUND + MP_ROUND_ENTRY rows. `rows` is [(playerId, state, team, score)],
+    team None/-1 = MP_ROUND_TEAM_NONE; written in ascending player id."""
+    rows = sorted(rows)[:MAX_PLAYERS]
+    out = bytearray(ROUND.pack(gamemode & 0xFF, phase & 0xFF, round_no & 0xFFFF, len(rows)))
+    for pid, state, team, score in rows:
+        t = ROUND_TEAM_NONE if team is None or team < 0 else team & 0xFF
+        out += ROUND_ENTRY.pack(pid & 0xFF, state & 0xFF, t, int(score))
+    return bytes(out)
+
+
+def parse_round(payload):
+    """(gamemode, phase, round, [(playerId, state, team or -1, score)]), or None
+    when the frame is short or its count is out of range (mp_round.c MpRoundApply)."""
+    if len(payload) < ROUND.size:
+        return None
+    gm, phase, rnd, count = ROUND.unpack_from(payload, 0)
+    if count > MAX_PLAYERS or len(payload) < ROUND.size + count * ROUND_ENTRY.size:
+        return None
+    rows = []
+    for i in range(count):
+        pid, state, team, score = ROUND_ENTRY.unpack_from(payload, ROUND.size + i * ROUND_ENTRY.size)
+        rows.append((pid, state, -1 if team == ROUND_TEAM_NONE else team, score))
+    return gm, phase, rnd, rows
+
 
 REJECT_NAMES = {0: "NONE", 1: "FULL", 2: "VERSION", 3: "MODS", 4: "INPROGRESS", 5: "CUSTOM"}
 REJECT_IDS = {v.lower(): k for k, v in REJECT_NAMES.items() if k != 0}
@@ -331,6 +373,16 @@ def mode_host(args):
         sess = SESSION.pack(0, args.city, 1, 0, 1234, 2, 1, 0)
         send_frame(conn, TAG["start"], sess)
         print(f"[mock-host] sent START (city={args.city})")
+
+    # ...and the round state, as the real host does after a WELCOME (proto 22): Take a
+    # Ride's round 1, live once started, the fake host (0) and the client (1) playing.
+    if args.start:
+        rd = build_round(0, ROUND_PHASE_LIVE, 1, [(0, ROUND_PLAYER_PLAYING, -1, 0),
+                                                  (1, ROUND_PLAYER_PLAYING, -1, 0)])
+    else:
+        rd = build_round(0, ROUND_PHASE_IDLE, 0, [(0, ROUND_PLAYER_WAITING, -1, 0),
+                                                  (1, ROUND_PLAYER_WAITING, -1, 0)])
+    send_frame(conn, TAG["round"], rd)
 
     # Service the connection. A real host does NOT hang up the moment it has said
     # hello: it answers keepalives and stays up. Closing 0.5 s after WELCOME is

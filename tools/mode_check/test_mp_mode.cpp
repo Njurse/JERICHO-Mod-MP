@@ -3,13 +3,14 @@
  *
  * Asserts that mode 0, Take a Ride, answers every decision point exactly as the
  * session behaved before modes existed, and that an unknown id behaves as mode 0.
- * Builds against mp_mode.c alone (no engine, no session) -- run it with
+ * Builds against mp_mode.c and mp_round.c alone (no engine, no session) -- run it with
  * tools/mode_check/run_mode_check.py, which finds a C++ compiler.
  *
  * Named .cpp, not .c, on purpose: the mod project globs **.c into the DLL and this
  * file has a main().
  */
 #include "mp_mode.h"
+#include "mp_round.h"
 #include "mp_proto.h"
 
 #include <stdio.h>
@@ -155,6 +156,38 @@ int main(void)
 	CheckAnswersAreToday(255, "-");
 
 	CheckLobby();
+
+	/* MpModePlayerTeam reads the round state now. Even a snapshot that names a team
+	 * cannot put a Take a Ride player on one: the mode has no teams. */
+	{
+		unsigned char buf[sizeof(MP_ROUND) + 2 * sizeof(MP_ROUND_ENTRY)];
+		MP_ROUND h;
+		MP_ROUND_ENTRY e;
+		int i;
+
+		memset(&h, 0, sizeof(h));
+		h.phase = MP_ROUND_PHASE_LIVE;
+		h.round = 1;
+		h.count = 2;
+		memcpy(buf, &h, sizeof(h));
+		memset(&e, 0, sizeof(e));
+		e.playerId = 0; e.team = 1;
+		memcpy(buf + sizeof(h), &e, sizeof(e));
+		e.playerId = 1; e.team = MP_ROUND_TEAM_NONE;
+		memcpy(buf + sizeof(h) + sizeof(e), &e, sizeof(e));
+
+		MpRoundReset();
+		CHECK(MpRoundApply(buf, (int)sizeof(buf)) == 1);
+		CHECK(MpRoundPlayerTeam(0) == 1);		/* the carrier has it... */
+
+		for (i = -1; i < MP_MAX_PLAYERS; i++)
+		{
+			CHECK(MpModePlayerTeam(MP_GAMEMODE_TAKEADRIDE, i) == -1);	/* ...TaR ignores it */
+			CHECK(MpModePlayerTeam(MP_GAMEMODE_COUNT, i) == -1);	/* unknown plays as TaR */
+		}
+
+		MpRoundReset();
+	}
 
 	printf("mp_mode: %d check(s), %d failure(s)\n", gChecks, gFails);
 	return gFails == 0 ? 0 : 1;

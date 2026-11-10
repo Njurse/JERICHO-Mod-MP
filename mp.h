@@ -22,6 +22,7 @@
 
 #include "mp_proto.h"
 #include "mp_mode.h"	/* the game-mode registry and its decision points */
+#include "mp_round.h"	/* the round lifecycle and per-player round state (MP_TAG_ROUND) */
 
 #ifdef __cplusplus
 extern "C" {

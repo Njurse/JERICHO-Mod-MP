@@ -27,6 +27,7 @@ sys.path.insert(0, TOOLS)
 sys.path.insert(0, SERVERS)
 import mp_test as m            # noqa: E402  the single Python source of truth
 from dedi import relay   # noqa: E402  hit / colour / channel routing
+from dedi.roundstate import RoundState   # noqa: E402  the round state (MP_TAG_ROUND)
 from dedi.plugins import CONSOLE, Player, PluginManager, tick_loop   # noqa: E402
 import proto_check            # noqa: E402  the wire-mirror guard
 
@@ -378,6 +379,12 @@ class Dedicated:
         self.stop = threading.Event()
         self.started = time.time()
 
+        # The round state (proto 22). This server is a match in progress from the
+        # start -- every joiner gets a START -- so round 1 is live from here.
+        self.round = RoundState(int(cfg.get("gamemode", 0) or 0))
+        self.round.begin()
+        self.round_sent = -1     # the revision last broadcast
+
         # Reported by the console. The beacon can be turned off from there (a LAN
         # you do not want to appear on) without stopping anything else, so the
         # loop reads this rather than the config value directly.
@@ -627,6 +634,9 @@ class Dedicated:
             # ...and a PING, as the host's keepalive does: the client echoes the tick
             # in a PONG, and that round trip is the roster's `ping` (MpPingForPlayer)
             _send(conn, m.TAG["ping"], struct.pack("<I", _ms32()))
+            # ...and the round state, on the host's same cadence (MpHostRoundTick), so
+            # a lost one is repaired
+            _send(conn, m.TAG["round"], self.round_bytes())
         except OSError:
             return False, now
         except Exception as e:
@@ -653,6 +663,26 @@ class Dedicated:
             n += 1
         out[0] = n
         return bytes(out)
+
+    def round_bytes(self):
+        """MP_ROUND for the clients connected right now (mp_round.c MpRoundBuild).
+        The present-set follows the clients, so a join or a leave is a change."""
+        with self.lock:
+            self.round.sync(info["id"] for info in self.clients.values())
+            return self.round.to_bytes()
+
+    def broadcast_round_if_changed(self, force=False, skip=None):
+        """The in-game host's MpHostRoundTick: everyone hears the round state when it
+        changed (a join, a leave) -- or always, with force. `skip` is a connection
+        that already has this snapshot (the joiner). True when sent."""
+        payload = self.round_bytes()
+        with self.lock:
+            due = force or self.round.revision != self.round_sent
+            if due:
+                self.round_sent = self.round.revision
+        if due:
+            self.broadcast(payload, m.TAG["round"], skip=skip)
+        return due
 
     def note_car_pick(self, conn, payload):
         """JPCC, the car a player picked: kept for the roster, which the caller
@@ -918,8 +948,16 @@ class Dedicated:
                          self._welcome(pid, running=1 if self.cfg["live"] else 0,
                                        matched=matched, seed=seed))
             _send(conn, m.TAG["start"], sess)
+            # The round state after the WELCOME (proto 22), as the in-game host's
+            # MpSendWelcome does: the joiner has it before it plays...
+            _send(conn, m.TAG["round"], self.round_bytes())
         except OSError:
             pass
+        # ...and everyone else hears of the new row now, not at the next cadence.
+        try:
+            self.broadcast_round_if_changed(skip=conn)
+        except Exception as e:
+            self.log.debug("join round broadcast failed: %s" % e)
 
         # THE MOTD, and only to THIS connection: it is a greeting, not an
         # announcement. It goes down the chat channel because that is already the
@@ -1038,6 +1076,8 @@ class Dedicated:
                         self.broadcast(self.roster_bytes(), m.TAG["roster"])
                 elif tag == m.TAG["pong"]:
                     self.note_pong(conn, payload)
+                elif tag == m.TAG["round"]:
+                    relay.round_state(self, conn, pid, payload)
                 elif tag == m.TAG["leave"]:
                     break
         finally:
@@ -1061,6 +1101,11 @@ class Dedicated:
                     self.broadcast(self.roster_bytes(), m.TAG["roster"])
                 except Exception as e:
                     self.log.debug("leave roster broadcast failed: %s" % e)
+                # ...and the round state without their row
+                try:
+                    self.broadcast_round_if_changed()
+                except Exception as e:
+                    self.log.debug("leave round broadcast failed: %s" % e)
             try:
                 conn.close()
             except OSError:
@@ -1278,6 +1323,9 @@ class Dedicated:
             "map mode:  %s" % ("multiplayer" if self.map_shape else "single-player city"),
             "arena:     %d (of the city's two multiplayer maps)" % self.arena,
             "gamemode:  %d" % int(self.cfg["gamemode"]),
+            "round:     %d (%s)" % (self.round.number,
+                                    {m.ROUND_PHASE_IDLE: "idle", m.ROUND_PHASE_LIVE: "live",
+                                     m.ROUND_PHASE_ENDED: "ended"}.get(self.round.phase, "?")),
             "rules:     %s" % rules_text(int(self.cfg["rules"])),
             "time:      %s, %s" % (TIMES_OF_DAY[time_of_day_index(self.cfg)],
                                    WEATHERS[weather_index(self.cfg)]),

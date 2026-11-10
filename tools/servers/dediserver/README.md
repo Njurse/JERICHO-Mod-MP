@@ -24,7 +24,7 @@ supervisor (or a test) can pipe commands in.
 
 | command | what it does |
 | --- | --- |
-| `status` | name, session port, city and multiplayer map, gamemode, rules (readable), players, uptime, beacon, master |
+| `status` | name, session port, city and multiplayer map, gamemode, round, rules (readable), players, uptime, beacon, master |
 | `list` | connected players: id, name, address, how long connected |
 | `say <text>` | one line into every player's console, prefixed `SERVER:` |
 | `kick <id> [reason]` | drop a player — the protocol's own kick message; with a reason they see "Kicked by admin: <reason>" (cut to 63 bytes) and chat is told |
@@ -360,6 +360,15 @@ A client that **never** appears has a transport problem (firewall, wrong address
 A client that joins and then leaves on its own has a client-side problem. That
 distinction is the whole point of logging joins and leaves.
 
+## The round state
+
+The server referees the round (`dedi/roundstate.py`, the Python twin of the game's
+`mp_round.c`). It is a match in progress from the moment it starts, so round 1 is
+live from then. Each joiner gets the `JPRD` snapshot right after its WELCOME and
+START, everyone gets it when a player joins or leaves, and it rides the roster's
+2-second cadence. For Take a Ride every player is playing, on no team, with score 0,
+and the round never ends. `status` shows the round. No config key controls it.
+
 ## Liveness
 
 The server answers a client's `PING` with a `PONG` echoing the tick, and pings on
@@ -383,4 +392,13 @@ defaults, and the `modes` plugin stays off unless named:
 
 ```sh
 python JERICHO/MODS/mp/tools/servers/dediserver/test_modes.py
+```
+
+`test_round.py` covers the round state (`JPRD`, proto 22) over a real socket: a
+joiner gets ROSTER, WELCOME, START and then round 1 live with every player
+playing, no team and score 0; joins and leaves reach everyone at once; a client's
+own `JPRD` is never forwarded; a proto-21 HELLO is refused:
+
+```sh
+python JERICHO/MODS/mp/tools/servers/dediserver/test_round.py
 ```
