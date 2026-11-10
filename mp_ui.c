@@ -222,6 +222,29 @@ static int AdjGameMode(void* ud, int dir)
 	return 1;
 }
 
+/* TIME: a timer mode's clock (Fox N Hounds: each player's; Car Bomb Tag: the shared
+ * one), 1..5 minutes, default 3. Shown only while the selected mode has a clock, and
+ * like the mode itself only taken before the match runs and never saved. */
+static void LblModeTime(void* ud, char* o, int n) { (void)ud; snprintf(o, n, "Time: < %d MIN >", MpSessionModeMinutes()); }
+
+static int AdjModeTime(void* ud, int dir)
+{
+	int m;
+
+	(void)ud;
+
+	if (dir == 0)
+		return 1;
+
+	/* wraps, like the other cycle rows */
+	m = MpSessionModeMinutes() + (dir > 0 ? 1 : -1);
+	if (m < MP_MARK_MINUTES_MIN) m = MP_MARK_MINUTES_MAX;
+	if (m > MP_MARK_MINUTES_MAX) m = MP_MARK_MINUTES_MIN;
+
+	MpSetSessionModeMinutes(m);
+	return 1;
+}
+
 static int AdjCops(void* ud, int dir)   { (void)ud; gMp.config.cops = (gMp.config.cops + dir + 2) & 1; MpConfigSave(); return 1; }
 static int AdjInvuln(void* ud, int dir) { (void)ud; gMp.config.invuln = (gMp.config.invuln + dir + 2) & 1; MpConfigSave(); return 1; }
 static int AdjImmune(void* ud, int dir) { (void)ud; gMp.config.immune = (gMp.config.immune + dir + 2) & 1; MpConfigSave(); return 1; }
@@ -666,7 +689,7 @@ static const JER_FE_MENU kLanMenu = { "mp.lan", kLanItems, 3, NULL, NULL };
 static void LblHostAddr(void* ud, char* o, int n) { char l[8]; (void)ud; MpHostStatusLines(o, (size_t)n, l, sizeof(l), 1); }
 static void LblHostList(void* ud, char* o, int n) { char a[8]; (void)ud; MpHostStatusLines(a, sizeof(a), o, (size_t)n, 1); }
 
-static const JER_FE_ITEM kHostItems[] =
+static const JER_FE_ITEM kHostItems[] =	/* the Time row is inserted after Game mode */
 {
 	{ NULL, LblHostAddr, NULL, NULL, NULL, -1, 0 },
 	{ NULL, LblHostList, NULL, NULL, NULL, -1, 0 },
@@ -682,7 +705,31 @@ static const JER_FE_ITEM kHostItems[] =
 	{ "Take a Ride", NULL, NULL, ActTakeARide, NULL, -1, 0 },
 	{ "Back",        NULL, NULL, NULL,         NULL, -1, 1 },
 };
-static const JER_FE_MENU kHostMenu = { "mp.host", kHostItems, 9, NULL, NULL };
+#define MP_HOST_ITEMS		((int)(sizeof(kHostItems) / sizeof(kHostItems[0])))
+#define MP_HOST_GAMEMODE_ROW	2	/* kHostItems[2] is Game mode */
+
+static const JER_FE_ITEM kHostTimeItem = { NULL, LblModeTime, NULL, NULL, AdjModeTime, -1, 0 };
+static JER_FE_ITEM gHostItems[MP_HOST_ITEMS + 1];
+static JER_FE_MENU gHostMenu = { "mp.host", gHostItems, 0, NULL, NULL };
+
+/* Rebuilt on every layout (a left/right on Game mode relayouts), so the Time row is
+ * there exactly while the selected mode has a clock. Take a Ride: the stock 9 rows. */
+static void HostOnEnter(void* ud)
+{
+	int i, k = 0;
+
+	(void)ud;
+
+	for (i = 0; i < MP_HOST_ITEMS; i++)
+	{
+		gHostItems[k++] = kHostItems[i];
+
+		if (i == MP_HOST_GAMEMODE_ROW && MpModeUsesTimer(gMp.gamemode))
+			gHostItems[k++] = kHostTimeItem;
+	}
+
+	gHostMenu.item_count = k;
+}
 
 static const JER_FE_ITEM kHostSetItems[] =
 {
@@ -2292,7 +2339,9 @@ void MpUiInit(void)
 	jer_frontend_register_menu(&kRootMenu);
 	jer_frontend_register_menu(&kLanMenu);
 	jer_frontend_register_menu(&gOnlineMenu);
-	jer_frontend_register_menu(&kHostMenu);
+	gHostMenu.on_enter = HostOnEnter;
+	HostOnEnter(NULL);
+	jer_frontend_register_menu(&gHostMenu);
 	jer_frontend_register_menu(&kHostSetMenu);
 	jer_frontend_register_menu(&gJoinMenu);
 	jer_frontend_register_menu(&gLobbyMenu);

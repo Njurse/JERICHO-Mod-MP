@@ -67,6 +67,24 @@ typedef enum
 					 * per-player road spot, x/z only (Take a Ride) */
 } MP_MODE_SPAWN;
 
+/* What a mode's clock does (Fox N Hounds / Car Bomb Tag, mp_mark.c). */
+typedef enum
+{
+	MP_MODE_TIMER_NONE = 0,		/* no clock, nobody marked (Take a Ride) */
+	MP_MODE_TIMER_PERSONAL,		/* a clock per player, ticking only while that player
+					 * is marked; the first to 0:00 wins (Fox N Hounds) */
+	MP_MODE_TIMER_SHARED		/* one clock; whoever is marked at 0:00 loses (Car Bomb Tag) */
+} MP_MODE_TIMER;
+
+/* The music a mode holds while its round is live. Same numbers as jer_music.h's
+ * JER_MUSIC_*, kept here as plain ids so this file stays engine-free. */
+typedef enum
+{
+	MP_MODE_MUSIC_AUTO = 0,		/* the engine decides (Take a Ride) */
+	MP_MODE_MUSIC_CALM = 1,
+	MP_MODE_MUSIC_PURSUIT = 2
+} MP_MODE_MUSIC;
+
 typedef struct MP_MODE_TEAM
 {
 	char    name[MP_MODE_TEAM_NAME_MAX];
@@ -91,6 +109,8 @@ typedef struct MP_MODE_DESC
 	int carPool;		/* MP_MODE_CARPOOL_* */
 	int spawn;		/* MP_MODE_SPAWN_* */
 	int mapCycle;		/* 1 = the lobby may offer map cycling */
+	int timer;		/* MP_MODE_TIMER_*: the marked-player clock (v23) */
+	int music;		/* MP_MODE_MUSIC_*: held while a round is live */
 } MP_MODE_DESC;
 
 /* ---- the registry ------------------------------------------------------- */
@@ -109,6 +129,9 @@ int         MpModeLateJoinPolicy(int mode);		/* MP_MODE_LATEJOIN_* */
 int         MpModeSpawnRule(int mode);			/* MP_MODE_SPAWN_* */
 int         MpModeWantsCountdown(int mode);
 int         MpModeAllowsMapCycle(int mode);
+int         MpModeTimerKind(int mode);			/* MP_MODE_TIMER_* */
+int         MpModeUsesTimer(int mode);			/* 1 = marked player + clock (JPMK) */
+int         MpModeMusic(int mode);			/* MP_MODE_MUSIC_* while live */
 
 /* NULL = the change may go ahead; otherwise the reason, for the log/notice.
  * `roundRunning` is whether a round is live (a session that is running). */

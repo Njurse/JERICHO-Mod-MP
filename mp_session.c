@@ -6,7 +6,10 @@
  */
 #include "jericho.h"
 #include "jer_events.h"
-#include "jer_notify.h"	/* the join toast */
+#include "jer_notify.h"	/* the join toast; the timer modes' golden notices */
+#include "jer_hud.h"	/* jer_hud_panel: the timer modes' clock readout */
+#include "jer_arrow.h"	/* jer_arrow_on_car: the arrow over the fox / the bomb */
+#include "jer_music.h"	/* jer_music_force: a mode's pursuit music while live */
 #include "jer_pause_menu.h"	/* JER_PAUSE_QUIT_*: the pause menu's codes (mirror MENU_QUIT_*) */
 #include "mp.h"
 #include "jer_carquery.h"	/* the mp <-> carhacks live-car query contract */
@@ -286,6 +289,26 @@ int MpSetSessionGamemode(int gamemode)
 	return gMp.gamemode;
 }
 
+int MpSessionModeMinutes(void)
+{
+	return gMp.modeMinutes > 0 ? MpMarkClampMinutes(gMp.modeMinutes) : MP_MARK_MINUTES_DEFAULT;
+}
+
+int MpSetSessionModeMinutes(int minutes)
+{
+	minutes = MpMarkClampMinutes(minutes);
+
+	if (MpIsHost() && !gMp.running && gMp.modeMinutes != minutes)
+	{
+		gMp.modeMinutes = minutes;
+
+		if (gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx, "[mp] lobby mode time: %d min\n", minutes);
+	}
+
+	return MpSessionModeMinutes();
+}
+
 /* ---- THE ROUND STATE (MP_TAG_ROUND, mp_round.c) ----------------------------
  *
  * The host is the only writer. It keeps the round's present-set equal to the
@@ -349,11 +372,22 @@ static void MpHostRoundTick(int periodic)
 		MpHostSendRound(-1);
 }
 
-/* Host: the match starts, and with it round 1. */
+static void MpHostMarkBegin(void);
+
+/* Host: the match starts, and with it round 1. A timer mode (Fox N Hounds, Car Bomb
+ * Tag) does not: its referee starts round 1 once two players are in (MpHostMarkTick),
+ * so until then the round state stays round 0, idle, everyone waiting. */
 static void MpHostRoundBegin(void)
 {
 	if (!MpIsHost())
 		return;
+
+	if (MpModeUsesTimer(gMp.gamemode))
+	{
+		MpHostMarkBegin();
+		MpHostSendRound(-1);
+		return;
+	}
 
 	MpRoundHostSync();
 	MpRoundBegin(gMp.gamemode);
@@ -413,6 +447,355 @@ static void MpClientRoundCheck(void)
 			MpModeName(MP_GAMEMODE_TAKEADRIDE));
 }
 
+/* ---- THE MARKED PLAYER (MP_TAG_MARK, mp_mark.c): Fox N Hounds, Car Bomb Tag ----
+ *
+ * The host referees: it keeps the referee's players equal to the registry, ticks it
+ * on the sim frame (30 Hz, so 1000 ms per 30 frames exactly), turns accepted player
+ * contacts into tags, drives the round state from its events, and sends 'JPMK'
+ * after a WELCOME, on START, on every change, and every 30 frames while a round is
+ * live (120 otherwise) so the clocks stay close. Clients apply it and never send.
+ *
+ * Every machine then PRESENTS it the same way (MpMarkPresentTick): the golden
+ * notice on a change of fox / bomb holder or a round end, derived locally from the
+ * snapshot and the roster's names; the clock as a top-centre panel; the stock
+ * arrow over the marked car (never over our own); and the mode's music while live.
+ * Take a Ride never reaches any of it: MpModeUsesTimer is 0 for mode 0. */
+#define MP_MARK_PANEL_SLOT	5	/* jer_hud_panel slot for the clock */
+#define MP_MARK_ARROW_SLOT	0	/* jer_arrow slot for the marked car */
+#define MP_MARK_RELAY_RADIUS	1800	/* host view of a reported contact: twice MP_HIT_RADIUS
+					 * (900, the contact code below), for two links' lag */
+
+static unsigned gMpMarkRng;		/* host: the referee's random picks */
+static unsigned gMpMarkSentRev;		/* host: the revision last broadcast */
+static unsigned gMpMarkMsAcc;		/* host: 30 Hz frames -> ms, without drift */
+static unsigned gMpMarkApplyFrame;	/* client: the frame the last snapshot landed */
+static int gMpMarkRefusedLogged;
+
+/* what this machine last PRESENTED, so a notice fires once per change */
+static int gMpMarkShownSeq = -1;
+static int gMpMarkShownPhase = -1;
+static int gMpMarkPanelOn;
+static int gMpMarkArrowOn;
+static int gMpMarkMusicOn;
+
+static unsigned MpMarkRand(void)
+{
+	gMpMarkRng = gMpMarkRng * 1103515245u + 12345u;
+	return (gMpMarkRng >> 16) & 0x7FFF;
+}
+
+static void MpMarkHostSync(void)
+{
+	int present[MP_MAX_PLAYERS];
+	int id;
+
+	for (id = 0; id < MP_MAX_PLAYERS; id++)
+		present[id] = MpGetPlayer(id) != NULL;
+
+	if (MpMarkSync(present, MpMarkRand()) & MP_MARK_EV_MOVED)
+	{
+		if (gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx, "[mp] mark: the marked player left - player %d is marked now\n", MpMarkMarked());
+	}
+}
+
+static void MpHostSendMark(int connIndex)
+{
+	unsigned char buf[sizeof(MP_MARK) + MP_MAX_PLAYERS * sizeof(MP_MARK_ENTRY)];
+	int len;
+
+	if (!MpIsHost() || !MpModeUsesTimer(gMp.gamemode))
+		return;
+
+	len = MpMarkBuild(buf, (int)sizeof(buf));
+
+	if (len <= 0)
+		return;
+
+	if (connIndex >= 0)
+	{
+		MpSendConn(connIndex, MP_TAG_MARK, 0, buf, len);
+		return;
+	}
+
+	MpHostBroadcast(MP_TAG_MARK, 0, buf, len);
+	gMpMarkSentRev = MpMarkRevision();
+}
+
+/* Host, at START in a timer mode: a fresh referee, waiting for two players. */
+static void MpHostMarkBegin(void)
+{
+	gMpMarkRng ^= (unsigned)MpNowMs() ^ (gMp.seed * 2654435761u) ^ 0x5EEDu;
+	gMpMarkMsAcc = 0;
+
+	MpMarkReset(gMp.gamemode, MpSessionModeMinutes());
+	MpRoundHostSync();
+	MpMarkHostSync();
+
+	if (gMpCtx != NULL)
+		gMpCtx->jer_log(gMpCtx, "[mp] mark: %s, %d min - waiting for two players\n",
+			MpModeName(gMp.gamemode), MpMarkMinutes());
+
+	MpHostSendMark(-1);
+}
+
+/* Host, once a frame in a match. */
+static void MpHostMarkTick(void)
+{
+	int ev, ms;
+
+	if (!MpIsHost() || !MpModeUsesTimer(gMp.gamemode))
+		return;
+
+	MpMarkHostSync();
+
+	gMpMarkMsAcc += 1000;
+	ms = (int)(gMpMarkMsAcc / 30);
+	gMpMarkMsAcc %= 30;
+
+	ev = MpMarkTick(ms, MpMarkRand());
+
+	if (ev & MP_MARK_EV_BEGIN)
+	{
+		MpRoundHostSync();
+		MpRoundBegin(gMp.gamemode);
+
+		if (gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx, "[mp] mark: round %d live, player %d is marked (%d min)\n",
+				MpRoundNumber(), MpMarkMarked(), MpMarkMinutes());
+	}
+
+	if (ev & MP_MARK_EV_END)
+	{
+		MpRoundEnd();
+
+		if (gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx, "[mp] mark: round %d over - winner %d, marked %d\n",
+				MpRoundNumber(), MpMarkWinner(), MpMarkMarked());
+	}
+
+	if (MpMarkRevision() != gMpMarkSentRev ||
+		(gMp.frame % (MpMarkPhase() == MP_MARK_PHASE_LIVE ? 30 : 120)) == 0)
+		MpHostSendMark(-1);
+}
+
+/* Host: a contact between players `a` and `b`. Our own (`a` is us) comes from the
+ * engine or the probe and is taken as seen; a client's report (MP_HIT) is checked
+ * against where the host sees both cars, with room for the two links' lag. A
+ * client never moves the mark itself -- it only reports, and this decides. */
+static void MpMarkHostReport(int a, int b, int checkDistance)
+{
+	if (!MpIsHost() || !MpModeUsesTimer(gMp.gamemode) || MpMarkPhase() != MP_MARK_PHASE_LIVE)
+		return;
+
+	if (checkDistance)
+	{
+		MP_PLAYER* pa = MpGetPlayer(a);
+		MP_PLAYER* pb = MpGetPlayer(b);
+		long long dx, dy, dz;
+
+		if (pa == NULL || pb == NULL || pa->carId < 0 || pb->carId < 0 ||
+			pa->carId >= MAX_CARS || pb->carId >= MAX_CARS)
+			return;
+
+		dx = (long long)car_data[pa->carId].hd.where.t[0] - car_data[pb->carId].hd.where.t[0];
+		dy = (long long)car_data[pa->carId].hd.where.t[1] - car_data[pb->carId].hd.where.t[1];
+		dz = (long long)car_data[pa->carId].hd.where.t[2] - car_data[pb->carId].hd.where.t[2];
+
+		if (dx * dx + dy * dy + dz * dz > (long long)MP_MARK_RELAY_RADIUS * MP_MARK_RELAY_RADIUS)
+		{
+			if (MpDebugOn() && gMpCtx != NULL)
+				gMpCtx->jer_log(gMpCtx, "[mp] mark: contact %d-%d refused (too far apart here)\n", a, b);
+			return;
+		}
+	}
+
+	if (MpMarkContact(a, b))
+	{
+		if (gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx, "[mp] mark: tag %d-%d, player %d is marked\n", a, b, MpMarkMarked());
+
+		MpHostSendMark(-1);
+	}
+}
+
+/* Client: a host snapshot. A host drops one a peer sends, as with JPRD. */
+static void MpHandleMark(int connIndex, const unsigned char* p, int len)
+{
+	if (gMp.role != MP_ROLE_CLIENT)
+	{
+		if (!gMpMarkRefusedLogged && gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx, "[mp] mark state from conn %d ignored: only the host writes it\n", connIndex);
+		gMpMarkRefusedLogged = 1;
+		return;
+	}
+
+	if (!MpMarkApply(p, len))
+	{
+		if (!gMpMarkRefusedLogged && gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx, "[mp] mark state refused: malformed (%d bytes)\n", len);
+		gMpMarkRefusedLogged = 1;
+		return;
+	}
+
+	gMpMarkApplyFrame = gMp.frame;
+}
+
+static const char* MpMarkName(int id)
+{
+	MP_PLAYER* pl = MpGetPlayer(id);
+
+	return (pl != NULL && pl->name[0] != '\0') ? pl->name : "Someone";
+}
+
+/* Drop everything MpMarkPresentTick put up. Safe to call any time. */
+static void MpMarkPresentClear(void)
+{
+	if (gMpMarkPanelOn)
+		jer_hud_panel_clear(MP_MARK_PANEL_SLOT);
+
+	if (gMpMarkArrowOn)
+		jer_arrow_clear(MP_MARK_ARROW_SLOT);
+
+	if (gMpMarkMusicOn && jer_music_forced() != JER_MUSIC_AUTO)
+		jer_music_force(JER_MUSIC_AUTO);
+
+	gMpMarkPanelOn = gMpMarkArrowOn = gMpMarkMusicOn = 0;
+	gMpMarkShownSeq = -1;
+	gMpMarkShownPhase = -1;
+}
+
+static void MpMarkNotices(int me)
+{
+	int seq = (int)MpMarkSeq(), phase = MpMarkPhase(), marked = MpMarkMarked();
+	int bomb = MpModeTimerKind(gMp.gamemode) == MP_MODE_TIMER_SHARED;
+	char line[JER_NOTIFY_TEXT_MAX];
+
+	/* a round ended since we last looked (not one we only joined into) */
+	if (phase == MP_MARK_PHASE_ENDED && gMpMarkShownPhase == MP_MARK_PHASE_LIVE)
+	{
+		line[0] = '\0';
+
+		if (!bomb && MpMarkWinner() >= 0)
+		{
+			if (MpMarkWinner() == me)
+				snprintf(line, sizeof(line), "You won the match!");
+			else
+				snprintf(line, sizeof(line), "%s won the match!", MpMarkName(MpMarkWinner()));
+		}
+		else if (bomb && marked >= 0)
+		{
+			if (marked == me)
+				snprintf(line, sizeof(line), "BOOM! You lost the match!");
+			else
+				snprintf(line, sizeof(line), "%s blew up! You won the match!", MpMarkName(marked));
+		}
+
+		if (line[0] != '\0')
+			jer_notify(line, 4, 5);
+	}
+	/* the fox / the bomb changed hands (or a round went live) */
+	else if (phase == MP_MARK_PHASE_LIVE && seq != gMpMarkShownSeq && marked >= 0)
+	{
+		if (bomb)
+		{
+			if (marked == me)
+				snprintf(line, sizeof(line), "You have the bomb! Get rid of it!");
+			else
+				snprintf(line, sizeof(line), "%s has the bomb! Stay away!", MpMarkName(marked));
+		}
+		else
+		{
+			if (marked == me)
+				snprintf(line, sizeof(line), "You are now the fox!");
+			else
+				snprintf(line, sizeof(line), "%s is now the fox!", MpMarkName(marked));
+		}
+
+		jer_notify(line, 3, 3);
+	}
+
+	gMpMarkShownSeq = seq;
+	gMpMarkShownPhase = phase;
+}
+
+/* Every machine, once a frame in a match. */
+static void MpMarkPresentTick(void)
+{
+	MP_PLAYER* me = MpLocalPlayer();
+	int myId = me != NULL ? me->id : -1;
+	int phase, marked, since, ms, want;
+	char text[32];
+
+	if (!MpModeUsesTimer(gMp.gamemode) || !MpMarkHaveState() || MpMarkMode() != gMp.gamemode)
+	{
+		if (gMpMarkPanelOn || gMpMarkArrowOn || gMpMarkMusicOn)
+			MpMarkPresentClear();
+		return;
+	}
+
+	phase = MpMarkPhase();
+	marked = MpMarkMarked();
+
+	MpMarkNotices(myId);
+
+	/* the clock: the host's is live; a client runs the ticking one on from its
+	 * last snapshot (at most a second old) so it counts down smoothly */
+	since = MpIsHost() ? 0 : (int)((gMp.frame - gMpMarkApplyFrame) * 1000u / 30u);
+	if (since > 3000)
+		since = 3000;
+
+	if (phase == MP_MARK_PHASE_WAITING)
+		snprintf(text, sizeof(text), "WAITING FOR PLAYERS");
+	else if (MpModeTimerKind(gMp.gamemode) == MP_MODE_TIMER_SHARED)
+	{
+		ms = MpMarkClockMs(-1, since);
+		snprintf(text, sizeof(text), "%s %d:%02d", marked == myId ? "BOMB" : "TIMER",
+			(ms + 999) / 1000 / 60, (ms + 999) / 1000 % 60);
+	}
+	else
+	{
+		ms = MpMarkClockMs(myId, since);
+		snprintf(text, sizeof(text), "%s %d:%02d", marked == myId ? "FOX" : "HOUND",
+			(ms + 999) / 1000 / 60, (ms + 999) / 1000 % 60);
+	}
+
+	if (marked == myId && phase == MP_MARK_PHASE_LIVE)
+		jer_hud_panel(MP_MARK_PANEL_SLOT, JER_HUD_ANCHOR_TOP_CENTRE, text, 255, 140, 40);
+	else
+		jer_hud_panel(MP_MARK_PANEL_SLOT, JER_HUD_ANCHOR_TOP_CENTRE, text, 235, 235, 235);
+	gMpMarkPanelOn = 1;
+
+	/* the arrow over the marked car: never our own (we have the notice and the
+	 * clock), only while a round is live */
+	{
+		MP_PLAYER* mp = (phase == MP_MARK_PHASE_LIVE && marked >= 0 && marked != myId) ? MpGetPlayer(marked) : NULL;
+
+		if (mp != NULL && mp->carId >= 0 && mp->carId < MAX_CARS && jer_arrow_on_car(MP_MARK_ARROW_SLOT, &car_data[mp->carId]))
+			gMpMarkArrowOn = 1;
+		else if (gMpMarkArrowOn)
+		{
+			jer_arrow_clear(MP_MARK_ARROW_SLOT);
+			gMpMarkArrowOn = 0;
+		}
+	}
+
+	/* the mode's music while live; the engine's own otherwise */
+	want = (phase == MP_MARK_PHASE_LIVE) ? MpModeMusic(gMp.gamemode) : MP_MODE_MUSIC_AUTO;
+
+	if (want != MP_MODE_MUSIC_AUTO)
+	{
+		if (jer_music_forced() != want)
+			jer_music_force(want);	/* MP_MODE_MUSIC_* == JER_MUSIC_* */
+		gMpMarkMusicOn = 1;
+	}
+	else if (gMpMarkMusicOn)
+	{
+		jer_music_force(JER_MUSIC_AUTO);
+		gMpMarkMusicOn = 0;
+	}
+}
+
 void MpSessionReset(void)
 {
 	/* a session that is over must not stay on the board: the unregister is what
@@ -450,6 +833,12 @@ void MpSessionReset(void)
 	gMp.gamemode = MP_GAMEMODE_TAKEADRIDE;
 	memset(gMpModeFallbackLogged, 0, sizeof(gMpModeFallbackLogged));
 	MpRoundReset();		/* no round, nobody in it: the next START begins round 1 */
+	gMp.modeMinutes = MP_MARK_MINUTES_DEFAULT;	/* per session, not saved */
+	MpMarkPresentClear();	/* no clock, arrow or forced music outlives a session */
+	MpMarkReset(MP_GAMEMODE_TAKEADRIDE, MP_MARK_MINUTES_DEFAULT);
+	gMpMarkSentRev = 0;
+	gMpMarkApplyFrame = 0;
+	gMpMarkRefusedLogged = 0;
 	gMpRoundSentRev = 0;
 	gMpRoundNoSnapshotLogged = 0;
 	gMpRoundRefusedLogged = 0;
@@ -2635,6 +3024,10 @@ static void MpSendWelcome(int connIndex, int playerId, int matched)
 	 * the new row on the next frame's change check, or in the lobby at START. */
 	MpHostSendRound(connIndex);
 
+	/* ...and, in a timer mode, the marked player and the clocks (MpHostSendMark is a
+	 * no-op for Take a Ride). */
+	MpHostSendMark(connIndex);
+
 	/* The player on the other end is about to launch a level and will say
 	 * nothing for the whole load. Grant the grace from here, not only from
 	 * our own launches: a host that started its match a minute ago has
@@ -4269,6 +4662,9 @@ static int MpContactPush(MP_PLAYER* me, MP_PLAYER* pl, int localHalf, const char
 
 	pl->lastHitFrame = gMp.frame;
 
+	/* a timer mode: the host's own contact is a tag report, taken as seen */
+	MpMarkHostReport(me->id, pl->id, 0);
+
 	if (MpIsHost())
 	{
 		int ci = MpConnFindByPlayer(pl->id);
@@ -4516,6 +4912,10 @@ static void MpHandleHit(int connIndex, const unsigned char* p, int len)
 
 		return;
 	}
+
+	/* A timer mode: a client's contact report is a tag CLAIM. The host checks it
+	 * against its own view of both cars before the referee may act on it. */
+	MpMarkHostReport(from, (int)h.targetId, 1);
 
 	if (me != NULL && h.targetId == me->id && me->carId >= 0 && me->carId < MAX_CARS)
 	{
@@ -5876,9 +6276,15 @@ void MpLockstepFrame(void)
 		MpHostSendStats();
 	}
 
+	/* the timer modes' referee first: it may begin or end the round */
+	MpHostMarkTick();
+
 	/* the round state: on the same cadence, and at once when someone joins or leaves */
 	MpHostRoundTick((gMp.frame % 120) == 0);
 	MpClientRoundCheck();
+
+	/* ...and what this machine shows of a timer mode (nothing in Take a Ride) */
+	MpMarkPresentTick();
 
 	/* the same cadence, and for the same reason: a machine that joins late or
 	 * misses one still ends up with everybody's colour */
@@ -13478,6 +13884,12 @@ void MpHandleMessage(int connIndex, const char* tag, const unsigned char* payloa
 	if (memcmp(tag, MP_TAG_ROUND, 4) == 0)
 	{
 		MpHandleRound(connIndex, payload, len);
+		return;
+	}
+
+	if (memcmp(tag, MP_TAG_MARK, 4) == 0)
+	{
+		MpHandleMark(connIndex, payload, len);
 		return;
 	}
 

@@ -32,7 +32,47 @@ static const MP_MODE_DESC kModes[] =
 		0,			/* carChangeLocked: Vehicle Options always works */
 		MP_MODE_CARPOOL_ALL,	/* every car the car mods offer */
 		MP_MODE_SPAWN_SESSION,	/* the session's own placement */
-		0			/* mapCycle: not offered */
+		0,			/* mapCycle: not offered */
+		MP_MODE_TIMER_NONE,	/* timer: none, nobody is marked */
+		MP_MODE_MUSIC_AUTO	/* music: the engine's own (cop chases) */
+	},
+	{
+		MP_GAMEMODE_FOXHOUNDS,	/* id */
+		"FOX N HOUNDS",		/* name */
+		1,			/* selectable */
+
+		0,			/* teamCount: every player for themselves */
+		{ { "", 0, 0, 0 } },	/* teams */
+		0,			/* teamColours */
+
+		MP_MODE_RESPAWN_INSTANT, 0,	/* as Take a Ride */
+		MP_MODE_LATEJOIN_LIVE,	/* a late joiner drives at once, as a hound */
+		0,			/* countdown: none (POC) */
+		0,			/* carChangeLocked */
+		MP_MODE_CARPOOL_ALL,
+		MP_MODE_SPAWN_SESSION,
+		0,			/* mapCycle */
+		MP_MODE_TIMER_PERSONAL,	/* your clock runs while you are the fox */
+		MP_MODE_MUSIC_PURSUIT	/* the chase is on */
+	},
+	{
+		MP_GAMEMODE_BOMBTAG,	/* id */
+		"CAR BOMB TAG",		/* name */
+		1,			/* selectable */
+
+		0,			/* teamCount */
+		{ { "", 0, 0, 0 } },	/* teams */
+		0,			/* teamColours */
+
+		MP_MODE_RESPAWN_INSTANT, 0,
+		MP_MODE_LATEJOIN_LIVE,	/* a late joiner drives at once, without the bomb */
+		0,			/* countdown */
+		0,			/* carChangeLocked */
+		MP_MODE_CARPOOL_ALL,
+		MP_MODE_SPAWN_SESSION,
+		0,			/* mapCycle */
+		MP_MODE_TIMER_SHARED,	/* one clock; the holder at 0:00 loses */
+		MP_MODE_MUSIC_PURSUIT
 	},
 };
 
@@ -149,6 +189,21 @@ int MpModeWantsCountdown(int mode)
 int MpModeAllowsMapCycle(int mode)
 {
 	return MpModeBehaviour(mode)->mapCycle;
+}
+
+int MpModeTimerKind(int mode)
+{
+	return MpModeBehaviour(mode)->timer;
+}
+
+int MpModeUsesTimer(int mode)
+{
+	return MpModeTimerKind(mode) != MP_MODE_TIMER_NONE;
+}
+
+int MpModeMusic(int mode)
+{
+	return MpModeBehaviour(mode)->music;
 }
 
 const char* MpModeCarChangeRefusal(int mode, int roundRunning)

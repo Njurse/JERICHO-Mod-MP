@@ -48,6 +48,48 @@ static void CheckTakeARideDescriptor(void)
 	CHECK(d->carPool == MP_MODE_CARPOOL_ALL);
 	CHECK(d->spawn == MP_MODE_SPAWN_SESSION);
 	CHECK(d->mapCycle == 0);
+	CHECK(d->timer == MP_MODE_TIMER_NONE);		/* no clock, nobody marked */
+	CHECK(d->music == MP_MODE_MUSIC_AUTO);		/* the engine's own music */
+}
+
+/* The proof-of-concept rows (v23): Fox N Hounds and Car Bomb Tag. Everything but
+ * the clock and the music is Take a Ride's answer. */
+static void CheckMarkModes(void)
+{
+	static const struct { int id; const char* name; int timer; } kRows[] = {
+		{ MP_GAMEMODE_FOXHOUNDS, "FOX N HOUNDS", MP_MODE_TIMER_PERSONAL },
+		{ MP_GAMEMODE_BOMBTAG,   "CAR BOMB TAG", MP_MODE_TIMER_SHARED },
+	};
+	size_t i;
+
+	CHECK(MP_GAMEMODE_FOXHOUNDS == 1 && MP_GAMEMODE_BOMBTAG == 2);
+	CHECK(MP_MODE_MUSIC_AUTO == 0 && MP_MODE_MUSIC_CALM == 1 && MP_MODE_MUSIC_PURSUIT == 2);	/* = JER_MUSIC_* */
+
+	for (i = 0; i < sizeof(kRows) / sizeof(kRows[0]); i++)
+	{
+		const MP_MODE_DESC* d = MpModeFind(kRows[i].id);
+
+		CHECK(d != NULL);
+		if (d == NULL)
+			continue;
+
+		CHECK(strcmp(d->name, kRows[i].name) == 0);
+		CHECK(strcmp(MpModeDisplayName(kRows[i].id), kRows[i].name) == 0);
+		CHECK(d->selectable == 1);
+		CHECK(d->timer == kRows[i].timer);
+		CHECK(MpModeTimerKind(kRows[i].id) == kRows[i].timer);
+		CHECK(MpModeUsesTimer(kRows[i].id) == 1);
+		CHECK(d->music == MP_MODE_MUSIC_PURSUIT && MpModeMusic(kRows[i].id) == MP_MODE_MUSIC_PURSUIT);
+		CHECK(d->teamCount == 0 && d->teamColours == 0);
+		CHECK(d->respawn == MP_MODE_RESPAWN_INSTANT);	/* instant respawn, as Take a Ride */
+		CHECK(d->lateJoin == MP_MODE_LATEJOIN_LIVE);
+		CHECK(d->spawn == MP_MODE_SPAWN_SESSION);
+		CHECK(d->carChangeLocked == 0 && d->countdown == 0 && d->mapCycle == 0);
+		CHECK(MpModeCarChangeRefusal(kRows[i].id, 1) == NULL);
+	}
+
+	CHECK(MpModeUsesTimer(MP_GAMEMODE_TAKEADRIDE) == 0);
+	CHECK(MpModeMusic(MP_GAMEMODE_TAKEADRIDE) == MP_MODE_MUSIC_AUTO);
 }
 
 /* Every id the registry knows, plus ids it does not, keep the table well formed. */
@@ -68,9 +110,10 @@ static void CheckTable(void)
 			CHECK(MpModeAt(j)->id != d->id);	/* ids unique */
 	}
 
-	/* Phase 0: Take a Ride is the only selectable mode. */
+	/* Every row in the table is selectable: Take a Ride and the v23 POC modes. */
+	CHECK(MpModeCount() == 3);
 	for (i = 0; i < MpModeCount(); i++)
-		CHECK(MpModeAt(i)->selectable == (MpModeAt(i)->id == MP_GAMEMODE_TAKEADRIDE));
+		CHECK(MpModeAt(i)->selectable == 1);
 }
 
 /* The answers each decision point in the session gets for a given id. */
@@ -93,6 +136,8 @@ static void CheckAnswersAreToday(int mode, const char* expectName)
 	/* not wired yet, but the answers must already be "off" */
 	CHECK(MpModeWantsCountdown(mode) == 0);
 	CHECK(MpModeAllowsMapCycle(mode) == 0);
+	CHECK(MpModeUsesTimer(mode) == 0);
+	CHECK(MpModeMusic(mode) == MP_MODE_MUSIC_AUTO);
 
 	/* MpChangeCar: never vetoed, in or out of a running session */
 	CHECK(MpModeCarChangeRefusal(mode, 0) == NULL);
@@ -133,12 +178,16 @@ static void CheckAnswersAreToday(int mode, const char* expectName)
 
 static void CheckLobby(void)
 {
-	/* the Game mode row: alone in the cycle, left/right stay on Take a Ride */
+	/* the Game mode row cycles 0 -> 1 -> 2 -> 0, and back */
 	CHECK(MpModeIsSelectable(MP_GAMEMODE_TAKEADRIDE));
+	CHECK(MpModeIsSelectable(MP_GAMEMODE_FOXHOUNDS));
+	CHECK(MpModeIsSelectable(MP_GAMEMODE_BOMBTAG));
 	CHECK(!MpModeIsSelectable(MP_GAMEMODE_COUNT));
 	CHECK(!MpModeIsSelectable(-1));
-	CHECK(MpModeNextSelectable(MP_GAMEMODE_TAKEADRIDE, 1) == MP_GAMEMODE_TAKEADRIDE);
-	CHECK(MpModeNextSelectable(MP_GAMEMODE_TAKEADRIDE, -1) == MP_GAMEMODE_TAKEADRIDE);
+	CHECK(MpModeNextSelectable(MP_GAMEMODE_TAKEADRIDE, 1) == MP_GAMEMODE_FOXHOUNDS);
+	CHECK(MpModeNextSelectable(MP_GAMEMODE_FOXHOUNDS, 1) == MP_GAMEMODE_BOMBTAG);
+	CHECK(MpModeNextSelectable(MP_GAMEMODE_BOMBTAG, 1) == MP_GAMEMODE_TAKEADRIDE);
+	CHECK(MpModeNextSelectable(MP_GAMEMODE_TAKEADRIDE, -1) == MP_GAMEMODE_BOMBTAG);
 	CHECK(MpModeNextSelectable(MP_GAMEMODE_TAKEADRIDE, 0) == MP_GAMEMODE_TAKEADRIDE);
 	CHECK(MpModeNextSelectable(200, 1) == MP_GAMEMODE_TAKEADRIDE);	/* unknown -> a selectable one */
 }
@@ -156,6 +205,7 @@ int main(void)
 	CheckAnswersAreToday(255, "-");
 
 	CheckLobby();
+	CheckMarkModes();
 
 	/* MpModePlayerTeam reads the round state now. Even a snapshot that names a team
 	 * cannot put a Take a Ride player on one: the mode has no teams. */
@@ -187,6 +237,15 @@ int main(void)
 		}
 
 		MpRoundReset();
+	}
+
+	/* the table's clock and music per id, for run_mode_check.py to compare with the
+	 * Python servers' mirror (mp_test.GAMEMODE_TIMER / GAMEMODE_MUSIC) */
+	{
+		int i;
+
+		for (i = 0; i < MpModeCount(); i++)
+			printf("MODEROW %d %d %d\n", MpModeAt(i)->id, MpModeAt(i)->timer, MpModeAt(i)->music);
 	}
 
 	printf("mp_mode: %d check(s), %d failure(s)\n", gChecks, gFails);

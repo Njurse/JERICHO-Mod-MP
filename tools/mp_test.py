@@ -27,9 +27,9 @@ import sys
 import threading
 import time
 
-PROTO = 22                    # mp_proto.h MP_PROTO_VERSION (22: the round state, MP_TAG_ROUND "JPRD", MP_ROUND + MP_ROUND_ENTRY; 21: a car's city byte past the stock rows is a bank NAME code 0x80..0xFE; 20: MP_ROSTER_ENTRY carries leftModel/leftModelCity, 32 bytes; 19: dynamic JMPPED entries on top of 18's ped model id) -- the game drops any frame whose envelope version differs
+PROTO = 23                    # mp_proto.h MP_PROTO_VERSION (23: the marked-player state, MP_TAG_MARK "JPMK", MP_MARK + MP_MARK_ENTRY, Fox N Hounds / Car Bomb Tag; 22: the round state, MP_TAG_ROUND "JPRD", MP_ROUND + MP_ROUND_ENTRY; 21: a car's city byte past the stock rows is a bank NAME code 0x80..0xFE; 20: MP_ROSTER_ENTRY carries leftModel/leftModelCity, 32 bytes; 19: dynamic JMPPED entries on top of 18's ped model id) -- the game drops any frame whose envelope version differs
 SDK = 3                       # JERICHO_SDK_VERSION
-MP_VER = "0.19.0"             # JERICHO/MODS/mp/mod.toml version -- always advertised (0.19.0 came with proto 22)
+MP_VER = "0.20.0"             # JERICHO/MODS/mp/mod.toml version -- always advertised (0.20.0 came with proto 23)
 NUL = bytes([0])
 
 # Shared protocol constants, mirrored from mp_proto.h so the tools never hard-code
@@ -56,7 +56,20 @@ CITY_WIRE_CODE_LAST = 0xFE
 MP_RULE_COPS = 0x1            # 1 = police cars spawn
 
 
-GAMEMODE_NAMES = {0: "TAKE A RIDE"}      # MP_GAMEMODE_* (mp_proto.h)
+GAMEMODE_NAMES = {0: "TAKE A RIDE", 1: "FOX N HOUNDS", 2: "CAR BOMB TAG"}      # MP_GAMEMODE_* (mp_proto.h)
+GAMEMODE_FOXHOUNDS = 1        # mp_proto.h MP_GAMEMODE_FOXHOUNDS
+GAMEMODE_BOMBTAG = 2          # mp_proto.h MP_GAMEMODE_BOMBTAG
+# mp_mode.c kModes[].timer / .music for each id (MP_MODE_TIMER_*, MP_MODE_MUSIC_*);
+# tools/mode_check checks this against the C table.
+MODE_TIMER_NONE, MODE_TIMER_PERSONAL, MODE_TIMER_SHARED = 0, 1, 2
+MODE_MUSIC_AUTO, MODE_MUSIC_CALM, MODE_MUSIC_PURSUIT = 0, 1, 2
+GAMEMODE_TIMER = {0: MODE_TIMER_NONE, 1: MODE_TIMER_PERSONAL, 2: MODE_TIMER_SHARED}
+GAMEMODE_MUSIC = {0: MODE_MUSIC_AUTO, 1: MODE_MUSIC_PURSUIT, 2: MODE_MUSIC_PURSUIT}
+
+
+def mode_timer(gamemode):
+    """MpModeTimerKind: an unknown id behaves as Take a Ride (no timer)."""
+    return GAMEMODE_TIMER.get(gamemode, MODE_TIMER_NONE)
 
 
 def mode_name(gamemode):
@@ -78,7 +91,7 @@ TAG = {
     "channel": b"JPCH", "leave": b"JPLV", "kick": b"JPKK", "chat": b"JPCX",
     "roster": b"JPRS", "car": b"JPCC",
     "ped": b"JPPD", "traffic": b"JPTF", "hit": b"JPHI", "color": b"JPCL",
-    "stats": b"JPSX", "round": b"JPRD",
+    "stats": b"JPSX", "round": b"JPRD", "mark": b"JPMK",
 }
 # NOTE: no "session" entry. 'JPSS' was retired from mp_proto.h -- it was reserved for
 # a standalone session/lobby broadcast that nothing ever sent or handled. Keep this
@@ -194,6 +207,46 @@ def parse_round(payload):
         pid, state, team, score = ROUND_ENTRY.unpack_from(payload, ROUND.size + i * ROUND_ENTRY.size)
         rows.append((pid, state, -1 if team == ROUND_TEAM_NONE else team, score))
     return gm, phase, rnd, rows
+
+
+# The marked-player state (JPMK, proto 23): Fox N Hounds / Car Bomb Tag. Host-authored
+# like JPRD (the referee is mp_mark.c / dedi/markref.py) and only sent in a mode that
+# uses it. Clocks are deciseconds remaining, rounded up.
+MARK = struct.Struct("<6BHHH")         # gamemode, phase, marked, winner, minutes, count, seq, sharedDs, reserved = 12
+MARK_ENTRY = struct.Struct("<BxH")     # playerId, reserved, remainDs = 4
+MARK_PHASE_WAITING = 0                  # mp_proto.h MP_MARK_PHASE_*
+MARK_PHASE_LIVE = 1
+MARK_PHASE_ENDED = 2
+MARK_NONE = 0xFF                        # mp_proto.h MP_MARK_NONE
+MARK_MINUTES_MIN = 1                    # mp_proto.h MP_MARK_MINUTES_*
+MARK_MINUTES_MAX = 5
+MARK_MINUTES_DEFAULT = 3
+
+
+def build_mark(gamemode, phase, marked, winner, minutes, seq, shared_ds, rows):
+    """MP_MARK + MP_MARK_ENTRY rows. `rows` is [(playerId, remainDs)]; marked /
+    winner None or -1 = MP_MARK_NONE; written in ascending player id."""
+    rows = sorted(rows)[:MAX_PLAYERS]
+    mk = MARK_NONE if marked is None or marked < 0 else marked & 0xFF
+    wn = MARK_NONE if winner is None or winner < 0 else winner & 0xFF
+    out = bytearray(MARK.pack(gamemode & 0xFF, phase & 0xFF, mk, wn, minutes & 0xFF, len(rows),
+                              seq & 0xFFFF, min(int(shared_ds), 0xFFFF), 0))
+    for pid, ds in rows:
+        out += MARK_ENTRY.pack(pid & 0xFF, min(int(ds), 0xFFFF))
+    return bytes(out)
+
+
+def parse_mark(payload):
+    """dict of the snapshot, or None when short / count out of range (MpMarkApply)."""
+    if len(payload) < MARK.size:
+        return None
+    gm, phase, mk, wn, minutes, count, seq, shared, _r = MARK.unpack_from(payload, 0)
+    if count > MAX_PLAYERS or len(payload) < MARK.size + count * MARK_ENTRY.size:
+        return None
+    rows = [MARK_ENTRY.unpack_from(payload, MARK.size + i * MARK_ENTRY.size) for i in range(count)]
+    return {"gamemode": gm, "phase": phase, "marked": -1 if mk == MARK_NONE else mk,
+            "winner": -1 if wn == MARK_NONE else wn, "minutes": minutes, "seq": seq,
+            "shared_ds": shared, "rows": rows}
 
 
 REJECT_NAMES = {0: "NONE", 1: "FULL", 2: "VERSION", 3: "MODS", 4: "INPROGRESS", 5: "CUSTOM"}

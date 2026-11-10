@@ -42,8 +42,9 @@ supervisor (or a test) can pipe commands in.
 --city N             GameLevel the clients should load (0..3)
 --arena N            which of that city's two multiplayer maps (0 or 1; the game's
                      -mp 0 / -mp 1). Default 0
---gamemode N         the session's game mode id (default 0 = TAKE A RIDE, the only
-                     one so far; see "gamemode" below)
+--gamemode N         the session's game mode id (default 0 = TAKE A RIDE; 1 = FOX N
+                     HOUNDS, 2 = CAR BOMB TAG; see "gamemode" below)
+--mode-time N        Fox N Hounds / Car Bomb Tag time in minutes, 1..5 (default 3)
 --max-players N      slots 1..N-1 are given to clients (0 belongs to the server)
 --beacon / --no-beacon
 --beacon-ms N        beacon cadence (default 1000)
@@ -97,10 +98,14 @@ existing file). Updates and `git pull` therefore leave your settings alone.
                             // the game's -mp 0 / -mp 1). The server hosts the
                             // multiplayer map, never the full single-player city
   "gamemode": 0,            // the game mode id, MP_GAMEMODE_* (mp_proto.h). 0 =
-                            // TAKE A RIDE, the only mode so far. Optional: a file
-                            // without it runs mode 0. Sent in the welcome, the
-                            // start, the beacon and the master advert; see
-                            // ../../../docs/GAMEMODES.md
+                            // TAKE A RIDE, 1 = FOX N HOUNDS, 2 = CAR BOMB TAG.
+                            // Optional: a file without it runs mode 0. Sent in the
+                            // welcome, the start, the beacon and the master advert;
+                            // see ../../../docs/GAMEMODES.md
+  // "mode_time": 3,        // OPTIONAL, not in the defaults: modes 1 and 2's time
+                            // in minutes, clamped 1..5; missing = 3. The server
+                            // referees them itself (tags from the carstates it
+                            // keeps) and sends JPMK; never written into your file
   "max_players": 16,        // 16 is the protocol cap (MP_MAX_PLAYERS); slot 0 is the server
   "motd": "Welcome to JERICHO - drive safe, mind the traffic.",
                             // said to each joiner as a SERVER chat line. One line only:
@@ -394,11 +399,15 @@ defaults, and the `modes` plugin stays off unless named:
 python JERICHO/MODS/mp/tools/servers/dediserver/test_modes.py
 ```
 
-`test_round.py` covers the round state (`JPRD`, proto 22) over a real socket: a
-joiner gets ROSTER, WELCOME, START and then round 1 live with every player
-playing, no team and score 0; joins and leaves reach everyone at once; a client's
-own `JPRD` is never forwarded; a proto-21 HELLO is refused:
+`test_round.py` covers the round state (`JPRD`, proto 22; the wire is proto 23)
+over a real socket: a joiner gets ROSTER, WELCOME, START and then round 1 live
+with every player playing, no team and score 0; joins and leaves reach everyone
+at once; a client's own `JPRD` is never forwarded; proto-21 and proto-22 HELLOs
+are refused. `test_marks.py` covers Fox N Hounds and Car Bomb Tag (`JPMK`): two
+players start a round, carstate contacts tag, a client's `JPMK` is never
+forwarded, the clocks win and lose, and `mode_time` is optional:
 
 ```sh
 python JERICHO/MODS/mp/tools/servers/dediserver/test_round.py
+python JERICHO/MODS/mp/tools/servers/dediserver/test_marks.py
 ```

@@ -23,6 +23,7 @@
 #include "mp_proto.h"
 #include "mp_mode.h"	/* the game-mode registry and its decision points */
 #include "mp_round.h"	/* the round lifecycle and per-player round state (MP_TAG_ROUND) */
+#include "mp_mark.h"	/* the Fox N Hounds / Car Bomb Tag referee (MP_TAG_MARK) */
 
 #ifdef __cplusplus
 extern "C" {
@@ -197,6 +198,8 @@ typedef struct MP_STATE
 
 	/* agreed lobby config */
 	int gamemode;			/* MP_GAMEMODE_* */
+	int modeMinutes;		/* host: a timer mode's time, MP_MARK_MINUTES_MIN..MAX
+					 * (Fox N Hounds / Car Bomb Tag); per session, not saved */
 	int city;			/* GameLevel 0..3 */
 	int subGame;			/* multiplayer sub-level (gSubGameNumber) */
 	int timeOfDay;			/* TIME_* (or -1 = mission default) */
@@ -656,6 +659,12 @@ const char* MpModeName(int gamemode);	/* MP_GAMEMODE_* -> display name */
  * selectable mode is taken and only before the match runs -- a running session keeps
  * the mode it was launched with. Returns the mode now in force for the session. */
 int MpSetSessionGamemode(int gamemode);
+
+/* The HOST's lobby choice of a timer mode's time (the mp.host page's Time row), in
+ * minutes, clamped to MP_MARK_MINUTES_MIN..MAX. Like the mode: only before the match
+ * runs, never saved. Returns the minutes now in force. */
+int MpSetSessionModeMinutes(int minutes);
+int MpSessionModeMinutes(void);		/* the minutes in force (default MP_MARK_MINUTES_DEFAULT) */
 
 /* The city name for a row of SOMEONE ELSE'S server: the engine's name, or "-"
  * when the engine has no row for that city. Not MpCarCityName, which says "the

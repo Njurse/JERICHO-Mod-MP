@@ -26,7 +26,7 @@ static int gChecks = 0;
 	printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); } } while (0)
 
 /* The wire, pinned. */
-static_assert(MP_PROTO_VERSION == 22, "the round state is proto 22");
+static_assert(MP_PROTO_VERSION == 23, "the round state came with proto 22; 23 added JPMK beside it");
 static_assert(sizeof(MP_ROUND) == 8, "MP_ROUND");
 static_assert(sizeof(MP_ROUND_ENTRY) == 8, "MP_ROUND_ENTRY");
 static_assert(sizeof(MP_ROSTER_ENTRY) == 32, "the roster entry is untouched");

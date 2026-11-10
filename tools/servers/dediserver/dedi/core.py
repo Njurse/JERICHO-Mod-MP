@@ -5,7 +5,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
+import random
 import socket
 import struct
 import sys
@@ -28,6 +30,7 @@ sys.path.insert(0, SERVERS)
 import mp_test as m            # noqa: E402  the single Python source of truth
 from dedi import relay   # noqa: E402  hit / colour / channel routing
 from dedi.roundstate import RoundState   # noqa: E402  the round state (MP_TAG_ROUND)
+from dedi import markref                 # noqa: E402  Fox N Hounds / Car Bomb Tag (MP_TAG_MARK)
 from dedi.plugins import CONSOLE, Player, PluginManager, tick_loop   # noqa: E402
 import proto_check            # noqa: E402  the wire-mirror guard
 
@@ -96,6 +99,53 @@ ROSTER_REFRESH_S = 2.0
 # 0 = full city (single-player map), 1 = multiplayer map. Arena selects MP map 0/1.
 MAP_MODE_CITY = "city"
 MAP_MODE_MP = "mp"
+
+# The timer modes (Fox N Hounds / Car Bomb Tag, proto 23). "mode_time" is an OPTIONAL
+# key -- minutes, 1..5 -- deliberately NOT in DEFAULTS, so upgrade_config never writes
+# it into an operator's file; missing or unreadable means 3 (mode_minutes).
+MARK_TICK_S = 0.1          # how often the referee is stepped
+MARK_SEND_LIVE_S = 1.0     # JPMK cadence while a round is live (the host: 30 frames)
+MARK_SEND_IDLE_S = 4.0     # ...and otherwise (the host: 120 frames)
+TAG_RADIUS = 900           # mp_session.c MP_HIT_RADIUS: car body scale, world units
+TAG_MIN_CLOSING = 4        # mp_session.c MP_HIT_MIN_CLOSING: whole units per frame
+TAG_ARM_S = 4.0            # mp_session.c MP_HIT_ARM_FRAMES (120) at 30 Hz: a spawn bump is no tag
+TAG_ROW_FRESH_S = 0.5      # the other car's row must be this recent to compare against
+TAG_REPORT_RADIUS = 1800   # a client's JPHI claim: twice the body scale, for the link lag
+FIXEDH = 4096              # the velocity fix point (1 world unit/frame << 12)
+
+
+def mode_minutes(cfg):
+    """The timer modes' time: cfg "mode_time" (minutes), missing/bad -> 3, clamped 1..5."""
+    try:
+        v = cfg.get("mode_time")
+        return markref.clamp_minutes(int(v)) if v is not None else m.MARK_MINUTES_DEFAULT
+    except (TypeError, ValueError):
+        return m.MARK_MINUTES_DEFAULT
+
+
+def car_pose(row):
+    """(x, y, z, vx, vy, vz) from a kept MP_CARSTATE_ENTRY, or None when on foot."""
+    f = m.CARSTATE_ENTRY.unpack(row)
+    if f[3] == 0xFF:                 # model MP_CARSTATE_NO_CAR: on foot, no car to tag
+        return None
+    return f[9], f[10], f[11], f[16], f[17], f[18]
+
+
+def contact_between(a, b, radius=TAG_RADIUS, min_closing=TAG_MIN_CLOSING):
+    """The carstate tag test: cars within `radius` and closing at >= `min_closing`
+    whole units/frame (mp_session.c MpContactNormal's units). `min_closing` None
+    skips the closing test (a client's report already passed its own)."""
+    if a is None or b is None:
+        return False
+    dx, dy, dz = b[0] - a[0], b[1] - a[1], b[2] - a[2]
+    d = math.sqrt(dx * dx + dy * dy + dz * dz)
+    if d == 0 or d > radius:
+        return False
+    if min_closing is None:
+        return True
+    closing = ((a[3] - b[3]) * dx + (a[4] - b[4]) * dy + (a[5] - b[5]) * dz) / d / FIXEDH
+    return closing >= min_closing
+
 
 CONFIG_NAME = "dediserver.json"
 EXAMPLE_NAME = "dediserver.example.json"   # tracked; dediserver.json is the operator's, untracked
@@ -382,8 +432,17 @@ class Dedicated:
         # The round state (proto 22). This server is a match in progress from the
         # start -- every joiner gets a START -- so round 1 is live from here.
         self.round = RoundState(int(cfg.get("gamemode", 0) or 0))
-        self.round.begin()
+        # A timer mode (Fox N Hounds / Car Bomb Tag, proto 23) does not: its referee
+        # starts round 1 once two players are in (mark_loop), and until then the round
+        # state is round 0, idle, everyone waiting -- the in-game host's rule too.
+        self.mark = markref.MarkReferee(self.round.gamemode, mode_minutes(cfg))
+        if not self.mark.active:
+            self.round.begin()
         self.round_sent = -1     # the revision last broadcast
+        self.mark_sent = -1      # the JPMK revision last broadcast
+        self.mark_rng = random.Random()
+        self.car_seen = {}       # playerId -> monotonic time its carstate row arrived
+        self.joined_at = {}      # playerId -> monotonic time it joined (the tag arm)
 
         # Reported by the console. The beacon can be turned off from there (a LAN
         # you do not want to appear on) without stopping anything else, so the
@@ -684,6 +743,117 @@ class Dedicated:
             self.broadcast(payload, m.TAG["round"], skip=skip)
         return due
 
+    # -- the timer modes (JPMK). The server referees exactly as an in-game host: the
+    # referee is dedi/markref.py (mp_mark.c's twin), the clock is wall time, and a
+    # tag is decided HERE from the carstates it already keeps -- a client never moves
+    # the mark itself.
+    def mark_bytes(self):
+        with self.lock:
+            return self.mark.to_bytes()
+
+    def _mark_step(self, ms):
+        """One referee step under the lock: sync, tick, drive the round. Returns
+        True when the round state changed (begin / end)."""
+        with self.lock:
+            ids = [info["id"] for info in self.clients.values()]
+            self.round.sync(ids)
+            ev = self.mark.sync(ids, self.mark_rng.randrange(1 << 15))
+            ev |= self.mark.tick(ms, self.mark_rng.randrange(1 << 15))
+            if ev & markref.EV_BEGIN:
+                self.round.begin()
+            if ev & markref.EV_END:
+                self.round.end()
+            marked, winner = self.mark.marked, self.mark.winner
+        if ev & markref.EV_BEGIN:
+            self.log.info("mark: round %d live, player %d is marked (%d min)"
+                          % (self.round.number, marked, self.mark.minutes))
+        if ev & markref.EV_END:
+            self.log.info("mark: round %d over - winner %d, marked %d"
+                          % (self.round.number, winner, marked))
+        if ev & markref.EV_MOVED:
+            self.log.info("mark: the marked player left - player %d is marked now" % marked)
+        return bool(ev & (markref.EV_BEGIN | markref.EV_END))
+
+    def broadcast_mark_if_due(self, force=False):
+        with self.lock:
+            due = force or self.mark.revision != self.mark_sent
+            if due:
+                self.mark_sent = self.mark.revision
+            payload = self.mark.to_bytes()
+        if due:
+            self.broadcast(payload, m.TAG["mark"])
+        return due
+
+    def mark_loop(self):
+        last = time.monotonic()
+        last_send = 0.0
+        while not self.stop.wait(MARK_TICK_S):
+            now = time.monotonic()
+            ms = int((now - last) * 1000)
+            last += ms / 1000.0
+            try:
+                if self._mark_step(ms):
+                    self.broadcast_round_if_changed()
+                every = MARK_SEND_LIVE_S if self.mark.phase == m.MARK_PHASE_LIVE else MARK_SEND_IDLE_S
+                if self.broadcast_mark_if_due(force=now - last_send >= every):
+                    last_send = now
+            except Exception as e:
+                self.log.debug("mark step failed: %s" % e)
+
+    def _armed(self, pid, now):
+        t = self.joined_at.get(pid)
+        return t is not None and now - t >= TAG_ARM_S
+
+    def mark_carstate(self, pid):
+        """A carstate row from `pid` just landed: a tag when its car is touching the
+        marked car's (or, when it is marked, any other player's) -- the position path."""
+        now = time.monotonic()
+        moved = None
+        with self.lock:
+            if self.mark.phase != m.MARK_PHASE_LIVE or not self._armed(pid, now):
+                return False
+            marked = self.mark.marked
+            if marked < 0:
+                return False
+            others = [marked] if pid != marked else [o for o in self.cars if o != pid]
+            mine = car_pose(self.cars[pid]) if pid in self.cars else None
+            for other in others:
+                if other not in self.cars or not self._armed(other, now):
+                    continue
+                if now - self.car_seen.get(other, 0) > TAG_ROW_FRESH_S:
+                    continue
+                if contact_between(mine, car_pose(self.cars[other])) and self.mark.contact(pid, other):
+                    moved = self.mark.marked
+                    break
+        if moved is None:
+            return False
+        self.log.info("mark: tag %d, player %d is marked (carstate contact)" % (pid, moved))
+        self.broadcast_mark_if_due()
+        return True
+
+    def mark_hit_report(self, pid, payload):
+        """A client's JPHI is a tag CLAIM (the fallback path): it counts only when the
+        cars the server keeps are near each other too."""
+        if len(payload) < m.HIT.size:
+            return False
+        target, flags = m.HIT.unpack_from(payload, 0)[:2]
+        if flags & m.HIT_F_TRAFFIC:
+            return False
+        now = time.monotonic()
+        with self.lock:
+            if self.mark.phase != m.MARK_PHASE_LIVE:
+                return False
+            if not (self._armed(pid, now) and self._armed(target, now)):
+                return False
+            a = car_pose(self.cars[pid]) if pid in self.cars else None
+            b = car_pose(self.cars[target]) if target in self.cars else None
+            if not contact_between(a, b, TAG_REPORT_RADIUS, None) or not self.mark.contact(pid, target):
+                return False
+            moved = self.mark.marked
+        self.log.info("mark: tag %d-%d, player %d is marked (reported contact)" % (pid, target, moved))
+        self.broadcast_mark_if_due()
+        return True
+
     def note_car_pick(self, conn, payload):
         """JPCC, the car a player picked: kept for the roster, which the caller
         then sends to everyone at once -- the host's MpHandleCar does the same
@@ -951,6 +1121,13 @@ class Dedicated:
             # The round state after the WELCOME (proto 22), as the in-game host's
             # MpSendWelcome does: the joiner has it before it plays...
             _send(conn, m.TAG["round"], self.round_bytes())
+            # ...and in a timer mode the marked player and the clocks (proto 23)
+            if self.mark.active:
+                with self.lock:
+                    self.joined_at[pid] = time.monotonic()
+                    self.mark.sync([info["id"] for info in self.clients.values()],
+                                   self.mark_rng.randrange(1 << 15))
+                _send(conn, m.TAG["mark"], self.mark_bytes())
         except OSError:
             pass
         # ...and everyone else hears of the new row now, not at the next cadence.
@@ -1046,6 +1223,7 @@ class Dedicated:
                                 # a row may only describe its sender (as for JPPD)
                                 if len(e) == m.CARSTATE_ENTRY.size and e[0] == pid:
                                     self.cars[e[0]] = e
+                                    self.car_seen[pid] = time.monotonic()
                     except Exception:
                         # a malformed frame is this connection's problem, not the
                         # server's: skip it and keep serving
@@ -1054,10 +1232,14 @@ class Dedicated:
                         continue
                     self.broadcast(self.carstate_union(int(time.time() * 30)),
                                    m.TAG["carstate"], skip=conn)
+                    if self.mark.active:
+                        self.mark_carstate(pid)
                 elif tag in (m.TAG["ped"], m.TAG["traffic"]):
                     self.relay_peer_state(conn, tag, payload, pid)
                 elif tag == m.TAG["hit"]:
                     relay.hit(self, conn, pid, payload)
+                    if self.mark.active:
+                        self.mark_hit_report(pid, payload)
                 elif tag == m.TAG["color"]:
                     relay.color(self, conn, pid, payload)
                 elif tag == m.TAG["channel"]:
@@ -1078,6 +1260,8 @@ class Dedicated:
                     self.note_pong(conn, payload)
                 elif tag == m.TAG["round"]:
                     relay.round_state(self, conn, pid, payload)
+                elif tag == m.TAG["mark"]:
+                    relay.mark_state(self, conn, pid, payload)
                 elif tag == m.TAG["leave"]:
                     break
         finally:
@@ -1085,6 +1269,8 @@ class Dedicated:
                 info = self.clients.pop(conn, None)
                 if info:
                     self.cars.pop(info["id"], None)
+                    self.car_seen.pop(info["id"], None)
+                    self.joined_at.pop(info["id"], None)
                     self.colors.pop(info["id"], None)
                     self.ped_models.pop(info["id"], None)
                 _NET.pop(conn, None)
@@ -1326,6 +1512,13 @@ class Dedicated:
             "round:     %d (%s)" % (self.round.number,
                                     {m.ROUND_PHASE_IDLE: "idle", m.ROUND_PHASE_LIVE: "live",
                                      m.ROUND_PHASE_ENDED: "ended"}.get(self.round.phase, "?")),
+        ] + ([
+            "mark:      %s, %d min, %s, marked %s" % (
+                m.mode_name(self.mark.gamemode), self.mark.minutes,
+                {m.MARK_PHASE_WAITING: "waiting", m.MARK_PHASE_LIVE: "live",
+                 m.MARK_PHASE_ENDED: "ended"}.get(self.mark.phase, "?"),
+                self.mark.marked if self.mark.marked >= 0 else "nobody")
+        ] if self.mark.active else []) + [
             "rules:     %s" % rules_text(int(self.cfg["rules"])),
             "time:      %s, %s" % (TIMES_OF_DAY[time_of_day_index(self.cfg)],
                                    WEATHERS[weather_index(self.cfg)]),
@@ -1481,6 +1674,8 @@ class Dedicated:
             threads.append(threading.Thread(target=self.master_loop, daemon=True))
         threads.append(threading.Thread(target=tick_loop, args=(self.plugins, self.stop),
                                         daemon=True))
+        if self.mark.active:
+            threads.append(threading.Thread(target=self.mark_loop, daemon=True))
         for t in threads:
             t.start()
 
@@ -1517,6 +1712,8 @@ def parse_args(argv):
                     help="which of the city's two multiplayer maps clients load (0 or 1; "
                          "the game's -mp 0 / -mp 1)")
     ap.add_argument("--gamemode", type=int)
+    ap.add_argument("--mode-time", type=int, dest="mode_time", metavar="MIN",
+                    help="Fox N Hounds / Car Bomb Tag time in minutes, 1..5 (default 3)")
     ap.add_argument("--max-players", type=int)
     ap.add_argument("--beacon", dest="beacon", action="store_true", default=None)
     ap.add_argument("--no-beacon", dest="beacon", action="store_false")
@@ -1629,7 +1826,7 @@ def build_config(argv):
     cfg = load_config(path, DEFAULTS)
     apply_overrides(cfg, args, (
         ("port", "port"), ("name", "name"), ("city", "city"), ("arena", "arena"),
-        ("gamemode", "gamemode"),
+        ("gamemode", "gamemode"), ("mode_time", "mode_time"),
         ("max_players", "max_players"), ("beacon", "beacon"), ("beacon_ms", "beacon_ms"),
         ("idle_drop_s", "idle_drop_s"), ("cops", "cops"),
         ("cop_difficulty", "cop_difficulty"), ("cop_immunity", "cop_immunity"),

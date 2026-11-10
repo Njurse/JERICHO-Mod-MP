@@ -99,6 +99,7 @@ host ── ROSTER ──▶ client        (who is in the match, BEFORE the welc
 host ── WELCOME {playerId, maxPlayers, running, subGame, city, time, weather,
                  seed, modsEnforced, modsMatched} ──▶ client
 host ── ROUND ──▶ client         (the round state, AFTER the welcome; proto 22)
+host ── MARK ──▶ client          (timer modes only: the marked player; proto 23)
    or ── REJECT {reason} ──▶ client
 ```
 
@@ -202,6 +203,7 @@ flushed as the socket accepts them (§10, trap 2).
 | `JPKK` | host -> client | KICK — the host removes a player. The kicked client prints "kicked by the host", then takes the same clean-leave path a deliberate quit uses (`MpLeaveSession`), so the roster row and the car leave every machine identically. Host-only (`MpKickPlayer`); a non-zero player id only. |
 | `JPCX` | both | chat line (T to open, Enter to send, Esc to cancel; drawn in the status console — the speaker's name in their own colour, or cream when custom colour is off, and the message in a flat 240,240,240) |
 | `JPRD` | H→all | ROUND (proto 22): the round number and phase, and per player the round state (playing / spectating / waiting), score and team (`MP_ROUND` + `MP_ROUND_ENTRY`, `mp_round.c`). Only the host or the dedicated server writes it: after a WELCOME, at START, whenever it changes, and on the roster's 120-frame cadence. A host drops one a client sends; it is never relayed. See `docs/GAMEMODES.md`. |
+| `JPMK` | H→all | MARK (proto 23), sent only in a timer mode (Fox N Hounds, Car Bomb Tag): the phase (waiting / live / ended), the marked player, the winner, the minutes, a change sequence, the shared clock, and each player's own clock in deciseconds (`MP_MARK` + `MP_MARK_ENTRY`, `mp_mark.c`). Only the host or the dedicated server writes it: after a WELCOME, at START, on every change, and every 30 frames while live (120 otherwise). Clients only report contacts (`JPHI`); a host drops a client's `JPMK`, and it is never relayed. See `docs/GAMEMODES.md`. |
 | `JPCC` | client -> host | the car this player picked in the car select. Sent when the pick becomes known (at launch), because the `JPHL` hello goes out at CONNECT time, long before the player has chosen. The host records it, republishes `JPRS`, and - in a match already running - builds the vehicle then rather than at hello. No car is built for a player until this arrives, so a joiner's vehicle never appears before they have picked it. |
 
 `JPSS` was reserved here for a standalone session/lobby broadcast. It is now **retired**:

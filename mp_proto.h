@@ -38,7 +38,18 @@
 extern "C" {
 #endif
 
-#define MP_PROTO_VERSION	22	/* 22: the ROUND STATE carrier, MP_TAG_ROUND ('JPRD'):
+#define MP_PROTO_VERSION	23	/* 23: the MARKED-PLAYER state, MP_TAG_MARK ('JPMK'):
+				 *     Fox N Hounds / Car Bomb Tag (modes 1, 2) -- the
+				 *     host's time setting, who is marked (fox / bomb
+				 *     holder), the winner, a transfer counter, and
+				 *     each player's clock or the one shared clock.
+				 *     Host-authored like JPRD; sent only in a mode that
+				 *     uses it, so Take a Ride's traffic is unchanged.
+				 *     Roster, welcome, session, beacon, rules and JPRD
+				 *     are unchanged. Bumped because a v22 peer has no
+				 *     handler for it and would never see the fox or the
+				 *     bomb; mp module 0.20.0.
+				 * 22: the ROUND STATE carrier, MP_TAG_ROUND ('JPRD'):
 				 *     round number + phase, and per player the
 				 *     state (playing/spectating/waiting), score and
 				 *     team. A new host-authored message rather than a
@@ -242,6 +253,9 @@ typedef struct MP_ROSTER
 				 * (MP_ROUND + MP_ROUND_ENTRY rows; v22). Only the host -- a
 				 * listen host or a dedicated server -- writes it; a client
 				 * applies it and never sends one. */
+#define MP_TAG_MARK	"JPMK"	/* host -> all: the marked-player state of a timer mode
+				 * (MP_MARK + MP_MARK_ENTRY rows; v23). Host-only like
+				 * JPRD, and only sent in a mode that uses it. */
 
 /* Envelope flags */
 #define MP_FLAG_RELIABLE	0x01	/* sender wants an ordered/reliable channel */
@@ -282,6 +296,8 @@ enum
 enum
 {
 	MP_GAMEMODE_TAKEADRIDE = 0,
+	MP_GAMEMODE_FOXHOUNDS = 1,	/* v23: tag the fox to become it; first clock to 0:00 wins */
+	MP_GAMEMODE_BOMBTAG = 2,	/* v23: pass the bomb; its holder at 0:00 loses */
 	MP_GAMEMODE_COUNT
 };
 
@@ -812,6 +828,47 @@ typedef struct MP_ROUND
 	uint8_t  reserved[3];
 } MP_ROUND;			/* 8 bytes: header only, the rows follow */
 
+/* THE MARKED-PLAYER STATE (v23, 'JPMK'). Fox N Hounds and Car Bomb Tag mark ONE
+ * player -- the fox, or whoever holds the bomb -- and run clocks: Fox N Hounds a
+ * clock per player that ticks only while that player is the fox, Car Bomb Tag
+ * one shared clock. The host referees (mp_mark.c / dedi/markref.py) and is the
+ * only writer; a client applies each snapshot whole and draws its notices from
+ * the CHANGES (seq, phase), so no text rides the wire.
+ *
+ * Clocks are deciseconds remaining (5 minutes = 3000). Header + `count` rows, one
+ * per present player in ascending id; Car Bomb Tag's rows carry 0. */
+enum
+{
+	MP_MARK_PHASE_WAITING = 0,	/* fewer than two players: nothing ticks */
+	MP_MARK_PHASE_LIVE = 1,		/* a round is being played */
+	MP_MARK_PHASE_ENDED = 2		/* won / blown up; the next round starts shortly */
+};
+
+#define MP_MARK_NONE		0xFF	/* no marked player / no winner */
+#define MP_MARK_MINUTES_MIN	1
+#define MP_MARK_MINUTES_MAX	5
+#define MP_MARK_MINUTES_DEFAULT	3
+
+typedef struct MP_MARK_ENTRY
+{
+	uint8_t  playerId;
+	uint8_t  reserved;
+	uint16_t remainDs;	/* Fox N Hounds: this player's clock; Car Bomb Tag: 0 */
+} MP_MARK_ENTRY;		/* 4 bytes */
+
+typedef struct MP_MARK
+{
+	uint8_t  gamemode;	/* MP_GAMEMODE_* being refereed */
+	uint8_t  phase;		/* MP_MARK_PHASE_* */
+	uint8_t  marked;	/* the fox / the bomb holder, MP_MARK_NONE = nobody */
+	uint8_t  winner;	/* Fox N Hounds: who reached 0:00; MP_MARK_NONE otherwise */
+	uint8_t  minutes;	/* the host's time setting, MP_MARK_MINUTES_MIN..MAX */
+	uint8_t  count;		/* MP_MARK_ENTRY rows that follow, <= MP_MAX_PLAYERS */
+	uint16_t seq;		/* +1 on every change of marked player (and every go-live) */
+	uint16_t sharedDs;	/* Car Bomb Tag: the bomb's clock; Fox N Hounds: 0 */
+	uint16_t reserved;
+} MP_MARK;			/* 12 bytes: header only, the rows follow */
+
 typedef struct MP_HIT
 {
 	uint8_t  targetId;	/* the player whose car should receive the impulse */
@@ -859,6 +916,8 @@ static_assert(sizeof(MP_TRAFFIC) == 8, "MP_TRAFFIC layout");
 static_assert(sizeof(MP_CHANNEL) == 26, "MP_CHANNEL layout");
 static_assert(sizeof(MP_ROUND) == 8, "MP_ROUND layout");		/* v22 */
 static_assert(sizeof(MP_ROUND_ENTRY) == 8, "MP_ROUND_ENTRY layout");	/* v22 */
+static_assert(sizeof(MP_MARK) == 12, "MP_MARK layout");		/* v23 */
+static_assert(sizeof(MP_MARK_ENTRY) == 4, "MP_MARK_ENTRY layout");	/* v23 */
 
 #endif
 

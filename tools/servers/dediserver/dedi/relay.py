@@ -141,3 +141,18 @@ def round_state(server, conn, pid, payload):
     except OSError:
         pass
     return False
+
+
+def mark_state(server, conn, pid, payload):
+    """JPMK from a client (proto 23). Only the server referees the timer modes, so,
+    like a JPRD, it is never forwarded -- a client could otherwise name itself the
+    winner or hand the bomb on. In a timer mode the sender gets the server's own
+    snapshot back. Returns False (nothing was relayed)."""
+    server.log.debug("player %d sent a mark state (%d bytes): ignored, only the server writes it"
+                     % (pid, len(payload)))
+    if server.mark.active:
+        try:
+            server.send_to(conn, m.TAG["mark"], server.mark_bytes())
+        except OSError:
+            pass
+    return False

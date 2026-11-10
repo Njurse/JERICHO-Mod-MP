@@ -1,11 +1,13 @@
-"""The round state (MP_TAG_ROUND, proto 22) on the dedicated server, over a real socket.
+"""The round state (MP_TAG_ROUND, proto 22; the wire is proto 23 since JPMK) on the
+dedicated server, over a real socket.
 
   * a joiner gets ROSTER, WELCOME, START and then the round state: Take a Ride's
     round 1, live, every player playing, no team, score 0;
   * a second joiner is announced to the first at once, and a leaver's row goes;
   * a client cannot write the round state: its JPRD is never forwarded, and the
     sender is answered with the server's own;
-  * every envelope says proto 22, and a proto-21 HELLO is refused (REJECT VERSION);
+  * every envelope says proto 23, and proto-21 and proto-22 HELLOs are refused
+    (REJECT VERSION);
   * a config with no "gamemode" key referees mode 0.
 
 The server's serve() runs on one end of a socketpair; no ports, no game.
@@ -98,7 +100,7 @@ def main():
         tags = [f[1] for f in seen]
         check("a joiner gets ROSTER, WELCOME, START, then the round state",
               tags[:4] == [m.TAG["roster"], m.TAG["welcome"], m.TAG["start"], m.TAG["round"]], tags)
-        check("every envelope says proto 22", m.PROTO == 22 and all(f[0] == 22 for f in seen),
+        check("every envelope says proto 23", m.PROTO == 23 and all(f[0] == 23 for f in seen),
               [f[0] for f in seen])
         rd = m.parse_round(seen[-1][2]) if seen and seen[-1][1] == m.TAG["round"] else None
         check("Take a Ride snapshot: mode 0, round 1, live, Alice playing, no team, score 0",
@@ -147,12 +149,13 @@ def main():
         check("a leaver's row goes, the round goes on", rd_l == (0, m.ROUND_PHASE_LIVE, 1,
               [(1, m.ROUND_PLAYER_PLAYING, -1, 0)]), rd_l)
 
-        # -- a proto-21 peer is refused
-        old, _to = connect(server, "Old", proto=21)
-        f = recv_env(old)
-        check("a proto-21 HELLO is refused with REJECT VERSION",
-              f is not None and f[1] == m.TAG["reject"] and f[2][0] == 2, f and (f[1], f[2][:1]))
-        old.close()
+        # -- proto-21 and proto-22 peers are refused
+        for proto in (21, 22):
+            old, _to = connect(server, "Old%d" % proto, proto=proto)
+            f = recv_env(old)
+            check("a proto-%d HELLO is refused with REJECT VERSION" % proto,
+                  f is not None and f[1] == m.TAG["reject"] and f[2][0] == 2, f and (f[1], f[2][:1]))
+            old.close()
         m.send_frame(alice, m.TAG["leave"], b"")
         alice.close()
         bob.close()

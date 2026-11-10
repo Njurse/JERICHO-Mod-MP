@@ -33,7 +33,9 @@ def main():
         fails += 0 if ok else 1
 
     check("DEFAULTS gamemode is 0", d.DEFAULTS.get("gamemode") == 0, d.DEFAULTS.get("gamemode"))
-    check("mode 0 is TAKE A RIDE", m.mode_name(0) == "TAKE A RIDE" and m.GAMEMODE_NAMES == {0: "TAKE A RIDE"})
+    check("mode 0 is TAKE A RIDE", m.mode_name(0) == "TAKE A RIDE")
+    check("the modes are 0 TAKE A RIDE, 1 FOX N HOUNDS, 2 CAR BOMB TAG", m.GAMEMODE_NAMES ==
+          {0: "TAKE A RIDE", 1: "FOX N HOUNDS", 2: "CAR BOMB TAG"}, m.GAMEMODE_NAMES)
     check("an unknown id is named '-'", m.mode_name(7) == "-")
     check("no mode keys in DEFAULTS", not any(k.startswith("mode") or k.startswith("team") for k in d.DEFAULTS),
           [k for k in d.DEFAULTS if k.startswith(("mode", "team"))])
