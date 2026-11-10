@@ -24,7 +24,7 @@
 #include "convert.h"	/* _RotMatrixY: a car's box is built from its matrix */
 #include "cosmetic.h"	/* car_cosmetics[slot]: the box a rebuilt car needs */
 #include "gamesnd.h"	/* CarHasSiren: whether a model has a siren, and its bank/sample */
-#include "sound.h"		/* Start3DSoundVolPitch: the engine's own 3D sound call */
+#include "sound.h"		/* StartSound / Start3DSoundVolPitch / SetChannelPosition3 */
 #include "jer_sound.h"	/* jer_sound_ensure: a voice a module may keep (never starving SFX) */
 #include "jer_carexplode.h"	/* bomb-tag wreck: dent, tumble, visual-only blasts */
 #include "jer_carglow.h"	/* the fox / bomb-car glow shell */
@@ -876,11 +876,26 @@ static int MpHudLerp(int cur, int tgt)
 	return cur + step;
 }
 
-/* Car Bomb Tag only, while LIVE: a 3D beep (SBK_ID_COUNTDOWN sample 0, not
+/* Car Bomb Tag only, while LIVE: a beep (SBK_ID_COUNTDOWN sample 0, not
  * the mission-23 clock tick) from the holder's car. Interval shrinks as the
- * clock runs down (1 s -> 200 ms approaching 10 s), then 100 ms at or under
- * 10 s, and every other frame under 5 s so the short beeps smear into a tone. */
-static void MpMarkBeepBomb(CAR_DATA* cp, int remMs, int fullMs)
+ * clock runs down (1 s -> 400 ms approaching 10 s), then 200 ms at or under
+ * 10 s, and every 4 frames under 5 s so the short beeps smear into a tone.
+ *
+ * Start3DSoundVolPitch always binds srcvelocity to dummylong (sound.c:645)
+ * and then ComputeDoppler (sound.c:545) uses srcVel - camera_vel. The
+ * per-frame DoDopplerSFX loop (gamesnd.c) re-applies that via
+ * SetChannelPosition3 for any channel that still has a srcposition. A
+ * local holder's beep would therefore doppler against the chase camera's
+ * velocity as if the source were parked in the world. For the local
+ * holder, StartSound (sound.c:585) is the non-doppler path: srcposition
+ * is NULL, CompleteSoundSetup applies pitch with no dopplerScale, and
+ * the update loop skips it. Volume stays -1500, which is already the
+ * point-blank 3D level (CalculateVolume floors distance at 1024).
+ * Remote holders stay positional: Start3DSoundVolPitch plus
+ * SetChannelPosition3 on the live car pose and linearVelocity (the same
+ * pairing engine and siren sounds use) so source velocity is not left
+ * at zero. */
+static void MpMarkBeepBomb(CAR_DATA* cp, int remMs, int fullMs, int localHolder)
 {
 	int interval, pitch;
 
@@ -888,9 +903,9 @@ static void MpMarkBeepBomb(CAR_DATA* cp, int remMs, int fullMs)
 		return;
 
 	if (remMs < 5000)
-		interval = 2;
+		interval = 4;
 	else if (remMs <= 10000)
-		interval = 3;
+		interval = 6;
 	else
 	{
 		int span = fullMs - 10000;
@@ -899,10 +914,10 @@ static void MpMarkBeepBomb(CAR_DATA* cp, int remMs, int fullMs)
 		if (span < 1)
 			span = 1;
 
-		ms = 200 + (int)(((long)(remMs - 10000) * 800) / span);
+		ms = 400 + (int)(((long)(remMs - 10000) * 600) / span);
 		interval = (ms * 30 + 500) / 1000;
-		if (interval < 3)
-			interval = 3;
+		if (interval < 6)
+			interval = 6;
 	}
 
 	if (gMpMarkTickFrame >= 0 && (int)gMp.frame - gMpMarkTickFrame < interval)
@@ -917,9 +932,22 @@ static void MpMarkBeepBomb(CAR_DATA* cp, int remMs, int fullMs)
 	if (pitch > 5120)
 		pitch = 5120;
 
-	Start3DSoundVolPitch(-1, jer_carexplode_bank(), jer_carexplode_beep_sample(),
-		cp->hd.where.t[0], cp->hd.where.t[1], cp->hd.where.t[2],
-		-1500, pitch);
+	if (localHolder)
+	{
+		StartSound(-1, jer_carexplode_bank(), jer_carexplode_beep_sample(),
+			-1500, pitch);
+		return;
+	}
+
+	{
+		int chan = Start3DSoundVolPitch(-1, jer_carexplode_bank(), jer_carexplode_beep_sample(),
+			cp->hd.where.t[0], cp->hd.where.t[1], cp->hd.where.t[2],
+			-1500, pitch);
+
+		if (chan >= 0)
+			SetChannelPosition3(chan, (VECTOR*)cp->hd.where.t,
+				(LONGVECTOR3*)cp->st.n.linearVelocity, -1500, pitch, 0);
+	}
 }
 
 static void MpMarkGlowFor(int marked, int myId, int bomb)
@@ -1118,7 +1146,7 @@ static void MpMarkPresentTick(void)
 			if (full < 15000)
 				full = 15000;
 
-			MpMarkBeepBomb(markedCar, rem, full);
+			MpMarkBeepBomb(markedCar, rem, full, marked == myId);
 		}
 		else
 			gMpMarkTickFrame = -1;
