@@ -294,6 +294,10 @@ int MpLocalCarChosen(void);
  * 0 in Take a Ride and outside a match. */
 int MpRoundStartHoldsCar(void);
 
+/* Cops n Robbers: the getaway driver's id while a round is live, else -1 (the
+ * map flashes their blip red/blue, mp_map.c). */
+int MpMarkChaseGetaway(void);
+
 /* Persistent "You're the fox!" / "<name> is the fox!" centre line, drawn
  * from DRAW_OVERLAY while Fox N Hounds is live. */
 void MpMarkDrawOverlay(void);

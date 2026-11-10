@@ -41,6 +41,17 @@ EV_MOVED = 0x04
 EV_COUNTDOWN = 0x08
 EV_LOBBY = 0x10              # retired: never set
 
+# Cops n Robbers (mp_mark.h MP_MARK_CNR_*)
+CNR_HIT_COOLDOWN_MS = 1000
+CNR_HIT_MAX = 20
+CNR_HIT_POINTS = 5
+CNR_BUST_POINTS = 1000
+CNR_DRIVE_BASE = 10
+CNR_DRIVE_BONUS = 5
+CNR_DRIVE_TOPSPEED = 300
+CNR_ESCAPE_DIST = 32000
+CNR_ESCAPE_HOLD_MS = 5000
+
 
 def clamp_minutes(minutes):
     """MpMarkClampMinutes: 1..5. A missing/unreadable value is the caller's (3)."""
@@ -82,10 +93,31 @@ class MarkReferee:
         self.present = set()
         self.ready = set()           # has picked a car (MpMarkReady); any id, present or not
         self.remain_ms = {}
+        # MODE_TIMER_GETAWAY (Cops n Robbers)
+        self.last_getaway = -1
+        self.first_pick = -1
+        self.heat = 0
+        self.drive_acc = 0
+        self.hit_until = {}
 
     @property
     def active(self):
         return self.timer != m.MODE_TIMER_NONE
+
+    def _one_clock(self):
+        return self.timer in (m.MODE_TIMER_SHARED, m.MODE_TIMER_GETAWAY)
+
+    def _next_getaway(self, rnd):
+        """MpMarkNextGetaway: random first (kept across an aborted count), then in turn."""
+        if self.last_getaway < 0:
+            if self.first_pick not in self.present:
+                self.first_pick = self._pick(rnd)
+            return self.first_pick
+        for i in range(1, m.MAX_PLAYERS + 1):
+            pid = (self.last_getaway + i) % m.MAX_PLAYERS
+            if pid in self.present:
+                return pid
+        return -1
 
     def _full_ms(self):
         return self.minutes * 60 * 1000
@@ -97,7 +129,7 @@ class MarkReferee:
     def _fresh_clocks(self):
         personal = self.timer == m.MODE_TIMER_PERSONAL
         self.remain_ms = {pid: (self._full_ms() if personal else 0) for pid in self.present}
-        self.shared_ms = self._full_ms() if self.timer == m.MODE_TIMER_SHARED else 0
+        self.shared_ms = self._full_ms() if self._one_clock() else 0
 
     def _startable(self):
         """MpMarkStartable: the mode's wait (min players, and wait-for-cars)."""
@@ -116,14 +148,23 @@ class MarkReferee:
         self.countdown_first = False
         self.first_map = False
         self._fresh_clocks()
-        self.marked = self._pick(rnd)
+        if self.timer == m.MODE_TIMER_GETAWAY:
+            if self.marked not in self.present:
+                self.marked = self._next_getaway(rnd)
+            self.last_getaway = self.marked
+            self.heat = 0
+            self.drive_acc = 0
+            self.hit_until = {}
+        else:
+            self.marked = self._pick(rnd)
         self.cooldown_until = self.clock_ms + TAG_COOLDOWN_MS
         self.seq = (self.seq + 1) & 0xFFFF
         self.revision += 1
 
-    def _countdown(self, first):
+    def _countdown(self, first, rnd=0):
         self.phase = m.MARK_PHASE_COUNTDOWN
-        self.marked = -1
+        self.marked = self._next_getaway(rnd) if self.timer == m.MODE_TIMER_GETAWAY else -1
+        self.heat = 0
         self.winner = -1
         self.countdown_first = bool(first)
         if first and self.first_sec > 0:
@@ -140,7 +181,7 @@ class MarkReferee:
     def _start(self, rnd):
         first = self.first_map and self.first_sec > 0
         if first or self.round_sec > 0:
-            self._countdown(first)
+            self._countdown(first, rnd)
             if self.countdown_ms > 0:
                 return EV_COUNTDOWN
         self._begin(rnd)
@@ -172,7 +213,10 @@ class MarkReferee:
                 if pid == self.marked:
                     marked_left = True
         ev = 0
-        if marked_left and self.phase == m.MARK_PHASE_LIVE:
+        if marked_left and self.phase == m.MARK_PHASE_LIVE and self.timer == m.MODE_TIMER_GETAWAY:
+            self._end(-1)                       # the getaway left: nobody won it
+            ev |= EV_END
+        elif marked_left and self.phase == m.MARK_PHASE_LIVE:
             self.marked = self._pick(rnd)
             self.cooldown_until = self.clock_ms + TAG_COOLDOWN_MS
             self.seq = (self.seq + 1) & 0xFFFF
@@ -219,6 +263,7 @@ class MarkReferee:
         if self.phase == m.MARK_PHASE_COUNTDOWN:
             if not self._startable():
                 self.phase = m.MARK_PHASE_WAITING
+                self.marked = -1
                 self.countdown_ms = 0
                 self.countdown_total_ms = 0
                 self.countdown_first = False
@@ -245,7 +290,8 @@ class MarkReferee:
                 self.shared_ms -= ms
                 if self.shared_ms <= 0:
                     self.shared_ms = 0
-                    self._end(-1)                   # the holder (still `marked`) loses
+                    # bomb: the holder loses; Cops n Robbers: the getaway lasted and wins
+                    self._end(self.marked if self.timer == m.MODE_TIMER_GETAWAY else -1)
                     return EV_END
             return 0
         # ENDED
@@ -262,7 +308,7 @@ class MarkReferee:
 
     def contact(self, a, b):
         """MpMarkContact: True when the contact moved the mark."""
-        if self.phase != m.MARK_PHASE_LIVE or not self.active:
+        if self.phase != m.MARK_PHASE_LIVE or not self.active or self.timer == m.MODE_TIMER_GETAWAY:
             return False
         if a == b or a not in self.present or b not in self.present:
             return False
@@ -280,7 +326,55 @@ class MarkReferee:
         self.revision += 1
         return True
 
+    def hit(self, a, b, strength):
+        """MpMarkHit: (points the cop earned, EV_* bits)."""
+        if self.phase != m.MARK_PHASE_LIVE or self.timer != m.MODE_TIMER_GETAWAY:
+            return 0, 0
+        if a == b or a not in self.present or b not in self.present:
+            return 0, 0
+        if self.marked == a:
+            cop = b
+        elif self.marked == b:
+            cop = a
+        else:
+            return 0, 0
+        if strength <= 0 or self.clock_ms < self.hit_until.get(cop, 0):
+            return 0, 0
+        strength = min(strength, CNR_HIT_MAX)
+        pts = strength * CNR_HIT_POINTS
+        self.hit_until[cop] = self.clock_ms + CNR_HIT_COOLDOWN_MS
+        self.heat += pts
+        self.revision += 1
+        if self.heat >= CNR_BUST_POINTS:
+            self.heat = CNR_BUST_POINTS
+            self._end(-1)                       # busted: the cops win
+            return pts, EV_END
+        return pts, 0
+
+    def drive(self, ms, speed):
+        """MpMarkDrive: the getaway's whole points for `ms` alive at `speed`."""
+        if self.phase != m.MARK_PHASE_LIVE or self.timer != m.MODE_TIMER_GETAWAY or self.marked < 0 or ms <= 0:
+            return 0
+        speed = max(0, min(CNR_DRIVE_TOPSPEED, int(speed)))
+        den = 1000 * CNR_DRIVE_TOPSPEED
+        self.drive_acc += ms * (CNR_DRIVE_BASE * CNR_DRIVE_TOPSPEED + CNR_DRIVE_BONUS * speed)
+        pts = self.drive_acc // den
+        self.drive_acc %= den
+        return pts
+
+    def escape(self):
+        """MpMarkEscape: the getaway is clear of every cop -> it wins now."""
+        if self.phase != m.MARK_PHASE_LIVE or self.timer != m.MODE_TIMER_GETAWAY or self.marked < 0:
+            return 0
+        self._end(self.marked)
+        return EV_END
+
     def to_bytes(self):
+        if self.timer == m.MODE_TIMER_GETAWAY:   # the getaway's row carries the heat meter
+            rows = [(pid, self.heat if pid == self.marked else 0,
+                     m.MARK_ENTRY_F_READY if pid in self.ready else 0) for pid in sorted(self.present)]
+            return m.build_mark(self.gamemode, self.phase, self.marked, self.winner, self.minutes,
+                                self.seq, _ds(self.shared_ms), rows, _ds(self.countdown_ms))
         rows = [(pid, _ds(self.remain_ms.get(pid, 0)),
                  m.MARK_ENTRY_F_READY if pid in self.ready else 0) for pid in sorted(self.present)]
         return m.build_mark(self.gamemode, self.phase, self.marked, self.winner, self.minutes,

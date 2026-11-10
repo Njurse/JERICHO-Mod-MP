@@ -225,7 +225,14 @@ static int AdjGameMode(void* ud, int dir)
 /* TIME: a timer mode's clock (Fox N Hounds: each player's; Car Bomb Tag: the shared
  * one), 1..5 minutes, default 3. Shown only while the selected mode has a clock, and
  * like the mode itself only taken before the match runs and never saved. */
-static void LblModeTime(void* ud, char* o, int n) { (void)ud; snprintf(o, n, "Time: < %d MIN >", MpSessionModeMinutes()); }
+static void LblModeTime(void* ud, char* o, int n)
+{
+	(void)ud;
+	/* Cops n Robbers: the clock is how long the getaway has to last (1..5 min) */
+	snprintf(o, n, "%s: < %d MIN >",
+		MpModeTimerKind(gMp.gamemode) == MP_MODE_TIMER_GETAWAY ? "Getaway time" : "Time",
+		MpSessionModeMinutes());
+}
 
 static int AdjModeTime(void* ud, int dir)
 {

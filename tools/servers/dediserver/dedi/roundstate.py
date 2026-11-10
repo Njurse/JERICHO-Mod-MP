@@ -29,9 +29,19 @@ class RoundState:
             self.gamemode = int(gamemode)
         self.number = 1 if self.number >= 0xFFFF else self.number + 1
         self.phase = m.ROUND_PHASE_LIVE
+        keep = m.mode_keeps_score(self.gamemode)  # Cops n Robbers: the match total
         for row in self.players.values():
-            row.update(state=m.ROUND_PLAYER_PLAYING, team=-1, score=0)
+            row.update(state=m.ROUND_PLAYER_PLAYING, team=-1, score=row["score"] if keep else 0)
         self.revision += 1
+
+    def add_score(self, pid, points):
+        """MpRoundAddScore: True when the row exists."""
+        row = self.players.get(int(pid))
+        if row is None or not points:
+            return False
+        row["score"] = max(-0x7FFFFFFF, min(0x7FFFFFFF, row["score"] + int(points)))
+        self.revision += 1
+        return True
 
     def end(self):
         if self.phase != m.ROUND_PHASE_ENDED:

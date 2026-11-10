@@ -1,8 +1,8 @@
 # Game modes
 
-Status: **Phase POC, two timer modes.** There are three modes: Take a Ride (id 0),
+Status: **Phase POC, three timer modes.** There are four modes: Take a Ride (id 0),
 which plays exactly as it did before the framework existed; Fox N Hounds (id 1);
-and Car Bomb Tag (id 2). Phase 1 added the round state every mode reads, on the
+Car Bomb Tag (id 2); and Cops n Robbers (id 3, mp 0.23.0, see its section). Phase 1 added the round state every mode reads, on the
 wire as `JPRD` (protocol 22). Phase POC adds the marked player and the clocks, on
 the wire as `JPMK` (protocol 23, mp module 0.20.0), and uses two core APIs from
 JERICHO 0.13.11+: `jer_arrow_on_car` and `jer_music_force` (core PR #94). mp module
@@ -26,7 +26,12 @@ bomb beep without doppler when you hold it (`StartSound`, no 3D velocity)
 and halves the beep pace (1 s to 400 ms approaching 10 s, then 200 ms, then
 every 4 frames under 5 s). The fox/bomb holo is a slightly scaled low-LOD
 body (NewLowCarModel vlist + those polys), not the hi-LOD dent dump fed
-to low-LOD indices. Everything below "Not yet" is design, not code.
+to low-LOD indices. 0.23.0 (still protocol 23: mode 3 is a new value of the
+existing `gamemode` byte; an older build names it `-` and plays it as Take a
+Ride) adds Cops n Robbers, puts the timer panel back at the top centre, makes
+every road-aligned spawn face along its lane, and draws the cop sight cones and
+the felony flash on the multiplayer maps. Everything below "Not yet" is design,
+not code.
 
 ## The model
 
@@ -47,11 +52,12 @@ A game mode is a row in one table, `kModes[]` in `mp_mode.c`. The row is an
 | `firstCountdownSec` | once per map load, after the wait, an N..1 count then GO (0 = skip) | 0 |
 | `roundCountdownSec` | later rounds: a 1 s GET READY then an N..1 count then GO (0 = skip) | 0 |
 | `carChangeLocked` | no car change while a round runs | 0 |
-| `carPool` | car-pool filter id, `MP_MODE_CARPOOL_*` | `ALL` |
-| `spawn` | spawn rule, `MP_MODE_SPAWN_SESSION` / `_CLUSTER` (seated as SESSION, then a start cluster each round) | `SESSION` |
+| `carPool` | car-pool filter id, `MP_MODE_CARPOOL_*`: `ALL`, or `ROLE` (police cars for cops, the rest for the getaway) | `ALL` |
+| `spawn` | spawn rule, `MP_MODE_SPAWN_SESSION` / `_CLUSTER` (seated as SESSION, then a start cluster each round) / `_CHASE` (the getaway on a random road, the cops behind it) | `SESSION` |
 | `mapCycle` | the lobby may cycle maps | 0 |
-| `timer` | `MP_MODE_TIMER_NONE` / `_PERSONAL` (a clock per player) / `_SHARED` (one clock) | none |
+| `timer` | `MP_MODE_TIMER_NONE` / `_PERSONAL` (a clock per player) / `_SHARED` (one clock) / `_GETAWAY` (one clock the getaway must outlast) | none |
 | `music` | `MP_MODE_MUSIC_AUTO` / `_CALM` / `_PURSUIT` while a round is live (= `JER_MUSIC_*`) | auto |
+| `keepScore` | 1 = a player's score runs across rounds (`MpModeKeepsScore`) | 0 |
 
 The rows today:
 
@@ -60,8 +66,9 @@ The rows today:
 | 0 | `TAKE A RIDE` | none | auto | off (`0, 0, 0, 0`) | `SESSION` |
 | 1 | `FOX N HOUNDS` | personal | pursuit | `2, 1, 5, 3` | `CLUSTER` |
 | 2 | `CAR BOMB TAG` | shared | pursuit | `2, 1, 5, 3` | `CLUSTER` |
+| 3 | `COPS N ROBBERS` | getaway | pursuit | `2, 1, 5, 3` | `CHASE` (car pool `ROLE`, scores kept) |
 
-All three are selectable. Apart from `timer`, `music`, the four pre-game fields
+All four are selectable. Apart from `timer`, `music`, the four pre-game fields
 and `spawn`, modes 1 and 2 take every Take a Ride answer: instant respawn, live
 late join, no teams, no car pool.
 
@@ -217,7 +224,7 @@ reaches 0:00 loses, and everyone else wins.
   apart (`MP_JOIN_CLEAR` + 1200, the join spawn's retry step). A spot must be
   on a road, within 9600 units of the anchor, and `MP_JOIN_CLEAR` (2000) from
   every other player's car; it is streamed (`MpWarpStreamTo`) and landed on
-  (`MpPlaceOnGround`). Each car faces its own random heading (0..4095), stopped
+  (`MpPlaceOnGround`). Each car faces along its road's lane (0.23.0; a random heading only where the road gives none), stopped
   and repaired. If the ground is still streaming, placement retries for up to
   2 s, then the pause-menu warp beside the anchor (`MpWarpToPlayer`) is the
   fallback; failing that the already-reset car starts where it is, and the log
@@ -319,7 +326,7 @@ contacts, and the host originates every state.
 - The pre-game lobby: `5`, `4`, `3`, `2`, `1` (priority 4, 1 s each).
 - The countdown: `GET READY`, `3`, `2`, `1` (priority 4, 1 s), then the GO line
   above (priority 4, 3 s). Each count is shown once and only ever downward.
-- The clock as a `jer_hud_panel` at the top right: `PRE-GAME n`,
+- The clock as a `jer_hud_panel` at the top centre (0.22.0 to 0.22.3: top right): `PRE-GAME n`,
   `WAITING FOR PLAYERS`, `WAITING FOR CARS r/n`,
   `FOX m:ss` / `HOUND m:ss`, or `BOMB m:ss` / `TIMER m:ss`. It fades to cream
   `(128, 128, 64)` while the viewer's clock is running, and to mid grey
@@ -360,11 +367,77 @@ contacts, and the host originates every state.
   The fox uses the player's colour if they have one set, otherwise cyan; the
   bomb car is always red.
 
+## Cops n Robbers (mode 3, mp 0.23.0)
+
+One player drives the getaway; everyone else is a cop. The referee is the same
+`mp_mark.c` / `dedi/markref.py` pair, timer kind `MP_MODE_TIMER_GETAWAY`, kept in
+lockstep by `run_mode_check.py`. Nothing new rides the wire: the getaway is
+`MP_MARK.marked`, the clock is `sharedDs`, and the getaway's row's `remainDs`
+carries the cops' damage meter (0..1000 points; every other row 0).
+
+- **Who drives.** The getaway is named at COUNTDOWN, so every machine can place
+  its car and pick its role car before GO. The first is random, and kept if the
+  countdown is aborted; after that, the next present id after the last getaway,
+  wrapping, so everyone gets a turn. A getaway who left during the countdown is
+  replaced at GO; one who leaves mid-round ends it with no winner.
+- **Time.** The Time row reads `Getaway time` (1..5 minutes, the usual
+  `mode_time`). At 0:00 the getaway wins.
+- **The getaway's points.** `MP_MARK_CNR_DRIVE_BASE` (10) a second alive, plus up
+  to `MP_MARK_CNR_DRIVE_BONUS` (5) a second scaled by speed (full at
+  `MP_MARK_CNR_DRIVE_TOPSPEED`, 300 whole units/frame). `MpMarkDrive` returns
+  whole points and carries the remainder.
+- **The cops' points.** A contact between a cop and the getaway the host accepts
+  (the same engine contact / `MP_HIT` report / dedicated-server carstate test that
+  tags in Fox N Hounds) is a hit. Its strength is the contact's push in whole
+  units/frame (60% of the closing speed, capped at 20). The cop who made the
+  contact scores `5 x strength` (5..100), once a second per cop at most
+  (`MP_MARK_CNR_HIT_COOLDOWN_MS`). The same points fill the damage meter; a full
+  meter (`MP_MARK_CNR_BUST_POINTS`, 1000) is a bust: the round ends, no winner.
+  No tag ever moves the getaway.
+- **Escape.** The getaway also wins when it is at least
+  `MP_MARK_CNR_ESCAPE_DIST` (32000 world units, x/z, about twice the draw
+  distance) from EVERY cop with a car, held for `MP_MARK_CNR_ESCAPE_HOLD_MS`
+  (5 s). The host measures (`MpHostCnrTick`, `dedi/core.py _getaway_step`);
+  `MpMarkEscape` decides.
+- **Scores** are added as they are earned (`MpRoundAddScore` /
+  `RoundState.add_score`) and run across rounds (`keepScore`). The getaway's drive
+  points are banked into the round once a second. The pause-menu player list has
+  a `PTS` column in every timer mode.
+- **The start (`MP_MODE_SPAWN_CHASE`, `MpMarkChaseTick`).** Each round is
+  somewhere else on the map. The getaway: a random road anywhere on the map (the
+  map-wide join spawn, a random data-bearing region), facing along its lane. Each
+  cop waits for the getaway's new pose (moved more than 2000 units, or 2 s), then
+  walks back from it along the road in 1000-unit steps, taking the road's heading
+  at each step (the way closer to the getaway's), and lands facing the same way.
+  Distance behind, by the cop's rank among the cops (by id):
+  `4000 + rank x 3000 + random(0..1500)`, so 4000-5500, 7000-8500, 10000-11500,
+  ... (a spot not clear of other players walks on, at most 6000 further; a dead
+  end stops the walk). Fallbacks: a road spot that far behind in a straight line,
+  then the warp beside the getaway, then where the car is.
+- **Cars.** At COUNTDOWN a cop is put in the level's police car (model 0) and
+  the getaway out of it (the first of the level's own non-police cars), through
+  the pause picker's own change-car path. The picker's list is filtered to the
+  role (`MpModeFilterCarPoolRole`); a list with no police car is left as it is.
+  A car mod's imported police car with another model number is not a police car
+  here.
+- **What you see.** The top-centre panel reads `GETAWAY m:ss DMG n%` or
+  `COP m:ss DMG n%`; the centre line names the getaway from the countdown on; the
+  getaway's car glows red and has the red arrow over it on everyone else's
+  screen; the map flashes red/blue for the whole round on every machine
+  (`gJerMapForceFlash`, core), and the getaway's blip flashes red/blue.
+- **Police radio.** The engine's own cop phrases (the host city's phrase bank,
+  the one the level loaded), said from the cop players' cars on the engine's own
+  cues: `10/11` (+ heading) at GO, `6` when the damage meter rises, `15..17`
+  (+ heading) as chatter no sooner than the engine's 720-frame gap. The speaker
+  is the cop nearest the getaway; one line at a time per listener, and never
+  over the engine's own cop speech. Presentation only. There is no regional
+  police-radio setting in this tree to follow.
+
 ## Choosing a mode
 
 - **Listen host:** the Host page has a `Game mode: < ... >` row. It cycles the
   selectable rows only (`MpModeNextSelectable`): Take a Ride, Fox N Hounds, Car
-  Bomb Tag. In a timer mode a `Time: < N MIN >` row (1 to 5, wrapping) follows
+  Bomb Tag, Cops n Robbers. In a timer mode a `Time: < N MIN >` row (1 to 5, wrapping) follows
   it. Neither choice is saved: `MpSessionReset` puts them back to 0 and 3 minutes.
   `MpSetSessionGamemode` and `MpSetSessionModeMinutes` take a change only while
   the match is not running.
@@ -465,4 +538,7 @@ yet played in game. These are later phases, and none of them is wired:
 - Phase 3: team assignment (every team is none), forced team colours, and
   scoreboard columns. Score is carried and stays 0, and nothing draws it.
 - Later: arenas and mode spawn points, team radio, a mode options menu, Capture
-  the Flag, Cops n Robbers, map cycling, and the admin pause page.
+  the Flag, map cycling, and the admin pause page.
+- Cops n Robbers, not yet: an in-game pass; a nested role page in the join car
+  picker (the picker lives in carhacks); the regional police-radio choice;
+  recognising an imported police car.

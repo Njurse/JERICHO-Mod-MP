@@ -112,6 +112,8 @@ TAG_ARM_S = 4.0            # mp_session.c MP_HIT_ARM_FRAMES (120) at 30 Hz: a sp
 TAG_ROW_FRESH_S = 0.5      # the other car's row must be this recent to compare against
 TAG_REPORT_RADIUS = 1800   # a client's JPHI claim: twice the body scale, for the link lag
 FIXEDH = 4096              # the velocity fix point (1 world unit/frame << 12)
+HIT_PUSH = 60              # mp_session.c MP_HIT_PUSH: per-cent of the closing speed
+HIT_MAX_PUSH = 20          # mp_session.c MP_HIT_MAX_PUSH: whole units/frame
 
 
 def mode_minutes(cfg):
@@ -145,6 +147,29 @@ def contact_between(a, b, radius=TAG_RADIUS, min_closing=TAG_MIN_CLOSING):
         return True
     closing = ((a[3] - b[3]) * dx + (a[4] - b[4]) * dy + (a[5] - b[5]) * dz) / d / FIXEDH
     return closing >= min_closing
+
+
+def contact_strength(a, b):
+    """Cops n Robbers' hit strength from two poses: mp_session.c MpContactPush's
+    push (60% of the closing speed, whole units/frame, capped at 20); 0 = none."""
+    if a is None or b is None:
+        return 0
+    dx, dy, dz = b[0] - a[0], b[1] - a[1], b[2] - a[2]
+    d = math.sqrt(dx * dx + dy * dy + dz * dz)
+    if d == 0:
+        return 0
+    closing = abs(((a[3] - b[3]) * dx + (a[4] - b[4]) * dy + (a[5] - b[5]) * dz) / d / FIXEDH)
+    return min(HIT_MAX_PUSH, int(closing) * HIT_PUSH // 100)
+
+
+def impulse_strength(impulse):
+    """A JPHI's impulse (normal * push << 12) back to its push, capped."""
+    v = math.sqrt(sum(float(c) * c for c in impulse)) / FIXEDH
+    return max(0, min(HIT_MAX_PUSH, int(v)))
+
+
+def flat_dist(a, b):
+    return math.hypot(b[0] - a[0], b[2] - a[2])
 
 
 CONFIG_NAME = "dediserver.json"
@@ -440,6 +465,7 @@ class Dedicated:
             self.round.begin()
         self.round_sent = -1     # the revision last broadcast
         self.mark_sent = -1      # the JPMK revision last broadcast
+        self.escape_ms = 0       # Cops n Robbers: how long the getaway has been clear
         self.mark_rng = random.Random()
         self.car_seen = {}       # playerId -> monotonic time its carstate row arrived
         self.joined_at = {}      # playerId -> monotonic time it joined (the tag arm)
@@ -765,6 +791,8 @@ class Dedicated:
             ev |= self.mark.tick(ms, self.mark_rng.randrange(1 << 15))
             if ev & markref.EV_BEGIN:
                 self.round.begin()
+                self.escape_ms = 0
+            ev |= self._getaway_step(ms)
             if ev & markref.EV_END:
                 self.round.end()
             marked, winner = self.mark.marked, self.mark.winner
@@ -784,6 +812,45 @@ class Dedicated:
             self.log.info("mark: the marked player left - player %d is marked now" % marked)
         return bool(ev & (markref.EV_BEGIN | markref.EV_END | markref.EV_COUNTDOWN | markref.EV_LOBBY))
 
+    def _getaway_step(self, ms):
+        """Cops n Robbers, under the lock: the getaway's drive points and the escape
+        (clear of every cop by CNR_ESCAPE_DIST for CNR_ESCAPE_HOLD_MS). EV_* bits."""
+        if self.mark.timer != m.MODE_TIMER_GETAWAY or self.mark.phase != m.MARK_PHASE_LIVE:
+            return 0
+        g = self.mark.marked
+        mine = car_pose(self.cars[g]) if g in self.cars else None
+        speed = math.hypot(mine[3], mine[5]) / FIXEDH if mine is not None else 0
+        pts = self.mark.drive(ms, int(speed))
+        if pts:
+            self.round.add_score(g, pts)
+        cops = [car_pose(self.cars[o]) for o in self.mark.present if o != g and o in self.cars]
+        cops = [c for c in cops if c is not None]
+        if mine is not None and cops and all(flat_dist(mine, c) >= markref.CNR_ESCAPE_DIST for c in cops):
+            self.escape_ms += ms
+        else:
+            self.escape_ms = 0
+        if self.escape_ms >= markref.CNR_ESCAPE_HOLD_MS:
+            self.escape_ms = 0
+            ev = self.mark.escape()
+            if ev & markref.EV_END:
+                self.log.info("mark: player %d got away - clear of every cop" % g)
+            return ev
+        return 0
+
+    def _getaway_hit(self, a, b, strength, why):
+        """Cops n Robbers, under the lock: a contact is a hit, scored for the cop."""
+        pts, ev = self.mark.hit(a, b, strength)
+        if not pts:
+            return False
+        cop = b if a == self.mark.marked else a
+        self.round.add_score(cop, pts)
+        self.log.info("mark: player %d hit the getaway for %d (%s), heat %d/%d"
+                      % (cop, pts, why, self.mark.heat, markref.CNR_BUST_POINTS))
+        if ev & markref.EV_END:
+            self.round.end()
+            self.log.info("mark: round %d over - busted" % self.round.number)
+        return True
+
     def broadcast_mark_if_due(self, force=False):
         with self.lock:
             due = force or self.mark.revision != self.mark_sent
@@ -797,13 +864,16 @@ class Dedicated:
     def mark_loop(self):
         last = time.monotonic()
         last_send = 0.0
+        last_round = 0.0
         while not self.stop.wait(MARK_TICK_S):
             now = time.monotonic()
             ms = int((now - last) * 1000)
             last += ms / 1000.0
             try:
-                if self._mark_step(ms):
-                    self.broadcast_round_if_changed()
+                # scores move every step in Cops n Robbers: JPRD at most once a second
+                if self._mark_step(ms) or now - last_round >= 1.0:
+                    if self.broadcast_round_if_changed():
+                        last_round = now
                 every = (MARK_SEND_LIVE_S if self.mark.phase in (m.MARK_PHASE_LIVE, m.MARK_PHASE_COUNTDOWN)
                          else MARK_SEND_IDLE_S)
                 if self.broadcast_mark_if_due(force=now - last_send >= every):
@@ -833,13 +903,22 @@ class Dedicated:
                     continue
                 if now - self.car_seen.get(other, 0) > TAG_ROW_FRESH_S:
                     continue
-                if contact_between(mine, car_pose(self.cars[other])) and self.mark.contact(pid, other):
+                theirs = car_pose(self.cars[other])
+                if self.mark.timer == m.MODE_TIMER_GETAWAY:
+                    if contact_between(mine, theirs) and \
+                            self._getaway_hit(pid, other, contact_strength(mine, theirs), "carstate contact"):
+                        moved = -1
+                        break
+                    continue
+                if contact_between(mine, theirs) and self.mark.contact(pid, other):
                     moved = self.mark.marked
                     break
         if moved is None:
             return False
-        self.log.info("mark: tag %d, player %d is marked (carstate contact)" % (pid, moved))
+        if moved >= 0:
+            self.log.info("mark: tag %d, player %d is marked (carstate contact)" % (pid, moved))
         self.broadcast_mark_if_due()
+        self.broadcast_round_if_changed()
         return True
 
     def mark_hit_report(self, pid, payload):
@@ -847,7 +926,8 @@ class Dedicated:
         cars the server keeps are near each other too."""
         if len(payload) < m.HIT.size:
             return False
-        target, flags = m.HIT.unpack_from(payload, 0)[:2]
+        f = m.HIT.unpack_from(payload, 0)
+        target, flags, impulse = f[0], f[1], f[2:5]
         if flags & m.HIT_F_TRAFFIC:
             return False
         now = time.monotonic()
@@ -858,11 +938,19 @@ class Dedicated:
                 return False
             a = car_pose(self.cars[pid]) if pid in self.cars else None
             b = car_pose(self.cars[target]) if target in self.cars else None
-            if not contact_between(a, b, TAG_REPORT_RADIUS, None) or not self.mark.contact(pid, target):
+            if self.mark.timer == m.MODE_TIMER_GETAWAY:
+                if not contact_between(a, b, TAG_REPORT_RADIUS, None) or \
+                        not self._getaway_hit(pid, target, impulse_strength(impulse), "reported contact"):
+                    return False
+                moved = -1
+            elif not contact_between(a, b, TAG_REPORT_RADIUS, None) or not self.mark.contact(pid, target):
                 return False
-            moved = self.mark.marked
-        self.log.info("mark: tag %d-%d, player %d is marked (reported contact)" % (pid, target, moved))
+            else:
+                moved = self.mark.marked
+        if moved >= 0:
+            self.log.info("mark: tag %d-%d, player %d is marked (reported contact)" % (pid, target, moved))
         self.broadcast_mark_if_due()
+        self.broadcast_round_if_changed()
         return True
 
     def note_car_pick(self, conn, payload):

@@ -415,6 +415,72 @@ def check_bombtag(tmp):
         server.stop.set()
 
 
+def check_copsrobbers(tmp):
+    server = server_for(tmp, gamemode=m.GAMEMODE_COPSROBBERS, mode_time=1)
+    try:
+        a = connect(server, "Ann")
+        frames_until(a, m.TAG["mark"])
+        b = connect(server, "Ben")
+        frames_until(b, m.TAG["mark"])
+        pick(a)
+        pick(b)
+        check("CnR: both picks land", wait_ready(server, 1) and wait_ready(server, 2))
+        server._mark_step(0)
+        g = server.mark.marked
+        check("CnR: the getaway is named at the countdown", server.mark.phase == m.MARK_PHASE_COUNTDOWN
+              and g in (1, 2), (server.mark.phase, g))
+        server._mark_step(5000)
+        cop = 3 - g
+        check("CnR: GO, the same getaway, one shared 1:00", server.mark.phase == m.MARK_PHASE_LIVE and
+              server.mark.marked == g and server.mark.shared_ms == 60000)
+        socks = {1: a, 2: b}
+        arm_everyone(server)
+        m.send_frame(socks[g], m.TAG["carstate"], carstate(g, 0, 0, vx=300 * 4096))
+        m.send_frame(socks[cop], m.TAG["carstate"], carstate(cop, 20000, 0))
+        settle(server, [a, b])
+        with server.lock:               # the wall-clock loop scores too: measure one step
+            s0 = server.round.players[g]["score"]
+            server.mark.drive_acc = 0
+            server._getaway_step(1000)
+            s1 = server.round.players[g]["score"]
+        check("CnR: a second alive at top speed = 15 points", s1 - s0 == 15, (s0, s1))
+        m.send_frame(socks[g], m.TAG["carstate"], carstate(g, 0, 0))
+        m.send_frame(socks[cop], m.TAG["carstate"], carstate(cop, 600, 0, vx=-10 * 4096))
+        settle(server, [a, b])
+        check("CnR: a cop's contact scores for the cop (push 6 -> 30), the getaway stays",
+              server.round.players[cop]["score"] == 30 and server.mark.marked == g and
+              server.mark.heat == 30, (server.round.players[cop], server.mark.heat))
+        m.send_frame(socks[cop], m.TAG["carstate"], carstate(cop, 600, 0, vx=-10 * 4096))
+        settle(server, [a, b])
+        check("CnR: ...not again inside the cop's 1 s cooldown", server.round.players[cop]["score"] == 30)
+        mk = last_mark(a)
+        m.send_frame(socks[cop], m.TAG["carstate"], carstate(cop, 40000, 0))
+        m.send_frame(socks[g], m.TAG["carstate"], carstate(g, 0, 0))
+        settle(server, [a, b])
+        server._mark_step(4900)
+        check("CnR: clear of every cop, held 4.9 s: still live", server.mark.phase == m.MARK_PHASE_LIVE)
+        server._mark_step(100)
+        check("CnR: 5 s clear -> the getaway wins early", server.mark.phase == m.MARK_PHASE_ENDED and
+              server.mark.winner == g and server.mark.shared_ms > 0 and
+              server.round.phase == m.ROUND_PHASE_ENDED)
+        before = dict((pid, r["score"]) for pid, r in server.round.players.items())
+        server._mark_step(10000)
+        check("CnR: the next countdown names the other player", server.mark.phase == m.MARK_PHASE_COUNTDOWN
+              and server.mark.marked == cop, (server.mark.phase, server.mark.marked))
+        server._mark_step(4000)
+        check("CnR: round 2 keeps the scores", server.round.number == 2 and
+              all(server.round.players[p]["score"] >= v for p, v in before.items()),
+              (server.round.number, server.mark.phase, before, server.round.players))
+        server._mark_step(60000)
+        check("CnR: the getaway at 0:00 wins", server.mark.phase == m.MARK_PHASE_ENDED and
+              server.mark.winner == cop)
+        for s in (a, b):
+            m.send_frame(s, m.TAG["leave"], b"")
+            s.close()
+    finally:
+        server.stop.set()
+
+
 def check_mark_loop(tmp):
     """The real wall-clock loop: two joiners -> live within a few ticks, and the
     cadence keeps re-sending the snapshot."""
@@ -487,6 +553,7 @@ def main():
     check_minutes(tmp)
     check_foxhounds(tmp)
     check_bombtag(tmp)
+    check_copsrobbers(tmp)
     check_mark_loop(tmp)
     check_take_a_ride(tmp)
     print("%d failure(s)" % fails)
