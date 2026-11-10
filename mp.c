@@ -2927,6 +2927,14 @@ static int MpOnNetInput(void* userdata, void* args)
 				in->pad = 0;
 				in->handled = 1;
 			}
+			else if (MpRoundStartHoldsCar())
+			{
+				/* ...and the ROUND START holds everyone on the line for the 3-2-1
+				 * (Fox N Hounds / Car Bomb Tag; never Take a Ride). The same swallow,
+				 * bot included; GO (the referee's LIVE) gives the pad back. */
+				in->pad = 0;
+				in->handled = 1;
+			}
 			else if (MpBotEnabled())
 			{
 				if ((gMp.frame % 60) == 0 && gMpCtx != NULL)
@@ -3074,9 +3082,10 @@ static int MpOnPedInput(void* userdata, void* args)
 	/* The pause menu owns the pad while it is up: hold the ped still too, so
 	 * menu navigation never walks the player. The chat prompt owns the KEYBOARD the
 	 * same way -- the ped pad comes from the same raw keyboard state -- so typing a
-	 * line must not walk us either. (No `handled` field on this hook, so zeroing
+	 * line must not walk us either, and the round-start 3-2-1 holds us on the line.
+	 * (No `handled` field on this hook, so zeroing
 	 * the bits is the swallow.) */
-	if ((pauseflag != 0 || gMp.chatOpen) && (PLAYER*)in->player == &player[0])
+	if ((pauseflag != 0 || gMp.chatOpen || MpRoundStartHoldsCar()) && (PLAYER*)in->player == &player[0])
 	{
 		in->pad = 0;
 		return JER_RESULT_CONTINUE;
@@ -3685,11 +3694,12 @@ JER_MODULE_ENTRY(jer_module_mp_entry)(JERICHO_CONTEXT* ctx)
 	 * to be unattended needs a human to click OK. Same dump, no dialog. */
 	MpSuppressCrashDialogs();
 
-	/* The version is mod.toml's (0.20.0, bumped with MP_PROTO_VERSION 23). The core
+	/* The version is mod.toml's (0.21.0: the timer modes' round start on proto 23;
+	 * 0.20.0 came with MP_PROTO_VERSION 23). The core
 	 * lets the manifest win over this argument (jerCtxRegisterModule), so this is
 	 * only the fallback; it is kept equal to mod.toml rather than a stale "0.1.0" so
 	 * the two never disagree in a log. Bump both together. */
-	ctx->jer_register_module(ctx, "mp", "Multiplayer", "0.20.0", "JERICHO",
+	ctx->jer_register_module(ctx, "mp", "Multiplayer", "0.21.0", "JERICHO",
 		"LAN multiplayer: host/join, UDP discovery, JERICHO addon net bridge, "
 		"owner-authoritative car sync (each machine drives its own car and "
 		"broadcasts its state; peers adopt it verbatim), and in-match chat.",

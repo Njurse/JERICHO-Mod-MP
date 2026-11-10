@@ -79,12 +79,14 @@ def check_snapshot(output):
 
 
 def check_mode_rows(output):
-    """test_mp_mode's MODEROW lines (id timer music) vs the Python mirror."""
+    """test_mp_mode's MODEROW lines (id timer music countdown) vs the Python mirror."""
     import mp_test
-    rows = {int(i): (int(t), int(mu)) for i, t, mu in re.findall(r"^MODEROW (\d+) (\d+) (\d+)$", output, re.M)}
-    py = {i: (mp_test.GAMEMODE_TIMER.get(i), mp_test.GAMEMODE_MUSIC.get(i)) for i in mp_test.GAMEMODE_NAMES}
+    rows = {int(i): (int(t), int(mu), int(cd)) for i, t, mu, cd in
+            re.findall(r"^MODEROW (\d+) (\d+) (\d+) (\d+)$", output, re.M)}
+    py = {i: (mp_test.GAMEMODE_TIMER.get(i), mp_test.GAMEMODE_MUSIC.get(i), mp_test.GAMEMODE_COUNTDOWN.get(i))
+          for i in mp_test.GAMEMODE_NAMES}
     ok = bool(rows) and rows == py
-    print("mode clock/music: C %r vs mp_test %r -> %s" % (rows, py, "OK" if ok else "MISMATCH"), flush=True)
+    print("mode clock/music/countdown: C %r vs mp_test %r -> %s" % (rows, py, "OK" if ok else "MISMATCH"), flush=True)
     return ok
 
 
@@ -93,17 +95,45 @@ def mark_scripts():
     ones so an ordering slip in either twin shows up as a byte difference."""
     import random
     fox, bomb = "1", "2"
+    everyone = " ".join(str(i) for i in range(16))
     scripts = [
+        # The round start: two present but a car not picked -> no start; every car
+        # in -> COUNTDOWN, whose time touches no clock and allows no tag; a joiner
+        # without a car aborts it; GO; intermission -> the same gate again.
+        ["reset %s 2" % fox, "sync 0 3 6", "ready 3", "tick 5000 0", "tick 5000 0",
+         "ready 3 6", "tick 33 0", "contact 3 6", "tick 1000 0", "sync 0 3 6 8",
+         "tick 33 0", "ready 3 6 8", "tick 33 0", "tick 3999 0", "contact 3 6",
+         "tick 1 1", "tick 1000 0", "tick 1000 0", "contact 3 6", "tick 118000 0",
+         "tick 5000 0", "tick 5000 0", "tick 4000 0", "tick 1 2", "sync 0 3",
+         "tick 33 0", "tick 10000 0", "sync 0 3 9", "tick 33 0", "ready 3 9", "tick 33 0",
+         "sync 0 9", "tick 33 0"],
+        ["reset %s 1" % bomb, "ready 1 4", "sync 0 1", "tick 500 0", "sync 0 1 4",
+         "tick 0 0", "tick 2000 0", "tick 2000 0", "contact 1 4", "tick 2000 0",
+         "contact 1 4", "tick 60000 0", "tick 10000 0", "ready 1", "tick 33 0",
+         "ready 1 4", "tick 33 0", "tick 4000 1"],
+        # The pre-game lobby (t509): a map load runs 5-4-3-2-1 once someone is in,
+        # holds while nobody is, skips the next round on the same map, and comes
+        # back after everyone has left (a map vote's rejoin).
+        ["reset %s 2" % bomb, "ready %s" % everyone, "tick 9000 0", "sync 0 1", "tick 33 0",
+         "tick 1000 0", "contact 1 4", "sync 0 1 4", "tick 2000 0", "sync 0", "tick 3000 0",
+         "sync 0 1 4", "tick 4999 0", "tick 1 0", "tick 4000 0", "tick 120000 0",
+         "tick 10000 0", "tick 4000 1", "sync 0", "tick 33 0", "tick 10000 0", "sync 0 4 1",
+         "tick 33 0", "tick 2500 0", "tick 2500 0", "tick 4000 0"],
+        ["reset %s 3" % fox, "sync 0 2 5", "ready 2", "tick 0 0", "tick 5000 0", "tick 33 0",
+         "ready 2 5", "tick 33 0", "tick 4000 1", "sync 0 5", "tick 33 0", "tick 10000 0",
+         "sync 0", "sync 0 2 5", "tick 33 0", "tick 5000 0", "tick 4000 0"],
         # Fox N Hounds: one player waits, the second starts it, a tag in the cooldown
         # is refused, a tag after it moves the fox, no bounce, first to 0:00 wins,
         # intermission, the next round.
-        ["reset %s 3" % fox, "sync 0 2", "tick 5000 0", "sync 0 2 5", "tick 33 1",
+        ["reset %s 3" % fox, "ready %s" % everyone, "sync 0 2", "tick 5000 0",
+         "sync 0 2 5", "tick 33 1", "tick 4000 1",
          "tick 1000 0", "contact 2 5", "tick 1000 0", "contact 2 5", "contact 5 2",
          "tick 1999 0", "contact 5 2", "tick 1 0", "contact 5 2", "sync 0 2 5 7",
          "tick 2500 0", "contact 2 7", "tick 170000 0", "tick 9999 0", "tick 1 2",
          "sync 1 2 5", "sync 0 2", "tick 33 0", "tick 10000 0"],
         # Car Bomb Tag: shared clock, pass, no bounce, late joiner, the holder at 0:00.
-        ["reset %s 1" % bomb, "sync 0 1 4", "tick 0 0", "tick 2000 0", "contact 1 4",
+        ["reset %s 1" % bomb, "ready %s" % everyone, "sync 0 1 4", "tick 0 0",
+         "tick 4000 0", "tick 2000 0", "contact 1 4",
          "contact 1 4", "tick 1000 0", "sync 0 1 4 9", "tick 57000 0", "tick 10000 3"],
         # Take a Ride: inert; and the minutes clamp.
         ["reset 0 3", "sync 0 0 1 2", "tick 1000 0", "contact 0 1"],
@@ -114,15 +144,20 @@ def mark_scripts():
         mode = rng.choice([fox, bomb])
         steps = ["reset %s %d" % (mode, rng.randint(0, 6))]
         ids = set()
+        ready = set(rng.sample(range(6), rng.randint(0, 6)))
+        steps.append("ready %s" % " ".join(str(i) for i in sorted(ready)))
         for _ in range(120):
             r = rng.random()
             if r < 0.12:
                 ids ^= {rng.randrange(0, 6)}
                 steps.append("sync %d %s" % (rng.randrange(1000), " ".join(str(i) for i in sorted(ids))))
+            elif r < 0.20:
+                ready ^= {rng.randrange(0, 6)}
+                steps.append("ready %s" % " ".join(str(i) for i in sorted(ready)))
             elif r < 0.45:
                 steps.append("contact %d %d" % (rng.randrange(0, 6), rng.randrange(0, 6)))
             else:
-                steps.append("tick %d %d" % (rng.choice([0, 33, 34, 500, 2000, 15000, 61000]), rng.randrange(1000)))
+                steps.append("tick %d %d" % (rng.choice([0, 33, 34, 500, 1000, 2000, 3999, 4000, 5000, 15000, 61000]), rng.randrange(1000)))
         scripts.append(steps)
     return scripts
 
@@ -139,12 +174,38 @@ def python_mark_run(steps):
             ref.reset(int(t[1]), int(t[2]))
         elif t[0] == "sync":
             ev = ref.sync([int(i) for i in t[2:]], int(t[1]))
+        elif t[0] == "ready":
+            ref.set_ready([int(i) for i in t[1:]])
         elif t[0] == "tick":
             ev = ref.tick(int(t[1]), int(t[2]))
         elif t[0] == "contact":
             ev = 1 if ref.contact(int(t[1]), int(t[2])) else 0
         out.append("STEP %d %d %s" % (n, ev, ref.to_bytes().hex()))
     return out
+
+
+def check_mark_constants():
+    """The referee's timings: mp_mark.h vs dedi/markref.py."""
+    sys.path.insert(0, os.path.join(MP, "tools", "servers", "dediserver"))
+    from dedi import markref
+    h = open(os.path.join(MP, "mp_mark.h"), encoding="utf-8").read()
+    pairs = {"MP_MARK_TAG_COOLDOWN_MS": markref.TAG_COOLDOWN_MS,
+             "MP_MARK_INTERMISSION_MS": markref.INTERMISSION_MS,
+             "MP_MARK_COUNTDOWN_MS": markref.COUNTDOWN_MS,
+             "MP_MARK_LOBBY_MS": markref.LOBBY_MS,
+             "MP_MARK_EV_LOBBY": markref.EV_LOBBY,
+             "MP_MARK_EV_BEGIN": markref.EV_BEGIN, "MP_MARK_EV_END": markref.EV_END,
+             "MP_MARK_EV_MOVED": markref.EV_MOVED, "MP_MARK_EV_COUNTDOWN": markref.EV_COUNTDOWN}
+    ok = True
+    for name, py in pairs.items():
+        mm = re.search(r"#define\s+%s\s+(0x[0-9A-Fa-f]+|\d+)\b" % name, h)
+        c = int(mm.group(1), 0) if mm else None
+        if c != py:
+            print("mark constants: %s C %r vs markref %r -> MISMATCH" % (name, c, py), flush=True)
+            ok = False
+    if ok:
+        print("mark constants: %d mp_mark.h value(s) == dedi/markref.py -> OK" % len(pairs), flush=True)
+    return ok
 
 
 def check_mark_lockstep(exe):
@@ -191,6 +252,7 @@ def main():
     a = ap.parse_args()
 
     ok = check_names()
+    ok = check_mark_constants() and ok
     if a.names_only:
         return 0 if ok else 1
 

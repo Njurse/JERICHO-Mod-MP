@@ -48,7 +48,10 @@ extern "C" {
 				 *     Roster, welcome, session, beacon, rules and JPRD
 				 *     are unchanged. Bumped because a v22 peer has no
 				 *     handler for it and would never see the fox or the
-				 *     bomb; mp module 0.20.0.
+				 *     bomb; mp module 0.20.0. (0.21.0 adds the
+				 *     round start in the same layout: phases
+				 *     COUNTDOWN 3 and LOBBY 4, MP_MARK.countdownDs and
+				 *     MP_MARK_ENTRY.flags were reserved -- no bump.)
 				 * 22: the ROUND STATE carrier, MP_TAG_ROUND ('JPRD'):
 				 *     round number + phase, and per player the
 				 *     state (playing/spectating/waiting), score and
@@ -839,10 +842,21 @@ typedef struct MP_ROUND
  * per present player in ascending id; Car Bomb Tag's rows carry 0. */
 enum
 {
-	MP_MARK_PHASE_WAITING = 0,	/* fewer than two players: nothing ticks */
+	MP_MARK_PHASE_WAITING = 0,	/* fewer than two players, or (a countdown mode)
+					 * someone has not picked a car: nothing ticks */
 	MP_MARK_PHASE_LIVE = 1,		/* a round is being played */
-	MP_MARK_PHASE_ENDED = 2		/* won / blown up; the next round starts shortly */
+	MP_MARK_PHASE_ENDED = 2,	/* won / blown up; the next round starts shortly */
+	MP_MARK_PHASE_COUNTDOWN = 3,	/* every player has a car: 3-2-1 before LIVE.
+					 * Nothing ticks, nothing tags. Added in the
+					 * same byte (a v23 peer that predates it shows
+					 * a frozen clock, then LIVE as before). */
+	MP_MARK_PHASE_LOBBY = 4		/* a map was just loaded: the pre-game 5-4-3-2-1
+					 * (countdownDs), once per map, before WAITING.
+					 * Nothing ticks, nothing tags. */
 };
+
+/* MP_MARK_ENTRY.flags */
+#define MP_MARK_ENTRY_F_READY	0x01	/* this player has picked a car (the round-start gate) */
 
 #define MP_MARK_NONE		0xFF	/* no marked player / no winner */
 #define MP_MARK_MINUTES_MIN	1
@@ -852,7 +866,7 @@ enum
 typedef struct MP_MARK_ENTRY
 {
 	uint8_t  playerId;
-	uint8_t  reserved;
+	uint8_t  flags;		/* MP_MARK_ENTRY_F_* (was reserved, always 0) */
 	uint16_t remainDs;	/* Fox N Hounds: this player's clock; Car Bomb Tag: 0 */
 } MP_MARK_ENTRY;		/* 4 bytes */
 
@@ -866,7 +880,8 @@ typedef struct MP_MARK
 	uint8_t  count;		/* MP_MARK_ENTRY rows that follow, <= MP_MAX_PLAYERS */
 	uint16_t seq;		/* +1 on every change of marked player (and every go-live) */
 	uint16_t sharedDs;	/* Car Bomb Tag: the bomb's clock; Fox N Hounds: 0 */
-	uint16_t reserved;
+	uint16_t countdownDs;	/* COUNTDOWN: time to GO; LOBBY: time left in the
+				 * pre-game count; else 0 (was reserved) */
 } MP_MARK;			/* 12 bytes: header only, the rows follow */
 
 typedef struct MP_HIT

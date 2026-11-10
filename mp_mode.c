@@ -47,10 +47,10 @@ static const MP_MODE_DESC kModes[] =
 
 		MP_MODE_RESPAWN_INSTANT, 0,	/* as Take a Ride */
 		MP_MODE_LATEJOIN_LIVE,	/* a late joiner drives at once, as a hound */
-		0,			/* countdown: none (POC) */
+		1,			/* countdown: every car picked, cluster, 3-2-1, GO */
 		0,			/* carChangeLocked */
 		MP_MODE_CARPOOL_ALL,
-		MP_MODE_SPAWN_SESSION,
+		MP_MODE_SPAWN_CLUSTER,	/* the round starts with everyone close together */
 		0,			/* mapCycle */
 		MP_MODE_TIMER_PERSONAL,	/* your clock runs while you are the fox */
 		MP_MODE_MUSIC_PURSUIT	/* the chase is on */
@@ -66,10 +66,10 @@ static const MP_MODE_DESC kModes[] =
 
 		MP_MODE_RESPAWN_INSTANT, 0,
 		MP_MODE_LATEJOIN_LIVE,	/* a late joiner drives at once, without the bomb */
-		0,			/* countdown */
+		1,			/* countdown: every car picked, cluster, 3-2-1, GO */
 		0,			/* carChangeLocked */
 		MP_MODE_CARPOOL_ALL,
-		MP_MODE_SPAWN_SESSION,
+		MP_MODE_SPAWN_CLUSTER,
 		0,			/* mapCycle */
 		MP_MODE_TIMER_SHARED,	/* one clock; the holder at 0:00 loses */
 		MP_MODE_MUSIC_PURSUIT

@@ -15,9 +15,19 @@
  * again, so one bump cannot bounce it straight back.
  *
  * Lifecycle, on the HOST (a listen host here, dedi/markref.py on a dedicated server):
- * WAITING until two players are present; then LIVE with a randomly chosen marked
- * player; ENDED on a win (or when fewer than two are left), and after
- * MP_MARK_INTERMISSION_MS the next round starts (or WAITING again). The caller
+ * after a MAP LOAD (MpMarkReset -- the host's START -- or the present-set emptying,
+ * as a dedicated server's map vote does) and once someone is present, a countdown
+ * mode first runs the pre-game LOBBY for MP_MARK_LOBBY_MS (5, 4, 3, 2, 1; nothing
+ * ticks, nothing tags, cars drive freely); only once per map, not between rounds.
+ * Then WAITING until two players are present -- and, in a mode that wants a countdown
+ * (MpModeWantsCountdown), until every present player has picked a car
+ * (MpMarkReady); then COUNTDOWN for MP_MARK_COUNTDOWN_MS (every machine puts its
+ * own car in the round-start cluster and shows GET READY, 3, 2, 1), back to WAITING
+ * if a player leaves or a joiner without a car arrives; then LIVE with a randomly
+ * chosen marked player (GO); ENDED on a win (or when fewer than two are left), and
+ * after MP_MARK_INTERMISSION_MS the same gate again: COUNTDOWN when everyone has a
+ * car, else WAITING. Nothing ticks and nothing tags outside LIVE. A mode without
+ * the countdown flag goes WAITING -> LIVE as soon as two are present. The caller
  * drives the round carrier (mp_round.c) from the events these return.
  *
  * On a CLIENT this is a mirror: each 'JPMK' snapshot replaces it whole.
@@ -34,11 +44,17 @@ extern "C" {
 
 #define MP_MARK_TAG_COOLDOWN_MS	2000	/* after a transfer (and a go-live), no tag */
 #define MP_MARK_INTERMISSION_MS	10000	/* ENDED -> the next round */
+#define MP_MARK_COUNTDOWN_MS	4000	/* COUNTDOWN -> LIVE: GET READY (the cluster
+					 * placement), then 3, 2, 1 -- a second each */
+#define MP_MARK_COUNTDOWN_SPAWN_MS	1000	/* the first slice: placement, no digit yet */
+#define MP_MARK_LOBBY_MS	5000	/* after a map load: the pre-game 5-4-3-2-1 */
 
 /* Event bits returned by MpMarkSync / MpMarkTick. */
 #define MP_MARK_EV_BEGIN	0x01	/* a round went live: MpRoundBegin */
 #define MP_MARK_EV_END		0x02	/* the round ended: MpRoundEnd */
 #define MP_MARK_EV_MOVED	0x04	/* the marked player changed (not a go-live) */
+#define MP_MARK_EV_COUNTDOWN	0x08	/* every car is in: the 3-2-1 started */
+#define MP_MARK_EV_LOBBY	0x10	/* a map was loaded: the pre-game 5-4-3-2-1 started */
 
 int  MpMarkClampMinutes(int minutes);	/* MP_MARK_MINUTES_MIN..MAX */
 
@@ -51,6 +67,12 @@ void MpMarkReset(int mode, int minutes);
  * An arrival gets a full, frozen clock (a hound / no bomb); if the marked player
  * leaves a live round, `rnd` picks the next one. Returns MP_MARK_EV_* bits. */
 int  MpMarkSync(const int* present, unsigned rnd);
+
+/* Ready-set = `ready[id]` (MP_MAX_PLAYERS entries, nonzero = that player has
+ * picked a car). Only a present player's flag matters; a player is NOT ready until
+ * the caller says so. Rides the snapshot (MP_MARK_ENTRY_F_READY) so every machine
+ * can show who the round is waiting for. */
+void MpMarkReady(const int* ready);
 
 /* Advance by `ms`. `rnd` picks the marked player when a round goes live. */
 int  MpMarkTick(int ms, unsigned rnd);
@@ -75,6 +97,12 @@ int  MpMarkWinner(void);		/* player id, -1 = nobody */
 int  MpMarkMinutes(void);
 unsigned MpMarkSeq(void);
 int  MpMarkPresent(int playerId);
+int  MpMarkPlayerReady(int playerId);	/* present and has picked a car */
+int  MpMarkCountWaiting(int* outReady);	/* present players; *outReady = how many have a car */
+
+/* COUNTDOWN: ms until GO; LOBBY: ms until the pre-game count ends; 0 otherwise.
+ * `sinceMs` is run on like MpMarkClockMs. */
+int  MpMarkCountdownMs(int sinceMs);
 
 /* The clock to SHOW, in ms: `playerId`'s own (MP_MODE_TIMER_PERSONAL) or the shared
  * one (playerId < 0). `sinceMs` is how long ago the state was applied: a client

@@ -29,7 +29,7 @@ import time
 
 PROTO = 23                    # mp_proto.h MP_PROTO_VERSION (23: the marked-player state, MP_TAG_MARK "JPMK", MP_MARK + MP_MARK_ENTRY, Fox N Hounds / Car Bomb Tag; 22: the round state, MP_TAG_ROUND "JPRD", MP_ROUND + MP_ROUND_ENTRY; 21: a car's city byte past the stock rows is a bank NAME code 0x80..0xFE; 20: MP_ROSTER_ENTRY carries leftModel/leftModelCity, 32 bytes; 19: dynamic JMPPED entries on top of 18's ped model id) -- the game drops any frame whose envelope version differs
 SDK = 3                       # JERICHO_SDK_VERSION
-MP_VER = "0.20.0"             # JERICHO/MODS/mp/mod.toml version -- always advertised (0.20.0 came with proto 23)
+MP_VER = "0.21.0"             # JERICHO/MODS/mp/mod.toml version -- always advertised (0.20.0 came with proto 23; 0.21.0: the timer modes' round start, same proto)
 NUL = bytes([0])
 
 # Shared protocol constants, mirrored from mp_proto.h so the tools never hard-code
@@ -65,11 +65,18 @@ MODE_TIMER_NONE, MODE_TIMER_PERSONAL, MODE_TIMER_SHARED = 0, 1, 2
 MODE_MUSIC_AUTO, MODE_MUSIC_CALM, MODE_MUSIC_PURSUIT = 0, 1, 2
 GAMEMODE_TIMER = {0: MODE_TIMER_NONE, 1: MODE_TIMER_PERSONAL, 2: MODE_TIMER_SHARED}
 GAMEMODE_MUSIC = {0: MODE_MUSIC_AUTO, 1: MODE_MUSIC_PURSUIT, 2: MODE_MUSIC_PURSUIT}
+# mp_mode.c kModes[].countdown: 1 = the round start waits for every car, then 3-2-1
+GAMEMODE_COUNTDOWN = {0: 0, 1: 1, 2: 1}
 
 
 def mode_timer(gamemode):
     """MpModeTimerKind: an unknown id behaves as Take a Ride (no timer)."""
     return GAMEMODE_TIMER.get(gamemode, MODE_TIMER_NONE)
+
+
+def mode_countdown(gamemode):
+    """MpModeWantsCountdown: an unknown id behaves as Take a Ride (none)."""
+    return GAMEMODE_COUNTDOWN.get(gamemode, 0)
 
 
 def mode_name(gamemode):
@@ -212,27 +219,34 @@ def parse_round(payload):
 # The marked-player state (JPMK, proto 23): Fox N Hounds / Car Bomb Tag. Host-authored
 # like JPRD (the referee is mp_mark.c / dedi/markref.py) and only sent in a mode that
 # uses it. Clocks are deciseconds remaining, rounded up.
-MARK = struct.Struct("<6BHHH")         # gamemode, phase, marked, winner, minutes, count, seq, sharedDs, reserved = 12
-MARK_ENTRY = struct.Struct("<BxH")     # playerId, reserved, remainDs = 4
+MARK = struct.Struct("<6BHHH")         # gamemode, phase, marked, winner, minutes, count, seq, sharedDs, countdownDs = 12
+MARK_ENTRY = struct.Struct("<BBH")     # playerId, flags, remainDs = 4
 MARK_PHASE_WAITING = 0                  # mp_proto.h MP_MARK_PHASE_*
 MARK_PHASE_LIVE = 1
 MARK_PHASE_ENDED = 2
+MARK_PHASE_COUNTDOWN = 3                # every car is in: 3-2-1 before LIVE (same byte, no bump)
+MARK_PHASE_LOBBY = 4                    # a map was just loaded: the pre-game 5-4-3-2-1 (same byte)
+MARK_ENTRY_F_READY = 0x01               # mp_proto.h MP_MARK_ENTRY_F_READY: has picked a car
 MARK_NONE = 0xFF                        # mp_proto.h MP_MARK_NONE
 MARK_MINUTES_MIN = 1                    # mp_proto.h MP_MARK_MINUTES_*
 MARK_MINUTES_MAX = 5
 MARK_MINUTES_DEFAULT = 3
 
 
-def build_mark(gamemode, phase, marked, winner, minutes, seq, shared_ds, rows):
-    """MP_MARK + MP_MARK_ENTRY rows. `rows` is [(playerId, remainDs)]; marked /
-    winner None or -1 = MP_MARK_NONE; written in ascending player id."""
+def build_mark(gamemode, phase, marked, winner, minutes, seq, shared_ds, rows, countdown_ds=0):
+    """MP_MARK + MP_MARK_ENTRY rows. `rows` is [(playerId, remainDs)] or
+    [(playerId, remainDs, flags)] (MARK_ENTRY_F_*); marked / winner None or -1 =
+    MP_MARK_NONE; written in ascending player id."""
     rows = sorted(rows)[:MAX_PLAYERS]
     mk = MARK_NONE if marked is None or marked < 0 else marked & 0xFF
     wn = MARK_NONE if winner is None or winner < 0 else winner & 0xFF
     out = bytearray(MARK.pack(gamemode & 0xFF, phase & 0xFF, mk, wn, minutes & 0xFF, len(rows),
-                              seq & 0xFFFF, min(int(shared_ds), 0xFFFF), 0))
-    for pid, ds in rows:
-        out += MARK_ENTRY.pack(pid & 0xFF, min(int(ds), 0xFFFF))
+                              seq & 0xFFFF, min(int(shared_ds), 0xFFFF),
+                              min(int(countdown_ds), 0xFFFF)))
+    for row in rows:
+        pid, ds = row[0], row[1]
+        flags = row[2] if len(row) > 2 else 0
+        out += MARK_ENTRY.pack(pid & 0xFF, flags & 0xFF, min(int(ds), 0xFFFF))
     return bytes(out)
 
 
@@ -240,13 +254,15 @@ def parse_mark(payload):
     """dict of the snapshot, or None when short / count out of range (MpMarkApply)."""
     if len(payload) < MARK.size:
         return None
-    gm, phase, mk, wn, minutes, count, seq, shared, _r = MARK.unpack_from(payload, 0)
+    gm, phase, mk, wn, minutes, count, seq, shared, countdown = MARK.unpack_from(payload, 0)
     if count > MAX_PLAYERS or len(payload) < MARK.size + count * MARK_ENTRY.size:
         return None
-    rows = [MARK_ENTRY.unpack_from(payload, MARK.size + i * MARK_ENTRY.size) for i in range(count)]
+    raw = [MARK_ENTRY.unpack_from(payload, MARK.size + i * MARK_ENTRY.size) for i in range(count)]
     return {"gamemode": gm, "phase": phase, "marked": -1 if mk == MARK_NONE else mk,
             "winner": -1 if wn == MARK_NONE else wn, "minutes": minutes, "seq": seq,
-            "shared_ds": shared, "rows": rows}
+            "shared_ds": shared, "countdown_ds": countdown,
+            "rows": [(pid, ds) for pid, _f, ds in raw],
+            "ready": sorted(pid for pid, f, _ds in raw if f & MARK_ENTRY_F_READY)}
 
 
 REJECT_NAMES = {0: "NONE", 1: "FULL", 2: "VERSION", 3: "MODS", 4: "INPROGRESS", 5: "CUSTOM"}

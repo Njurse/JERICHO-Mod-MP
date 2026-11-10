@@ -63,8 +63,13 @@ typedef enum
 /* Where a player's car is placed. */
 typedef enum
 {
-	MP_MODE_SPAWN_SESSION = 0	/* the session's own placement: the level start, the
+	MP_MODE_SPAWN_SESSION = 0,	/* the session's own placement: the level start, the
 					 * per-player road spot, x/z only (Take a Ride) */
+	MP_MODE_SPAWN_CLUSTER = 1	/* seated as SESSION, then at every round start
+					 * (MP_MARK_PHASE_COUNTDOWN) each machine puts its own
+					 * car on a road near one anchor car, clear of the
+					 * others, facing a random way (mp_session.c
+					 * MpMarkClusterTick) */
 } MP_MODE_SPAWN;
 
 /* What a mode's clock does (Fox N Hounds / Car Bomb Tag, mp_mark.c). */

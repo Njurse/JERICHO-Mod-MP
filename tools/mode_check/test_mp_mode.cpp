@@ -83,13 +83,18 @@ static void CheckMarkModes(void)
 		CHECK(d->teamCount == 0 && d->teamColours == 0);
 		CHECK(d->respawn == MP_MODE_RESPAWN_INSTANT);	/* instant respawn, as Take a Ride */
 		CHECK(d->lateJoin == MP_MODE_LATEJOIN_LIVE);
-		CHECK(d->spawn == MP_MODE_SPAWN_SESSION);
-		CHECK(d->carChangeLocked == 0 && d->countdown == 0 && d->mapCycle == 0);
+		/* the round start: wait for every car, cluster on a road, 3-2-1, GO */
+		CHECK(d->spawn == MP_MODE_SPAWN_CLUSTER && MpModeSpawnRule(kRows[i].id) == MP_MODE_SPAWN_CLUSTER);
+		CHECK(d->countdown == 1 && MpModeWantsCountdown(kRows[i].id) == 1);
+		CHECK(d->carChangeLocked == 0 && d->mapCycle == 0);
 		CHECK(MpModeCarChangeRefusal(kRows[i].id, 1) == NULL);
 	}
 
 	CHECK(MpModeUsesTimer(MP_GAMEMODE_TAKEADRIDE) == 0);
 	CHECK(MpModeMusic(MP_GAMEMODE_TAKEADRIDE) == MP_MODE_MUSIC_AUTO);
+	CHECK(MpModeWantsCountdown(MP_GAMEMODE_TAKEADRIDE) == 0);
+	CHECK(MpModeSpawnRule(MP_GAMEMODE_TAKEADRIDE) == MP_MODE_SPAWN_SESSION);
+	CHECK(MpModeWantsCountdown(77) == 0 && MpModeSpawnRule(77) == MP_MODE_SPAWN_SESSION);	/* unknown -> mode 0 */
 }
 
 /* Every id the registry knows, plus ids it does not, keep the table well formed. */
@@ -245,7 +250,8 @@ int main(void)
 		int i;
 
 		for (i = 0; i < MpModeCount(); i++)
-			printf("MODEROW %d %d %d\n", MpModeAt(i)->id, MpModeAt(i)->timer, MpModeAt(i)->music);
+			printf("MODEROW %d %d %d %d\n", MpModeAt(i)->id, MpModeAt(i)->timer, MpModeAt(i)->music,
+				MpModeAt(i)->countdown);
 	}
 
 	printf("mp_mode: %d check(s), %d failure(s)\n", gChecks, gFails);

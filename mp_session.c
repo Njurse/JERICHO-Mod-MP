@@ -459,7 +459,19 @@ static void MpClientRoundCheck(void)
  * notice on a change of fox / bomb holder or a round end, derived locally from the
  * snapshot and the roster's names; the clock as a top-centre panel; the stock
  * arrow over the marked car (never over our own); and the mode's music while live.
- * Take a Ride never reaches any of it: MpModeUsesTimer is 0 for mode 0. */
+ * Take a Ride never reaches any of it: MpModeUsesTimer is 0 for mode 0.
+ *
+ * THE PRE-GAME LOBBY (once per map load, both timer modes): MpMarkReset at START (and
+ * a referee whose players all left) runs LOBBY first: 5, 4, 3, 2, 1, free driving,
+ * nothing ticks. Rounds after an intermission on the same map skip it.
+ *
+ * THE ROUND START (MpModeWantsCountdown, both timer modes): the referee waits until
+ * every present player has picked a car (MpPlayerCarReady -> MpMarkReady), then
+ * goes COUNTDOWN. Every machine -- listen host, its clients, a dedicated server's
+ * clients alike -- then puts ITS OWN car in the start cluster (MpMarkClusterTick:
+ * cars are owner-authoritative, so nobody else can place them) and shows GET READY,
+ * 3, 2, 1 with the driving pad held (MpRoundStartHoldsCar); GO is the referee's
+ * LIVE. No clock, tag, arrow or forced music before GO. */
 #define MP_MARK_PANEL_SLOT	5	/* jer_hud_panel slot for the clock */
 #define MP_MARK_ARROW_SLOT	0	/* jer_arrow slot for the marked car */
 #define MP_MARK_RELAY_RADIUS	1800	/* host view of a reported contact: twice MP_HIT_RADIUS
@@ -477,6 +489,14 @@ static int gMpMarkShownPhase = -1;
 static int gMpMarkPanelOn;
 static int gMpMarkArrowOn;
 static int gMpMarkMusicOn;
+static int gMpMarkShownCount = -1;	/* the countdown notice last shown: 4 = GET READY, 3..1 */
+
+/* the round-start cluster on THIS machine (MpMarkClusterTick, defined with the
+ * other placement code below) */
+static int gMpClusterState;		/* 0 = not in a countdown, 1 = placing, 2 = done / gave up */
+static unsigned gMpClusterFrom;		/* the frame this machine saw the countdown start */
+static int gMpClusterTries;
+static void MpMarkClusterTick(void);
 
 static unsigned MpMarkRand(void)
 {
@@ -487,16 +507,26 @@ static unsigned MpMarkRand(void)
 static void MpMarkHostSync(void)
 {
 	int present[MP_MAX_PLAYERS];
+	int ready[MP_MAX_PLAYERS];
 	int id;
 
 	for (id = 0; id < MP_MAX_PLAYERS; id++)
-		present[id] = MpGetPlayer(id) != NULL;
+	{
+		MP_PLAYER* p = MpGetPlayer(id);
+
+		present[id] = p != NULL;
+		/* the round-start gate: the same "has chosen a car" the spawn and the
+		 * roster's MP_ROSTER_FLAG_CAR_READY use (the host is always chosen) */
+		ready[id] = p != NULL && MpPlayerCarReady(p);
+	}
 
 	if (MpMarkSync(present, MpMarkRand()) & MP_MARK_EV_MOVED)
 	{
 		if (gMpCtx != NULL)
 			gMpCtx->jer_log(gMpCtx, "[mp] mark: the marked player left - player %d is marked now\n", MpMarkMarked());
 	}
+
+	MpMarkReady(ready);
 }
 
 static void MpHostSendMark(int connIndex)
@@ -533,8 +563,9 @@ static void MpHostMarkBegin(void)
 	MpMarkHostSync();
 
 	if (gMpCtx != NULL)
-		gMpCtx->jer_log(gMpCtx, "[mp] mark: %s, %d min - waiting for two players\n",
-			MpModeName(gMp.gamemode), MpMarkMinutes());
+		gMpCtx->jer_log(gMpCtx, "[mp] mark: %s, %d min - waiting for two players%s\n",
+			MpModeName(gMp.gamemode), MpMarkMinutes(),
+			MpModeWantsCountdown(gMp.gamemode) ? " with a car each, then a countdown" : "");
 
 	MpHostSendMark(-1);
 }
@@ -554,6 +585,18 @@ static void MpHostMarkTick(void)
 	gMpMarkMsAcc %= 30;
 
 	ev = MpMarkTick(ms, MpMarkRand());
+
+	if ((ev & MP_MARK_EV_LOBBY) && gMpCtx != NULL)
+		gMpCtx->jer_log(gMpCtx, "[mp] mark: map loaded - pre-game 5-4-3-2-1 (%d ms) before the first round\n",
+			MP_MARK_LOBBY_MS);
+
+	if ((ev & MP_MARK_EV_COUNTDOWN) && gMpCtx != NULL)
+	{
+		int ready = 0, n = MpMarkCountWaiting(&ready);
+
+		gMpCtx->jer_log(gMpCtx, "[mp] mark: all %d/%d cars in - countdown %d ms to round %d\n",
+			ready, n, MP_MARK_COUNTDOWN_MS, MpRoundNumber() + 1);
+	}
 
 	if (ev & MP_MARK_EV_BEGIN)
 	{
@@ -575,7 +618,8 @@ static void MpHostMarkTick(void)
 	}
 
 	if (MpMarkRevision() != gMpMarkSentRev ||
-		(gMp.frame % (MpMarkPhase() == MP_MARK_PHASE_LIVE ? 30 : 120)) == 0)
+		(gMp.frame % ((MpMarkPhase() == MP_MARK_PHASE_LIVE || MpMarkPhase() == MP_MARK_PHASE_COUNTDOWN ||
+			MpMarkPhase() == MP_MARK_PHASE_LOBBY) ? 30 : 120)) == 0)
 		MpHostSendMark(-1);
 }
 
@@ -663,13 +707,60 @@ static void MpMarkPresentClear(void)
 	gMpMarkPanelOn = gMpMarkArrowOn = gMpMarkMusicOn = 0;
 	gMpMarkShownSeq = -1;
 	gMpMarkShownPhase = -1;
+	gMpMarkShownCount = -1;
+	gMpClusterState = 0;
+	gMpClusterTries = 0;
 }
 
-static void MpMarkNotices(int me)
+/* JERICHO round start: is the local player held still for the 3-2-1? See mp.h. Only
+ * a timer mode with a countdown, only this session's state, only COUNTDOWN -- so Take
+ * a Ride never holds anything, and GO (LIVE) releases it the same frame. */
+int MpRoundStartHoldsCar(void)
+{
+	return gMp.running && MpModeUsesTimer(gMp.gamemode) && MpModeWantsCountdown(gMp.gamemode) &&
+		MpMarkHaveState() && MpMarkMode() == gMp.gamemode &&
+		MpMarkPhase() == MP_MARK_PHASE_COUNTDOWN;
+}
+
+static void MpMarkNotices(int me, int since)
 {
 	int seq = (int)MpMarkSeq(), phase = MpMarkPhase(), marked = MpMarkMarked();
 	int bomb = MpModeTimerKind(gMp.gamemode) == MP_MODE_TIMER_SHARED;
+	int go = gMpMarkShownPhase == MP_MARK_PHASE_COUNTDOWN;	/* LIVE straight out of the 3-2-1 */
 	char line[JER_NOTIFY_TEXT_MAX];
+
+	/* THE TWO COUNTDOWNS, the engine's own golden notice, one a second, each shown
+	 * once; a client runs the time on from its last snapshot, as it does the clocks.
+	 *   LOBBY     (once per map load): 5, 4, 3, 2, 1 -- the pre-game lobby;
+	 *   COUNTDOWN (every round): GET READY while the cluster is placed, then 3, 2, 1,
+	 *             and GO below. */
+	if (phase == MP_MARK_PHASE_COUNTDOWN || phase == MP_MARK_PHASE_LOBBY)
+	{
+		int left = MpMarkCountdownMs(since);
+		int count = (phase == MP_MARK_PHASE_COUNTDOWN && left > MP_MARK_COUNTDOWN_MS - MP_MARK_COUNTDOWN_SPAWN_MS)
+			? 4 : (left + 999) / 1000;
+
+		if (gMpMarkShownPhase != phase)
+			gMpMarkShownCount = -1;	/* a fresh countdown (or one restarted) */
+
+		/* only ever DOWN: a client's next snapshot (rounded up to 0.1 s) must not
+		 * put a "3" back after the "2" at a boundary */
+		if (count > 0 && (gMpMarkShownCount < 0 || count < gMpMarkShownCount))
+		{
+			if (phase == MP_MARK_PHASE_COUNTDOWN && count >= 4)
+				snprintf(line, sizeof(line), "GET READY");
+			else
+				snprintf(line, sizeof(line), "%d", count);
+			jer_notify(line, 4, 1);
+			gMpMarkShownCount = count;
+		}
+
+		gMpMarkShownSeq = seq;
+		gMpMarkShownPhase = phase;
+		return;
+	}
+
+	gMpMarkShownCount = -1;
 
 	/* a round ended since we last looked (not one we only joined into) */
 	if (phase == MP_MARK_PHASE_ENDED && gMpMarkShownPhase == MP_MARK_PHASE_LIVE)
@@ -697,22 +788,24 @@ static void MpMarkNotices(int me)
 	/* the fox / the bomb changed hands (or a round went live) */
 	else if (phase == MP_MARK_PHASE_LIVE && seq != gMpMarkShownSeq && marked >= 0)
 	{
+		const char* lead = go ? "GO! " : "";	/* one line: the GO and who is marked */
+
 		if (bomb)
 		{
 			if (marked == me)
-				snprintf(line, sizeof(line), "You have the bomb! Get rid of it!");
+				snprintf(line, sizeof(line), "%sYou have the bomb! Get rid of it!", lead);
 			else
-				snprintf(line, sizeof(line), "%s has the bomb! Stay away!", MpMarkName(marked));
+				snprintf(line, sizeof(line), "%s%s has the bomb! Stay away!", lead, MpMarkName(marked));
 		}
 		else
 		{
 			if (marked == me)
-				snprintf(line, sizeof(line), "You are now the fox!");
+				snprintf(line, sizeof(line), "%sYou are now the fox!", lead);
 			else
-				snprintf(line, sizeof(line), "%s is now the fox!", MpMarkName(marked));
+				snprintf(line, sizeof(line), "%s%s is now the fox!", lead, MpMarkName(marked));
 		}
 
-		jer_notify(line, 3, 3);
+		jer_notify(line, go ? 4 : 3, 3);	/* 4: over the last digit still showing */
 	}
 
 	gMpMarkShownSeq = seq;
@@ -737,16 +830,42 @@ static void MpMarkPresentTick(void)
 	phase = MpMarkPhase();
 	marked = MpMarkMarked();
 
-	MpMarkNotices(myId);
-
 	/* the clock: the host's is live; a client runs the ticking one on from its
 	 * last snapshot (at most a second old) so it counts down smoothly */
 	since = MpIsHost() ? 0 : (int)((gMp.frame - gMpMarkApplyFrame) * 1000u / 30u);
 	if (since > 3000)
 		since = 3000;
 
-	if (phase == MP_MARK_PHASE_WAITING)
-		snprintf(text, sizeof(text), "WAITING FOR PLAYERS");
+	MpMarkNotices(myId, since);
+
+	/* the round-start cluster: this machine places its own car once per countdown */
+	if (phase == MP_MARK_PHASE_COUNTDOWN && MpModeSpawnRule(gMp.gamemode) == MP_MODE_SPAWN_CLUSTER)
+	{
+		if (gMpClusterState == 0)
+		{
+			gMpClusterState = 1;
+			gMpClusterFrom = gMp.frame;
+			gMpClusterTries = 0;
+		}
+
+		if (gMpClusterState == 1)
+			MpMarkClusterTick();
+	}
+	else
+		gMpClusterState = 0;
+
+	if (phase == MP_MARK_PHASE_LOBBY)
+		snprintf(text, sizeof(text), "PRE-GAME %d", (MpMarkCountdownMs(since) + 999) / 1000);
+	else if (phase == MP_MARK_PHASE_WAITING)
+	{
+		int ready = 0, n = MpMarkCountWaiting(&ready);
+
+		/* two are here but somebody is still in the car select: say so */
+		if (n >= 2 && MpModeWantsCountdown(gMp.gamemode) && ready < n)
+			snprintf(text, sizeof(text), "WAITING FOR CARS %d/%d", ready, n);
+		else
+			snprintf(text, sizeof(text), "WAITING FOR PLAYERS");
+	}
 	else if (MpModeTimerKind(gMp.gamemode) == MP_MODE_TIMER_SHARED)
 	{
 		ms = MpMarkClockMs(-1, since);
@@ -2045,7 +2164,9 @@ void MpSpawnLateJoiners(void)
 		if (late != MP_MODE_LATEJOIN_LIVE)
 			MpModeFallbackOnce(MP_MODE_FALLBACK_LATEJOIN, "late-join policy", late);
 
-		if (rule != MP_MODE_SPAWN_SESSION)
+		/* CLUSTER seats a joiner exactly as SESSION does; the cluster itself is a
+		 * round-start placement (MpMarkClusterTick), not a seat */
+		if (rule != MP_MODE_SPAWN_SESSION && rule != MP_MODE_SPAWN_CLUSTER)
 			MpModeFallbackOnce(MP_MODE_FALLBACK_SPAWN, "spawn rule", rule);
 	}
 
@@ -4161,7 +4282,9 @@ int MpOnNetSpawn(void* userdata, void* args)
 	{
 		int rule = MpModeSpawnRule(gMp.gamemode);
 
-		if (rule != MP_MODE_SPAWN_SESSION)
+		/* CLUSTER: the level-load line-up is SESSION's; the round start moves
+		 * everyone into the cluster later (MpMarkClusterTick) */
+		if (rule != MP_MODE_SPAWN_SESSION && rule != MP_MODE_SPAWN_CLUSTER)
 			MpModeFallbackOnce(MP_MODE_FALLBACK_SPAWN, "spawn rule", rule);
 	}
 
@@ -12556,6 +12679,219 @@ int MpRespawnOnRoad(void)
 	}
 
 	return 1;
+}
+
+/* ------------------------------------------------------------------ */
+/* THE ROUND-START CLUSTER (Fox N Hounds / Car Bomb Tag)               */
+/*                                                                     */
+/* When the referee goes COUNTDOWN every machine puts ITS OWN car near  */
+/* one ANCHOR car: cars are owner-authoritative (each owner's carstate  */
+/* is adopted verbatim), so a host placing somebody else's car would be */
+/* undone by that owner's next sample -- and a dedicated server has no  */
+/* world at all. The anchor is the lowest present id (the JPMK rows,    */
+/* so every machine agrees) whose car this machine can see.             */
+/*                                                                     */
+/*   - the anchor snaps to the nearest road (MpFindRoadSpotNear, the    */
+/*     pause-menu Respawn's search);                                    */
+/*   - everyone else waits MP_CLUSTER_SETTLE_FRAMES for that snap to    */
+/*     reach them, then searches around a slot on a ring about the      */
+/*     anchor (one slot per player, MP_CLUSTER_PER_RING to a ring, so   */
+/*     two searches do not start from the same point), keeps a road     */
+/*     spot within MP_CLUSTER_RADIUS of the anchor and MP_JOIN_CLEAR of */
+/*     every other car, streams it (MpWarpStreamTo) and lands on it     */
+/*     (MpPlaceOnGround);                                               */
+/*   - every car faces its OWN random heading (0..4095), stopped and    */
+/*     repaired, wanted level cleared, as the Respawn row does.         */
+/*                                                                     */
+/* The distances are the join spawn's, not a new unit system: the slot  */
+/* ring steps by the join's own retry step (MP_JOIN_CLEAR + 1200) and   */
+/* the clearance is MP_JOIN_CLEAR. Nothing ticks meanwhile -- the       */
+/* referee keeps every clock frozen until GO -- and the pad is held     */
+/* (MpRoundStartHoldsCar), so nobody drives off the line early.         */
+/* If nothing qualifies by the end of the GET READY slice, the pause    */
+/* menu's warp to the anchor is the fallback; failing that, the car     */
+/* stays where it is and the log says so (the round still starts).      */
+#define MP_CLUSTER_STEP		(MP_JOIN_CLEAR + 1200)	/* 3200: the join spawn's retry step */
+#define MP_CLUSTER_RADIUS	(3 * MP_CLUSTER_STEP)	/* 9600: furthest a car lands from the anchor */
+#define MP_CLUSTER_PER_RING	8	/* slots on one ring: 2*3200*sin(pi/8) ~ 2450 apart, > MP_JOIN_CLEAR */
+#define MP_CLUSTER_SETTLE_FRAMES	15	/* 0.5 s: the anchor's own snap reaches us first */
+#define MP_CLUSTER_GIVEUP_FRAMES	(MP_MARK_COUNTDOWN_SPAWN_MS * 30 / 1000 + 30)	/* 2 s */
+#define MP_CLUSTER_TRIES_PER_FRAME	4
+
+/* Land our car at (x,z) facing `dir`, stopped and repaired. 0 = no ground. */
+static int MpClusterPlace(MP_PLAYER* me, CAR_DATA* cp, int x, int z, int dir, int anchorId, const char* how)
+{
+	JER_ARGS_RESET_CAR rc;
+
+	if (!MpWarpStreamTo(x, z) || !MpPlaceOnGround(cp, x, z, dir))
+		return 0;
+
+	cp->hd.speed = 0;
+	cp->wheel_angle = 0;
+
+	/* a fresh round: repaired and no wanted level, the Respawn row's own fields */
+	cp->totalDamage = 0;
+	memset(cp->ap.damage, 0, sizeof(cp->ap.damage));
+	CreateDentableCar(cp);
+	CarReapplyHubcapState(cp->id);
+	cp->ap.needsDenting = 0;
+	MpSelfClearFelony();
+
+	player[0].cameraAngle = cp->hd.direction + 1536;
+	player[0].cameraCarId = cp->id;
+
+	rc.carId = me->carId;
+	jer_fire(JER_EVENT_RESET_CAR, &rc);
+
+	if (gMpCtx != NULL)
+		gMpCtx->jer_log(gMpCtx,
+			"[mp] round start: player %d placed at %d,%d heading %d (%s, anchor player %d, try %d, %u frame(s) into the countdown)\n",
+			me->id, cp->hd.where.t[0], cp->hd.where.t[2], dir & 0xfff, how, anchorId,
+			gMpClusterTries, gMp.frame - gMpClusterFrom);
+
+	return 1;
+}
+
+static void MpMarkClusterTick(void)
+{
+	MP_PLAYER* me = MpLocalPlayer();
+	CAR_DATA* cp;
+	unsigned int rnd;
+	int id, anchorId = -1, rank = 0, ax, az, t;
+
+	if (me == NULL || !gMp.running)
+		return;
+
+	/* ON FOOT: there is no car to put on the line; the pad hold still applies */
+	if (me->carId < 0 || me->carId >= MAX_CARS || player[0].playerType == PLAYER_TYPE_PEDESTRIAN)
+	{
+		if (gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx, "[mp] round start: player %d is on foot - not placed in the start cluster\n", me->id);
+		gMpClusterState = 2;
+		return;
+	}
+
+	cp = &car_data[me->carId];
+
+	/* the anchor: the lowest present id with a car this machine can see */
+	for (id = 0; id < MP_MAX_PLAYERS; id++)
+	{
+		MP_PLAYER* p;
+
+		if (!MpMarkPresent(id))
+			continue;
+
+		p = MpGetPlayer(id);
+
+		if (p != NULL && p->carId >= 0 && p->carId < MAX_CARS &&
+			car_data[p->carId].controlType != CONTROL_TYPE_NONE)
+		{
+			anchorId = id;
+			break;
+		}
+	}
+
+	if (anchorId < 0)
+		anchorId = me->id;	/* nobody else has a car here yet: we are the anchor */
+
+	gMpClusterTries++;
+	rnd = gMp.seed ^ (unsigned int)MpNowMs() ^ (unsigned int)((me->id + 11) * 2654435761u) ^ (unsigned int)gMpClusterTries;
+	rnd = rnd * 1103515245u + 12345u;
+
+	/* THE ANCHOR: onto the nearest road, its own random heading */
+	if (anchorId == me->id)
+	{
+		int x = 0, z = 0, dir = -1, ring = 0;
+
+		if (MpFindRoadSpotNear(cp->hd.where.t[0], cp->hd.where.t[1], cp->hd.where.t[2], -1, &x, &z, &dir, &ring) &&
+			MpClusterPlace(me, cp, x, z, (int)((rnd >> 8) & 0xfff), me->id, "anchor, nearest road"))
+		{
+			gMpClusterState = 2;
+			return;
+		}
+
+		if (gMp.frame - gMpClusterFrom >= (unsigned)MP_CLUSTER_GIVEUP_FRAMES)
+		{
+			if (gMpCtx != NULL)
+				gMpCtx->jer_log(gMpCtx, "[mp] round start: anchor player %d found no road near %d,%d - starts where it is\n",
+					me->id, cp->hd.where.t[0], cp->hd.where.t[2]);
+			gMpClusterState = 2;
+		}
+		return;
+	}
+
+	/* everyone else: give the anchor's snap time to arrive */
+	if (gMp.frame - gMpClusterFrom < (unsigned)MP_CLUSTER_SETTLE_FRAMES)
+	{
+		gMpClusterTries--;
+		return;
+	}
+
+	{
+		MP_PLAYER* ap = MpGetPlayer(anchorId);
+
+		ax = car_data[ap->carId].hd.where.t[0];
+		az = car_data[ap->carId].hd.where.t[2];
+	}
+
+	/* our slot: our place among the present players, the anchor left out */
+	for (id = 0; id < me->id && id < MP_MAX_PLAYERS; id++)
+		if (id != anchorId && MpMarkPresent(id))
+			rank++;
+
+	/* the anchor's ground first, as the pause-menu warp does (once: forcing it
+	 * every frame would fight the streamer that follows our own car) */
+	if (gMpClusterTries == 1)
+		MpWarpStreamTo(ax, az);
+
+	for (t = 0; t < MP_CLUSTER_TRIES_PER_FRAME; t++)
+	{
+		int ringNo = 1 + rank / MP_CLUSTER_PER_RING;
+		int ang = ((rank % MP_CLUSTER_PER_RING) * 4096 / MP_CLUSTER_PER_RING +
+			(gMpClusterTries * MP_CLUSTER_TRIES_PER_FRAME + t) * 331) & 0xfff;
+		int r = ringNo * MP_CLUSTER_STEP;
+		int cx = ax + (int)(((long)rsin(ang) * r) >> 12);
+		int cz = az + (int)(((long)rcos(ang) * r) >> 12);
+		int x = 0, z = 0, dir = -1;
+		long long dx, dz;
+
+		if (!MpFindRoadSpotNear(cx, 0, cz, me->id + (gMpClusterTries * MP_CLUSTER_TRIES_PER_FRAME + t) * 64, &x, &z, &dir, NULL))
+			continue;
+
+		dx = (long long)x - ax;
+		dz = (long long)z - az;
+
+		if (dx * dx + dz * dz > (long long)MP_CLUSTER_RADIUS * MP_CLUSTER_RADIUS)
+			continue;	/* the nearest road to the slot is too far from the anchor */
+
+		if (!MpJoinSpotClearOfPlayers(x, z, me->id, me->carId))
+			continue;
+
+		rnd = rnd * 1103515245u + 12345u;
+
+		if (MpClusterPlace(me, cp, x, z, (int)((rnd >> 8) & 0xfff), anchorId, "start cluster"))
+		{
+			gMpClusterState = 2;
+			return;
+		}
+	}
+
+	if (gMp.frame - gMpClusterFrom < (unsigned)MP_CLUSTER_GIVEUP_FRAMES)
+		return;		/* the ground may still be streaming: next frame */
+
+	/* LAST RESORT: the pause menu's warp beside the anchor (its heading, not a
+	 * random one). Failing that, start where we are. */
+	if (MpWarpToPlayer(anchorId))
+	{
+		if (gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx, "[mp] round start: no clear road in the cluster around player %d - warped beside them instead\n",
+				anchorId);
+	}
+	else if (gMpCtx != NULL)
+		gMpCtx->jer_log(gMpCtx, "[mp] round start: no clear road within %d of player %d's car at %d,%d - player %d starts where it is\n",
+			MP_CLUSTER_RADIUS, anchorId, ax, az, me->id);
+
+	gMpClusterState = 2;
 }
 
 /* A player is on foot and this machine has no body for the car they left: build

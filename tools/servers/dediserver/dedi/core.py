@@ -756,14 +756,24 @@ class Dedicated:
         True when the round state changed (begin / end)."""
         with self.lock:
             ids = [info["id"] for info in self.clients.values()]
+            # the round-start gate: a player is ready once their JPCC (the car they
+            # picked) has landed -- MpHandleCar's carConfirmed on an in-game host
+            ready = [info["id"] for info in self.clients.values() if info.get("car") is not None]
             self.round.sync(ids)
             ev = self.mark.sync(ids, self.mark_rng.randrange(1 << 15))
+            self.mark.set_ready(ready)
             ev |= self.mark.tick(ms, self.mark_rng.randrange(1 << 15))
             if ev & markref.EV_BEGIN:
                 self.round.begin()
             if ev & markref.EV_END:
                 self.round.end()
             marked, winner = self.mark.marked, self.mark.winner
+        if ev & markref.EV_LOBBY:
+            self.log.info("mark: a new map - the pre-game 5-4-3-2-1 (%d ms) before the first round"
+                          % markref.LOBBY_MS)
+        if ev & markref.EV_COUNTDOWN:
+            self.log.info("mark: every car is in - countdown to round %d (%d ms); each game "
+                          "puts its own car in the start cluster" % (self.round.number + 1, markref.COUNTDOWN_MS))
         if ev & markref.EV_BEGIN:
             self.log.info("mark: round %d live, player %d is marked (%d min)"
                           % (self.round.number, marked, self.mark.minutes))
@@ -772,7 +782,7 @@ class Dedicated:
                           % (self.round.number, winner, marked))
         if ev & markref.EV_MOVED:
             self.log.info("mark: the marked player left - player %d is marked now" % marked)
-        return bool(ev & (markref.EV_BEGIN | markref.EV_END))
+        return bool(ev & (markref.EV_BEGIN | markref.EV_END | markref.EV_COUNTDOWN | markref.EV_LOBBY))
 
     def broadcast_mark_if_due(self, force=False):
         with self.lock:
@@ -794,7 +804,9 @@ class Dedicated:
             try:
                 if self._mark_step(ms):
                     self.broadcast_round_if_changed()
-                every = MARK_SEND_LIVE_S if self.mark.phase == m.MARK_PHASE_LIVE else MARK_SEND_IDLE_S
+                every = (MARK_SEND_LIVE_S if self.mark.phase in (m.MARK_PHASE_LIVE, m.MARK_PHASE_COUNTDOWN,
+                                                                 m.MARK_PHASE_LOBBY)
+                         else MARK_SEND_IDLE_S)
                 if self.broadcast_mark_if_due(force=now - last_send >= every):
                     last_send = now
             except Exception as e:
@@ -1516,7 +1528,9 @@ class Dedicated:
             "mark:      %s, %d min, %s, marked %s" % (
                 m.mode_name(self.mark.gamemode), self.mark.minutes,
                 {m.MARK_PHASE_WAITING: "waiting", m.MARK_PHASE_LIVE: "live",
-                 m.MARK_PHASE_ENDED: "ended"}.get(self.mark.phase, "?"),
+                 m.MARK_PHASE_ENDED: "ended",
+                 m.MARK_PHASE_COUNTDOWN: "countdown",
+                 m.MARK_PHASE_LOBBY: "pre-game lobby"}.get(self.mark.phase, "?"),
                 self.mark.marked if self.mark.marked >= 0 else "nobody")
         ] if self.mark.active else []) + [
             "rules:     %s" % rules_text(int(self.cfg["rules"])),

@@ -287,6 +287,12 @@ void MpCarReadinessTick(void);
  * assigned a player who has not picked? carhacks must not put an assignment into the
  * session's import set: it takes a resident slot nobody drives. */
 int MpLocalCarChosen(void);
+
+/* JERICHO round start (Fox N Hounds / Car Bomb Tag): 1 while the referee's 3-2-1 is
+ * running (MP_MARK_PHASE_COUNTDOWN) in a mode that wants one -- the local pad and
+ * on-foot pad are held (mp.c MpOnNetInput / MpOnPedInput) and released on GO. Always
+ * 0 in Take a Ride and outside a match. */
+int MpRoundStartHoldsCar(void);
 MP_PLAYER* MpAddPlayer(int id, const char* name, int isLocal);
 void       MpRemovePlayer(int id);
 void       MpCleanupLeaverWorld(MP_PLAYER* p);	/* a leaver's stand-in ped + abandoned car */
