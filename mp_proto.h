@@ -259,6 +259,10 @@ typedef struct MP_ROSTER
 #define MP_TAG_MARK	"JPMK"	/* host -> all: the marked-player state of a timer mode
 				 * (MP_MARK + MP_MARK_ENTRY rows; v23). Host-only like
 				 * JPRD, and only sent in a mode that uses it. */
+#define MP_TAG_DAMAGE	"JPDM"	/* getaway -> host: its own car's damage (MP_DAMAGE), Cops n
+				 * Robbers while LIVE (mp 0.23.4). OPTIONAL like JPSX: a host
+				 * or server that does not know it drops it and keeps scoring
+				 * contacts, so it needs no protocol bump. Never relayed. */
 
 /* Envelope flags */
 #define MP_FLAG_RELIABLE	0x01	/* sender wants an ordered/reliable channel */
@@ -884,6 +888,18 @@ typedef struct MP_MARK
 				 * pre-game count; else 0 (was reserved) */
 } MP_MARK;			/* 12 bytes: header only, the rows follow */
 
+/* MP_TAG_DAMAGE: the sender's OWN car, as its engine has it -- the meter's only
+ * real-damage source (player carstate rows carry no damage). `playerId` must be
+ * the sender (the host checks it against the connection). */
+typedef struct MP_DAMAGE
+{
+	uint8_t  playerId;	/* the sender */
+	uint8_t  flags;		/* reserved, 0 */
+	uint16_t seq;		/* +1 per report (diagnostic) */
+	int32_t  totalDamage;	/* CAR_DATA.totalDamage */
+	int32_t  maxDamage;	/* MaxPlayerDamage[0]: the wreck point on the sender */
+} MP_DAMAGE;			/* 12 bytes */
+
 typedef struct MP_HIT
 {
 	uint8_t  targetId;	/* the player whose car should receive the impulse */
@@ -933,6 +949,7 @@ static_assert(sizeof(MP_ROUND) == 8, "MP_ROUND layout");		/* v22 */
 static_assert(sizeof(MP_ROUND_ENTRY) == 8, "MP_ROUND_ENTRY layout");	/* v22 */
 static_assert(sizeof(MP_MARK) == 12, "MP_MARK layout");		/* v23 */
 static_assert(sizeof(MP_MARK_ENTRY) == 4, "MP_MARK_ENTRY layout");	/* v23 */
+static_assert(sizeof(MP_DAMAGE) == 12, "MP_DAMAGE layout");	/* optional, mp 0.23.4 */
 
 #endif
 

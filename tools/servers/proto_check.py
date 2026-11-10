@@ -63,6 +63,7 @@ MIRROR = {
     "MP_ROUND_ENTRY": "ROUND_ENTRY",
     "MP_MARK": "MARK",
     "MP_MARK_ENTRY": "MARK_ENTRY",
+    "MP_DAMAGE": "DAMAGE",
 }
 
 # C #define -> the Python constant that must carry the same value.

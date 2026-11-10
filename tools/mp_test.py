@@ -29,7 +29,7 @@ import time
 
 PROTO = 23                    # mp_proto.h MP_PROTO_VERSION (23: the marked-player state, MP_TAG_MARK "JPMK", MP_MARK + MP_MARK_ENTRY, Fox N Hounds / Car Bomb Tag; 22: the round state, MP_TAG_ROUND "JPRD", MP_ROUND + MP_ROUND_ENTRY; 21: a car's city byte past the stock rows is a bank NAME code 0x80..0xFE; 20: MP_ROSTER_ENTRY carries leftModel/leftModelCity, 32 bytes; 19: dynamic JMPPED entries on top of 18's ped model id) -- the game drops any frame whose envelope version differs
 SDK = 3                       # JERICHO_SDK_VERSION
-MP_VER = "0.23.3"             # JERICHO/MODS/mp/mod.toml version -- always advertised (0.20.0 came with proto 23; 0.21.0: the timer modes' round start; 0.22.0: bomb tick/wreck/HUD/glow; 0.22.1: countdown beep, centred glow, framework pre-game; 0.22.2: countdown-start respawn and wreck-lock clear; 0.22.3: local bomb-beep without doppler, halved beep pace, same proto; 0.23.0: Cops n Robbers, mode id 3, same proto; 0.23.1: role cars at join, same proto; 0.23.2: role-car picks per connection, same proto; 0.23.3: respawn hold, join/leave sounds, same proto)
+MP_VER = "0.23.4"             # JERICHO/MODS/mp/mod.toml version -- always advertised (0.20.0 came with proto 23; 0.21.0: the timer modes' round start; 0.22.0: bomb tick/wreck/HUD/glow; 0.22.1: countdown beep, centred glow, framework pre-game; 0.22.2: countdown-start respawn and wreck-lock clear; 0.22.3: local bomb-beep without doppler, halved beep pace, same proto; 0.23.0: Cops n Robbers, mode id 3, same proto; 0.23.1: role cars at join, same proto; 0.23.2: role-car picks per connection, same proto; 0.23.3: respawn hold, join/leave sounds, same proto; 0.23.4: round hold, own-damage JPDM (optional), fox digit timers, same proto)
 NUL = bytes([0])
 
 # Shared protocol constants, mirrored from mp_proto.h so the tools never hard-code
@@ -130,6 +130,7 @@ TAG = {
     "roster": b"JPRS", "car": b"JPCC",
     "ped": b"JPPD", "traffic": b"JPTF", "hit": b"JPHI", "color": b"JPCL",
     "stats": b"JPSX", "round": b"JPRD", "mark": b"JPMK",
+    "damage": b"JPDM",
 }
 # NOTE: no "session" entry. 'JPSS' was retired from mp_proto.h -- it was reserved for
 # a standalone session/lobby broadcast that nothing ever sent or handled. Keep this
@@ -252,6 +253,7 @@ def parse_round(payload):
 # uses it. Clocks are deciseconds remaining, rounded up.
 MARK = struct.Struct("<6BHHH")         # gamemode, phase, marked, winner, minutes, count, seq, sharedDs, countdownDs = 12
 MARK_ENTRY = struct.Struct("<BBH")     # playerId, flags, remainDs = 4
+DAMAGE = struct.Struct("<BBHii")       # MP_DAMAGE (JPDM, optional): playerId, flags, seq, totalDamage, maxDamage = 12
 MARK_PHASE_WAITING = 0                  # mp_proto.h MP_MARK_PHASE_*
 MARK_PHASE_LIVE = 1
 MARK_PHASE_ENDED = 2

@@ -221,9 +221,11 @@ static void CheckFoxAndHounds(void)
 	Present(two, 2, 1);
 	CHECK(MpMarkMarked() == 5);
 
-	/* down to one player: the round ends with no winner, then waits */
+	/* down to one player: the round ends with no winner, then waits. The fox
+	 * leaving with fewer than two left ends it at once and marks nobody (0.23.4) */
 	Present(one, 1, 0);
-	CHECK(MpMarkTick(33, 0) == MP_MARK_EV_END);
+	CHECK(MpMarkPhase() == MP_MARK_PHASE_ENDED && MpMarkMarked() == -1);
+	CHECK(MpMarkTick(33, 0) == 0);
 	CHECK(MpMarkWinner() == -1);
 	MpMarkTick(MP_MARK_INTERMISSION_MS, 0);
 	CHECK(MpMarkPhase() == MP_MARK_PHASE_WAITING && MpMarkMarked() == -1);
@@ -483,9 +485,11 @@ static void CheckPreGame(void)
 	CHECK(MpMarkTick(MP_MARK_COUNTDOWN_MS, 0) == MP_MARK_EV_BEGIN);
 
 	/* a new map: everyone is kicked to rejoin (a dedicated server's vote) ->
-	 * the live round ends, and the next startable group gets the first-load count */
+	 * the live round ends (the holder leaving ends it at once, nobody marked),
+	 * and the next startable group gets the first-load count */
 	Present(one, 0, 0);
-	CHECK(MpMarkTick(33, 0) == MP_MARK_EV_END);
+	CHECK(MpMarkPhase() == MP_MARK_PHASE_ENDED && MpMarkMarked() == -1);
+	CHECK(MpMarkTick(33, 0) == 0);
 	CHECK(MpMarkTick(MP_MARK_INTERMISSION_MS, 0) == 0 && MpMarkPhase() == MP_MARK_PHASE_WAITING);
 	Present(two, 2, 0);
 	CHECK(MpMarkTick(33, 0) == MP_MARK_EV_COUNTDOWN);
@@ -574,6 +578,79 @@ static void CheckJoinDuringCountdown(void)
 	CHECK(!MpMarkCountdownIsFirst() && MpMarkCountdownMs(0) == MP_MARK_COUNTDOWN_MS);
 }
 
+/* 0.23.4: Car Bomb Tag leavers, and Cops n Robbers on the getaway's real damage. */
+static void CheckLeaversAndDamage(void)
+{
+	int three[] = { 1, 4, 6 };
+	int two46[] = { 4, 6 };
+	int two14[] = { 1, 4 };
+	int one4[] = { 4 };
+	int cop = 0, ev = 0, holder;
+
+	/* the holder leaves with two left: a random new holder, a 12 s grace (no
+	 * pass, and the clock raised to 12 s when less was left) */
+	MpMarkReset(MP_GAMEMODE_BOMBTAG, 1);
+	AllReady();
+	Present(three, 3, 0);
+	CHECK(MpMarkTick(0, 0) == MP_MARK_EV_COUNTDOWN);
+	CHECK(MpMarkTick(5 * 1000, 0) == MP_MARK_EV_BEGIN && MpMarkMarked() == 1);
+	MpMarkTick(MIN_MS - 5000, 0);
+	CHECK(MpMarkClockMs(-1, 0) == 5000);
+	Present(two46, 2, 1);
+	holder = MpMarkMarked();
+	CHECK(holder == 6 && MpMarkPhase() == MP_MARK_PHASE_LIVE);
+	CHECK(MpMarkClockMs(-1, 0) == MP_MARK_BOMB_GRACE_MS);
+	MpMarkTick(MP_MARK_BOMB_GRACE_MS - 1, 0);
+	CHECK(MpMarkContact(4, 6) == 0 && MpMarkMarked() == 6);	/* still the grace */
+	CHECK(MpMarkPhase() == MP_MARK_PHASE_LIVE);
+	CHECK(MpMarkTick(1, 0) == MP_MARK_EV_END && MpMarkMarked() == 6);	/* 0:00: the holder */
+
+	/* the holder leaves with one left: void, nobody marked, no bomb */
+	MpMarkReset(MP_GAMEMODE_BOMBTAG, 1);
+	AllReady();
+	Present(two14, 2, 0);
+	MpMarkTick(0, 0);
+	CHECK(MpMarkTick(5 * 1000, 0) == MP_MARK_EV_BEGIN && MpMarkMarked() == 1);
+	Present(one4, 1, 0);
+	CHECK(MpMarkPhase() == MP_MARK_PHASE_ENDED && MpMarkMarked() == -1 && MpMarkWinner() == -1);
+	CHECK(MpMarkClockMs(-1, 0) > 0);	/* not the clock: no 0:00 */
+
+	/* the OTHER player leaves the holder alone: void too */
+	MpMarkReset(MP_GAMEMODE_BOMBTAG, 1);
+	AllReady();
+	Present(two14, 2, 0);
+	MpMarkTick(0, 0);
+	MpMarkTick(5 * 1000, 0);
+	CHECK(MpMarkMarked() == 1);
+	{
+		int only1[] = { 1 };
+		Present(only1, 1, 0);
+	}
+	CHECK(MpMarkTick(33, 0) == MP_MARK_EV_END && MpMarkMarked() == -1);
+
+	/* Cops n Robbers: the meter from damage, the cop in contact credited */
+	MpMarkReset(MP_GAMEMODE_COPSROBBERS, 1);
+	AllReady();
+	Present(three, 3, 0);
+	MpMarkTick(0, 0);
+	CHECK(MpMarkTick(5 * 1000, 0) == MP_MARK_EV_BEGIN && MpMarkMarked() == 1);
+	CHECK(MpMarkDamageLive() == 0);
+	CHECK(MpMarkHit(1, 4, 10, &ev) == 50);		/* no report yet: the old contact score */
+	CHECK(MpMarkDamage(4, 100, 30000, &cop, &ev) == 0);	/* only the getaway reports */
+	CHECK(MpMarkDamage(1, 0, 30000, &cop, &ev) == 0 && MpMarkDamageLive() == 1);
+	MpMarkTick(1000, 0);
+	CHECK(MpMarkHit(1, 6, 20, &ev) == 0);		/* names the cop, scores nothing now */
+	CHECK(MpMarkDamage(1, 3000, 30000, &cop, &ev) == 100 && cop == 6 && ev == 0);
+	CHECK(MpMarkHeat() == 150);
+	MpMarkTick(MP_MARK_CNR_CREDIT_MS + 1, 0);
+	CHECK(MpMarkDamage(1, 6000, 30000, &cop, &ev) == 100 && cop == -1);	/* too long ago */
+	CHECK(MpMarkDamage(1, 1000, 30000, &cop, &ev) == 0 && MpMarkHeat() == 250);	/* repaired */
+	CHECK(MpMarkHit(4, 1, 5, &ev) == 0);
+	CHECK(MpMarkDamage(1, 30000, 30000, &cop, &ev) == MP_MARK_CNR_BUST_POINTS - 250 && cop == 4);
+	CHECK(ev == MP_MARK_EV_END && MpMarkPhase() == MP_MARK_PHASE_ENDED && MpMarkWinner() == -1);
+	CHECK(MpMarkHeat() == MP_MARK_CNR_BUST_POINTS);
+}
+
 static int RunScript(void)
 {
 	char line[256];
@@ -644,6 +721,15 @@ static int RunScript(void)
 		}
 		else if (strcmp(tok, "escape") == 0)
 			ev = MpMarkEscape();
+		else if (strcmp(tok, "damage") == 0)
+		{
+			int from = atoi(strtok(NULL, " \t\r\n"));
+			int dmg = atoi(strtok(NULL, " \t\r\n"));
+			int maxd = atoi(strtok(NULL, " \t\r\n"));
+			int cop = -1, dev = 0;
+			int pts = MpMarkDamage(from, dmg, maxd, &cop, &dev);
+			ev = pts * 65536 + (cop + 1) * 256 + dev;	/* points, credited cop, event */
+		}
 		else
 			continue;
 
@@ -672,6 +758,7 @@ int main(int argc, char** argv)
 	CheckPreGame();
 	CheckJoinDuringWait();
 	CheckJoinDuringCountdown();
+	CheckLeaversAndDamage();
 
 	printf("mp_mark: %d check(s), %d failure(s)\n", gChecks, gFails);
 	return gFails == 0 ? 0 : 1;

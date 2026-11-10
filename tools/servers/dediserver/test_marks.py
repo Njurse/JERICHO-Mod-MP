@@ -38,6 +38,7 @@ sys.path.insert(0, HERE)
 import dediserver as d          # noqa: E402
 import mp_test as m             # noqa: E402
 from dedi import core           # noqa: E402
+from dedi import markref        # noqa: E402
 
 fails = 0
 
@@ -148,6 +149,17 @@ def arm_everyone(server):
     with server.lock:
         for pid in list(server.joined_at):
             server.joined_at[pid] -= 10.0
+
+
+def wait_gone(server, pid, secs=2.0):
+    """The server has dropped player `pid` (its serve thread saw the leave)."""
+    end = time.monotonic() + secs
+    while time.monotonic() < end:
+        with server.lock:
+            if all(info["id"] != pid for info in server.clients.values()):
+                return True
+        time.sleep(0.01)
+    return False
 
 
 def check_minutes(tmp):
@@ -408,7 +420,35 @@ def check_bombtag(tmp):
         server._mark_step(4000)
         check("after the countdown, round 2", server.round.number == 2 and
               server.mark.phase == m.MARK_PHASE_LIVE and server.mark.shared_ms == 60000)
-        for s in (a, b, c):
+        # 0.23.4: the holder leaves with two left -> a random new holder, 12 s grace
+        socks = {1: a, 2: b, 3: c}
+        server._mark_step(50000)
+        holder = server.mark.marked
+        gone = socks.pop(holder)
+        m.send_frame(gone, m.TAG["leave"], b"")
+        gone.close()
+        left_ok = wait_gone(server, holder)
+        server._mark_step(0)
+        check("bomb: the holder leaves, two left -> a new holder, the clock raised to the 12 s grace",
+              left_ok and server.mark.phase == m.MARK_PHASE_LIVE and server.mark.marked in socks and
+              server.mark.shared_ms == markref.BOMB_GRACE_MS,
+              (server.mark.marked, server.mark.shared_ms))
+        holder = server.mark.marked
+        other = [p for p in socks if p != holder][0]
+        check("bomb: no pass inside the grace", not server.mark.contact(other, holder) and
+              server.mark.marked == holder)
+        # ...and the holder leaves with one left: void, nobody marked, no bomb
+        gone = socks.pop(holder)
+        m.send_frame(gone, m.TAG["leave"], b"")
+        gone.close()
+        left_ok = wait_gone(server, holder)
+        server._mark_step(0)
+        check("bomb: the holder leaves, one left -> ended, nobody marked, nobody won",
+              left_ok and server.mark.phase == m.MARK_PHASE_ENDED and server.mark.marked == -1 and
+              server.mark.winner == -1 and server.mark.shared_ms > 0 and
+              server.round.phase == m.ROUND_PHASE_ENDED,
+              (server.mark.phase, server.mark.marked, server.mark.shared_ms))
+        for s in socks.values():
             m.send_frame(s, m.TAG["leave"], b"")
             s.close()
     finally:
@@ -453,6 +493,22 @@ def check_copsrobbers(tmp):
         m.send_frame(socks[cop], m.TAG["carstate"], carstate(cop, 600, 0, vx=-10 * 4096))
         settle(server, [a, b])
         check("CnR: ...not again inside the cop's 1 s cooldown", server.round.players[cop]["score"] == 30)
+        # 0.23.4: the getaway's own damage (JPDM) drives the meter from here
+        m.send_frame(socks[cop], m.TAG["damage"], m.DAMAGE.pack(cop, 0, 1, 9000, 30000))
+        m.send_frame(socks[g], m.TAG["damage"], m.DAMAGE.pack(g, 0, 1, 0, 30000))
+        settle(server, [a, b])
+        check("CnR: a cop's JPDM is refused; the getaway's turns real damage on",
+              server.mark.dmg_live and server.mark.heat == 30, (server.mark.dmg_live, server.mark.heat))
+        server._mark_step(1000)
+        m.send_frame(socks[cop], m.TAG["carstate"], carstate(cop, 600, 0, vx=-10 * 4096))
+        settle(server, [a, b])
+        check("CnR: with real damage on, a contact only names the cop (no points)",
+              server.round.players[cop]["score"] == 30 and server.mark.last_cop == cop)
+        m.send_frame(socks[g], m.TAG["damage"], m.DAMAGE.pack(g, 0, 2, 3000, 30000))
+        settle(server, [a, b])
+        check("CnR: 10% damage = +100 on the meter, scored for the cop in contact",
+              server.mark.heat == 130 and server.round.players[cop]["score"] == 130,
+              (server.mark.heat, server.round.players[cop]))
         mk = last_mark(a)
         m.send_frame(socks[cop], m.TAG["carstate"], carstate(cop, 40000, 0))
         m.send_frame(socks[g], m.TAG["carstate"], carstate(g, 0, 0))

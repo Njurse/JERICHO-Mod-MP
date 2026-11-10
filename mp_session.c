@@ -6,7 +6,7 @@
  */
 #include "jericho.h"
 #include "jer_events.h"
-#include "jer_notify.h"	/* the join toast; the timer modes' golden notices */
+#include "jer_notify.h"	/* the timer modes' golden notices */
 #include "jer_hud.h"	/* jer_hud_panel: the timer modes' clock readout */
 #include "jer_arrow.h"	/* jer_arrow_on_car: the arrow over the fox / the bomb */
 #include "jer_music.h"	/* jer_music_force: a mode's pursuit music while live */
@@ -502,6 +502,28 @@ static char gMpFoxLine1[64];
 static char gMpFoxLine2[16];
 static int gMpFoxLinesOn;
 
+/* Fox N Hounds: the timers in the mission-timer digits (MpMarkDrawOverlay).
+ * Built each frame by MpMarkPresentTick, drawn from DRAW_OVERLAY. (mp 0.23.4) */
+#define MP_FOX_FADE_FRAMES	12	/* grey -> cyan in ~0.4 s at 30 fps */
+#define MP_FOX_SIDE_ROWS	5	/* side timers before a "+N" */
+static struct
+{
+	int on;
+	int me;				/* our id, -1 = no own timer (not in the round) */
+	int title;			/* draw the "... IS THE FOX!" title */
+	int marked;
+	int ms[MP_MAX_PLAYERS];		/* -1 = not in the round */
+	char titleText[48];
+} gMpFoxHud;
+static int gMpFoxFade[MP_MAX_PLAYERS];	/* 0 = grey (frozen) .. MP_FOX_FADE_FRAMES = cyan */
+
+/* A3: the full repair still owed after the round's role-car swap */
+static int gMpRoundRepairPending;
+static int MpCarChangeWaiting(void);
+static void MpClearFelony(int notify);
+static void MpMarkResetCarState(CAR_DATA* cp);
+static void MpFoxHudBuild(int phase, int marked, int myId, int since);
+
 /* the round-start cluster on THIS machine (MpMarkClusterTick, defined with the
  * other placement code below) */
 static int gMpClusterState;		/* 0 = not in a countdown, 1 = placing, 2 = done / gave up */
@@ -558,15 +580,16 @@ static void MpMarkHostSync(void)
 		if ((ev & MP_MARK_EV_MOVED) && gMpCtx != NULL)
 			gMpCtx->jer_log(gMpCtx, "[mp] mark: the marked player left - player %d is marked now\n", MpMarkMarked());
 
-		/* Cops n Robbers: the getaway left mid-round -- over, nobody won it */
+		/* the getaway left mid-round (Cops n Robbers), or the fox / the bomb
+		 * holder left with fewer than two still here: over, nobody won it */
 		if (ev & MP_MARK_EV_END)
 		{
 			gMpCnrPending = 0;
 			MpRoundEnd();
 
 			if (gMpCtx != NULL)
-				gMpCtx->jer_log(gMpCtx, "[mp] mark: the getaway (player %d) left - round %d over\n",
-					MpMarkMarked(), MpRoundNumber());
+				gMpCtx->jer_log(gMpCtx, "[mp] mark: the marked player left - round %d over, nobody won (marked %d)\n",
+					MpRoundNumber(), MpMarkMarked());
 		}
 	}
 
@@ -915,6 +938,9 @@ static void MpMarkPresentClear(void)
 	gMpFoxLinesOn = 0;
 	gMpFoxLine1[0] = '\0';
 	gMpFoxLine2[0] = '\0';
+	gMpFoxHud.on = 0;
+	memset(gMpFoxFade, 0, sizeof(gMpFoxFade));
+	gMpRoundRepairPending = 0;
 	gMpHudR = 128;
 	gMpHudG = 128;
 	gMpHudB = 64;
@@ -974,14 +1000,19 @@ int MpMarkChaseGetaway(void)
 	return MpMarkMarked();
 }
 
-/* JERICHO round start: is the local player held still for the 3-2-1? See mp.h. Only
- * a timer mode with a countdown, only this session's state, only COUNTDOWN -- so Take
- * a Ride never holds anything, and GO (LIVE) releases it the same frame. */
-int MpRoundStartHoldsCar(void)
+/* JERICHO round hold (mp 0.23.4): is the local car held still -- the COUNTDOWN and
+ * the ENDED result screen of a countdown mode, never WAITING (the lobby drives
+ * free) and never Take a Ride. See mp.h. */
+int MpRoundHoldsCar(void)
 {
-	return gMp.running && MpModeUsesTimer(gMp.gamemode) && MpModeWantsCountdown(gMp.gamemode) &&
-		MpMarkHaveState() && MpMarkMode() == gMp.gamemode &&
-		MpMarkPhase() == MP_MARK_PHASE_COUNTDOWN;
+	int ph;
+
+	if (!gMp.running || !MpModeUsesTimer(gMp.gamemode) || !MpModeWantsCountdown(gMp.gamemode) ||
+		!MpMarkHaveState() || MpMarkMode() != gMp.gamemode)
+		return 0;
+
+	ph = MpMarkPhase();
+	return ph == MP_MARK_PHASE_COUNTDOWN || ph == MP_MARK_PHASE_ENDED;
 }
 
 static void MpMarkNotices(int me, int since)
@@ -1048,6 +1079,10 @@ static void MpMarkNotices(int me, int since)
 				else
 					snprintf(line, sizeof(line), "%s is busted!", MpMarkName(marked));
 			}
+			else if (marked >= 0 && !MpMarkPresent(marked))
+				snprintf(line, sizeof(line), "The getaway left - round over");
+			else
+				snprintf(line, sizeof(line), "Round over - not enough players");
 		}
 		else if (!bomb && MpMarkWinner() >= 0)
 		{
@@ -1063,6 +1098,8 @@ static void MpMarkNotices(int me, int since)
 			else
 				snprintf(line, sizeof(line), "%s blew up! You won the match!", MpMarkName(marked));
 		}
+		else
+			snprintf(line, sizeof(line), "Round over - not enough players");	/* void: nobody marked, nobody won */
 
 		if (line[0] != '\0')
 			jer_notify(line, 4, 5);
@@ -1072,12 +1109,16 @@ static void MpMarkNotices(int me, int since)
 	{
 		const char* lead = go ? "GO! " : "";	/* one line: the GO and who is marked */
 
+		line[0] = '\0';
+
+		/* Cops n Robbers names the getaway in the role line under the clock,
+		 * and Fox N Hounds in the timer title: the notice does not say it again */
 		if (cnr)
 		{
 			if (marked == me)
 				snprintf(line, sizeof(line), "%sLose the cops!", lead);
 			else
-				snprintf(line, sizeof(line), "%sBust %s!", lead, MpMarkName(marked));
+				snprintf(line, sizeof(line), "%sBust the getaway!", lead);
 		}
 		else if (bomb)
 		{
@@ -1090,11 +1131,12 @@ static void MpMarkNotices(int me, int since)
 		{
 			if (marked == me)
 				snprintf(line, sizeof(line), "%sYou are now the fox!", lead);
-			else
-				snprintf(line, sizeof(line), "%s%s is now the fox!", lead, MpMarkName(marked));
+			else if (go)
+				snprintf(line, sizeof(line), "GO!");
 		}
 
-		jer_notify(line, go ? 4 : 3, 3);	/* 4: over the last digit still showing */
+		if (line[0] != '\0')
+			jer_notify(line, go ? 4 : 3, 3);	/* 4: over the last digit still showing */
 	}
 
 	gMpMarkShownSeq = seq;
@@ -1238,8 +1280,13 @@ static void MpMarkGlowFor(int marked, int myId, int bomb)
 /* The heading clip (sample direction + 1, GetCarDirectionOfTravel of   */
 /* the getaway) follows exactly where CopSay plays one (gamesnd.c: 10   */
 /* for cop banks 2/3, 15 for 1/4; cop_bank = mission % 4 + 1).          */
-/* The speaker is the cop car nearest the getaway on this machine, 3D   */
-/* from that car (non-positional when it is our own car).               */
+/* The speaker ROTATES among the cop players within MP_RADIO_RANGE of  */
+/* the getaway (round-robin by player id after the last speaker), so    */
+/* the chatter stays on the cars in the action; no cop in range = no    */
+/* line. The damage line is said by the cop who scored it (the last     */
+/* cop whose round score went up -- the host's MpRoundAddScore, seen    */
+/* by clients through JPRD). 3D from that car (non-positional when it   */
+/* is our own car). (mp 0.23.4)                                         */
 /* NOBODY TALKS OVER ANYBODY: one line at a time per listener -- a new  */
 /* line waits for the last (and its heading clip) to finish, and for    */
 /* the engine's own speech queue (an AI cop's CopSay) to be quiet.      */
@@ -1251,6 +1298,17 @@ static void MpMarkGlowFor(int marked, int myId, int bomb)
 #define MP_RADIO_CHATTER_JITTER	300
 #define MP_RADIO_DAMAGE_FRAMES	90	/* a damage line at most every 3 s */
 #define MP_RADIO_MIN_SAMPLES	18	/* the phrase bank reaches sample 17 */
+/* x/z units from the getaway: half of MP_MARK_CNR_ESCAPE_DIST (32000, "~2x draw
+ * distance", mp_mark.h), so about one draw distance -- a cop that can SEE the
+ * chase. Farther cops stay quiet. */
+#define MP_RADIO_RANGE		16000
+#define MP_RADIO_SCORER_FRAMES	90	/* the scorer says the damage line within 3 s */
+
+static int gMpRadioLastSpeaker = -1;		/* player id of the last cop that spoke */
+static int gMpRadioScorer = -1;			/* the last cop whose score went up */
+static unsigned gMpRadioScorerFrame;
+static int gMpRadioScore[MP_MAX_PLAYERS];
+static int gMpRadioScoreInit;
 
 extern int gDoCopSpeech;	/* gamesnd.c: 0 on the gang missions */
 
@@ -1266,6 +1324,31 @@ static void MpCnrRadioClear(void)
 	gMpRadioNext = 0;
 	gMpRadioHeat = 0;
 	gMpRadioSaidGo = 0;
+	gMpRadioLastSpeaker = -1;
+	gMpRadioScorer = -1;
+	gMpRadioScoreInit = 0;
+}
+
+/* Who scored last: every frame the radio is on, even while a line plays. The
+ * first look only records (a round's carried scores are not a fresh hit). */
+static void MpCnrRadioScorerTick(int marked)
+{
+	int id;
+
+	for (id = 0; id < MP_MAX_PLAYERS; id++)
+	{
+		int sc = MpRoundPlayerScore(id);
+
+		if (gMpRadioScoreInit && id != marked && MpMarkPresent(id) && sc > gMpRadioScore[id])
+		{
+			gMpRadioScorer = id;
+			gMpRadioScorerFrame = gMp.frame;
+		}
+
+		gMpRadioScore[id] = sc;
+	}
+
+	gMpRadioScoreInit = 1;
 }
 
 static void MpCnrRadioSay(int carSlot, int sample, int local)
@@ -1295,16 +1378,22 @@ static void MpCnrRadioTick(int on, int marked, int myId)
 	static unsigned lastLine;
 	MP_PLAYER* gp;
 	CAR_DATA* gc;
-	int id, best = -1, bank, phrase = 0, heading, follow = 0;
-	long long bestD = 0;
+	int id, best = -1, bank, phrase = 0, heading, follow = 0, speaker = -1;
+	int inRange[MP_MAX_PLAYERS], nIn = 0, i;
+	const long long range2 = (long long)MP_RADIO_RANGE * MP_RADIO_RANGE;
 
 	if (!on)
 	{
 		gMpRadioSaidGo = 0;
 		gMpRadioFollow = 0;
 		gMpRadioHeat = 0;
+		gMpRadioLastSpeaker = -1;
+		gMpRadioScorer = -1;
+		gMpRadioScoreInit = 0;
 		return;
 	}
+
+	MpCnrRadioScorerTick(marked);
 
 	if (!gDoCopSpeech || GetSoundBankSampleCount(SOUND_BANK_VOICES) < MP_RADIO_MIN_SAMPLES)
 	{
@@ -1357,10 +1446,11 @@ static void MpCnrRadioTick(int on, int marked, int myId)
 
 	gc = &car_data[gp->carId];
 
+	/* the cop players in range of the getaway, by id */
 	for (id = 0; id < MP_MAX_PLAYERS; id++)
 	{
 		MP_PLAYER* p;
-		long long dx, dz, d;
+		long long dx, dz;
 
 		if (id == marked || !MpMarkPresent(id))
 			continue;
@@ -1373,17 +1463,13 @@ static void MpCnrRadioTick(int on, int marked, int myId)
 
 		dx = (long long)car_data[p->carId].hd.where.t[0] - gc->hd.where.t[0];
 		dz = (long long)car_data[p->carId].hd.where.t[2] - gc->hd.where.t[2];
-		d = dx * dx + dz * dz;
 
-		if (best < 0 || d < bestD)
-		{
-			best = p->carId;
-			bestD = d;
-		}
+		if (dx * dx + dz * dz <= range2)
+			inRange[nIn++] = id;
 	}
 
-	if (best < 0)
-		return;
+	if (nIn == 0)
+		return;	/* nobody near the chase: no line (the GO line waits for one) */
 
 	rnd = rnd * 1103515245u + 12345u;
 	heading = GetCarDirectionOfTravel(gc);
@@ -1417,6 +1503,31 @@ static void MpCnrRadioTick(int on, int marked, int myId)
 	if (phrase == 0)
 		return;
 
+	/* the damage line: the cop who scored it, when they are near */
+	if (phrase == 6 && gMpRadioScorer >= 0 &&
+		gMp.frame - gMpRadioScorerFrame <= (unsigned)MP_RADIO_SCORER_FRAMES)
+	{
+		for (i = 0; i < nIn; i++)
+			if (inRange[i] == gMpRadioScorer)
+				speaker = gMpRadioScorer;
+	}
+
+	/* else the next cop in range after the last speaker (round-robin by id) */
+	if (speaker < 0)
+	{
+		speaker = inRange[0];
+
+		for (i = 0; i < nIn; i++)
+			if (inRange[i] > gMpRadioLastSpeaker)
+			{
+				speaker = inRange[i];
+				break;
+			}
+	}
+
+	best = MpGetPlayer(speaker)->carId;
+	gMpRadioLastSpeaker = speaker;
+
 	if ((phrase == 10 && (bank == 2 || bank == 3)) || (phrase == 15 && (bank == 1 || bank == 4)))
 		follow = heading + 1;
 
@@ -1426,6 +1537,10 @@ static void MpCnrRadioTick(int on, int marked, int myId)
 		MpCnrRadioSay(best, phrase, me != NULL && me->id != marked && me->carId == best);
 	}
 
+	if (MpDebugOn() && gMpCtx != NULL)
+		gMpCtx->jer_log(gMpCtx, "[mp] cops n robbers: radio line %d from player %d (%d cop(s) within %d)\n",
+			phrase, speaker, nIn, MP_RADIO_RANGE);
+
 	gMpRadioFollow = follow;
 	gMpRadioFollowCar = best;
 	lastLine = gMp.frame;
@@ -1434,6 +1549,152 @@ static void MpCnrRadioTick(int on, int marked, int myId)
 		gMpRadioNext = gMp.frame + MP_RADIO_CHATTER_FRAMES + (int)((rnd >> 8) % MP_RADIO_CHATTER_JITTER);
 
 	(void)myId;
+}
+
+/* Cops n Robbers, host: the getaway's own damage (its JPDM, or our own car when
+ * the host drives it). MpMarkDamage moves the meter; the cop it credits scores. */
+static void MpMarkHostDamage(int from, int damage, int maxDamage, const char* how)
+{
+	static int loggedRound = -1;
+	int cop = -1, ev = 0, pts;
+
+	if (!MpIsHost() || MpModeTimerKind(gMp.gamemode) != MP_MODE_TIMER_GETAWAY ||
+		MpMarkPhase() != MP_MARK_PHASE_LIVE)
+		return;
+
+	pts = MpMarkDamage(from, damage, maxDamage, &cop, &ev);
+
+	if (MpMarkDamageLive() && loggedRound != MpRoundNumber() && gMpCtx != NULL)
+	{
+		loggedRound = MpRoundNumber();
+		gMpCtx->jer_log(gMpCtx, "[mp] mark: getaway %d reports its own damage (%s, max %d) - the meter follows it this round\n",
+			from, how, maxDamage);
+	}
+
+	if (pts <= 0)
+		return;
+
+	if (cop >= 0)
+		MpRoundAddScore(cop, pts);
+
+	if (gMpCtx != NULL)
+		gMpCtx->jer_log(gMpCtx, "[mp] mark: getaway %d damage %d/%d -> meter +%d = %d/%d, %s\n",
+			from, damage, maxDamage, pts, MpMarkHeat(), MP_MARK_CNR_BUST_POINTS,
+			cop >= 0 ? MpMarkName(cop) : "no cop in contact (no points)");
+
+	if (ev & MP_MARK_EV_END)
+	{
+		MpHostCnrFlush();
+		MpRoundEnd();
+
+		if (gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx, "[mp] mark: round %d over - player %d busted (wrecked)\n",
+				MpRoundNumber(), from);
+	}
+
+	MpHostSendMark(-1);
+	MpHostSendRound(-1);
+}
+
+/* Host: a getaway's MP_TAG_DAMAGE. Optional: an older host never gets here. */
+static void MpHandleDamage(int connIndex, const unsigned char* p, int len)
+{
+	static int refusedLogged;
+	MP_DAMAGE d;
+	int from;
+
+	if (!MpIsHost() || len < (int)sizeof(d))
+		return;
+
+	memcpy(&d, p, sizeof(d));
+	from = MpConnPlayerId(connIndex);
+
+	if (from < 0 || d.playerId != from || d.maxDamage <= 0 || d.maxDamage > (1 << 20))
+	{
+		if (!refusedLogged && gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx, "[mp] damage report from conn %d ignored (player %d says %d, max %d)\n",
+				connIndex, from, (int)d.playerId, (int)d.maxDamage);
+		refusedLogged = 1;
+		return;
+	}
+
+	MpMarkHostDamage(from, d.totalDamage, d.maxDamage, "reported");
+}
+
+/* Cops n Robbers, the getaway's own machine: say what its engine says the car's
+ * damage is -- on a change (at most 10 a second) and every half second while
+ * live, so a lost packet is soon made good. The host drives the referee itself. */
+#define MP_DAMAGE_MIN_FRAMES	3
+#define MP_DAMAGE_KEEP_FRAMES	15
+
+static void MpCnrDamageTick(int phase, int marked, int myId)
+{
+	static int lastSent = -1;
+	static unsigned lastFrame;
+	static uint16_t seq;
+	MP_PLAYER* me = MpLocalPlayer();
+	int dmg, change;
+
+	if (MpModeTimerKind(gMp.gamemode) != MP_MODE_TIMER_GETAWAY || phase != MP_MARK_PHASE_LIVE ||
+		myId < 0 || marked != myId || me == NULL || me->carId < 0 || me->carId >= MAX_CARS ||
+		player[0].playerType == PLAYER_TYPE_PEDESTRIAN)
+	{
+		lastSent = -1;
+		return;
+	}
+
+	dmg = car_data[me->carId].totalDamage;
+	change = dmg != lastSent;
+
+	if (MpIsHost())
+	{
+		if (change)
+			MpMarkHostDamage(myId, dmg, MaxPlayerDamage[0], "own car");
+		lastSent = dmg;
+		return;
+	}
+
+	if (lastSent >= 0 && !(change && gMp.frame - lastFrame >= (unsigned)MP_DAMAGE_MIN_FRAMES) &&
+		gMp.frame - lastFrame < (unsigned)MP_DAMAGE_KEEP_FRAMES)
+		return;
+
+	{
+		MP_DAMAGE d;
+
+		memset(&d, 0, sizeof(d));
+		d.playerId = (uint8_t)myId;
+		d.seq = ++seq;
+		d.totalDamage = dmg;
+		d.maxDamage = MaxPlayerDamage[0];
+		MpSendToHost(MP_TAG_DAMAGE, 0, &d, sizeof(d));
+	}
+
+	lastSent = dmg;
+	lastFrame = gMp.frame;
+}
+
+/* A3: the full pre-round repair, after the role-car swap has landed. */
+static void MpRoundRepairTick(void)
+{
+	MP_PLAYER* me = MpLocalPlayer();
+	CAR_DATA* cp;
+
+	if (!gMpRoundRepairPending || MpCarChangeWaiting())
+		return;
+
+	gMpRoundRepairPending = 0;
+
+	if (me == NULL || me->carId < 0 || me->carId >= MAX_CARS || player[0].playerType == PLAYER_TYPE_PEDESTRIAN)
+		return;
+
+	cp = &car_data[me->carId];
+	MpMarkResetCarState(cp);
+
+	if (gMpCtx != NULL)
+		gMpCtx->jer_log(gMpCtx,
+			"[mp] round start: car repaired after the role car (slot %d model %d): damage %d, hubcaps lost 0x%x, felony %d/%d\n",
+			me->carId, (int)cp->ap.model, cp->totalDamage, (int)(cp->ap.flags & 0xF),
+			cp->felonyRating, pedestrianFelony);
 }
 
 /* Every machine, once a frame in a match. */
@@ -1484,6 +1745,10 @@ static void MpMarkPresentTick(void)
 			if (MpModeRoleSlotCount(gMp.gamemode) > 0)
 				MpRoleCarApply();
 
+			/* ...and the full repair AFTER that swap (a swap that waits for
+			 * an import is repaired when it lands, MpRoundRepairTick) */
+			gMpRoundRepairPending = 1;
+
 			if (chase)
 			{
 				MP_PLAYER* gp = MpGetPlayer(marked);
@@ -1510,6 +1775,8 @@ static void MpMarkPresentTick(void)
 	}
 	else
 		gMpClusterState = 0;
+
+	MpRoundRepairTick();
 
 	if (phase == MP_MARK_PHASE_COUNTDOWN && MpMarkCountdownIsFirst())
 		snprintf(text, sizeof(text), "PRE-GAME %d", (MpMarkCountdownMs(since) + 999) / 1000);
@@ -1548,6 +1815,9 @@ static void MpMarkPresentTick(void)
 			(ms + 999) / 1000 / 60, (ms + 999) / 1000 % 60);
 	}
 
+	MpCnrDamageTick(phase, marked, myId);
+	MpFoxHudBuild(phase, marked, myId, since);
+
 	/* own clock, top centre (0.23.0: back from the top right): cream while it is
 	 * running, mid grey if this viewer is a frozen hound, red and flashing while
 	 * they hold the bomb */
@@ -1583,9 +1853,20 @@ static void MpMarkPresentTick(void)
 		gMpHudR = MpHudLerp(gMpHudR, tr);
 		gMpHudG = MpHudLerp(gMpHudG, tg);
 		gMpHudB = MpHudLerp(gMpHudB, tb);
-		jer_hud_panel(MP_MARK_PANEL_SLOT, JER_HUD_ANCHOR_TOP_CENTRE,
-			flashOff ? "" : text, gMpHudR, gMpHudG, gMpHudB);
-		gMpMarkPanelOn = 1;
+
+		/* Fox N Hounds: the digit timers replace the text clock (MpFoxHudBuild) */
+		if (gMpFoxHud.on)
+		{
+			if (gMpMarkPanelOn)
+				jer_hud_panel_clear(MP_MARK_PANEL_SLOT);
+			gMpMarkPanelOn = 0;
+		}
+		else
+		{
+			jer_hud_panel(MP_MARK_PANEL_SLOT, JER_HUD_ANCHOR_TOP_CENTRE,
+				flashOff ? "" : text, gMpHudR, gMpHudG, gMpHudB);
+			gMpMarkPanelOn = 1;
+		}
 	}
 
 	/* the arrow over the marked car: never our own (we have the notice and the
@@ -1640,7 +1921,9 @@ static void MpMarkPresentTick(void)
 
 		if (bombKind && markedCar != NULL)
 		{
-			if (phase == MP_MARK_PHASE_ENDED)
+			/* only the clock sets it off: a round that ended any other way
+			 * (a leaver, MpMarkSync / MpMarkTick) has nobody marked anyway */
+			if (phase == MP_MARK_PHASE_ENDED && MpMarkClockMs(-1, 0) == 0)
 				jer_carexplode(markedCar);
 
 			jer_carexplode_hold(markedCar);
@@ -1672,37 +1955,177 @@ static void MpMarkPresentTick(void)
 			else
 				snprintf(gMpFoxLine1, sizeof(gMpFoxLine1), "%s is the getaway!", MpMarkName(marked));
 		}
-		else if (!bombKind && live && marked >= 0)
+		/* Fox N Hounds: who the fox is is the timer title (MpFoxHudBuild) */
+	}
+}
+
+/* Fox N Hounds timers in the mission timer's own font (mdraw.c DrawTimer:
+ * PrintDigit "MM:SS", then PrintString ".FF" at y + 13). `scale` 16 = that size.
+ * Colour: grey while frozen, fading to cyan while this player is the fox. */
+static void MpFoxTimerColour(int id)
+{
+	int f = (id >= 0 && id < MP_MAX_PLAYERS) ? gMpFoxFade[id] : 0;
+
+	/* grey (72,72,72) -> cyan (24,112,128); 128 = the texture's own brightness */
+	SetTextColour(72 + (24 - 72) * f / MP_FOX_FADE_FRAMES,
+		72 + (112 - 72) * f / MP_FOX_FADE_FRAMES,
+		72 + (128 - 72) * f / MP_FOX_FADE_FRAMES);
+}
+
+static void MpFoxTimerText(int ms, char* mmss, int mmssLen, char* frac, int fracLen)
+{
+	if (ms < 0)
+		ms = 0;
+
+	snprintf(mmss, mmssLen, "%02d:%02d", ms / 60000 % 100, ms / 1000 % 60);
+	snprintf(frac, fracLen, ".%02d", ms % 1000 / 10);
+}
+
+/* One timer, its right edge at `right` (or centred when right < 0). Returns its left x. */
+static int MpFoxDrawTimer(int id, int ms, int right, int y, int scale)
+{
+	char mmss[8], frac[8];
+	int dw = (4 * 16 + 8) * scale / 16;	/* "MM:SS": four 16 px digits and an 8 px ':' */
+	int fw, x, end;
+
+	MpFoxTimerText(ms, mmss, sizeof(mmss), frac, sizeof(frac));
+	fw = StringWidth(frac);
+	/* centred on the digits (the ".FF" hangs right), which keeps it clear of the
+	 * Damage bar (overlay.c: x 16..118, y 24) */
+	x = (right < 0) ? (320 - dw) / 2 : right - dw - fw;
+
+	MpFoxTimerColour(id);
+	end = PrintDigitScaled(x, y, mmss, scale);
+	PrintString(frac, end, y + 28 * scale / 16 - 15);	/* DrawTimer: y + 13 at full size */
+	return x;
+}
+
+#define MP_FOX_TITLE_Y		4
+#define MP_FOX_OWN_Y		18	/* the own timer: under the title, over nothing */
+#define MP_FOX_SIDE_X		314	/* the side column's right edge */
+#define MP_FOX_SIDE_Y		60	/* under the Felony bar's row (overlay.c: y 46) */
+#define MP_FOX_SIDE_STEP	20
+#define MP_FOX_SIDE_SCALE	10	/* 10/16 of the mission timer */
+
+/* Every frame from MpMarkPresentTick: what the overlay draws, and the fades. */
+static void MpFoxHudBuild(int phase, int marked, int myId, int since)
+{
+	int id, live = phase == MP_MARK_PHASE_LIVE;
+
+	gMpFoxHud.on = MpModeTimerKind(gMp.gamemode) == MP_MODE_TIMER_PERSONAL &&
+		(live || phase == MP_MARK_PHASE_ENDED ||
+		 (phase == MP_MARK_PHASE_COUNTDOWN && !MpMarkCountdownIsFirst()));
+
+	if (!gMpFoxHud.on)
+	{
+		memset(gMpFoxFade, 0, sizeof(gMpFoxFade));
+		return;
+	}
+
+	gMpFoxHud.marked = live ? marked : -1;
+	gMpFoxHud.me = (myId >= 0 && MpMarkPresent(myId)) ? myId : -1;
+
+	for (id = 0; id < MP_MAX_PLAYERS; id++)
+	{
+		gMpFoxHud.ms[id] = MpMarkPresent(id) ? MpMarkClockMs(id, since) : -1;
+
+		if (live && id == marked)
 		{
-			gMpFoxLinesOn = 1;
+			if (gMpFoxFade[id] < MP_FOX_FADE_FRAMES)
+				gMpFoxFade[id]++;
+		}
+		else if (gMpFoxFade[id] > 0)
+			gMpFoxFade[id]--;
+	}
 
-			if (marked == myId)
-				snprintf(gMpFoxLine1, sizeof(gMpFoxLine1), "You're the fox!");
-			else
-			{
-				int foxMs = MpMarkClockMs(marked, since);
+	gMpFoxHud.title = live && marked >= 0;
 
-				snprintf(gMpFoxLine1, sizeof(gMpFoxLine1), "%s is the fox!",
-					MpMarkName(marked));
-				snprintf(gMpFoxLine2, sizeof(gMpFoxLine2), "%d:%02d",
-					(foxMs + 999) / 1000 / 60, (foxMs + 999) / 1000 % 60);
-			}
+	if (gMpFoxHud.title)
+	{
+		if (marked == myId)
+			snprintf(gMpFoxHud.titleText, sizeof(gMpFoxHud.titleText), "YOU ARE THE FOX!");
+		else
+		{
+			char name[16];
+			int k;
+
+			snprintf(name, sizeof(name), "%s", MpMarkName(marked));
+			for (k = 0; name[k] != '\0'; k++)
+				if (name[k] >= 'a' && name[k] <= 'z')
+					name[k] = (char)(name[k] - 'a' + 'A');
+
+			snprintf(gMpFoxHud.titleText, sizeof(gMpFoxHud.titleText), "%s IS THE FOX!",
+				name[0] != '\0' ? name : "?");
 		}
 	}
 }
 
-/* The persistent fox centre line. Drawn from DRAW_OVERLAY; jer_notify cannot
- * hold two lines or stay up for the whole live phase. Cream matches notify. */
+/* The persistent overlay lines, from DRAW_OVERLAY: Cops n Robbers' role line
+ * just under the top-centre clock (0.23.4: off the centre, where the engine's
+ * notices are), and Fox N Hounds' timers. */
 void MpMarkDrawOverlay(void)
 {
-	if (!gMpFoxLinesOn || gMpFoxLine1[0] == '\0')
-		return;
+	extern int gShowMap;
 
-	SetTextColour(128, 128, 64);
-	PrintStringCentred(gMpFoxLine1, 96);
+	if (gShowMap)
+		return;	/* the full map is up: it owns the screen */
 
-	if (gMpFoxLine2[0] != '\0')
-		PrintStringCentred(gMpFoxLine2, 112);
+	if (gMpFoxLinesOn && gMpFoxLine1[0] != '\0')
+	{
+		SetTextColour(128, 128, 64);
+		PrintStringCentred(gMpFoxLine1, 38);	/* JER_HUD_FIRST_Y 22 + one 16 px row */
+	}
+
+	if (gMpFoxHud.on)
+	{
+		int id, row = 0, more = 0;
+
+		if (gMpFoxHud.title)
+		{
+			MpFoxTimerColour(gMpFoxHud.marked);
+			PrintStringCentred(gMpFoxHud.titleText, MP_FOX_TITLE_Y);
+		}
+
+		/* our own: the mission timer's size, top centre */
+		if (gMpFoxHud.me >= 0)
+			MpFoxDrawTimer(gMpFoxHud.me, gMpFoxHud.ms[gMpFoxHud.me], -1, MP_FOX_OWN_Y, 16);
+
+		/* everyone else: smaller, down the right, each with a name */
+		for (id = 0; id < MP_MAX_PLAYERS; id++)
+		{
+			char label[16];
+			int y, x;
+
+			if (id == gMpFoxHud.me || gMpFoxHud.ms[id] < 0)
+				continue;
+
+			if (row >= MP_FOX_SIDE_ROWS)
+			{
+				more++;
+				continue;
+			}
+
+			y = MP_FOX_SIDE_Y + row * MP_FOX_SIDE_STEP;
+			x = MpFoxDrawTimer(id, gMpFoxHud.ms[id], MP_FOX_SIDE_X, y, MP_FOX_SIDE_SCALE);
+
+			snprintf(label, sizeof(label), "%.8s", MpMarkName(id));
+			if (label[0] == '\0')
+				snprintf(label, sizeof(label), "P%d", id + 1);
+
+			MpFoxTimerColour(id);
+			PrintStringRightAligned(label, x - 4, y + 3);
+			row++;
+		}
+
+		if (more > 0)
+		{
+			char extra[8];
+
+			snprintf(extra, sizeof(extra), "+%d", more);
+			SetTextColour(72, 72, 72);
+			PrintStringRightAligned(extra, MP_FOX_SIDE_X, MP_FOX_SIDE_Y + row * MP_FOX_SIDE_STEP + 3);
+		}
+	}
 }
 
 void MpSessionReset(void)
@@ -4158,8 +4581,7 @@ static void MpHandleHello(int connIndex, const unsigned char* p, int len)
 		snprintf(toast, sizeof(toast), "%s joined (%s%s, mods %06x)", h.playerName,
 			joinVer[0] && joinVer[0] >= '0' && joinVer[0] <= '9' ? "v" : "",
 			joinVer[0] ? joinVer : "?", MpModsDigest(mods, n));
-		MpConsoleLine("%s", toast);
-		jer_notify(toast, 1, 6);
+		MpConsoleLine("%s", toast);	/* once: the centre notice repeated it (mp 0.23.4) */
 	}
 
 	if (gMpCtx)
@@ -4409,6 +4831,15 @@ static struct
 
 static unsigned long gMpLeaveSoundDueMs;	/* 0 = no leave sound pending */
 
+/* "<name> left" waits like the leave sound, so a city change's kick-by-kick
+ * cancels it; the players come back silently. (mp 0.23.4) */
+static struct
+{
+	char name[MP_MAX_PLAYERS][MP_NAME_MAX];
+	unsigned long dueMs[MP_MAX_PLAYERS];
+	int count;
+} gMpLeftLines;
+
 static void MpRejoinQuietArm(void)
 {
 	int i;
@@ -4428,6 +4859,7 @@ static void MpRejoinQuietArm(void)
 
 	gMpRejoinQuiet.untilMs = MpNowMs() + MP_REJOIN_QUIET_MS;
 	gMpLeaveSoundDueMs = 0;	/* the leaves this kick is part of */
+	gMpLeftLines.count = 0;	/* ...and their "left" lines */
 }
 
 /* 1 = `name` was in the match before the city change and this is its return:
@@ -4498,8 +4930,81 @@ void MpJoinLeaveNote(int joined, const char* name)
 		gMpLeaveSoundDueMs = 1;
 }
 
+static int MpLeftLinesQuiet(void)
+{
+	return gMp.leaving || gMpRejoin.active || gMpRejoin.settling;
+}
+
+/* One "<name> left" per leaver. A dedicated server's client prints none: the
+ * server's announce plugin says it in chat (and stays quiet for a city change's
+ * rejoin kick) -- the second copy was the duplicate. A game host and its clients
+ * print it after MP_JOINLEAVE_LEAVE_DELAY_MS, unless a rejoin kick lands first. */
+void MpJoinLeaveLeftLine(const char* name)
+{
+	int k, hostRow = 0;
+
+	if (name == NULL || name[0] == '\0')
+		return;
+
+	if (gMp.role == MP_ROLE_CLIENT)
+	{
+		for (k = 0; k < MP_MAX_PLAYERS; k++)
+			if (MpGetPlayer(k) != NULL && MpGetPlayer(k)->isHost)
+				hostRow = 1;
+
+		if (!hostRow)
+			return;	/* a dedicated server announces it */
+	}
+
+	if (!gMp.running)
+	{
+		MpConsoleLine("%s left", name);
+		return;
+	}
+
+	if (MpLeftLinesQuiet() || gMpLeftLines.count >= MP_MAX_PLAYERS)
+		return;
+
+	snprintf(gMpLeftLines.name[gMpLeftLines.count], MP_NAME_MAX, "%s", name);
+	gMpLeftLines.dueMs[gMpLeftLines.count] = MpNowMs() + MP_JOINLEAVE_LEAVE_DELAY_MS;
+	gMpLeftLines.count++;
+}
+
+static void MpLeftLinesTick(void)
+{
+	int i = 0;
+
+	if (gMpLeftLines.count == 0)
+		return;
+
+	if (MpLeftLinesQuiet())
+	{
+		gMpLeftLines.count = 0;
+		return;
+	}
+
+	while (i < gMpLeftLines.count)
+	{
+		if ((long)(MpNowMs() - gMpLeftLines.dueMs[i]) < 0)
+		{
+			i++;
+			continue;
+		}
+
+		MpConsoleLine("%s left", gMpLeftLines.name[i]);
+		gMpLeftLines.count--;
+		if (i != gMpLeftLines.count)
+		{
+			memcpy(gMpLeftLines.name[i], gMpLeftLines.name[gMpLeftLines.count], MP_NAME_MAX);
+			gMpLeftLines.dueMs[i] = gMpLeftLines.dueMs[gMpLeftLines.count];
+		}
+	}
+}
+
 void MpJoinLeaveTick(void)
 {
+	MpLeftLinesTick();
+
 	if (gMpLeaveSoundDueMs == 0)
 		return;
 
@@ -4780,6 +5285,11 @@ void MpSelfRepairCar(void)
  * back on us the moment we step out. */
 void MpSelfClearFelony(void)
 {
+	MpClearFelony(1);
+}
+
+static void MpClearFelony(int notify)
+{
 	MP_PLAYER* me = MpLocalPlayer();
 	int i, released = 0;
 
@@ -4827,7 +5337,8 @@ void MpSelfClearFelony(void)
 	if (released > 0 && gMpCtx != NULL)
 		gMpCtx->jer_log(gMpCtx, "[mp] clear felony: %d cop car(s) back to civilian AI\n", released);
 
-	MpNotify("Wanted level cleared");
+	if (notify)
+		MpNotify("Wanted level cleared");
 }
 
 /* Every peer the last roster named no car for is ON FOOT (A1): called once the
@@ -11634,6 +12145,11 @@ static struct
 
 static int MpChangeCarRun(int city, int model, int isRetry);
 
+static int MpCarChangeWaiting(void)
+{
+	return gMpCarChangeWait.active;
+}
+
 int MpChangeCar(int city, int model)
 {
 	/* GAME-MODE DECISION POINT: a mode may lock the car while a round runs. Take a
@@ -14043,7 +14559,7 @@ int MpRespawnOnRoad(void)
 /* ring steps by the join's own retry step (MP_JOIN_CLEAR + 1200) and   */
 /* the clearance is MP_JOIN_CLEAR. Nothing ticks meanwhile -- the       */
 /* referee keeps every clock frozen until GO -- and the pad is held     */
-/* (MpRoundStartHoldsCar), so nobody drives off the line early.         */
+/* (MpRoundHoldsCar), so nobody drives off the line early.         */
 /* If the ground is still streaming, placement retries for up to 2 s;   */
 /* then the pause menu's warp to the anchor is the fallback; failing    */
 /* that, the already-reset car stays where it is and the log says so    */
@@ -14065,6 +14581,7 @@ static void MpMarkResetCarState(CAR_DATA* cp)
 	cp->totalDamage = 0;
 	memset(cp->ap.damage, 0, sizeof(cp->ap.damage));
 	CreateDentableCar(cp);
+	DentCar(cp);		/* MpSelfRepairCar's recipe: the geometry AND the damage UVs pristine */
 	CarReapplyHubcapState(cp->id);
 	cp->ap.needsDenting = 0;
 	cp->hd.speed = 0;
@@ -14073,7 +14590,7 @@ static void MpMarkResetCarState(CAR_DATA* cp)
 	cp->thrust = 0;
 	cp->handbrake = 0;
 	cp->wheelspin = 0;
-	MpSelfClearFelony();
+	MpClearFelony(0);	/* no "Wanted level cleared" notice every round */
 	jer_carexplode_reset(cp->id);
 }
 
@@ -15912,6 +16429,12 @@ void MpHandleMessage(int connIndex, const char* tag, const unsigned char* payloa
 	if (memcmp(tag, MP_TAG_MARK, 4) == 0)
 	{
 		MpHandleMark(connIndex, payload, len);
+		return;
+	}
+
+	if (memcmp(tag, MP_TAG_DAMAGE, 4) == 0)
+	{
+		MpHandleDamage(connIndex, payload, len);
 		return;
 	}
 
