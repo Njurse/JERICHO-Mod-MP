@@ -60,16 +60,36 @@ typedef enum
 typedef enum
 {
 	MP_MODE_CARPOOL_ALL = 0,	/* everything the car mods offer (Take a Ride) */
-	MP_MODE_CARPOOL_ROLE = 1	/* by round role: the marked player (the getaway) gets
-					 * non-police cars, everyone else police cars
-					 * (MpModeCarPoolWantsPolice, MpModeFilterCarPoolRole) */
+	MP_MODE_CARPOOL_ROLE = 1	/* by round role: the pool of the role slot the
+					 * player drives (MP_MODE_ROLE_SLOT; Cops n Robbers:
+					 * the getaway non-police cars, everyone else police
+					 * cars; MpModeFilterCarPoolRole) */
 } MP_MODE_CARPOOL;
 
-/* The police car's model number: Driver 2's own rule (FEmain.c carNumLookup
- * lists it as model 0 in every city; the cop the engine pings in is resident
- * model slot 3, residentModels[3] == 0). A car mod's imported police car with
- * another number is not recognised as one. */
-#define MP_MODE_POLICE_MODEL	0
+/* Which cars one role may drive. The values are jer_carquery.h's JER_CARQ_POOL_*
+ * (mp_session.c checks that they match), kept here as plain ids so this file stays
+ * engine-free. WHICH car is a police car is the engine's answer (JerCarIsPolice /
+ * JerCarSlotIsPolice, models.h: model 0 in a Driver 2 city, the bake's cop flags
+ * in any other); the filters below take it as a parallel isPolice[] list. */
+typedef enum
+{
+	MP_MODE_POOL_ANY = 0,		/* any car */
+	MP_MODE_POOL_POLICE = 1,	/* police cars only */
+	MP_MODE_POOL_CIVILIAN = 2	/* anything that is not a police car */
+} MP_MODE_POOL;
+
+/* ROLE CARS (0.23.1). A mode may ask each player for one car PER ROLE when they
+ * join (the join car select walks the roles in order, filtered to each role's
+ * pool), and the round then drives the role's car: roleSlotMarked while the
+ * player is the marked one, roleSlotOther otherwise. roleSlotCount 0 = one car,
+ * picked once (every mode before Cops n Robbers). */
+#define MP_MODE_ROLE_SLOTS_MAX	2
+
+typedef struct MP_MODE_ROLE_SLOT
+{
+	const char* title;	/* the car select's heading for this pick */
+	int         pool;	/* MP_MODE_POOL_* */
+} MP_MODE_ROLE_SLOT;
 
 /* Where a player's car is placed. */
 typedef enum
@@ -164,6 +184,12 @@ typedef struct MP_MODE_DESC
 	int keepScore;		/* 1 = scores carry from round to round for the whole
 				 * match (MpRoundBegin keeps them); 0 = each round
 				 * starts at 0 (every mode before Cops n Robbers) */
+
+	/* Role cars (see MP_MODE_ROLE_SLOT). Zero = one car per player. */
+	int               roleSlotCount;	/* 0..MP_MODE_ROLE_SLOTS_MAX */
+	MP_MODE_ROLE_SLOT roleSlots[MP_MODE_ROLE_SLOTS_MAX];
+	int               roleSlotMarked;	/* the slot the marked player drives */
+	int               roleSlotOther;	/* the slot everyone else drives */
 } MP_MODE_DESC;
 
 /* ---- the registry ------------------------------------------------------- */
@@ -194,8 +220,19 @@ int         MpModeKeepsScore(int mode);		/* 1 = scores carry across rounds */
 
 /* MP_MODE_CARPOOL_ROLE: 1 = this role drives police cars, 0 = non-police cars;
  * -1 = the mode has no role pool (any car). `isMarked` = the player is the
- * marked one (the getaway driver). */
+ * marked one (the getaway driver). Read from the role slot the player drives. */
 int         MpModeCarPoolWantsPolice(int mode, int isMarked);
+
+/* Role cars. Count 0 for a mode without them (and for an unknown id). Title NULL
+ * and pool ANY past the count. RoleSlotFor: the slot a player drives this round,
+ * -1 when the mode has no role cars. */
+int         MpModeRoleSlotCount(int mode);
+const char* MpModeRoleSlotTitle(int mode, int slot);
+int         MpModeRoleSlotPool(int mode, int slot);
+int         MpModeRoleSlotFor(int mode, int isMarked);
+
+/* Does a car with this police flag belong in `pool`? */
+int         MpModePoolKeeps(int pool, int isPolice);
 
 /* NULL = the change may go ahead; otherwise the reason, for the log/notice.
  * `roundRunning` is whether a round is live (a session that is running). */
@@ -205,11 +242,16 @@ const char* MpModeCarChangeRefusal(int mode, int roundRunning);
  * returns `count` untouched. */
 int MpModeFilterCarPool(int mode, int city, int* slots, int* models, int count);
 
-/* MP_MODE_CARPOOL_ROLE: keep only the cars for this role (police for a cop,
- * anything else for the getaway), in place, order kept. A list the filter would
- * EMPTY (no police car offered) comes back untouched: the session then swaps the
- * car itself at the round start. Other pools: untouched. Returns the count. */
-int MpModeFilterCarPoolRole(int mode, int isMarked, int* slots, int* models, int count);
+/* Keep only the cars `pool` allows, in place, order kept; isPolice[] is parallel
+ * to slots[]/models[] (and compacted with them). A list the filter would EMPTY
+ * comes back untouched: a picker never offers nothing, and the session swaps the
+ * car itself at the round start. MP_MODE_POOL_ANY: untouched. Returns the count. */
+int MpModeFilterPool(int pool, int* slots, int* models, int* isPolice, int count);
+
+/* MP_MODE_CARPOOL_ROLE: MpModeFilterPool with the pool of the role slot this
+ * player drives (police for a cop, anything else for the getaway). Other car
+ * pools, and modes without role slots: untouched. */
+int MpModeFilterCarPoolRole(int mode, int isMarked, int* slots, int* models, int* isPolice, int count);
 
 /* The team a player is on, -1 for none. Read from the round state (mp_round.h,
  * MP_TAG_ROUND); always -1 for a mode with no teams, such as Take a Ride, and for

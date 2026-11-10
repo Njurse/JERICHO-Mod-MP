@@ -92,7 +92,14 @@ static const MP_MODE_DESC kModes[] =
 		0,			/* mapCycle */
 		MP_MODE_TIMER_GETAWAY,	/* getaway time = the lobby's 1-5 minutes */
 		MP_MODE_MUSIC_PURSUIT,
-		1			/* keepScore: everyone gets a turn as the getaway */
+		1,			/* keepScore: everyone gets a turn as the getaway */
+		2,			/* roleSlotCount: a patrol car, then a getaway car */
+		{
+			{ "PATROL CAR", MP_MODE_POOL_POLICE },
+			{ "GETAWAY CAR", MP_MODE_POOL_CIVILIAN }
+		},
+		1,			/* roleSlotMarked: the getaway drives the getaway car */
+		0			/* roleSlotOther: every cop the patrol car */
 	},
 };
 
@@ -261,12 +268,73 @@ int MpModeKeepsScore(int mode)
 	return MpModeBehaviour(mode)->keepScore;
 }
 
+int MpModeRoleSlotCount(int mode)
+{
+	int n = MpModeBehaviour(mode)->roleSlotCount;
+
+	if (n < 0)
+		return 0;
+
+	return (n > MP_MODE_ROLE_SLOTS_MAX) ? MP_MODE_ROLE_SLOTS_MAX : n;
+}
+
+const char* MpModeRoleSlotTitle(int mode, int slot)
+{
+	if (slot < 0 || slot >= MpModeRoleSlotCount(mode))
+		return NULL;
+
+	return MpModeBehaviour(mode)->roleSlots[slot].title;
+}
+
+int MpModeRoleSlotPool(int mode, int slot)
+{
+	if (slot < 0 || slot >= MpModeRoleSlotCount(mode))
+		return MP_MODE_POOL_ANY;
+
+	return MpModeBehaviour(mode)->roleSlots[slot].pool;
+}
+
+int MpModeRoleSlotFor(int mode, int isMarked)
+{
+	const MP_MODE_DESC* d = MpModeBehaviour(mode);
+	int slot;
+
+	if (MpModeRoleSlotCount(mode) <= 0)
+		return -1;
+
+	slot = isMarked ? d->roleSlotMarked : d->roleSlotOther;
+
+	return (slot >= 0 && slot < MpModeRoleSlotCount(mode)) ? slot : -1;
+}
+
+int MpModePoolKeeps(int pool, int isPolice)
+{
+	switch (pool)
+	{
+	case MP_MODE_POOL_POLICE:
+		return isPolice != 0;
+	case MP_MODE_POOL_CIVILIAN:
+		return isPolice == 0;
+	case MP_MODE_POOL_ANY:
+	default:
+		return 1;
+	}
+}
+
 int MpModeCarPoolWantsPolice(int mode, int isMarked)
 {
 	if (MpModeBehaviour(mode)->carPool != MP_MODE_CARPOOL_ROLE)
 		return -1;
 
-	return isMarked ? 0 : 1;
+	switch (MpModeRoleSlotPool(mode, MpModeRoleSlotFor(mode, isMarked)))
+	{
+	case MP_MODE_POOL_POLICE:
+		return 1;
+	case MP_MODE_POOL_CIVILIAN:
+		return 0;
+	default:
+		return -1;
+	}
 }
 
 const char* MpModeCarChangeRefusal(int mode, int roundRunning)
@@ -293,34 +361,43 @@ int MpModeFilterCarPool(int mode, int city, int* slots, int* models, int count)
 	}
 }
 
-int MpModeFilterCarPoolRole(int mode, int isMarked, int* slots, int* models, int count)
+int MpModeFilterPool(int pool, int* slots, int* models, int* isPolice, int count)
 {
-	int want = MpModeCarPoolWantsPolice(mode, isMarked);
 	int i, n = 0;
 
-	if (want < 0 || slots == NULL || models == NULL || count <= 0)
+	if (pool == MP_MODE_POOL_ANY || slots == NULL || models == NULL || isPolice == NULL || count <= 0)
 		return count;
 
 	for (i = 0; i < count; i++)
-		if ((models[i] == MP_MODE_POLICE_MODEL) == (want == 1))
+		if (MpModePoolKeeps(pool, isPolice[i]))
 			n++;
 
 	if (n == 0)
-		return count;	/* nothing for this role: leave it to the round-start swap */
+		return count;	/* nothing for this pool: leave it to the round-start swap */
 
 	n = 0;
 
 	for (i = 0; i < count; i++)
 	{
-		if ((models[i] == MP_MODE_POLICE_MODEL) != (want == 1))
+		if (!MpModePoolKeeps(pool, isPolice[i]))
 			continue;
 
 		slots[n] = slots[i];
 		models[n] = models[i];
+		isPolice[n] = isPolice[i];
 		n++;
 	}
 
 	return n;
+}
+
+int MpModeFilterCarPoolRole(int mode, int isMarked, int* slots, int* models, int* isPolice, int count)
+{
+	if (MpModeBehaviour(mode)->carPool != MP_MODE_CARPOOL_ROLE)
+		return count;
+
+	return MpModeFilterPool(MpModeRoleSlotPool(mode, MpModeRoleSlotFor(mode, isMarked)),
+		slots, models, isPolice, count);
 }
 
 int MpModePlayerTeam(int mode, int playerId)

@@ -24,6 +24,7 @@
 #include "jer_npc.h"		/* JerNpc: the stand-in we drew for a remote player */
 #include "jer_carexplode.h"	/* request bank 54 at entry; wreck is driven from the session */
 #include "jer_carglow.h"	/* JER_EVENT_DRAW_WORLD: the fox / bomb-car glow */
+#include "jer_carquery.h"	/* JER_CARQ_ROLES / _ROLEPICK: mp answers the join car select */
 
 /* The chat key needs PsyX's debug-key hook, but NOT its header: PsyX_public.h and
  * SDL_scancode.h both pull in math/SDL defines that collide with the game's in
@@ -3710,7 +3711,8 @@ JER_MODULE_ENTRY(jer_module_mp_entry)(JERICHO_CONTEXT* ctx)
 	 * to be unattended needs a human to click OK. Same dump, no dialog. */
 	MpSuppressCrashDialogs();
 
-	/* The version is mod.toml's (0.23.0: Cops n Robbers, game mode 3, on proto 23;
+	/* The version is mod.toml's (0.23.1: role cars at join, imported police cars, remote cop cones;
+	 * 0.23.0 was Cops n Robbers, game mode 3, on proto 23;
 	 * 0.22.3 was local bomb-beep without doppler, halved beep pace;
 	 * 0.22.2 was countdown-start respawn and wreck-lock clear;
 	 * 0.22.1 was countdown beep, centred glow, framework pre-game;
@@ -3718,7 +3720,7 @@ JER_MODULE_ENTRY(jer_module_mp_entry)(JERICHO_CONTEXT* ctx)
 	 * The core lets the manifest win over this argument (jerCtxRegisterModule), so
 	 * this is only the fallback; it is kept equal to mod.toml rather than a stale
 	 * "0.1.0" so the two never disagree in a log. Bump both together. */
-	ctx->jer_register_module(ctx, "mp", "Multiplayer", "0.23.0", "JERICHO",
+	ctx->jer_register_module(ctx, "mp", "Multiplayer", "0.23.1", "JERICHO",
 		"LAN multiplayer: host/join, UDP discovery, JERICHO addon net bridge, "
 		"owner-authoritative car sync (each machine drives its own car and "
 		"broadcasts its state; peers adopt it verbatim), and in-match chat.",
@@ -3753,6 +3755,8 @@ JER_MODULE_ENTRY(jer_module_mp_entry)(JERICHO_CONTEXT* ctx)
 	ctx->jer_register_hook(ctx, JER_EVENT_DRAW_OVERLAY, MpOnDrawOverlay, NULL, 10);
 	ctx->jer_register_hook(ctx, JER_EVENT_DRAW_WORLD, jer_carglow_on_draw_world, NULL, 0);
 	ctx->jer_register_hook(ctx, JER_EVENT_CAR_DRAW_COLOR, MpOnCarDrawColor, NULL, 0);
+	ctx->jer_register_hook(ctx, JER_CARQ_ROLES, MpOnCarqRoles, NULL, 0);	/* role cars: the join car select asks */
+	ctx->jer_register_hook(ctx, JER_CARQ_ROLEPICK, MpOnCarqRolePick, NULL, 0);
 	/* Local Super Turbo. Runs for every car ProcessCarPad steps; the handler
 	 * itself ignores anything that is not this machine's seat. */
 	ctx->jer_register_hook(ctx, JER_EVENT_CAR_ENGINE, MpOnCarEngine, NULL, 0);

@@ -30,8 +30,11 @@ to low-LOD indices. 0.23.0 (still protocol 23: mode 3 is a new value of the
 existing `gamemode` byte; an older build names it `-` and plays it as Take a
 Ride) adds Cops n Robbers, puts the timer panel back at the top centre, makes
 every road-aligned spawn face along its lane, and draws the cop sight cones and
-the felony flash on the multiplayer maps. Everything below "Not yet" is design,
-not code.
+the felony flash on the multiplayer maps. 0.23.1 (same protocol) adds role
+cars: a mode may ask for one car per role at the join car select (Cops n
+Robbers: a patrol car, then a getaway car); a car mod's police car counts as
+police; and other players' police cars get their sight cones on the map.
+Everything below "Not yet" is design, not code.
 
 ## The model
 
@@ -58,6 +61,8 @@ A game mode is a row in one table, `kModes[]` in `mp_mode.c`. The row is an
 | `timer` | `MP_MODE_TIMER_NONE` / `_PERSONAL` (a clock per player) / `_SHARED` (one clock) / `_GETAWAY` (one clock the getaway must outlast) | none |
 | `music` | `MP_MODE_MUSIC_AUTO` / `_CALM` / `_PURSUIT` while a round is live (= `JER_MUSIC_*`) | auto |
 | `keepScore` | 1 = a player's score runs across rounds (`MpModeKeepsScore`) | 0 |
+| `roleSlotCount`, `roleSlots[2]` | role cars: 0 = one car as always, else this many cars picked at join, each a title and a pool (`MP_MODE_POOL_ANY` / `_POLICE` / `_CIVILIAN`) | 0 |
+| `roleSlotMarked`, `roleSlotOther` | which role car the marked player and everyone else drive in a round | 0, 0 |
 
 The rows today:
 
@@ -367,7 +372,7 @@ contacts, and the host originates every state.
   The fox uses the player's colour if they have one set, otherwise cyan; the
   bomb car is always red.
 
-## Cops n Robbers (mode 3, mp 0.23.0)
+## Cops n Robbers (mode 3, mp 0.23.0, role cars 0.23.1)
 
 One player drives the getaway; everyone else is a cop. The referee is the same
 `mp_mark.c` / `dedi/markref.py` pair, timer kind `MP_MODE_TIMER_GETAWAY`, kept in
@@ -414,12 +419,37 @@ carries the cops' damage meter (0..1000 points; every other row 0).
   ... (a spot not clear of other players walks on, at most 6000 further; a dead
   end stops the walk). Fallbacks: a road spot that far behind in a straight line,
   then the warp beside the getaway, then where the car is.
-- **Cars.** At COUNTDOWN a cop is put in the level's police car (model 0) and
-  the getaway out of it (the first of the level's own non-police cars), through
-  the pause picker's own change-car path. The picker's list is filtered to the
-  role (`MpModeFilterCarPoolRole`); a list with no police car is left as it is.
-  A car mod's imported police car with another model number is not a police car
-  here.
+- **Cars (0.23.1: role cars).** The row has two role slots, `PATROL CAR`
+  (police pool) and `GETAWAY CAR` (not police); the getaway drives slot 1, a
+  cop slot 0. On join the car select (carhacks `carselect.c`) asks the session
+  for the roles (`JER_CARQ_ROLES`, core `jer_carquery.h`), shows the menu once
+  per role with the role as the heading and the roster cut to the role's pool,
+  reads `Next` until the last role, and steps back a role on Triangle. Each
+  pick is reported (`JER_CARQ_ROLEPICK`); mp checks its pool and keeps it for
+  the session and in `[mp] role_m3_s<slot>_{city,model,palette}`, so the next
+  join offers nothing new to decide but the same menu. The last pick launches,
+  with the patrol car (the getaway is not named until COUNTDOWN), so the
+  `waitForCars` gate (`MpPlayerCarReady`) is passed only once both are picked.
+  At every COUNTDOWN `MpRoleCarApply` puts each machine's player in its role's
+  car through the pause picker's change-car path (`MpChangeCarRun`, which
+  imports a car from another city), with its saved palette. With no pick for
+  the role, the old rule: the level's police car (model 0) for a cop, the first
+  of the level's own non-police cars for the getaway. A pause-menu car change
+  is kept as the current role's pick. The pause picker's list is filtered to
+  the role (`MpModeFilterCarPoolRole`); a list the filter would empty is left
+  as it is (the car select does the same).
+- **What is a police car.** The engine's own rule (core `JerCarIsPolice`,
+  `models.c`): in a Driver 2 city model 0 (the cop body: `carNumLookup` row
+  `{1,2,3,4,0,...}`, `CarHasSiren`, the civ AI's cop slot); in a car-mod or
+  Driver 1 city, the models the bake marked with a cop siren (bank.json
+  `cars.<id>.sounds.cop` -> `LUMP_CAR_SIRENS`, read into `carSirenMask`). So a
+  car mod's police car is police whatever its model number. Nothing is guessed
+  from names.
+- **Cones of other players.** Remote player cars are `CONTROL_TYPE_PLAYER`
+  with no `CONTROL_FLAG_COP`, so the map's cop-cone loops skipped them. mp
+  sets core `gJerMapCopCars` (overmap.h, a bit per `car_data` slot) every
+  frame: every other player in a police car, and in Cops n Robbers every live
+  cop player. The getaway is never set.
 - **What you see.** The top-centre panel reads `GETAWAY m:ss DMG n%` or
   `COP m:ss DMG n%`; the centre line names the getaway from the countdown on; the
   getaway's car glows red and has the red arrow over it on everyone else's
@@ -432,6 +462,18 @@ carries the cops' damage meter (0..1000 points; every other row 0).
   is the cop nearest the getaway; one line at a time per listener, and never
   over the engine's own cop speech. Presentation only. There is no regional
   police-radio setting in this tree to follow.
+- **Assets on the multiplayer maps.** A session plays `GAME_TAKEADRIVE`, so the
+  level is mission 50 (full city) or 58 (the multiplayer map), + city x 2 +
+  night + arena x 440 (`glaunch.c`). For
+  those, `LoadLevelSFX` loads the host city's siren and both cop phrase banks
+  into `VOICES` (`gamesnd.c`), and `gDoCopSpeech` is 0 only on the gang
+  missions; the radio logs `police radio on (N voice sample(s) ...)` once and
+  `no police radio here` only when that is not so. The bomb beep (lump 44) and
+  the wreck bang (lump 54) are requested at mp activation and loaded every
+  level by `jer_sound_load_requested_banks` (a `[jer_sound] lump N` line each),
+  with the stock samples as a fallback when the bank is full. The arrow is
+  untextured geometry. The glow uses the level's SMOKE texture, then LIGHT, and
+  is skipped (logged once) when a level has neither.
 
 ## Choosing a mode
 
@@ -539,6 +581,6 @@ yet played in game. These are later phases, and none of them is wired:
   scoreboard columns. Score is carried and stays 0, and nothing draws it.
 - Later: arenas and mode spawn points, team radio, a mode options menu, Capture
   the Flag, map cycling, and the admin pause page.
-- Cops n Robbers, not yet: an in-game pass; a nested role page in the join car
-  picker (the picker lives in carhacks); the regional police-radio choice;
-  recognising an imported police car.
+- Cops n Robbers, not yet: an in-game pass; the regional police-radio choice;
+  role cars for the dedicated server's own records (it never sees them; they
+  are a client matter).
