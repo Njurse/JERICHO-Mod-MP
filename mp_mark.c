@@ -15,7 +15,10 @@ static struct
 	int have;
 	int mode;
 	int timer;		/* MP_MODE_TIMER_* of mode */
-	int countdown;		/* MpModeWantsCountdown(mode): the round-start gate */
+	int waitMin;		/* MpModeWaitMinPlayers */
+	int waitCars;		/* MpModeWaitForCars */
+	int firstSec;		/* MpModeFirstCountdownSec */
+	int roundSec;		/* MpModeRoundCountdownSec */
 	int phase;		/* MP_MARK_PHASE_* */
 	int minutes;
 	int marked;		/* -1 = nobody */
@@ -26,8 +29,10 @@ static struct
 	long clockMs;		/* host: time refereed this session */
 	long cooldownUntil;	/* host: no tag before this */
 	int intermissionMs;	/* host: ENDED -> next round */
-	int countdownMs;	/* LOBBY -> WAITING, COUNTDOWN -> LIVE (on the wire as countdownDs) */
-	int lobby;		/* host: a map was just loaded -- run the 5-4-3-2-1 first */
+	int countdownMs;	/* COUNTDOWN -> LIVE (on the wire as countdownDs) */
+	int countdownTotalMs;	/* length of the current count */
+	int countdownFirst;	/* 1 = fresh-map N..1 (not GET READY + N..1) */
+	int firstMap;		/* host: GO has not happened since the last map load */
 	int present[MP_MAX_PLAYERS];
 	int ready[MP_MAX_PLAYERS];	/* has picked a car (MpMarkReady) */
 	int remainMs[MP_MAX_PLAYERS];
@@ -89,8 +94,11 @@ void MpMarkReset(int mode, int minutes)
 	memset(&gMark, 0, sizeof(gMark));
 	gMark.mode = mode;
 	gMark.timer = MpModeTimerKind(mode);
-	gMark.countdown = MpModeWantsCountdown(mode);
-	gMark.lobby = gMark.countdown;	/* a reset is a map load (the host's START) */
+	gMark.waitMin = MpModeWaitMinPlayers(mode);
+	gMark.waitCars = MpModeWaitForCars(mode);
+	gMark.firstSec = MpModeFirstCountdownSec(mode);
+	gMark.roundSec = MpModeRoundCountdownSec(mode);
+	gMark.firstMap = MpModeHasPreGame(mode);	/* a reset is a map load (the host's START) */
 	gMark.phase = MP_MARK_PHASE_WAITING;
 	gMark.minutes = MpMarkClampMinutes(minutes);
 	gMark.marked = -1;
@@ -109,16 +117,21 @@ static void MpMarkFreshClocks(void)
 	gMark.sharedMs = gMark.timer == MP_MODE_TIMER_SHARED ? MpMarkFullMs() : 0;
 }
 
-/* May a round start now? Two present players, and in a countdown mode every one of
- * them has picked a car. */
+/* May a round start now? The mode's wait: enough players, and if waitForCars
+ * every present player has picked a car. A mode with no wait is startable as
+ * soon as someone is here (this referee is inactive when the mode has no timer). */
 static int MpMarkStartable(void)
 {
-	int i;
+	int i, n = MpMarkCount();
+	int need = gMark.waitMin;
 
-	if (MpMarkCount() < 2)
+	if (need < 1)
+		need = (gMark.waitCars || gMark.firstSec > 0 || gMark.roundSec > 0) ? 1 : 2;
+
+	if (n < need)
 		return 0;
 
-	if (!gMark.countdown)
+	if (!gMark.waitCars)
 		return 1;
 
 	for (i = 0; i < MP_MAX_PLAYERS; i++)
@@ -133,6 +146,9 @@ static void MpMarkBegin(unsigned rnd)
 	gMark.phase = MP_MARK_PHASE_LIVE;
 	gMark.winner = -1;
 	gMark.countdownMs = 0;
+	gMark.countdownTotalMs = 0;
+	gMark.countdownFirst = 0;
+	gMark.firstMap = 0;	/* GO: later rounds on this map use the per-round count */
 	MpMarkFreshClocks();
 	gMark.marked = MpMarkPick(rnd);
 	gMark.cooldownUntil = gMark.clockMs + MP_MARK_TAG_COOLDOWN_MS;
@@ -140,14 +156,28 @@ static void MpMarkBegin(unsigned rnd)
 	gMark.revision++;
 }
 
-/* Every car is in: the 3-2-1. The clocks show what the round will start with, and
- * nobody is marked until GO picks someone. */
-static void MpMarkCountdown(void)
+/* The wait is satisfied: one COUNTDOWN. A fresh map uses firstCountdownSec as
+ * N..1; later rounds use GET READY + roundCountdownSec. firstMap is only
+ * cleared at GO, so an aborted first-load count is retried, not replaced by
+ * the shorter per-round count. */
+static void MpMarkCountdown(int first)
 {
+	int ms;
+
 	gMark.phase = MP_MARK_PHASE_COUNTDOWN;
 	gMark.marked = -1;
 	gMark.winner = -1;
-	gMark.countdownMs = MP_MARK_COUNTDOWN_MS;
+	gMark.countdownFirst = first ? 1 : 0;
+
+	if (first && gMark.firstSec > 0)
+		ms = gMark.firstSec * 1000;
+	else if (gMark.roundSec > 0)
+		ms = MP_MARK_COUNTDOWN_SPAWN_MS + gMark.roundSec * 1000;
+	else
+		ms = 0;
+
+	gMark.countdownMs = ms;
+	gMark.countdownTotalMs = ms;
 	MpMarkFreshClocks();
 	gMark.revision++;
 }
@@ -155,10 +185,13 @@ static void MpMarkCountdown(void)
 /* WAITING -> (COUNTDOWN | LIVE) when the gate opens; the events that start says. */
 static int MpMarkStart(unsigned rnd)
 {
-	if (gMark.countdown)
+	int first = gMark.firstMap && gMark.firstSec > 0;
+
+	if (first || gMark.roundSec > 0)
 	{
-		MpMarkCountdown();
-		return MP_MARK_EV_COUNTDOWN;
+		MpMarkCountdown(first);
+		if (gMark.countdownMs > 0)
+			return MP_MARK_EV_COUNTDOWN;
 	}
 
 	MpMarkBegin(rnd);
@@ -212,10 +245,10 @@ int MpMarkSync(const int* present, unsigned rnd)
 		gMark.revision++;
 
 	/* Everyone gone: whoever comes in next is loading the map (a dedicated
-	 * server's vote kicks everyone to rejoin on the new one), so the next round
-	 * starts with the pre-game lobby again. */
-	if (changed && gMark.countdown && MpMarkCount() == 0 && gMark.phase != MP_MARK_PHASE_LOBBY)
-		gMark.lobby = 1;
+	 * server's vote kicks everyone to rejoin on the new one), so the next
+	 * countdown is the first-load count again. */
+	if (changed && MpModeHasPreGame(gMark.mode) && MpMarkCount() == 0)
+		gMark.firstMap = 1;
 
 	return ev;
 }
@@ -257,40 +290,17 @@ int MpMarkTick(int ms, unsigned rnd)
 	switch (gMark.phase)
 	{
 	case MP_MARK_PHASE_WAITING:
-		/* a map was just loaded and someone is in it: the pre-game 5-4-3-2-1 */
-		if (gMark.lobby && n >= 1)
-		{
-			gMark.lobby = 0;
-			gMark.phase = MP_MARK_PHASE_LOBBY;
-			gMark.countdownMs = MP_MARK_LOBBY_MS;
-			gMark.marked = -1;
-			gMark.winner = -1;
-			gMark.revision++;
-			return MP_MARK_EV_LOBBY;
-		}
 		if (MpMarkStartable())
 			return MpMarkStart(rnd);
 		return 0;
 
 	case MP_MARK_PHASE_LOBBY:
-		/* nobody here to see it: hold it full until someone is */
-		if (n == 0)
-		{
-			gMark.countdownMs = MP_MARK_LOBBY_MS;
-			return 0;
-		}
-
-		gMark.countdownMs -= ms;
-
-		if (gMark.countdownMs > 0)
-			return 0;
-
-		/* the lobby is over: the round-start gate, at once */
-		gMark.lobby = 0;
+		/* retired: treat a stale snapshot as WAITING */
 		gMark.phase = MP_MARK_PHASE_WAITING;
 		gMark.countdownMs = 0;
+		gMark.countdownTotalMs = 0;
+		gMark.countdownFirst = 0;
 		gMark.revision++;
-
 		if (MpMarkStartable())
 			return MpMarkStart(rnd);
 		return 0;
@@ -301,6 +311,8 @@ int MpMarkTick(int ms, unsigned rnd)
 		{
 			gMark.phase = MP_MARK_PHASE_WAITING;
 			gMark.countdownMs = 0;
+			gMark.countdownTotalMs = 0;
+			gMark.countdownFirst = 0;
 			gMark.revision++;
 			return 0;
 		}
@@ -354,8 +366,8 @@ int MpMarkTick(int ms, unsigned rnd)
 		if (gMark.intermissionMs > 0)
 			return 0;
 
-		/* the same gate -- unless a new map came in meanwhile (lobby first) */
-		if (!gMark.lobby && MpMarkStartable())
+		/* the same wait-then-countdown gate (first-load if the map was emptied) */
+		if (MpMarkStartable())
 			return MpMarkStart(rnd);
 
 		gMark.phase = MP_MARK_PHASE_WAITING;
@@ -468,7 +480,10 @@ int MpMarkApply(const unsigned char* p, int len)
 	gMark.have = 1;
 	gMark.mode = h.gamemode;
 	gMark.timer = MpModeTimerKind(h.gamemode);
-	gMark.countdown = MpModeWantsCountdown(h.gamemode);
+	gMark.waitMin = MpModeWaitMinPlayers(h.gamemode);
+	gMark.waitCars = MpModeWaitForCars(h.gamemode);
+	gMark.firstSec = MpModeFirstCountdownSec(h.gamemode);
+	gMark.roundSec = MpModeRoundCountdownSec(h.gamemode);
 	gMark.phase = h.phase;
 	gMark.marked = h.marked == MP_MARK_NONE || !MpMarkIdOk(h.marked) ? -1 : h.marked;
 	gMark.winner = h.winner == MP_MARK_NONE || !MpMarkIdOk(h.winner) ? -1 : h.winner;
@@ -476,6 +491,32 @@ int MpMarkApply(const unsigned char* p, int len)
 	gMark.seq = h.seq;
 	gMark.sharedMs = (int)h.sharedDs * 100;
 	gMark.countdownMs = (int)h.countdownDs * 100;
+
+	/* first vs per-round is host-only; a client infers from remaining vs the
+	 * later total (firstSec*1000 is 5000, later is 4000 for Fox/Bomb). Once
+	 * a COUNTDOWN is already in progress, keep the kind locked in. */
+	if (gMark.phase != MP_MARK_PHASE_COUNTDOWN)
+	{
+		gMark.countdownFirst = 0;
+		gMark.countdownTotalMs = 0;
+	}
+	else if (gMark.countdownTotalMs <= 0)
+	{
+		int later = gMark.roundSec > 0
+			? MP_MARK_COUNTDOWN_SPAWN_MS + gMark.roundSec * 1000 : 0;
+		int first = gMark.firstSec * 1000;
+
+		if (first > 0 && (later <= 0 || gMark.countdownMs > later))
+		{
+			gMark.countdownFirst = 1;
+			gMark.countdownTotalMs = first;
+		}
+		else
+		{
+			gMark.countdownFirst = 0;
+			gMark.countdownTotalMs = later > 0 ? later : first;
+		}
+	}
 
 	memset(gMark.present, 0, sizeof(gMark.present));
 	memset(gMark.ready, 0, sizeof(gMark.ready));
@@ -540,11 +581,21 @@ int MpMarkCountdownMs(int sinceMs)
 {
 	int ms;
 
-	if (gMark.phase != MP_MARK_PHASE_COUNTDOWN && gMark.phase != MP_MARK_PHASE_LOBBY)
+	if (gMark.phase != MP_MARK_PHASE_COUNTDOWN)
 		return 0;
 
 	ms = gMark.countdownMs - (sinceMs > 0 ? sinceMs : 0);
 	return ms < 0 ? 0 : ms;
+}
+
+int MpMarkCountdownTotalMs(void)
+{
+	return gMark.phase == MP_MARK_PHASE_COUNTDOWN ? gMark.countdownTotalMs : 0;
+}
+
+int MpMarkCountdownIsFirst(void)
+{
+	return gMark.phase == MP_MARK_PHASE_COUNTDOWN && gMark.countdownFirst;
 }
 
 int MpMarkClockMs(int playerId, int sinceMs)

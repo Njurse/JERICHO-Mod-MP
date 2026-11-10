@@ -111,9 +111,18 @@ def mark_scripts():
          "tick 0 0", "tick 2000 0", "tick 2000 0", "contact 1 4", "tick 2000 0",
          "contact 1 4", "tick 60000 0", "tick 10000 0", "ready 1", "tick 33 0",
          "ready 1 4", "tick 33 0", "tick 4000 1"],
-        # The pre-game lobby (t509): a map load runs 5-4-3-2-1 once someone is in,
-        # holds while nobody is, skips the next round on the same map, and comes
-        # back after everyone has left (a map vote's rejoin).
+        # Join during WAITING and during COUNTDOWN (t515): a joiner without a
+        # car is counted in the wait and aborts a countdown already running;
+        # once they are ready the first-load count starts (or restarts).
+        ["reset %s 2" % fox, "sync 0 3", "ready 3", "tick 1000 0", "sync 0 3 6",
+         "tick 33 0", "ready 3 6", "tick 33 0", "sync 0 3 6 8", "tick 33 0",
+         "ready 3 6 8", "tick 33 0", "tick 5000 1"],
+        ["reset %s 2" % bomb, "ready 1 4", "sync 0 1 4", "tick 0 0", "tick 2000 0",
+         "sync 0 1 4 9", "tick 33 0", "ready 1 4 9", "tick 33 0", "tick 2500 0",
+         "tick 2500 0"],
+        # Pre-game wait (t515/t516): a map load sits in WAITING until the mode's
+        # wait is satisfied, then one first-load 5-4-3-2-1; later rounds on the
+        # same map use the shorter count; everyone leaving re-arms the first-load.
         ["reset %s 2" % bomb, "ready %s" % everyone, "tick 9000 0", "sync 0 1", "tick 33 0",
          "tick 1000 0", "contact 1 4", "sync 0 1 4", "tick 2000 0", "sync 0", "tick 3000 0",
          "sync 0 1 4", "tick 4999 0", "tick 1 0", "tick 4000 0", "tick 120000 0",

@@ -137,18 +137,19 @@ static void CheckFoxAndHounds(void)
 	CHECK(MpMarkHaveState());
 	AllReady();	/* the round-start gate has its own check: CheckRoundStart */
 
-	/* one player: the map's pre-game lobby, then nothing starts, nothing ticks */
+	/* one player: the wait is not satisfied, nothing starts, nothing ticks */
 	Present(one, 1, 0);
-	CHECK(MpMarkTick(5000, 0) == MP_MARK_EV_LOBBY);
+	CHECK(MpMarkTick(5000, 0) == 0);
 	CHECK(MpMarkTick(MP_MARK_LOBBY_MS, 0) == 0);
 	CHECK(MpMarkTick(5000, 0) == 0);
 	CHECK(MpMarkPhase() == MP_MARK_PHASE_WAITING && MpMarkMarked() == -1);
 	CHECK(MpMarkClockMs(2, 0) == 3 * MIN_MS);
 
-	/* the second arrives: the countdown, then live, the random pick is the fox */
+	/* the second arrives: the first-load countdown (5 s), then live */
 	Present(two, 2, 0);
 	CHECK(MpMarkTick(33, 1) == MP_MARK_EV_COUNTDOWN);
-	CHECK(MpMarkTick(MP_MARK_COUNTDOWN_MS, 1) == MP_MARK_EV_BEGIN);	/* rnd 1 of {2,5} -> 5 */
+	CHECK(MpMarkCountdownIsFirst() && MpMarkCountdownMs(0) == 5 * 1000);
+	CHECK(MpMarkTick(5 * 1000, 1) == MP_MARK_EV_BEGIN);	/* rnd 1 of {2,5} -> 5 */
 	CHECK(MpMarkPhase() == MP_MARK_PHASE_LIVE && MpMarkMarked() == 5);
 	fox = 5; hound = 2;
 	CHECK(MpMarkSeq() == 1);
@@ -240,13 +241,13 @@ static void CheckBombTag(void)
 	MpMarkReset(MP_GAMEMODE_BOMBTAG, 1);
 	AllReady();
 	Present(two, 2, 0);
-	CHECK(MpMarkTick(0, 0) == MP_MARK_EV_LOBBY);
-	CHECK(MpMarkTick(MP_MARK_LOBBY_MS, 0) == MP_MARK_EV_COUNTDOWN);	/* lobby over, cars in */
+	CHECK(MpMarkTick(0, 0) == MP_MARK_EV_COUNTDOWN);	/* first-load 5 s, cars already in */
+	CHECK(MpMarkCountdownIsFirst() && MpMarkCountdownMs(0) == 5 * 1000);
 	CHECK(MpMarkClockMs(-1, 0) == MIN_MS);
 	CHECK(MpMarkTick(1000, 0) == 0);
 	CHECK(MpMarkClockMs(-1, 0) == MIN_MS);		/* the countdown is not the bomb's time */
 	CHECK(MpMarkContact(1, 4) == 0);		/* nor a pass */
-	CHECK(MpMarkTick(MP_MARK_COUNTDOWN_MS - 1000, 0) == MP_MARK_EV_BEGIN);	/* rnd 0 -> 1 */
+	CHECK(MpMarkTick(5 * 1000 - 1000, 0) == MP_MARK_EV_BEGIN);	/* rnd 0 -> 1 */
 	holder = 1; other = 4;
 	CHECK(MpMarkMarked() == holder);
 	CHECK(MpMarkClockMs(-1, 0) == MIN_MS);
@@ -292,9 +293,8 @@ static void CheckApply(void)
 	MpMarkReset(MP_GAMEMODE_FOXHOUNDS, 2);
 	AllReady();
 	Present(two, 2, 0);
-	MpMarkTick(10, 1);
-	MpMarkTick(MP_MARK_LOBBY_MS, 1);
-	MpMarkTick(MP_MARK_COUNTDOWN_MS, 1);
+	MpMarkTick(10, 1);			/* first-load countdown */
+	MpMarkTick(5 * 1000, 1);
 	MpMarkTick(1234, 0);
 	len = MpMarkBuild(buf, (int)sizeof(buf));
 
@@ -326,9 +326,9 @@ static void CheckRoundStart(void)
 	MpMarkReset(MP_GAMEMODE_FOXHOUNDS, 2);
 	Present(two, 2, 0);
 
-	/* two present, one still in the car select: the lobby, then nothing starts */
+	/* two present, one still in the car select: nothing starts */
 	Ready(only3, 1);
-	CHECK(MpMarkTick(0, 0) == MP_MARK_EV_LOBBY);
+	CHECK(MpMarkTick(0, 0) == 0);
 	CHECK(MpMarkTick(MP_MARK_LOBBY_MS, 0) == 0);
 	CHECK(MpMarkTick(5000, 0) == 0);
 	CHECK(MpMarkTick(60000, 0) == 0);
@@ -344,11 +344,11 @@ static void CheckRoundStart(void)
 	Ready(two, 2);
 	CHECK(MpMarkTick(33, 0) == MP_MARK_EV_COUNTDOWN);
 	CHECK(MpMarkPhase() == MP_MARK_PHASE_COUNTDOWN && MpMarkMarked() == -1);
-	CHECK(MpMarkCountdownMs(0) == MP_MARK_COUNTDOWN_MS);
-	CHECK(MpMarkCountdownMs(1500) == MP_MARK_COUNTDOWN_MS - 1500);
+	CHECK(MpMarkCountdownIsFirst() && MpMarkCountdownMs(0) == 5 * 1000);
+	CHECK(MpMarkCountdownMs(1500) == 5 * 1000 - 1500);
 	len = MpMarkBuild(buf, (int)sizeof(buf));
 	memcpy(&h, buf, sizeof(h));
-	CHECK(h.phase == MP_MARK_PHASE_COUNTDOWN && h.countdownDs == MP_MARK_COUNTDOWN_MS / 100);
+	CHECK(h.phase == MP_MARK_PHASE_COUNTDOWN && h.countdownDs == (5 * 1000) / 100);
 	memcpy(&e, buf + sizeof(h) + sizeof(e), sizeof(e));
 	CHECK(e.flags == MP_MARK_ENTRY_F_READY);
 
@@ -357,7 +357,7 @@ static void CheckRoundStart(void)
 	CHECK(MpMarkContact(3, 6) == 0);
 	CHECK(MpMarkClockMs(3, 0) == 2 * MIN_MS && MpMarkClockMs(6, 0) == 2 * MIN_MS);
 	CHECK(MpMarkClockMs(3, 900) == 2 * MIN_MS);	/* a client does not run it on either */
-	CHECK(MpMarkCountdownMs(0) == MP_MARK_COUNTDOWN_MS - 1000);
+	CHECK(MpMarkCountdownMs(0) == 5 * 1000 - 1000);
 
 	/* a joiner arrives before GO without a car: back to waiting for them */
 	Present(three, 3, 0);
@@ -365,11 +365,11 @@ static void CheckRoundStart(void)
 	CHECK(MpMarkPhase() == MP_MARK_PHASE_WAITING && MpMarkCountdownMs(0) == 0);
 	CHECK(MpMarkTick(30000, 0) == 0 && MpMarkPhase() == MP_MARK_PHASE_WAITING);
 
-	/* their car is in: a fresh countdown, the full length */
+	/* their car is in: a fresh first-load countdown (GO has not happened yet) */
 	Ready(three, 3);
 	CHECK(MpMarkTick(33, 0) == MP_MARK_EV_COUNTDOWN);
-	CHECK(MpMarkCountdownMs(0) == MP_MARK_COUNTDOWN_MS);
-	CHECK(MpMarkTick(MP_MARK_COUNTDOWN_MS - 1, 0) == 0);
+	CHECK(MpMarkCountdownIsFirst() && MpMarkCountdownMs(0) == 5 * 1000);
+	CHECK(MpMarkTick(5 * 1000 - 1, 0) == 0);
 	CHECK(MpMarkPhase() == MP_MARK_PHASE_COUNTDOWN);
 	CHECK(MpMarkClockMs(3, 0) == 2 * MIN_MS && MpMarkClockMs(6, 0) == 2 * MIN_MS && MpMarkClockMs(8, 0) == 2 * MIN_MS);
 
@@ -386,17 +386,18 @@ static void CheckRoundStart(void)
 	MpMarkReset(MP_GAMEMODE_BOMBTAG, 1);
 	Present(two, 2, 0);
 	Ready(two, 2);
-	CHECK(MpMarkTick(0, 0) == MP_MARK_EV_LOBBY);
-	CHECK(MpMarkTick(MP_MARK_LOBBY_MS, 0) == MP_MARK_EV_COUNTDOWN);
+	CHECK(MpMarkTick(0, 0) == MP_MARK_EV_COUNTDOWN);
+	CHECK(MpMarkCountdownIsFirst() && MpMarkCountdownMs(0) == 5 * 1000);
 	Present(only3, 1, 0);
-	CHECK(MpMarkTick(MP_MARK_COUNTDOWN_MS, 0) == 0);
+	CHECK(MpMarkTick(5 * 1000, 0) == 0);
 	CHECK(MpMarkPhase() == MP_MARK_PHASE_WAITING && MpMarkMarked() == -1);
 	CHECK(MpMarkClockMs(-1, 0) == MIN_MS);
 
-	/* the intermission leads into the same gate: a car missing -> WAITING ... */
+	/* still the first-load count (GO never happened), then GO, then intermission */
 	Present(two, 2, 0);
 	CHECK(MpMarkTick(0, 0) == MP_MARK_EV_COUNTDOWN);
-	CHECK(MpMarkTick(MP_MARK_COUNTDOWN_MS, 0) == MP_MARK_EV_BEGIN);
+	CHECK(MpMarkCountdownIsFirst());
+	CHECK(MpMarkTick(5 * 1000, 0) == MP_MARK_EV_BEGIN);
 	CHECK(MpMarkTick(MIN_MS, 0) == MP_MARK_EV_END);
 	CHECK(MpMarkClockMs(-1, 0) == 0);
 	Ready(only3, 1);				/* (a test-only flip: cars stay picked) */
@@ -424,9 +425,10 @@ static void CheckRoundStart(void)
 	CHECK(MpMarkClockMs(-1, 3000) == MIN_MS);	/* frozen on a client too */
 }
 
-/* THE PRE-GAME LOBBY (t509): after a map load, a 5-4-3-2-1 before the first round's
- * wait-for-cars / 3-2-1 / GO, once per map. */
-static void CheckLobby(void)
+/* THE PRE-GAME WAIT (t515/t516): after a map load, WAITING until the mode's
+ * wait is satisfied, then one first-load N..1; later rounds on the same map
+ * use the shorter per-round count. PHASE_LOBBY is unused. */
+static void CheckPreGame(void)
 {
 	int two[] = { 1, 4 };
 	int one[] = { 1 };
@@ -434,70 +436,142 @@ static void CheckLobby(void)
 	MP_MARK h;
 	int len;
 
-	/* Take a Ride: no lobby, ever */
+	/* Take a Ride: no wait, no countdown, ever (the referee is inert) */
 	MpMarkReset(MP_GAMEMODE_TAKEADRIDE, 3);
 	Present(two, 2, 0);
 	CHECK(MpMarkTick(0, 0) == 0 && MpMarkPhase() == MP_MARK_PHASE_WAITING && MpMarkCountdownMs(0) == 0);
+	CHECK(MpModeHasPreGame(MP_GAMEMODE_TAKEADRIDE) == 0);
 
-	/* a map load with nobody in it yet: nothing, until someone is there */
+	/* a map load with nobody in it yet: nothing, until the wait is satisfied */
 	MpMarkReset(MP_GAMEMODE_BOMBTAG, 2);
 	AllReady();
 	CHECK(MpMarkTick(10000, 0) == 0 && MpMarkPhase() == MP_MARK_PHASE_WAITING);
 	Present(one, 1, 0);
-	CHECK(MpMarkTick(33, 0) == MP_MARK_EV_LOBBY);
-	CHECK(MpMarkPhase() == MP_MARK_PHASE_LOBBY && MpMarkCountdownMs(0) == MP_MARK_LOBBY_MS);
+	CHECK(MpMarkTick(33, 0) == 0);
+	CHECK(MpMarkPhase() == MP_MARK_PHASE_WAITING && MpMarkCountdownMs(0) == 0);
 	CHECK(MpMarkMarked() == -1);
 
-	/* 5, 4, ...: no clock, no tag, even with two players in */
+	/* the second player (cars already in): first-load 5, 4, ... COUNTDOWN */
 	Present(two, 2, 0);
+	CHECK(MpMarkTick(0, 0) == MP_MARK_EV_COUNTDOWN);
+	CHECK(MpMarkCountdownIsFirst() && MpMarkCountdownTotalMs() == 5 * 1000);
 	CHECK(MpMarkTick(1000, 0) == 0);
-	CHECK(MpMarkCountdownMs(0) == MP_MARK_LOBBY_MS - 1000);
-	CHECK(MpMarkCountdownMs(500) == MP_MARK_LOBBY_MS - 1500);
-	CHECK(MpMarkClockMs(-1, 0) == 0 && MpMarkContact(1, 4) == 0);
+	CHECK(MpMarkCountdownMs(0) == 5 * 1000 - 1000);
+	CHECK(MpMarkCountdownMs(500) == 5 * 1000 - 1500);
+	CHECK(MpMarkClockMs(-1, 0) == 2 * MIN_MS && MpMarkContact(1, 4) == 0);
 	len = MpMarkBuild(buf, (int)sizeof(buf));
 	memcpy(&h, buf, sizeof(h));
-	CHECK(h.phase == MP_MARK_PHASE_LOBBY && h.countdownDs == (MP_MARK_LOBBY_MS - 1000) / 100);
+	CHECK(h.phase == MP_MARK_PHASE_COUNTDOWN && h.countdownDs == (5 * 1000 - 1000) / 100);
 
-	/* everyone leaves mid-lobby: it holds, full, until someone is back */
+	/* everyone leaves mid-count: back to WAITING, and first-map stays armed */
 	Present(one, 0, 0);
-	CHECK(MpMarkTick(2000, 0) == 0 && MpMarkPhase() == MP_MARK_PHASE_LOBBY);
-	CHECK(MpMarkCountdownMs(0) == MP_MARK_LOBBY_MS);
+	CHECK(MpMarkTick(2000, 0) == 0 && MpMarkPhase() == MP_MARK_PHASE_WAITING);
+	CHECK(MpMarkCountdownMs(0) == 0);
 	Present(two, 2, 0);
-	CHECK(MpMarkTick(MP_MARK_LOBBY_MS - 1, 0) == 0 && MpMarkPhase() == MP_MARK_PHASE_LOBBY);
+	CHECK(MpMarkTick(0, 0) == MP_MARK_EV_COUNTDOWN);
+	CHECK(MpMarkCountdownIsFirst() && MpMarkCountdownMs(0) == 5 * 1000);
+	CHECK(MpMarkTick(5 * 1000 - 1, 0) == 0 && MpMarkPhase() == MP_MARK_PHASE_COUNTDOWN);
 
-	/* the lobby ends: straight into the round start (every car is in) */
-	CHECK(MpMarkTick(1, 0) == MP_MARK_EV_COUNTDOWN);
-	CHECK(MpMarkPhase() == MP_MARK_PHASE_COUNTDOWN && MpMarkCountdownMs(0) == MP_MARK_COUNTDOWN_MS);
-	CHECK(MpMarkClockMs(-1, 0) == 2 * MIN_MS);
-	CHECK(MpMarkTick(MP_MARK_COUNTDOWN_MS, 0) == MP_MARK_EV_BEGIN);
+	/* the first-load count ends: GO, then the round, then ENDED */
+	CHECK(MpMarkTick(1, 0) == MP_MARK_EV_BEGIN);
+	CHECK(MpMarkPhase() == MP_MARK_PHASE_LIVE);
 	CHECK(MpMarkTick(2 * MIN_MS, 0) == MP_MARK_EV_END);
 
-	/* the SAME map, after the intermission: no lobby, the 3-2-1 again */
+	/* the SAME map, after the intermission: the shorter per-round count */
 	CHECK(MpMarkTick(MP_MARK_INTERMISSION_MS, 0) == MP_MARK_EV_COUNTDOWN);
+	CHECK(!MpMarkCountdownIsFirst() && MpMarkCountdownMs(0) == MP_MARK_COUNTDOWN_MS);
 	CHECK(MpMarkTick(MP_MARK_COUNTDOWN_MS, 0) == MP_MARK_EV_BEGIN);
 
-	/* a new map: everyone is kicked to rejoin (a dedicated server's vote) -> the
-	 * live round ends, and the first one back gets the lobby again */
+	/* a new map: everyone is kicked to rejoin (a dedicated server's vote) ->
+	 * the live round ends, and the next startable group gets the first-load count */
 	Present(one, 0, 0);
 	CHECK(MpMarkTick(33, 0) == MP_MARK_EV_END);
 	CHECK(MpMarkTick(MP_MARK_INTERMISSION_MS, 0) == 0 && MpMarkPhase() == MP_MARK_PHASE_WAITING);
 	Present(two, 2, 0);
-	CHECK(MpMarkTick(33, 0) == MP_MARK_EV_LOBBY);
-	CHECK(MpMarkTick(MP_MARK_LOBBY_MS, 0) == MP_MARK_EV_COUNTDOWN);
+	CHECK(MpMarkTick(33, 0) == MP_MARK_EV_COUNTDOWN);
+	CHECK(MpMarkCountdownIsFirst() && MpMarkCountdownMs(0) == 5 * 1000);
 
-	/* players coming back during an intermission after a new map: lobby first */
-	CHECK(MpMarkTick(MP_MARK_COUNTDOWN_MS, 0) == MP_MARK_EV_BEGIN);
+	/* players coming back during an intermission after a new map: first-load again */
+	CHECK(MpMarkTick(5 * 1000, 0) == MP_MARK_EV_BEGIN);
 	CHECK(MpMarkTick(2 * MIN_MS, 0) == MP_MARK_EV_END);
 	Present(one, 0, 0);
 	Present(two, 2, 0);
-	CHECK(MpMarkTick(MP_MARK_INTERMISSION_MS, 0) == 0 && MpMarkPhase() == MP_MARK_PHASE_WAITING);
-	CHECK(MpMarkTick(33, 0) == MP_MARK_EV_LOBBY);
+	CHECK(MpMarkTick(MP_MARK_INTERMISSION_MS, 0) == MP_MARK_EV_COUNTDOWN);
+	CHECK(MpMarkCountdownIsFirst());
 
 	/* the mirror */
 	len = MpMarkBuild(buf, (int)sizeof(buf));
 	MpMarkReset(MP_GAMEMODE_TAKEADRIDE, 3);
 	CHECK(MpMarkApply(buf, len) == 1);
-	CHECK(MpMarkPhase() == MP_MARK_PHASE_LOBBY && MpMarkCountdownMs(1000) == MP_MARK_LOBBY_MS - 1000);
+	CHECK(MpMarkPhase() == MP_MARK_PHASE_COUNTDOWN && MpMarkCountdownIsFirst());
+	CHECK(MpMarkCountdownMs(1000) == 5 * 1000 - 1000);
+}
+
+/* A joiner who arrives during WAITING is counted in the wait, not mid-round. */
+static void CheckJoinDuringWait(void)
+{
+	int one[] = { 3 };
+	int two[] = { 3, 6 };
+	int three[] = { 3, 6, 8 };
+
+	MpMarkReset(MP_GAMEMODE_FOXHOUNDS, 2);
+	Present(one, 1, 0);
+	Ready(one, 1);
+	CHECK(MpMarkTick(1000, 0) == 0 && MpMarkPhase() == MP_MARK_PHASE_WAITING);
+
+	/* a second player joins without a car: still waiting */
+	Present(two, 2, 0);
+	CHECK(MpMarkTick(33, 0) == 0 && MpMarkPhase() == MP_MARK_PHASE_WAITING);
+	CHECK(!MpMarkPlayerReady(6));
+
+	/* their car is in: the first-load countdown starts */
+	Ready(two, 2);
+	CHECK(MpMarkTick(33, 0) == MP_MARK_EV_COUNTDOWN);
+	CHECK(MpMarkCountdownIsFirst());
+
+	/* a third joins during the wait after an abort, still counted */
+	Present(three, 3, 0);
+	CHECK(MpMarkTick(33, 0) == 0 && MpMarkPhase() == MP_MARK_PHASE_WAITING);
+	Ready(three, 3);
+	CHECK(MpMarkTick(33, 0) == MP_MARK_EV_COUNTDOWN);
+	CHECK(MpMarkCountdownIsFirst() && MpMarkCountdownMs(0) == 5 * 1000);
+}
+
+/* A joiner who arrives during COUNTDOWN without a car aborts it; after they
+ * pick a car the same kind of countdown starts again. After GO, a later-round
+ * countdown aborted the same way retries the shorter count, not the first-load. */
+static void CheckJoinDuringCountdown(void)
+{
+	int two[] = { 3, 6 };
+	int three[] = { 3, 6, 8 };
+
+	MpMarkReset(MP_GAMEMODE_FOXHOUNDS, 2);
+	Present(two, 2, 0);
+	Ready(two, 2);
+	CHECK(MpMarkTick(0, 0) == MP_MARK_EV_COUNTDOWN);
+	CHECK(MpMarkTick(2000, 0) == 0 && MpMarkCountdownIsFirst());
+
+	Present(three, 3, 0);
+	CHECK(MpMarkTick(33, 0) == 0);
+	CHECK(MpMarkPhase() == MP_MARK_PHASE_WAITING && MpMarkCountdownMs(0) == 0);
+
+	Ready(three, 3);
+	CHECK(MpMarkTick(33, 0) == MP_MARK_EV_COUNTDOWN);
+	CHECK(MpMarkCountdownIsFirst() && MpMarkCountdownMs(0) == 5 * 1000);
+	CHECK(MpMarkTick(5 * 1000, 0) == MP_MARK_EV_BEGIN);
+
+	/* later round: abort mid-count, retry is the per-round length */
+	CHECK(MpMarkTick(2 * MIN_MS, 0) == MP_MARK_EV_END);
+	CHECK(MpMarkTick(MP_MARK_INTERMISSION_MS, 0) == MP_MARK_EV_COUNTDOWN);
+	CHECK(!MpMarkCountdownIsFirst() && MpMarkCountdownMs(0) == MP_MARK_COUNTDOWN_MS);
+	Present(two, 2, 0);	/* 8 left -- still two, startable, count continues? 8 left means two remain, both ready */
+	/* drop to a joiner-not-ready by adding 8 back without ready */
+	Present(three, 3, 0);
+	Ready(two, 2);
+	CHECK(MpMarkTick(33, 0) == 0 && MpMarkPhase() == MP_MARK_PHASE_WAITING);
+	Ready(three, 3);
+	CHECK(MpMarkTick(33, 0) == MP_MARK_EV_COUNTDOWN);
+	CHECK(!MpMarkCountdownIsFirst() && MpMarkCountdownMs(0) == MP_MARK_COUNTDOWN_MS);
 }
 
 static int RunScript(void)
@@ -578,7 +652,9 @@ int main(int argc, char** argv)
 	CheckBombTag();
 	CheckApply();
 	CheckRoundStart();
-	CheckLobby();
+	CheckPreGame();
+	CheckJoinDuringWait();
+	CheckJoinDuringCountdown();
 
 	printf("mp_mark: %d check(s), %d failure(s)\n", gChecks, gFails);
 	return gFails == 0 ? 0 : 1;

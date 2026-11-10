@@ -2,6 +2,8 @@
 
 #include "driver2.h"
 #include "cars.h"
+#include "cosmetic.h"	/* carCos->cog: DrawCarObject places the body here */
+#include "main.h"	/* ActiveCheats.cheat13: mini cars, same cog scale as DrawCarObject */
 #include "camera.h"
 #include "draw.h"
 #include "system.h"
@@ -11,7 +13,12 @@
 #include "dr2math.h"
 #include "jericho.h"
 
-/* ~1.12x about the model origin (the CoG the body was built around). */
+/* ~1.12x about the body centre. DrawCarObject (cars.c:3964-3983) does not
+ * draw verts about the model origin: it sets trans to pos, transforms
+ * carCos->cog, and uses that as the model trans, so a vertex v appears at
+ * pos + R*(v + cog). The car position / visual centre is model point -cog.
+ * Scaling about 0 with trans=pos left the shell growing from the mesh
+ * origin, off the body. */
 #define JER_CARGLOW_SCALE	4588
 
 static CAR_DATA* gGlowCar;
@@ -39,16 +46,20 @@ void jer_carglow_clear(void)
 	gGlowCar = NULL;
 }
 
-static void JerCarGlowCopyVerts(CAR_DATA* cp, int scale)
+/* Scale about model-space -cog, the point DrawCarObject places on the car
+ * position. Then the same trans path (pos, then + R*cog) keeps the shell
+ * centred on the body. */
+static void JerCarGlowCopyVerts(CAR_DATA* cp, int scale, SVECTOR cog)
 {
 	int i;
 	const SVECTOR* src = gTempCarVertDump[cp->id];
+	int cx = -cog.vx, cy = -cog.vy, cz = -cog.vz;
 
 	for (i = 0; i < MAX_DENTING_VERTS; i++)
 	{
-		gGlowVerts[i].vx = (short)((src[i].vx * scale) >> 12);
-		gGlowVerts[i].vy = (short)((src[i].vy * scale) >> 12);
-		gGlowVerts[i].vz = (short)((src[i].vz * scale) >> 12);
+		gGlowVerts[i].vx = (short)(cx + (((src[i].vx - cx) * scale) >> 12));
+		gGlowVerts[i].vy = (short)(cy + (((src[i].vy - cy) * scale) >> 12));
+		gGlowVerts[i].vz = (short)(cz + (((src[i].vz - cz) * scale) >> 12));
 		gGlowVerts[i].pad = src[i].pad;
 	}
 }
@@ -159,29 +170,51 @@ int jer_carglow_on_draw_world(void* userdata, void* args)
 	pos.vz -= camera_position.vz;
 	Apply_Inv_CameraMatrix(&pos);
 	MulMatrix0(&inv_camera_matrix, &cp->hd.drawCarMat, &workmatrix);
-	gte_SetRotMatrix(&workmatrix);
-	gte_SetTransVector(&pos);
 
-	wave = RSIN(CameraCnt * 96);
-	scale = JER_CARGLOW_SCALE + ((wave * 200) >> 12);
-	if (scale < 4096)
-		scale = 4096;
+	if (cp->ap.carCos == NULL)
+		return JER_RESULT_CONTINUE;
 
-	pulse = 160 + ((wave * 70) >> 12);
-	if (pulse < 40)
-		pulse = 40;
-	else if (pulse > 255)
-		pulse = 255;
+	{
+		VECTOR modelLocation;
+		SVECTOR cog = cp->ap.carCos->cog;
 
-	r = (gGlowR * pulse) / 255;
-	g = (gGlowG * pulse) / 255;
-	b = (gGlowB * pulse) / 255;
-	/* packed B<<16 | G<<8 | R, same as DrawExplosion */
-	rgb = ((u_int)b << 16) | ((u_int)g << 8) | (u_int)r;
+		/* same mini-car adjustment DrawCarObject applies to cog (cars.c:3966-3971) */
+		if (ActiveCheats.cheat13 != 0)
+		{
+			cog.vx <<= 1;
+			cog.vy <<= 1;
+			cog.vz <<= 1;
+		}
 
-	JerCarGlowCopyVerts(cp, scale);
-	JerCarGlowTris(mdl->pFT3, mdl->numFT3, rgb);
-	JerCarGlowTris(mdl->pGT3, mdl->numGT3, rgb);
+		/* DrawCarObject cars.c:3973-3983 */
+		gte_SetRotMatrix(&workmatrix);
+		gte_SetTransVector(&pos);
+		gte_ldv0(&cog);
+		gte_rtv0tr();
+		gte_stlvnl(&modelLocation);
+		gte_SetTransVector(&modelLocation);
+
+		wave = RSIN(CameraCnt * 96);
+		scale = JER_CARGLOW_SCALE + ((wave * 200) >> 12);
+		if (scale < 4096)
+			scale = 4096;
+
+		pulse = 160 + ((wave * 70) >> 12);
+		if (pulse < 40)
+			pulse = 40;
+		else if (pulse > 255)
+			pulse = 255;
+
+		r = (gGlowR * pulse) / 255;
+		g = (gGlowG * pulse) / 255;
+		b = (gGlowB * pulse) / 255;
+		/* packed B<<16 | G<<8 | R, same as DrawExplosion */
+		rgb = ((u_int)b << 16) | ((u_int)g << 8) | (u_int)r;
+
+		JerCarGlowCopyVerts(cp, scale, cog);
+		JerCarGlowTris(mdl->pFT3, mdl->numFT3, rgb);
+		JerCarGlowTris(mdl->pGT3, mdl->numGT3, rgb);
+	}
 
 	return JER_RESULT_CONTINUE;
 }

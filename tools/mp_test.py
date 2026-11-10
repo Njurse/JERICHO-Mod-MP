@@ -29,7 +29,7 @@ import time
 
 PROTO = 23                    # mp_proto.h MP_PROTO_VERSION (23: the marked-player state, MP_TAG_MARK "JPMK", MP_MARK + MP_MARK_ENTRY, Fox N Hounds / Car Bomb Tag; 22: the round state, MP_TAG_ROUND "JPRD", MP_ROUND + MP_ROUND_ENTRY; 21: a car's city byte past the stock rows is a bank NAME code 0x80..0xFE; 20: MP_ROSTER_ENTRY carries leftModel/leftModelCity, 32 bytes; 19: dynamic JMPPED entries on top of 18's ped model id) -- the game drops any frame whose envelope version differs
 SDK = 3                       # JERICHO_SDK_VERSION
-MP_VER = "0.22.0"             # JERICHO/MODS/mp/mod.toml version -- always advertised (0.20.0 came with proto 23; 0.21.0: the timer modes' round start; 0.22.0: bomb tick/wreck/HUD/glow, same proto)
+MP_VER = "0.22.1"             # JERICHO/MODS/mp/mod.toml version -- always advertised (0.20.0 came with proto 23; 0.21.0: the timer modes' round start; 0.22.0: bomb tick/wreck/HUD/glow; 0.22.1: countdown beep, centred glow, framework pre-game, same proto)
 NUL = bytes([0])
 
 # Shared protocol constants, mirrored from mp_proto.h so the tools never hard-code
@@ -65,7 +65,13 @@ MODE_TIMER_NONE, MODE_TIMER_PERSONAL, MODE_TIMER_SHARED = 0, 1, 2
 MODE_MUSIC_AUTO, MODE_MUSIC_CALM, MODE_MUSIC_PURSUIT = 0, 1, 2
 GAMEMODE_TIMER = {0: MODE_TIMER_NONE, 1: MODE_TIMER_PERSONAL, 2: MODE_TIMER_SHARED}
 GAMEMODE_MUSIC = {0: MODE_MUSIC_AUTO, 1: MODE_MUSIC_PURSUIT, 2: MODE_MUSIC_PURSUIT}
-# mp_mode.c kModes[].countdown: 1 = the round start waits for every car, then 3-2-1
+# mp_mode.c kModes[] pre-game: 0 = off (Take a Ride). Fox/Bomb wait for 2 players
+# and a car each, then 5 s on a fresh map and 3 s on later rounds.
+GAMEMODE_WAIT_MIN = {0: 0, 1: 2, 2: 2}
+GAMEMODE_WAIT_CARS = {0: 0, 1: 1, 2: 1}
+GAMEMODE_FIRST_COUNTDOWN = {0: 0, 1: 5, 2: 5}
+GAMEMODE_ROUND_COUNTDOWN = {0: 0, 1: 3, 2: 3}
+# 1 = a first-load or per-round count is set (MpModeWantsCountdown)
 GAMEMODE_COUNTDOWN = {0: 0, 1: 1, 2: 1}
 
 
@@ -75,8 +81,25 @@ def mode_timer(gamemode):
 
 
 def mode_countdown(gamemode):
-    """MpModeWantsCountdown: an unknown id behaves as Take a Ride (none)."""
+    """MpModeWantsCountdown: 1 = a first-load or per-round count is set."""
     return GAMEMODE_COUNTDOWN.get(gamemode, 0)
+
+def mode_wait_min(gamemode):
+    return GAMEMODE_WAIT_MIN.get(gamemode, 0)
+
+def mode_wait_cars(gamemode):
+    return GAMEMODE_WAIT_CARS.get(gamemode, 0)
+
+def mode_first_countdown(gamemode):
+    return GAMEMODE_FIRST_COUNTDOWN.get(gamemode, 0)
+
+def mode_round_countdown(gamemode):
+    return GAMEMODE_ROUND_COUNTDOWN.get(gamemode, 0)
+
+def mode_has_pre_game(gamemode):
+    d = (mode_wait_min(gamemode), mode_wait_cars(gamemode),
+         mode_first_countdown(gamemode), mode_round_countdown(gamemode))
+    return any(d)
 
 
 def mode_name(gamemode):
@@ -225,7 +248,7 @@ MARK_PHASE_WAITING = 0                  # mp_proto.h MP_MARK_PHASE_*
 MARK_PHASE_LIVE = 1
 MARK_PHASE_ENDED = 2
 MARK_PHASE_COUNTDOWN = 3                # every car is in: 3-2-1 before LIVE (same byte, no bump)
-MARK_PHASE_LOBBY = 4                    # a map was just loaded: the pre-game 5-4-3-2-1 (same byte)
+MARK_PHASE_LOBBY = 4                    # retired (unused on the wire; proto 23 keeps the value)
 MARK_ENTRY_F_READY = 0x01               # mp_proto.h MP_MARK_ENTRY_F_READY: has picked a car
 MARK_NONE = 0xFF                        # mp_proto.h MP_MARK_NONE
 MARK_MINUTES_MIN = 1                    # mp_proto.h MP_MARK_MINUTES_*

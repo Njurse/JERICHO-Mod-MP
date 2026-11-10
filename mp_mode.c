@@ -28,7 +28,7 @@ static const MP_MODE_DESC kModes[] =
 
 		MP_MODE_RESPAWN_INSTANT, 0,	/* a death puts you straight back on the map */
 		MP_MODE_LATEJOIN_LIVE,	/* a late joiner drives at once */
-		0,			/* countdown: none */
+		0, 0, 0, 0,		/* pre-game: off — no wait, no countdown */
 		0,			/* carChangeLocked: Vehicle Options always works */
 		MP_MODE_CARPOOL_ALL,	/* every car the car mods offer */
 		MP_MODE_SPAWN_SESSION,	/* the session's own placement */
@@ -46,8 +46,8 @@ static const MP_MODE_DESC kModes[] =
 		0,			/* teamColours */
 
 		MP_MODE_RESPAWN_INSTANT, 0,	/* as Take a Ride */
-		MP_MODE_LATEJOIN_LIVE,	/* a late joiner drives at once, as a hound */
-		1,			/* countdown: every car picked, cluster, 3-2-1, GO */
+		MP_MODE_LATEJOIN_LIVE,	/* a late joiner drives at once, as a hound — only after GO */
+		2, 1, 5, 3,		/* wait for 2, wait for cars, 5-4-3-2-1 first map, 3-2-1 later */
 		0,			/* carChangeLocked */
 		MP_MODE_CARPOOL_ALL,
 		MP_MODE_SPAWN_CLUSTER,	/* the round starts with everyone close together */
@@ -65,8 +65,8 @@ static const MP_MODE_DESC kModes[] =
 		0,			/* teamColours */
 
 		MP_MODE_RESPAWN_INSTANT, 0,
-		MP_MODE_LATEJOIN_LIVE,	/* a late joiner drives at once, without the bomb */
-		1,			/* countdown: every car picked, cluster, 3-2-1, GO */
+		MP_MODE_LATEJOIN_LIVE,	/* a late joiner drives at once, without the bomb — only after GO */
+		2, 1, 5, 3,		/* wait for 2, wait for cars, 5-4-3-2-1 first map, 3-2-1 later */
 		0,			/* carChangeLocked */
 		MP_MODE_CARPOOL_ALL,
 		MP_MODE_SPAWN_CLUSTER,
@@ -183,7 +183,37 @@ int MpModeSpawnRule(int mode)
 
 int MpModeWantsCountdown(int mode)
 {
-	return MpModeBehaviour(mode)->countdown;
+	const MP_MODE_DESC* d = MpModeBehaviour(mode);
+
+	return d->firstCountdownSec > 0 || d->roundCountdownSec > 0;
+}
+
+int MpModeWaitMinPlayers(int mode)
+{
+	return MpModeBehaviour(mode)->waitMinPlayers;
+}
+
+int MpModeWaitForCars(int mode)
+{
+	return MpModeBehaviour(mode)->waitForCars;
+}
+
+int MpModeFirstCountdownSec(int mode)
+{
+	return MpModeBehaviour(mode)->firstCountdownSec;
+}
+
+int MpModeRoundCountdownSec(int mode)
+{
+	return MpModeBehaviour(mode)->roundCountdownSec;
+}
+
+int MpModeHasPreGame(int mode)
+{
+	const MP_MODE_DESC* d = MpModeBehaviour(mode);
+
+	return d->waitMinPlayers > 0 || d->waitForCars ||
+		d->firstCountdownSec > 0 || d->roundCountdownSec > 0;
 }
 
 int MpModeAllowsMapCycle(int mode)

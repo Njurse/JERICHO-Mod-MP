@@ -2,9 +2,9 @@
 over real sockets: the server referees from the carstates it keeps.
 
   * a timer mode does not start round 1 at boot; one player waits, nothing ticks;
-  * the pre-game lobby (t509): a new map (boot, or everyone gone as after a map
-    vote) gives the first player in a 5-4-3-2-1 before any round; the next round on
-    the same map does not repeat it;
+  * the pre-game wait (t515/t516): a new map (boot, or everyone gone as after a
+    map vote) sits in WAITING until the mode's wait is satisfied, then one
+    first-load 5-4-3-2-1; the next round on the same map uses the shorter count;
   * the round start (t508): two present but a car not picked -> nothing starts; every
     car in -> COUNTDOWN (no clock, no tag, no round yet), then GO: round 1 live, one of
     the two marked, JPMK sent; a joiner without a car aborts a countdown; the
@@ -188,22 +188,18 @@ def check_foxhounds(tmp):
               mk["phase"] == m.MARK_PHASE_WAITING and mk["marked"] == -1 and mk["rows"] == [(1, 1800)]
               and mk["gamemode"] == 1 and mk["minutes"] == 3, mk)
         server._mark_step(5000)
-        check("a new map: the first player in gets the pre-game 5-4-3-2-1 (no clock)",
-              server.mark.phase == m.MARK_PHASE_LOBBY and server.mark.countdown_ms == 5000 and
+        check("a new map: one player waits (the wait needs two)",
+              server.mark.phase == m.MARK_PHASE_WAITING and
               server.mark.remain_ms[1] == 180000 and server.round.number == 0,
               (server.mark.phase, server.mark.countdown_ms))
         drain(alice, 0.2)
         server.mark_sent = -1
         server.broadcast_mark_if_due()
         mk = last_mark(alice)
-        check("...and hears it (LOBBY, 5.0 s)", mk is not None and mk["phase"] == m.MARK_PHASE_LOBBY and
-              mk["countdown_ds"] == 50, mk)
+        check("...and hears WAITING", mk is not None and mk["phase"] == m.MARK_PHASE_WAITING, mk)
         server._mark_step(4000)
-        check("...4 s in: still the lobby, 1 s left", server.mark.phase == m.MARK_PHASE_LOBBY and
-              server.mark.countdown_ms == 1000)
+        check("...still waiting (one player)", server.mark.phase == m.MARK_PHASE_WAITING)
         server._mark_step(1000)
-        check("the lobby is over: waiting (one player)", server.mark.phase == m.MARK_PHASE_WAITING)
-        server._mark_step(5000)
         check("one player does not start the clock", server.mark.phase == m.MARK_PHASE_WAITING and
               server.mark.remain_ms[1] == 180000 and server.round.number == 0)
 
@@ -236,7 +232,7 @@ def check_foxhounds(tmp):
         server.broadcast_mark_if_due()
         mk = last_mark(alice)
         check("everyone hears the countdown", mk is not None and mk["phase"] == m.MARK_PHASE_COUNTDOWN and
-              mk["countdown_ds"] == 40 and mk["ready"] == [1, 2], mk)
+              mk["countdown_ds"] == 50 and mk["ready"] == [1, 2], mk)
         server._mark_step(1000)
         with server.lock:
             server.cars[1] = carstate(1, 1000, 1000)[m.CARSTATE.size:]
@@ -250,8 +246,8 @@ def check_foxhounds(tmp):
             server.joined_at[1] += 10.0
             server.joined_at[2] += 10.0
         check("the countdown does not run the clocks", server.mark.remain_ms == {1: 180000, 2: 180000} and
-              server.mark.countdown_ms == 3000, (server.mark.remain_ms, server.mark.countdown_ms))
-        changed = server._mark_step(3000)
+              server.mark.countdown_ms == 4000, (server.mark.remain_ms, server.mark.countdown_ms))
+        changed = server._mark_step(4000)
         check("GO: the countdown starts round 1", changed and server.mark.phase == m.MARK_PHASE_LIVE and
               (server.round.number, server.round.phase) == (1, m.ROUND_PHASE_LIVE) and
               server.mark.marked in (1, 2), (server.mark.phase, server.mark.marked))
@@ -369,11 +365,10 @@ def check_bombtag(tmp):
         pick(b)
         check("both picks land", wait_ready(server, 1) and wait_ready(server, 2))
         server._mark_step(0)
-        check("bomb: the map's pre-game lobby first", server.mark.phase == m.MARK_PHASE_LOBBY)
-        server._mark_step(5000)
-        check("bomb: the countdown first, the shared clock full and still",
-              server.mark.phase == m.MARK_PHASE_COUNTDOWN and server.mark.shared_ms == 60000)
-        server._mark_step(3999)
+        check("bomb: first-load countdown, the shared clock full and still",
+              server.mark.phase == m.MARK_PHASE_COUNTDOWN and server.mark.countdown_ms == 5000 and
+              server.mark.shared_ms == 60000, (server.mark.phase, server.mark.countdown_ms))
+        server._mark_step(4999)
         check("...still counting one ms before GO", server.mark.phase == m.MARK_PHASE_COUNTDOWN and
               server.mark.shared_ms == 60000)
         server._mark_step(1)
@@ -428,17 +423,17 @@ def check_mark_loop(tmp):
         b = connect(server, "Max")
         frames_until(b, m.TAG["mark"])
         time.sleep(0.5)
-        check("mark_loop: a new map opens with the pre-game lobby", server.mark.phase == m.MARK_PHASE_LOBBY and
+        check("mark_loop: a new map, two without cars, waits", server.mark.phase == m.MARK_PHASE_WAITING and
               server.round.number == 0, server.mark.phase)
-        time.sleep(5.0)
-        check("mark_loop: two without cars wait", server.mark.phase == m.MARK_PHASE_WAITING and
+        time.sleep(1.0)
+        check("mark_loop: still waiting without cars", server.mark.phase == m.MARK_PHASE_WAITING and
               server.round.number == 0, server.mark.phase)
         pick(a)
         pick(b)
         time.sleep(0.5)
-        check("mark_loop: both cars in -> the countdown on its own",
+        check("mark_loop: both cars in -> the first-load countdown on its own",
               server.mark.phase == m.MARK_PHASE_COUNTDOWN and server.round.number == 0, server.mark.phase)
-        time.sleep(4.2)
+        time.sleep(5.3)
         check("mark_loop starts the round on its own", server.mark.phase == m.MARK_PHASE_LIVE and
               server.round.number == 1 and server.mark.minutes == 2)
         drain(a, 0.1)
@@ -452,12 +447,13 @@ def check_mark_loop(tmp):
         time.sleep(0.4)
         check("everyone gone: the round ends, no winner", server.mark.phase != m.MARK_PHASE_LIVE and
               server.mark.winner == -1, (server.mark.phase, server.mark.winner))
-        check("...and the next one in gets the pre-game lobby again (a map vote's rejoin)",
-              server.mark.lobby is True)
+        check("...and the next one in gets the first-load count again (a map vote's rejoin)",
+              server.mark.first_map is True)
         a = connect(server, "Lou")
         frames_until(a, m.TAG["mark"])
         time.sleep(0.4)
-        check("...after the intermission", server.mark.phase in (m.MARK_PHASE_ENDED, m.MARK_PHASE_LOBBY),
+        check("...after the intermission, one player still waits",
+              server.mark.phase in (m.MARK_PHASE_ENDED, m.MARK_PHASE_WAITING),
               server.mark.phase)
         m.send_frame(a, m.TAG["leave"], b"")
         a.close()
