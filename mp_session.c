@@ -505,6 +505,7 @@ static int gMpClusterState;		/* 0 = not in a countdown, 1 = placing, 2 = done / 
 static unsigned gMpClusterFrom;		/* the frame this machine saw the countdown start */
 static int gMpClusterTries;
 static void MpMarkClusterTick(void);
+static void MpMarkRoundReset(void);
 
 static unsigned MpMarkRand(void)
 {
@@ -990,9 +991,13 @@ static void MpMarkPresentTick(void)
 	{
 		if (gMpClusterState == 0)
 		{
+			/* WAITING is already satisfied: COUNTDOWN has just begun.
+			 * The real respawn is here, once, not during waiting and not
+			 * mid-count. Placement follows on this same tick. */
 			gMpClusterState = 1;
 			gMpClusterFrom = gMp.frame;
 			gMpClusterTries = 0;
+			MpMarkRoundReset();
 		}
 
 		if (gMpClusterState == 1)
@@ -12962,15 +12967,25 @@ int MpRespawnOnRoad(void)
 /* world at all. The anchor is the lowest present id (the JPMK rows,    */
 /* so every machine agrees) whose car this machine can see.             */
 /*                                                                     */
-/*   - the anchor snaps to the nearest road (MpFindRoadSpotNear, the    */
-/*     pause-menu Respawn's search);                                    */
-/*   - everyone else waits MP_CLUSTER_SETTLE_FRAMES for that snap to    */
-/*     reach them, then searches around a slot on a ring about the      */
-/*     anchor (one slot per player, MP_CLUSTER_PER_RING to a ring, so   */
-/*     two searches do not start from the same point), keeps a road     */
-/*     spot within MP_CLUSTER_RADIUS of the anchor and MP_JOIN_CLEAR of */
-/*     every other car, streams it (MpWarpStreamTo) and lands on it     */
-/*     (MpPlaceOnGround);                                               */
+/*   - the moment COUNTDOWN begins (WAITING already satisfied), every   */
+/*     machine runs a real respawn on its own car: wreck latch cleared  */
+/*     (jer_carexplode_reset, every slot -- hold is local), damage and  */
+/*     dents repaired, handbrake / thrust / wheelspin dropped, death    */
+/*     state and wanted level cleared, JER_EVENT_RESET_CAR fired. This  */
+/*     is not done during waiting and is not deferred mid-count; even   */
+/*     a later placement miss leaves the car unlocked and repaired.     */
+/*     The latch used to live until session teardown (PresentClear),    */
+/*     so a bomb holder wrecked at 0:00 stayed locked through the next  */
+/*     GO -- InitCarPhysics does not clear handbrake, and hold would    */
+/*     re-apply the lock the instant they were marked again.            */
+/*   - the same tick, the anchor snaps to the nearest road              */
+/*     (MpFindRoadSpotNear, the pause-menu Respawn's search); everyone  */
+/*     else searches around a slot on a ring about the anchor's         */
+/*     current pose (one slot per player, MP_CLUSTER_PER_RING to a      */
+/*     ring, so two searches do not start from the same point), keeps   */
+/*     a road spot within MP_CLUSTER_RADIUS of the anchor and           */
+/*     MP_JOIN_CLEAR of every other car, streams it (MpWarpStreamTo)    */
+/*     and lands on it (MpPlaceOnGround);                               */
 /*   - every car faces its OWN random heading (0..4095), stopped and    */
 /*     repaired, wanted level cleared, as the Respawn row does.         */
 /*                                                                     */
@@ -12979,15 +12994,69 @@ int MpRespawnOnRoad(void)
 /* the clearance is MP_JOIN_CLEAR. Nothing ticks meanwhile -- the       */
 /* referee keeps every clock frozen until GO -- and the pad is held     */
 /* (MpRoundStartHoldsCar), so nobody drives off the line early.         */
-/* If nothing qualifies by the end of the GET READY slice, the pause    */
-/* menu's warp to the anchor is the fallback; failing that, the car     */
-/* stays where it is and the log says so (the round still starts).      */
+/* If the ground is still streaming, placement retries for up to 2 s;   */
+/* then the pause menu's warp to the anchor is the fallback; failing    */
+/* that, the already-reset car stays where it is and the log says so    */
+/* (the round still starts).                                            */
 #define MP_CLUSTER_STEP		(MP_JOIN_CLEAR + 1200)	/* 3200: the join spawn's retry step */
 #define MP_CLUSTER_RADIUS	(3 * MP_CLUSTER_STEP)	/* 9600: furthest a car lands from the anchor */
 #define MP_CLUSTER_PER_RING	8	/* slots on one ring: 2*3200*sin(pi/8) ~ 2450 apart, > MP_JOIN_CLEAR */
-#define MP_CLUSTER_SETTLE_FRAMES	15	/* 0.5 s: the anchor's own snap reaches us first */
 #define MP_CLUSTER_GIVEUP_FRAMES	(MP_MARK_COUNTDOWN_SPAWN_MS * 30 / 1000 + 30)	/* 2 s */
 #define MP_CLUSTER_TRIES_PER_FRAME	4
+
+/* The repair-and-unlock half of a countdown-start respawn. Placement
+ * (road, heading) is separate. Also used after InitCarPhysics, which
+ * zeros thrust and wheel_angle but leaves handbrake and the wreck latch. */
+static void MpMarkResetCarState(CAR_DATA* cp)
+{
+	if (cp == NULL)
+		return;
+
+	cp->totalDamage = 0;
+	memset(cp->ap.damage, 0, sizeof(cp->ap.damage));
+	CreateDentableCar(cp);
+	CarReapplyHubcapState(cp->id);
+	cp->ap.needsDenting = 0;
+	cp->hd.speed = 0;
+	cp->hd.wheel_speed = 0;
+	cp->wheel_angle = 0;
+	cp->thrust = 0;
+	cp->handbrake = 0;
+	cp->wheelspin = 0;
+	MpSelfClearFelony();
+	jer_carexplode_reset(cp->id);
+}
+
+/* Once, when this machine first sees COUNTDOWN. Clears the wreck latch
+ * on every slot (hold is a local presentation), then repairs the local
+ * car even if the cluster has not found a road yet. */
+static void MpMarkRoundReset(void)
+{
+	MP_PLAYER* me = MpLocalPlayer();
+	CAR_DATA* cp;
+	JER_ARGS_RESET_CAR rc;
+
+	jer_carexplode_reset(-1);
+	jer_carglow_clear();
+	MpClearDeathState();
+
+	if (me == NULL || me->carId < 0 || me->carId >= MAX_CARS)
+		return;
+
+	if (player[0].playerType == PLAYER_TYPE_PEDESTRIAN)
+		return;
+
+	cp = &car_data[me->carId];
+	MpMarkResetCarState(cp);
+
+	rc.carId = me->carId;
+	jer_fire(JER_EVENT_RESET_CAR, &rc);
+
+	if (gMpCtx != NULL)
+		gMpCtx->jer_log(gMpCtx,
+			"[mp] round start: player %d respawned as the countdown began (wreck and lock cleared)\n",
+			me->id);
+}
 
 /* Land our car at (x,z) facing `dir`, stopped and repaired. 0 = no ground. */
 static int MpClusterPlace(MP_PLAYER* me, CAR_DATA* cp, int x, int z, int dir, int anchorId, const char* how)
@@ -12997,16 +13066,8 @@ static int MpClusterPlace(MP_PLAYER* me, CAR_DATA* cp, int x, int z, int dir, in
 	if (!MpWarpStreamTo(x, z) || !MpPlaceOnGround(cp, x, z, dir))
 		return 0;
 
-	cp->hd.speed = 0;
-	cp->wheel_angle = 0;
-
-	/* a fresh round: repaired and no wanted level, the Respawn row's own fields */
-	cp->totalDamage = 0;
-	memset(cp->ap.damage, 0, sizeof(cp->ap.damage));
-	CreateDentableCar(cp);
-	CarReapplyHubcapState(cp->id);
-	cp->ap.needsDenting = 0;
-	MpSelfClearFelony();
+	/* InitCarPhysics (inside PlaceOnGround) does not clear handbrake or the latch */
+	MpMarkResetCarState(cp);
 
 	player[0].cameraAngle = cp->hd.direction + 1536;
 	player[0].cameraCarId = cp->id;
@@ -13091,13 +13152,8 @@ static void MpMarkClusterTick(void)
 		return;
 	}
 
-	/* everyone else: give the anchor's snap time to arrive */
-	if (gMp.frame - gMpClusterFrom < (unsigned)MP_CLUSTER_SETTLE_FRAMES)
-	{
-		gMpClusterTries--;
-		return;
-	}
-
+	/* everyone else: ring around the anchor's current pose, this same
+	 * countdown-start frame -- do not wait mid-count for the snap */
 	{
 		MP_PLAYER* ap = MpGetPlayer(anchorId);
 
