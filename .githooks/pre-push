@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+set -euo pipefail
+root=$(git rev-parse --show-toplevel)
+exec "$root/tools/ci/no_cursor_attribution.sh" --pre-push "$@"

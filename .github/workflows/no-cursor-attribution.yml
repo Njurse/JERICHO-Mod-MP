@@ -1,0 +1,21 @@
+name: no-cursor-attribution
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  no-cursor-attribution:
+    name: no-cursor-attribution
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Scan commit attribution
+        run: tools/ci/no_cursor_attribution.sh
