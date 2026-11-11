@@ -28,7 +28,8 @@
 #include "jer_sound.h"	/* jer_sound_ensure: a voice a module may keep (never starving SFX) */
 #include "jer_carexplode.h"	/* bomb-tag wreck: dent, tumble, visual-only blasts */
 #include "jer_carglow.h"	/* the fox / bomb-car glow shell */
-#include "pres.h"	/* SetTextColour / PrintStringCentred: the fox centre line */
+#include "pres.h"	/* SetTextColour / PrintStringCentred / PrintTimer: the timer HUD */
+#include "jer_screen.h"	/* jer_screen_edges: the side timers sit at the screen's edge */
 #include "system.h"	/* CITY_COUNT and LevelNames: the city registry MpCarCityName reads */
 #include "denting.h"	/* CreateDentableCar: the only writer of the drawn vertex dump */
 #include "civ_ai.h"	/* reservedSlots: the array PingInCivCar's free-slot scan reads */
@@ -211,6 +212,7 @@ static int MpFindRoadSpotNear(int cx, int cy, int cz, int seed,
 	int* outX, int* outZ, int* outDir, int* outRing);
 static int MpFindRespawnSpot(int cx, int cz, int* outX, int* outZ, int* outDir);
 static int MpWarpStreamTo(int x, int z);
+static int MpStreamRegionAt(int x, int z);
 static int MpRespawnOnFoot(MP_PLAYER* me);
 static void MpFollowLocalCar(void);
 
@@ -508,20 +510,27 @@ static char gMpFoxLine1[64];
 static char gMpFoxLine2[16];
 static int gMpFoxLinesOn;
 
-/* Fox N Hounds: the timers in the mission-timer digits (MpMarkDrawOverlay).
- * Built each frame by MpMarkPresentTick, drawn from DRAW_OVERLAY. (mp 0.23.4) */
-#define MP_FOX_FADE_FRAMES	12	/* grey -> cyan in ~0.4 s at 30 fps */
+/* The timer modes' HUD in the mission-timer digits (core PrintTimer, the JERICHO
+ * HUD timer convention: JERICHO/docs/HOOKS.md "HUD timers"). Built each frame by
+ * MpMarkPresentTick, drawn from DRAW_OVERLAY. Fox N Hounds: every player's own
+ * clock (ours top centre, the rest down the right edge). Car Bomb Tag and Cops n
+ * Robbers: the one round clock, top centre. (mp 0.23.4; all modes 0.24.0) */
+#define MP_FOX_FADE_FRAMES	12	/* a colour fade, ~0.4 s at 30 fps */
 #define MP_FOX_SIDE_ROWS	5	/* side timers before a "+N" */
 static struct
 {
 	int on;
+	int kind;			/* MP_MODE_TIMER_* */
 	int me;				/* our id, -1 = no own timer (not in the round) */
 	int title;			/* draw the "... IS THE FOX!" title */
 	int marked;
 	int ms[MP_MAX_PLAYERS];		/* -1 = not in the round */
+	int shared;			/* the round clock (bomb, CnR) */
 	char titleText[48];
+	char sub[24];			/* one line under the clock: the CnR damage meter */
 } gMpFoxHud;
 static int gMpFoxFade[MP_MAX_PLAYERS];	/* 0 = grey (frozen) .. MP_FOX_FADE_FRAMES = cyan */
+static int gMpBombFade;			/* 0 = white .. MP_FOX_FADE_FRAMES = red: we hold the bomb */
 
 /* A3: the full repair still owed after the round's role-car swap */
 static int gMpRoundRepairPending;
@@ -529,6 +538,7 @@ static int MpCarChangeWaiting(void);
 static void MpClearFelony(int notify);
 static void MpMarkResetCarState(CAR_DATA* cp);
 static void MpFoxHudBuild(int phase, int marked, int myId, int since);
+static void MpListenRotationTick(void);	/* listen-host vote clock + rotation */
 
 /* the round-start cluster on THIS machine (MpMarkClusterTick, defined with the
  * other placement code below) */
@@ -1358,17 +1368,25 @@ static void MpMarkGlowFor(int marked, int myId, int bomb)
 #define MP_RADIO_CHATTER_JITTER	300
 #define MP_RADIO_DAMAGE_FRAMES	90	/* a damage line at most every 3 s */
 #define MP_RADIO_MIN_SAMPLES	18	/* the phrase bank reaches sample 17 */
-/* x/z units from the getaway: half of MP_MARK_CNR_ESCAPE_DIST (32000, "~2x draw
- * distance", mp_mark.h), so about one draw distance -- a cop that can SEE the
- * chase. Farther cops stay quiet. */
+/* x/z units from the getaway: about one draw distance -- a cop that can SEE the
+ * chase (two thirds of MP_MARK_CNR_ESCAPE_DIST, 24000, since 0.24.0). Farther
+ * cops stay quiet. */
 #define MP_RADIO_RANGE		16000
 #define MP_RADIO_SCORER_FRAMES	90	/* the scorer says the damage line within 3 s */
+/* The longest a line (or its heading clip) holds the radio. The wait is on the
+ * voice's own play time (jer_sound_channel_busy: channels[].time), but an UNLOCKED
+ * voice (jer_sound_ensure gives -1 once the reserve is reached, or after a level
+ * change dropped the lock) can be taken by a LOOPING sample -- a siren, an engine --
+ * and sound.c never counts a looping voice's time down, so the radio waited on it
+ * forever: the "lines stop switching" report. 5 s is longer than any phrase. */
+#define MP_RADIO_LINE_MAX_FRAMES	150
 
 static int gMpRadioLastSpeaker = -1;		/* player id of the last cop that spoke */
 static int gMpRadioScorer = -1;			/* the last cop whose score went up */
 static unsigned gMpRadioScorerFrame;
 static int gMpRadioScore[MP_MAX_PLAYERS];
 static int gMpRadioScoreInit;
+static unsigned gMpRadioPlayFrame;		/* when the playing line started */
 
 extern int gDoCopSpeech;	/* gamesnd.c: 0 on the gang missions */
 
@@ -1429,6 +1447,7 @@ static void MpCnrRadioSay(int carSlot, int sample, int local)
 	}
 
 	gMpRadioPlaying = ch;
+	gMpRadioPlayFrame = gMp.frame;
 }
 
 static void MpCnrRadioTick(int on, int marked, int myId)
@@ -1474,8 +1493,10 @@ static void MpCnrRadioTick(int on, int marked, int myId)
 			GetSoundBankSampleCount(SOUND_BANK_VOICES), gCurrentMissionNumber, gCurrentMissionNumber % 4 + 1);
 	}
 
-	/* one line at a time: the last one (and its heading clip) first */
-	if (gMpRadioPlaying >= 0 && jer_sound_channel_busy(gMpRadioPlaying))
+	/* one line at a time: the last one (and its heading clip) first -- but never
+	 * longer than any line can be (MP_RADIO_LINE_MAX_FRAMES) */
+	if (gMpRadioPlaying >= 0 && jer_sound_channel_busy(gMpRadioPlaying) &&
+		gMp.frame - gMpRadioPlayFrame < (unsigned)MP_RADIO_LINE_MAX_FRAMES)
 		return;
 
 	gMpRadioPlaying = -1;
@@ -1832,6 +1853,7 @@ static void MpMarkPresentTick(void)
 	char text[32];
 
 	MpRespawnHoldTick();
+	MpListenRotationTick();
 
 	if (!MpModeUsesTimer(gMp.gamemode) || !MpMarkHaveState() || MpMarkMode() != gMp.gamemode)
 	{
@@ -1955,13 +1977,9 @@ static void MpMarkPresentTick(void)
 
 		if (bombKind && live && marked == myId)
 		{
-			int rem = MpMarkClockMs(-1, since);
-			int period = (rem < 10000) ? 2 : 4;	/* 8 Hz under 10 s, else 4 Hz */
-
 			tr = 128;
 			tg = 0;
 			tb = 0;
-			flashOff = ((CameraCnt / period) & 1) != 0;
 		}
 		else if (!bombKind && live && myId >= 0 && marked != myId &&
 			MpModeTimerKind(gMp.gamemode) == MP_MODE_TIMER_PERSONAL)
@@ -1981,7 +1999,7 @@ static void MpMarkPresentTick(void)
 		gMpHudG = MpHudLerp(gMpHudG, tg);
 		gMpHudB = MpHudLerp(gMpHudB, tb);
 
-		/* Fox N Hounds: the digit timers replace the text clock (MpFoxHudBuild) */
+		/* the digit timers replace the text clock in every timer mode (MpFoxHudBuild) */
 		if (gMpFoxHud.on)
 		{
 			if (gMpMarkPanelOn)
@@ -2058,8 +2076,8 @@ static void MpMarkPresentTick(void)
 
 		int cnrKind = (MpModeTimerKind(gMp.gamemode) == MP_MODE_TIMER_GETAWAY);
 
-		if (live && marked >= 0)
-			MpMarkGlowFor(marked, myId, bombKind || cnrKind);	/* the getaway glows red */
+		if (live && marked >= 0 && !cnrKind)	/* CnR: no shell on the getaway (0.24.0 polish) */
+			MpMarkGlowFor(marked, myId, bombKind);
 		else
 			jer_carglow_clear();
 
@@ -2093,43 +2111,44 @@ static void MpFoxTimerColour(int id)
 {
 	int f = (id >= 0 && id < MP_MAX_PLAYERS) ? gMpFoxFade[id] : 0;
 
+	if (gMpFoxHud.kind == MP_MODE_TIMER_SHARED)
+	{
+		/* white (128,128,128) -> red (128,16,16) while WE hold the bomb, and back */
+		f = gMpBombFade;
+		SetTextColour(128, 128 + (16 - 128) * f / MP_FOX_FADE_FRAMES,
+			128 + (16 - 128) * f / MP_FOX_FADE_FRAMES);
+		return;
+	}
+
+	if (gMpFoxHud.kind == MP_MODE_TIMER_GETAWAY)
+	{
+		SetTextColour(128, 128, 128);	/* white: the clock is everyone's */
+		return;
+	}
+
 	/* grey (72,72,72) -> cyan (24,112,128); 128 = the texture's own brightness */
 	SetTextColour(72 + (24 - 72) * f / MP_FOX_FADE_FRAMES,
 		72 + (112 - 72) * f / MP_FOX_FADE_FRAMES,
 		72 + (128 - 72) * f / MP_FOX_FADE_FRAMES);
 }
 
-static void MpFoxTimerText(int ms, char* mmss, int mmssLen, char* frac, int fracLen)
-{
-	if (ms < 0)
-		ms = 0;
-
-	snprintf(mmss, mmssLen, "%02d:%02d", ms / 60000 % 100, ms / 1000 % 60);
-	snprintf(frac, fracLen, ".%02d", ms % 1000 / 10);
-}
-
-/* One timer, its right edge at `right` (or centred when right < 0). Returns its left x. */
+/* One timer, its right edge at `right` (or centred on the digits when right < 0:
+ * the ".FF" hangs right, which keeps it clear of the Damage bar, overlay.c x
+ * 16..118 y 24). Returns its left x. */
 static int MpFoxDrawTimer(int id, int ms, int right, int y, int scale)
 {
-	char mmss[8], frac[8];
-	int dw = (4 * 16 + 8) * scale / 16;	/* "MM:SS": four 16 px digits and an 8 px ':' */
-	int fw, x, end;
-
-	MpFoxTimerText(ms, mmss, sizeof(mmss), frac, sizeof(frac));
-	fw = StringWidth(frac);
-	/* centred on the digits (the ".FF" hangs right), which keeps it clear of the
-	 * Damage bar (overlay.c: x 16..118, y 24) */
-	x = (right < 0) ? (320 - dw) / 2 : right - dw - fw;
-
 	MpFoxTimerColour(id);
-	end = PrintDigitScaled(x, y, mmss, scale);
-	PrintString(frac, end, y + 28 * scale / 16 - 15);	/* DrawTimer: y + 13 at full size */
-	return x;
+
+	if (right < 0)
+		return PrintTimer(160, y, ms, scale, PRINT_TIMER_CENTRE);
+
+	return PrintTimer(right, y, ms, scale, PRINT_TIMER_RIGHT);
 }
 
 #define MP_FOX_TITLE_Y		4
 #define MP_FOX_OWN_Y		18	/* the own timer: under the title, over nothing */
-#define MP_FOX_SIDE_X		314	/* the side column's right edge */
+#define MP_FOX_SIDE_INSET	6	/* the side column's right edge: in from the SCREEN's
+					 * edge (jer_screen_edges), so widescreen moves it out */
 #define MP_FOX_SIDE_Y		60	/* under the Felony bar's row (overlay.c: y 46) */
 #define MP_FOX_SIDE_STEP	20
 #define MP_FOX_SIDE_SCALE	10	/* 10/16 of the mission timer */
@@ -2139,13 +2158,70 @@ static void MpFoxHudBuild(int phase, int marked, int myId, int since)
 {
 	int id, live = phase == MP_MARK_PHASE_LIVE;
 
-	gMpFoxHud.on = MpModeTimerKind(gMp.gamemode) == MP_MODE_TIMER_PERSONAL &&
+	int kind = MpModeTimerKind(gMp.gamemode);
+
+	gMpFoxHud.kind = kind;
+	gMpFoxHud.on = (kind == MP_MODE_TIMER_PERSONAL || kind == MP_MODE_TIMER_SHARED ||
+		kind == MP_MODE_TIMER_GETAWAY) &&
 		(live || phase == MP_MARK_PHASE_ENDED ||
 		 (phase == MP_MARK_PHASE_COUNTDOWN && !MpMarkCountdownIsFirst()));
 
 	if (!gMpFoxHud.on)
 	{
 		memset(gMpFoxFade, 0, sizeof(gMpFoxFade));
+		gMpBombFade = 0;
+		return;
+	}
+
+	gMpFoxHud.sub[0] = '\0';
+
+	if (kind != MP_MODE_TIMER_PERSONAL)
+	{
+		/* one round clock. Bomb: it fades to red while WE hold the bomb (and
+		 * stays red as it goes off), back to white once we pass it. */
+		int hold = (kind == MP_MODE_TIMER_SHARED && marked >= 0 && marked == myId &&
+			(live || phase == MP_MARK_PHASE_ENDED));
+
+		if (hold && gMpBombFade < MP_FOX_FADE_FRAMES)
+			gMpBombFade++;
+		else if (!hold && gMpBombFade > 0)
+			gMpBombFade--;
+
+		gMpFoxHud.shared = MpMarkClockMs(-1, since);
+		gMpFoxHud.me = -1;
+		gMpFoxHud.marked = marked;
+		memset(gMpFoxHud.ms, 0xff, sizeof(gMpFoxHud.ms));	/* no side column */
+
+		if (kind == MP_MODE_TIMER_GETAWAY)
+			snprintf(gMpFoxHud.sub, sizeof(gMpFoxHud.sub), "DAMAGE %d%%",
+				MpMarkHeat() * 100 / MP_MARK_CNR_BUST_POINTS);
+
+		gMpFoxHud.title = marked >= 0 && (live || phase == MP_MARK_PHASE_COUNTDOWN);
+
+		if (gMpFoxHud.title)
+		{
+			char name[16];
+			int k;
+
+			snprintf(name, sizeof(name), "%s", MpMarkName(marked));
+			for (k = 0; name[k] != '\0'; k++)
+				if (name[k] >= 'a' && name[k] <= 'z')
+					name[k] = (char)(name[k] - 'a' + 'A');
+
+			if (kind == MP_MODE_TIMER_SHARED)
+			{
+				if (marked == myId)
+					snprintf(gMpFoxHud.titleText, sizeof(gMpFoxHud.titleText), "YOU HAVE THE BOMB!");
+				else
+					snprintf(gMpFoxHud.titleText, sizeof(gMpFoxHud.titleText), "%s HAS THE BOMB!",
+						name[0] != '\0' ? name : "?");
+			}
+			else if (marked == myId)
+				snprintf(gMpFoxHud.titleText, sizeof(gMpFoxHud.titleText), "YOU'RE THE GETAWAY!");
+			else
+				snprintf(gMpFoxHud.titleText, sizeof(gMpFoxHud.titleText), "%s IS THE GETAWAY!",
+					name[0] != '\0' ? name : "?");
+		}
 		return;
 	}
 
@@ -2210,7 +2286,7 @@ void MpMarkDrawOverlay(void)
 		Print321Go(96, 0, 32 - ((int)gMp.frame - gMpGoFrame) * 16 / 30);	/* 32 -> 16 */
 	}
 
-	if (gMpFoxLinesOn && gMpFoxLine1[0] != '\0')
+	if (gMpFoxLinesOn && gMpFoxLine1[0] != '\0' && !gMpFoxHud.on)
 	{
 		SetTextColour(128, 128, 64);
 		PrintStringCentred(gMpFoxLine1, 38);	/* JER_HUD_FIRST_Y 22 + one 16 px row */
@@ -2218,12 +2294,24 @@ void MpMarkDrawOverlay(void)
 
 	if (gMpFoxHud.on)
 	{
-		int id, row = 0, more = 0;
+		int id, row = 0, more = 0, sideX;
+
+		jer_screen_edges(NULL, &sideX);
+		sideX -= MP_FOX_SIDE_INSET;
 
 		if (gMpFoxHud.title)
 		{
 			MpFoxTimerColour(gMpFoxHud.marked);
 			PrintStringCentred(gMpFoxHud.titleText, MP_FOX_TITLE_Y);
+		}
+
+		/* the round clock (bomb, CnR): the mission timer's size, top centre */
+		if (gMpFoxHud.kind != MP_MODE_TIMER_PERSONAL)
+		{
+			MpFoxDrawTimer(-1, gMpFoxHud.shared, -1, MP_FOX_OWN_Y, 16);
+
+			if (gMpFoxHud.sub[0] != '\0')
+				PrintStringCentred(gMpFoxHud.sub, MP_FOX_OWN_Y + 30);
 		}
 
 		/* our own: the mission timer's size, top centre */
@@ -2246,7 +2334,7 @@ void MpMarkDrawOverlay(void)
 			}
 
 			y = MP_FOX_SIDE_Y + row * MP_FOX_SIDE_STEP;
-			x = MpFoxDrawTimer(id, gMpFoxHud.ms[id], MP_FOX_SIDE_X, y, MP_FOX_SIDE_SCALE);
+			x = MpFoxDrawTimer(id, gMpFoxHud.ms[id], sideX, y, MP_FOX_SIDE_SCALE);
 
 			snprintf(label, sizeof(label), "%.8s", MpMarkName(id));
 			if (label[0] == '\0')
@@ -2263,7 +2351,7 @@ void MpMarkDrawOverlay(void)
 
 			snprintf(extra, sizeof(extra), "+%d", more);
 			SetTextColour(72, 72, 72);
-			PrintStringRightAligned(extra, MP_FOX_SIDE_X, MP_FOX_SIDE_Y + row * MP_FOX_SIDE_STEP + 3);
+			PrintStringRightAligned(extra, sideX, MP_FOX_SIDE_Y + row * MP_FOX_SIDE_STEP + 3);
 		}
 	}
 }
@@ -4728,6 +4816,446 @@ static void MpHandleHello(int connIndex, const unsigned char* p, int len)
 			matched ? "" : " [mods differ]");
 }
 
+/* ------------------------------------------------------------------ */
+/* LISTEN-HOST VOTE AND MAP ROTATION (0.24.0)                          */
+/* ------------------------------------------------------------------ */
+/* A game host runs the dedicated server's !vote (dedi/builtin/vote.py: the same
+ * grammar, one yes per player, passes at more than half, 30 s, 60 s cooldown)
+ * and its map rotation (dedi/builtin/rotation.py). Settings: JERICHO/CONFIG/mp.ini
+ * [mp] rounds_per_map (default 0 = off) -- read here with its default in code and
+ * never written, so mp.ini is not changed by this feature.
+ *
+ * A switch is the dedicated server's: every peer is kicked with
+ * MP_KICK_FLAG_REJOIN (they come back on their own, MpRejoinArm), then the host
+ * itself leaves the level (EndGame) and relaunches the session on the new map
+ * from the frontend (MpRelaunchTick, driven by mp.c) without closing the
+ * listener, so the rejoining peers find it.
+ *
+ * THE ROTATION'S DATA MODEL is a list of stops {city, shape (1 = multiplayer
+ * map, 0 = full city), arena, area}. `area` is reserved (-1) for stops INSIDE one
+ * map (arenas within the big city map) -- the arena work fills it in. The order is
+ * every city's multiplayer maps, areas within a city first, then the next city:
+ * the dedicated server's default_rotation(). */
+#define MP_LVOTE_MS		30000
+#define MP_LVOTE_COOLDOWN_MS	60000
+#define MP_ROTATE_DELAY_MS	4000	/* after the round's end: let the result show */
+#define MP_ROT_CITIES		4
+#define MP_ROT_ARENAS		2
+
+typedef struct
+{
+	int city;	/* GameLevel 0..3 */
+	int shape;	/* 1 = multiplayer map, 0 = the full city */
+	int arena;	/* the multiplayer map, 0/1 */
+	int area;	/* reserved: a stop inside one map; -1 = the whole level */
+} MP_ROT_STOP;
+
+static struct
+{
+	int active;
+	MP_ROT_STOP to;
+	unsigned long untilMs, cooldownUntilMs;
+	unsigned char yes[MP_MAX_PLAYERS];
+} gMpLVote;
+
+static struct
+{
+	int state;		/* 0 none, 1 leave the level, 2 waiting for the frontend */
+	MP_ROT_STOP to;
+	unsigned long atMs;	/* a delayed switch (rotation) */
+	int lastRound, rounds;	/* round counting for the rotation */
+	int levelCity, levelShape, levelArena;
+} gMpRelaunch = { 0, { 0, 1, 0, -1 }, 0, -1, 0, -1, -1, -1 };
+
+static const char* const gMpRotCity[MP_ROT_CITIES] = { "CHICAGO", "HAVANA", "VEGAS", "RIO" };
+
+static int MpRotStopCount(void)
+{
+	return MP_ROT_CITIES * MP_ROT_ARENAS;
+}
+
+/* The default order: stop i = city i/2, multiplayer map i%2. */
+static MP_ROT_STOP MpRotStop(int i)
+{
+	MP_ROT_STOP s;
+
+	i %= MpRotStopCount();
+	s.city = i / MP_ROT_ARENAS;
+	s.shape = 1;
+	s.arena = i % MP_ROT_ARENAS;
+	s.area = -1;
+	return s;
+}
+
+static MP_ROT_STOP MpRotationNext(int city, int shape, int arena)
+{
+	int i;
+
+	for (i = 0; i < MpRotStopCount(); i++)
+	{
+		MP_ROT_STOP s = MpRotStop(i);
+
+		if (s.city == city && s.shape == shape && (!shape || s.arena == arena))
+			return MpRotStop(i + 1);
+	}
+	return MpRotStop(0);
+}
+
+static void MpRotWhere(const MP_ROT_STOP* s, char* out, int max)
+{
+	int c = (s->city >= 0 && s->city < MP_ROT_CITIES) ? s->city : 0;
+
+	if (s->shape)
+		snprintf(out, max, "%s MP %d", gMpRotCity[c], s->arena);
+	else
+		snprintf(out, max, "%s CITY", gMpRotCity[c]);
+}
+
+/* A line from the host as the SERVER voice (no player row: MpHandleChat inks it). */
+static void MpHostSay(const char* text)
+{
+	MP_CHAT c;
+
+	memset(&c, 0, sizeof(c));
+	c.playerId = 0xFF;		/* no player: the server voice */
+	c.reserved[0] = 0xFF;		/* the dedicated server's vote ink, #FFD24A */
+	c.reserved[1] = 0xD2;
+	c.reserved[2] = 0x4A;
+	snprintf(c.text, sizeof(c.text), "%s", text);
+
+	MpConsoleChat(NULL, 0, 0, 0, 0, c.text, c.reserved);
+	MpHostBroadcast(MP_TAG_CHAT, MP_FLAG_RELIABLE, &c, sizeof(c));
+}
+
+static int MpLVoteCityIndex(const char* w)
+{
+	int i;
+
+	if (w[0] >= '0' && w[0] <= '3' && w[1] == '\0')
+		return w[0] - '0';
+
+	for (i = 0; i < MP_ROT_CITIES; i++)
+	{
+		const char* a = gMpRotCity[i];
+		const char* b = w;
+
+		while (*a != '\0' && *b != '\0' && *a == ((*b >= 'a' && *b <= 'z') ? *b - 'a' + 'A' : *b))
+		{
+			a++;
+			b++;
+		}
+		if (*a == '\0' && *b == '\0')
+			return i;
+	}
+	return -1;
+}
+
+/* vote.py parse_target: "city <city> [mp [0|1]]", "mp [0|1]", legacy "<city> [mp ..]".
+ * Fills `to` from the current level for what the words leave out. 0 = bad. */
+static int MpLVoteParse(const char* args, MP_ROT_STOP* to)
+{
+	char buf[64], *w[5];
+	int n = 0, i = 0, city;
+	char* p;
+
+	snprintf(buf, sizeof(buf), "%s", args);
+	for (p = strtok(buf, " "); p != NULL && n < 5; p = strtok(NULL, " "))
+	{
+		char* q;
+
+		for (q = p; *q; q++)
+			if (*q >= 'A' && *q <= 'Z')
+				*q = (char)(*q - 'A' + 'a');
+		w[n++] = p;
+	}
+
+	to->city = GameLevel;
+	to->shape = gBootMpLevel ? 1 : 0;
+	to->arena = gBootMpArena;
+	to->area = -1;
+
+	if (n == 0)
+		return 0;
+
+	if (strcmp(w[0], "mp") != 0)
+	{
+		if (strcmp(w[0], "city") == 0)
+			i++;
+		if (i >= n || (city = MpLVoteCityIndex(w[i])) < 0)
+			return 0;
+		to->city = city;
+		to->shape = 0;
+		to->arena = 0;
+		i++;
+		if (i >= n)
+			return 1;
+		if (strcmp(w[i], "mp") != 0)
+			return 0;
+	}
+
+	/* w[i] == "mp" */
+	to->shape = 1;
+	to->arena = gBootMpArena;	/* "mp" alone keeps the current multiplayer map */
+	i++;
+	if (i < n)
+	{
+		if ((w[i][0] != '0' && w[i][0] != '1') || w[i][1] != '\0' || i + 1 < n)
+			return 0;
+		to->arena = w[i][0] - '0';
+	}
+	return 1;
+}
+
+static int MpLVoteNeeded(void)
+{
+	return gMp.playerCount / 2 + 1;
+}
+
+static void MpListenSwitch(const MP_ROT_STOP* to, const char* why);
+
+static void MpLVoteTally(char* out, int max)
+{
+	char where[24];
+	int i, yes = 0;
+
+	for (i = 0; i < MP_MAX_PLAYERS; i++)
+		yes += gMpLVote.yes[i];
+	MpRotWhere(&gMpLVote.to, where, sizeof(where));
+	snprintf(out, max, "%s: %d/%d yes", where, yes, MpLVoteNeeded());
+}
+
+/* "!vote ..." from `pid` (the host itself or a peer), on the HOST. */
+static void MpListenVote(int pid, const char* args)
+{
+	char line[96], tally[48], where[24];
+	MP_PLAYER* pl = MpGetPlayer(pid);
+	unsigned long now = MpNowMs();
+	MP_ROT_STOP to;
+	int i, yes = 0;
+
+	while (*args == ' ')
+		args++;
+
+	if (args[0] == '\0')
+	{
+		if (gMpLVote.active)
+		{
+			MpLVoteTally(tally, sizeof(tally));
+			snprintf(line, sizeof(line), "vote in progress -- %s", tally);
+		}
+		else
+			snprintf(line, sizeof(line), "no vote; !vote city <city> [mp [0|1]] or !vote mp [0|1]");
+		MpHostSay(line);
+		return;
+	}
+
+	if (strcmp(args, "cancel") == 0)
+	{
+		if (pid != gMp.localPlayerId || !gMpLVote.active)
+			return;		/* the host is the admin of its own game */
+		gMpLVote.active = 0;
+		gMpLVote.cooldownUntilMs = now + MP_LVOTE_COOLDOWN_MS;
+		MpHostSay("Vote cancelled by the host");
+		return;
+	}
+
+	if (!MpLVoteParse(args, &to))
+	{
+		MpHostSay("usage: !vote city <city> [mp [0|1]] or !vote mp [0|1]");
+		return;
+	}
+
+	if (!gMpLVote.active)
+	{
+		if ((long)(gMpLVote.cooldownUntilMs - now) > 0)
+		{
+			snprintf(line, sizeof(line), "next vote in %lus", (gMpLVote.cooldownUntilMs - now + 999) / 1000);
+			MpHostSay(line);
+			return;
+		}
+		if (to.city == GameLevel && to.shape == (gBootMpLevel ? 1 : 0) &&
+			(!to.shape || to.arena == gBootMpArena))
+		{
+			MpHostSay("the game is already on that map");
+			return;
+		}
+		memset(&gMpLVote, 0, sizeof(gMpLVote));
+		gMpLVote.active = 1;
+		gMpLVote.to = to;
+		gMpLVote.untilMs = now + MP_LVOTE_MS;
+		MpRotWhere(&to, where, sizeof(where));
+		snprintf(line, sizeof(line), "%s started a vote for %s -- type the same !vote to agree (30s)",
+			pl != NULL ? pl->name : "?", where);
+		MpHostSay(line);
+	}
+	else if (to.city != gMpLVote.to.city || to.shape != gMpLVote.to.shape ||
+		(to.shape && to.arena != gMpLVote.to.arena))
+	{
+		MpHostSay("another vote is running; wait for it to end");
+		return;
+	}
+
+	if (pid < 0 || pid >= MP_MAX_PLAYERS || gMpLVote.yes[pid])
+		return;
+
+	gMpLVote.yes[pid] = 1;
+	MpLVoteTally(tally, sizeof(tally));
+	snprintf(line, sizeof(line), "%s voted -- %s", pl != NULL ? pl->name : "?", tally);
+	MpHostSay(line);
+
+	for (i = 0; i < MP_MAX_PLAYERS; i++)
+		yes += gMpLVote.yes[i];
+
+	if (yes >= MpLVoteNeeded())
+	{
+		gMpLVote.active = 0;
+		gMpLVote.cooldownUntilMs = now + MP_LVOTE_COOLDOWN_MS;
+		MpListenSwitch(&gMpLVote.to, "vote passed");
+	}
+}
+
+/* Per frame on the HOST in a match: the vote's clock, and the rotation's count. */
+static void MpListenRotationTick(void)
+{
+	unsigned long now = MpNowMs();
+	int perMap;
+
+	if (!MpIsHost() || !gMp.running || gMpRelaunch.state != 0)
+		return;
+
+	if (gMpLVote.active && (long)(now - gMpLVote.untilMs) >= 0)
+	{
+		char line[96], tally[48];
+
+		MpLVoteTally(tally, sizeof(tally));
+		snprintf(line, sizeof(line), "Vote failed -- %s", tally);
+		MpHostSay(line);
+		gMpLVote.active = 0;
+		gMpLVote.cooldownUntilMs = now + MP_LVOTE_COOLDOWN_MS;
+	}
+
+	/* a new level (a vote, our own switch, a fresh session): count from zero */
+	if (gMpRelaunch.levelCity != GameLevel || gMpRelaunch.levelShape != (gBootMpLevel ? 1 : 0) ||
+		gMpRelaunch.levelArena != gBootMpArena)
+	{
+		gMpRelaunch.levelCity = GameLevel;
+		gMpRelaunch.levelShape = gBootMpLevel ? 1 : 0;
+		gMpRelaunch.levelArena = gBootMpArena;
+		gMpRelaunch.rounds = 0;
+		gMpRelaunch.lastRound = MpRoundNumber();
+		gMpRelaunch.atMs = 0;
+	}
+
+	if (gMpRelaunch.atMs != 0)
+	{
+		if ((long)(now - gMpRelaunch.atMs) >= 0)
+		{
+			MP_ROT_STOP to = gMpRelaunch.to;
+
+			gMpRelaunch.atMs = 0;
+			MpListenSwitch(&to, "map rotation");
+		}
+		return;
+	}
+
+	if (!MpModeUsesTimer(gMp.gamemode) || MpMarkPhase() != MP_MARK_PHASE_ENDED ||
+		MpRoundNumber() == gMpRelaunch.lastRound)
+		return;
+
+	gMpRelaunch.lastRound = MpRoundNumber();
+	gMpRelaunch.rounds++;
+
+	perMap = jer_config_get_int("mp", "rounds_per_map", 0);	/* default in code; never written */
+
+	if (perMap > 0 && gMpRelaunch.rounds >= perMap)
+	{
+		char line[96], where[24];
+
+		gMpRelaunch.to = MpRotationNext(GameLevel, gBootMpLevel ? 1 : 0, gBootMpArena);
+		gMpRelaunch.atMs = now + MP_ROTATE_DELAY_MS;
+		if (gMpRelaunch.atMs == 0)
+			gMpRelaunch.atMs = 1;
+		MpRotWhere(&gMpRelaunch.to, where, sizeof(where));
+		snprintf(line, sizeof(line), "%d round%s on this map - next: %s", perMap, perMap == 1 ? "" : "s", where);
+		MpHostSay(line);
+	}
+}
+
+static void MpKickPlayerFlags(int playerId, int flags)
+{
+	MP_KICK k;
+	int conn = MpConnFindByPlayer(playerId);
+
+	if (conn < 0)
+		return;
+
+	memset(&k, 0, sizeof(k));
+	k.playerId = (uint8_t)playerId;
+	k.reserved[0] = (uint8_t)flags;
+	MpSendConn(conn, MP_TAG_KICK, MP_FLAG_RELIABLE, &k, sizeof(k));
+}
+
+static void MpListenSwitch(const MP_ROT_STOP* to, const char* why)
+{
+	char line[96], where[24];
+	int i;
+
+	MpRotWhere(to, where, sizeof(where));
+	snprintf(line, sizeof(line), "%s: switching to %s -- everyone reconnects", why, where);
+	MpHostSay(line);
+
+	if (gMpCtx != NULL)
+		gMpCtx->jer_log(gMpCtx, "[mp] listen host: %s -> city %d shape %d arena %d; kicking peers with REJOIN, relaunching\n",
+			why, to->city, to->shape, to->arena);
+
+	for (i = 0; i < MP_MAX_PLAYERS; i++)
+		if (gMp.players[i].active && gMp.players[i].id != gMp.localPlayerId)
+			MpKickPlayerFlags(gMp.players[i].id, MP_KICK_FLAG_REJOIN);
+
+	gMpRelaunch.to = *to;
+	gMpRelaunch.state = 1;
+}
+
+int MpRelaunchActive(void)
+{
+	return gMpRelaunch.state != 0;
+}
+
+/* From mp.c's frame hook, every frame. MP_RELAUNCH_END_LEVEL: the caller leaves
+ * the level (EndGame). MP_RELAUNCH_BUSY: a relaunch owns the session this frame
+ * (skip the "host left the match" teardown). */
+int MpRelaunchTick(int inFrontend)
+{
+	if (gMpRelaunch.state == 1)
+	{
+		gMpRelaunch.state = 2;
+		return inFrontend ? MP_RELAUNCH_BUSY : MP_RELAUNCH_END_LEVEL;
+	}
+
+	if (gMpRelaunch.state != 2)
+		return MP_RELAUNCH_NONE;
+
+	if (!inFrontend)
+		return MP_RELAUNCH_BUSY;
+
+	/* back in the frontend: the same START the host's menu would give, on the
+	 * new map, with the listener and the session still up */
+	gMpRelaunch.state = 0;
+	GameLevel = gMpRelaunch.to.city;
+	MpSetMapShape(gMpRelaunch.to.shape, gMpRelaunch.to.arena);
+	gMpLaunched = 0;
+	gMp.running = 0;
+
+	if (gMpCtx != NULL)
+		gMpCtx->jer_log(gMpCtx, "[mp] listen host: relaunching on city %d shape %d arena %d\n",
+			GameLevel, gMpRelaunch.to.shape, gMpRelaunch.to.arena);
+
+	if (!MpStartMatch() && gMpCtx != NULL)
+		gMpCtx->jer_log(gMpCtx, "[mp] listen host: the relaunch did not start\n");
+
+	return MP_RELAUNCH_BUSY;
+}
+
 /* Chat: the host is the echo point, so a line is announced
  * exactly once on every peer. Clients send to the host, which republishes to
  * everyone (including the sender); the host announces its own line directly. */
@@ -4754,6 +5282,12 @@ void MpSendChat(const char* text)
 
 	if (MpIsHost() && MpChatIsCommand(c.text))
 	{
+		/* the one command a game host runs itself: !vote (0.24.0) */
+		if (strncmp(c.text + 1, "vote", 4) == 0 && (c.text[5] == '\0' || c.text[5] == ' '))
+		{
+			MpListenVote(gMp.localPlayerId, c.text + 5);
+			return;
+		}
 		MpConsoleLine("chat commands only work on a dedicated server; not sent");
 		return;
 	}
@@ -4803,6 +5337,12 @@ static void MpHandleChat(int connIndex, const unsigned char* p, int len)
 	 * unseen. Printing or relaying it would show a password to every player. */
 	if (MpIsHost() && MpChatIsCommand(c.text))
 	{
+		/* !vote is run here (never relayed: the host announces the tally) */
+		if (from >= 0 && strncmp(c.text + 1, "vote", 4) == 0 && (c.text[5] == '\0' || c.text[5] == ' '))
+		{
+			MpListenVote(from, c.text + 5);
+			return;
+		}
 		if (gMpCtx != NULL)
 			gMpCtx->jer_log(gMpCtx, "[mp] dropped a chat command from player %d (not relayed)\n", (int)c.playerId);
 		return;
@@ -13158,6 +13698,31 @@ static void MpRespawnDelayTick(void)
 	gMpRespawnDelayNow = 0;
 }
 
+/* A deferred death that is no death any more: our car is whole (under the
+ * mission's wreck point) and has ground under it. */
+static int MpHeldDeathAnswered(void)
+{
+	MP_PLAYER* me = MpLocalPlayer();
+	int slot = MpRespawnCarSlot(me);
+	CAR_DATA* cp;
+	VECTOR probe;
+
+	if (slot < 0 || player[0].playerType != PLAYER_TYPE_CAR)
+		return 0;
+
+	cp = &car_data[slot];
+
+	if (MaxPlayerDamage[0] > 0 && cp->totalDamage >= MaxPlayerDamage[0])
+		return 0;
+
+	probe.vx = cp->hd.where.t[0];
+	probe.vy = 0;
+	probe.vz = cp->hd.where.t[2];
+	probe.pad = 0;
+
+	return MapHeight(&probe) > -1000 && cp->hd.where.t[1] > -1000;
+}
+
 /* Every frame in a match (MpMarkPresentTick). */
 static void MpRespawnHoldTick(void)
 {
@@ -13192,6 +13757,22 @@ static void MpRespawnHoldTick(void)
 		return;
 
 	gMpRespawnDeferred = 0;
+
+	/* ALREADY ANSWERED: the wreck's game-over ask can land again after the
+	 * countdown's reset (the engine's death delay was already armed), which
+	 * re-deferred a death the round start had just repaired and placed. Respawning
+	 * it at GO threw the car off its start spot onto a random road (0.24.0 log:
+	 * "placed at 2210,-220695 heading 3072", then "respawn hold over (phase 1)" and
+	 * a ring spot 11k away). A car that is whole and on the ground stays. */
+	if (MpHeldDeathAnswered())
+	{
+		MpClearDeathState();
+
+		if (gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx, "[mp] respawn hold over (phase %d) - the round start already placed the car, no respawn\n",
+				MpMarkPhase());
+		return;
+	}
 
 	if (gMpCtx != NULL)
 		gMpCtx->jer_log(gMpCtx, "[mp] respawn hold over (phase %d) - the held death respawns now\n",
@@ -13366,9 +13947,19 @@ int MpRespawnAfterDeath(void)
 	/* A sane ground height means this x/z is on the map. Anything else is the void. */
 	ground = MapHeight(&probe);
 
-	if (ground <= -1000)
+	if (ground <= -1000 && jer_map_ready() &&
+		jer_map_region_has_data(jer_map_region_of(x, z)))
 	{
-		/* The void here: stream the level start in and go there, if there is one;
+		/* FELL THROUGH, ON THE MAP: the ring search below works from where the car
+		 * went down, not from the level start. Going to the start sent a Cops n
+		 * Robbers getaway 100k units off and handed it the escape (0.24.0 log:
+		 * "respawn ... ring around 87058,-455655" then "got away" the same second). */
+		if (gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx, "[mp] respawn: no ground under %d,%d - respawning near there\n", x, z);
+	}
+	else if (ground <= -1000)
+	{
+		/* Off the map: stream the level start in and go there, if there is one;
 		 * otherwise the ring search below works from where we are. */
 		if (PlayerStartInfo[0] != NULL)
 		{
@@ -13383,7 +13974,8 @@ int MpRespawnAfterDeath(void)
 	{
 		int fx, fz, fdir = -1;
 
-		if (MpFindRespawnSpot(x, z, &fx, &fz, &fdir))
+		if (MpFindRespawnSpot(x, z, &fx, &fz, &fdir) ||
+			MpFindRoadSpotNear(x, 0, z, -1, &fx, &fz, &fdir, NULL))
 		{
 			x = fx;
 			z = fz;
@@ -13579,6 +14171,16 @@ static int MpWarpStreamTo(int x, int z)
 	region = jer_map_region_of(x, z);
 
 	if (!jer_map_region_has_data(region))
+		return 0;
+
+	/* ALREADY RESIDENT: the spot failed on its scenery or its height, not on the
+	 * stream, and streaming cannot change that. jer_map_spool_to on a resident
+	 * region is a synchronous CheckLoadAreaData + StartSpooling + UpdateSpool pass
+	 * (jer_map.c), and that pass is what stalled the pair and 3-seat runs (the
+	 * gather's measured note). Callers retry this per frame (the chase every 15
+	 * tries, the respawn ring per try), which turned one stall into a spool storm:
+	 * the 0.23.4 and 0.24.0 hangs end in hundreds of StartSpooling CD warnings. */
+	if (jer_map_region_resident(region))
 		return 0;
 
 	/* HAND THE STREAMER BACK WHEN THE CALL ENDS. jer_map_spool_to reads
@@ -13892,7 +14494,9 @@ static int MpFindRespawnSpot(int cx, int cz, int* outX, int* outZ, int* outDir)
 			{
 				if (pass == 0)
 					continue;
-				if (!jer_map_spool_to(px, pz))
+				/* aimed: a bare jer_map_spool_to streams whatever is under
+				 * MainPlayer.spoolXZ (our wreck), not this candidate */
+				if (!MpStreamRegionAt(px, pz))
 					continue;
 			}
 
@@ -14029,6 +14633,11 @@ static int MpStreamRegionAt(int x, int z)
 
 	if (!jer_map_ready() || !jer_map_region_has_data(jer_map_region_of(x, z)))
 		return 0;
+
+	/* resident already: nothing to stream (and the resident spool pass stalls,
+	 * see MpWarpStreamTo) */
+	if (jer_map_region_resident(jer_map_region_of(x, z)))
+		return 1;
 
 	oldSpoolXZ = MainPlayer.spoolXZ;
 

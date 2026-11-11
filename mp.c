@@ -1461,9 +1461,21 @@ static int MpOnFrame(void* userdata, void* args)
 		jer_frontend_goto(0);
 	}
 
+	/* A listen-host map switch (MpRelaunchTick): leave the level, then START
+	 * again on the new map -- the session is NOT over, so none of the teardowns
+	 * below may see this as the host leaving. */
+	{
+		int rl = MpRelaunchTick(gInFrontend);
+
+		if (rl == MP_RELAUNCH_END_LEVEL && !gInFrontend)
+			EndGame(GAMEMODE_QUIT);
+		if (rl != MP_RELAUNCH_NONE)
+			gHostInWorld = 0;
+	}
+
 	/* The host quit the match: it is back in the frontend while the session
 	 * is still live, so tell the clients and tear everything down. */
-	if (MpHostLeftMatch())
+	if (!MpRelaunchActive() && MpHostLeftMatch())
 	{
 		if (gMpCtx != NULL)
 			gMpCtx->jer_log(gMpCtx, "[mp] host left the match - notifying clients\n");
@@ -3078,6 +3090,9 @@ static int MpOnFrontendEntered(void* userdata, void* args)
 
 	if (gMp.role == MP_ROLE_NONE || !gMp.running)
 		return JER_RESULT_CONTINUE;
+
+	if (MpRelaunchActive())
+		return JER_RESULT_CONTINUE;	/* a listen-host map switch: the session goes on */
 
 	if (gMpCtx != NULL)
 		gMpCtx->jer_log(gMpCtx, "[mp] back in the frontend from a match - leaving the session (role %d)\n",

@@ -669,6 +669,15 @@ int MpChangeCar(int city, int model);
 void MpRejoinTick(void);
 void MpPlaceSelfTick(void);	/* live join: move our car off the level start */
 int  MpRejoinActive(void);
+
+/* Listen-host map switch (a passed !vote or the rounds_per_map rotation):
+ * mp_session.c. mp.c's frame hook drives it; while active the "host left the
+ * match" teardown must not run. */
+#define MP_RELAUNCH_NONE	0
+#define MP_RELAUNCH_BUSY	1
+#define MP_RELAUNCH_END_LEVEL	2
+int  MpRelaunchActive(void);
+int  MpRelaunchTick(int inFrontend);
 void MpRejoinCancel(const char* why);
 
 /* JOIN / LEAVE SOUNDS (0.23.3, mp_session.c). mp_players.c reports every remote

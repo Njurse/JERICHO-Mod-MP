@@ -182,6 +182,19 @@ before deploying it publicly.
 Keys: `"vote"` (`false` turns `!vote` off), `"vote_duration"` (seconds, 30),
 `"vote_threshold"` (fraction that must be exceeded, 0.5), `"vote_cooldown"` (60).
 
+### Map rotation
+
+`"rounds_per_map"` (default `0`, off): after that many rounds end on one map,
+the server announces the next stop, waits 4 s, switches and reconnects everyone
+(the same rejoin as a vote). `"rotation"` is the ordered list of stops, each
+`"chicago mp 0"`, `"havana mp 1"`, `"vegas city"`, or
+`{"city": 1, "map_mode": "mp", "arena": 0, "area": -1}`. Without it the order is
+every city's two multiplayer maps, city by city. `area` is reserved for stops
+inside one map (arenas within the big city map) and must be `-1` for now. A
+rotation step is never saved: `dediserver.json` is not rewritten, and neither key
+is added to it (both default in code). A vote resets the round count. The
+listen host's mp.ini `rounds_per_map` follows the same default order.
+
 Session settings in `dediserver.json`: `"city"` (`0`-`3`) and `"arena"` (`0`/`1`,
 the city's two multiplayer maps), `"map_mode"` (`"city"` or `"mp"`), `"time_of_day"` (`dawn`, `day`, `dusk`, `night`)
 and `"weather"` (`clear`, `rain`, `wet`), or `--city` / `--arena` /
