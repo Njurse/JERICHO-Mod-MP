@@ -1361,8 +1361,11 @@ static void MpMarkGlowFor(int marked, int myId, int bomb)
 /* line waits for the last (and its heading clip) to finish, and for    */
 /* the engine's own speech queue (an AI cop's CopSay) to be quiet.      */
 /* Presentation only: nothing on the wire, each machine its own.        */
-/* Which bank: the host city's, the one the level loaded. There is no   */
-/* regional police-radio setting in this source tree to follow.         */
+/* Which lines: the SPEAKING CAR's city. A cop car imported from another */
+/* city speaks that city's radio lines (GetCopPhraseSample, gamesnd.c: */
+/* a D2 city's stock phrase banks; a Driver 1 cop its bank's baked     */
+/* LUMP_POLICE_VOICES, else Driver 1 Miami's), loaded beside the host's */
+/* when the car arrives; with none resident, the host city's. (0.24.0)  */
 /* ------------------------------------------------------------------ */
 #define MP_RADIO_CHATTER_FRAMES	720	/* cop_ai.c: TimeSinceLastSpeech > 720 */
 #define MP_RADIO_CHATTER_JITTER	300
@@ -1432,7 +1435,15 @@ static void MpCnrRadioScorerTick(int marked)
 static void MpCnrRadioSay(int carSlot, int sample, int local)
 {
 	CAR_DATA* cp = &car_data[carSlot];
-	int ch = jer_sound_ensure(&gMpRadioChan);
+	int ch;
+
+	/* the host's phrase number -> this car's own city's sample (or the host's) */
+	sample = GetCopPhraseSample(cp->ap.model, sample);
+
+	if (sample < 0)
+		return;
+
+	ch = jer_sound_ensure(&gMpRadioChan);
 
 	if (local)
 		ch = StartSound(ch, SOUND_BANK_VOICES, sample, -1500, 4096);
@@ -1474,7 +1485,7 @@ static void MpCnrRadioTick(int on, int marked, int myId)
 
 	MpCnrRadioScorerTick(marked);
 
-	if (!gDoCopSpeech || GetSoundBankSampleCount(SOUND_BANK_VOICES) < MP_RADIO_MIN_SAMPLES)
+	if (!gDoCopSpeech || GetCopPhraseSample(-1, MP_RADIO_MIN_SAMPLES - 1) < 0)
 	{
 		if (!saidNoBank && gMpCtx != NULL)
 			gMpCtx->jer_log(gMpCtx, "[mp] cops n robbers: no police radio here (cop speech %d, %d voice sample(s))\n",
