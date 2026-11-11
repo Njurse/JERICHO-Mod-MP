@@ -567,6 +567,7 @@ static void MpMapCopsTick(void);
 
 /* Cops n Robbers (MP_MODE_TIMER_GETAWAY) on THIS machine */
 static int gMpChaseFromX, gMpChaseFromZ;	/* the getaway's pose when the countdown began */
+static int gMpChaseFromSet;			/* ...actually captured (the car may not exist yet) */
 static int gMpCnrPending;		/* host: the getaway's drive points not yet in the round */
 static int gMpCnrEscapeMs;		/* host: how long the getaway has been clear of every cop */
 static int gMpRadioChan = -1;		/* the police radio's voice (one line at a time, per listener) */
@@ -964,6 +965,7 @@ static void MpMarkPresentClear(void)
 	gMpMarkShownCount = -1;
 	gMpClusterState = 0;
 	gMpClusterTries = 0;
+	gMpChaseFromSet = 0;
 	gMpMarkTickFrame = -1;
 	gMpFoxLinesOn = 0;
 	gMpFoxLine1[0] = '\0';
@@ -1960,11 +1962,13 @@ static void MpMarkPresentTick(void)
 				gMpWideRegion = -1;	/* a fresh map-wide pick every round */
 				gMpWideTries = 0;
 				gMpChaseFromX = gMpChaseFromZ = 0;
+				gMpChaseFromSet = 0;
 
 				if (gp != NULL && gp->carId >= 0 && gp->carId < MAX_CARS)
 				{
 					gMpChaseFromX = car_data[gp->carId].hd.where.t[0];
 					gMpChaseFromZ = car_data[gp->carId].hd.where.t[2];
+					gMpChaseFromSet = 1;
 				}
 			}
 		}
@@ -14430,6 +14434,29 @@ static int MpRoadHeadingAt(int x, int y, int z, int* outDir)
 	return 1;
 }
 
+#define MP_ROAD_HALF_WIDTH	450	/* a car's half-width: the footprint must fit the road */
+
+/* The car must FIT on the road, not merely touch it: `JerRoadAt` at the centre
+ * cell is true on the shoulder too, and a car planted there overhangs the
+ * drivable surface ("spawned out of bounds"). Probe the half-width to each side
+ * of the resolved heading; a spot whose body leaves the road is refused. `dir`
+ * < 0 means no heading was resolved (a junction) - then the centre test is all
+ * we have. */
+static int MpRoadFootprintOk(int x, int y, int z, int dir)
+{
+	int lx, lz, rx, rz;
+
+	if (dir < 0)
+		return 1;
+
+	lx = (int)(((long)rsin(dir + 1024) * MP_ROAD_HALF_WIDTH) >> 12);
+	lz = (int)(((long)rcos(dir + 1024) * MP_ROAD_HALF_WIDTH) >> 12);
+	rx = (int)(((long)rsin(dir - 1024) * MP_ROAD_HALF_WIDTH) >> 12);
+	rz = (int)(((long)rcos(dir - 1024) * MP_ROAD_HALF_WIDTH) >> 12);
+
+	return JerRoadAt(x + lx, y, z + lz) && JerRoadAt(x + rx, y, z + rz);
+}
+
 /* A landable road point near (cx, cz). `pickRandom` chooses among the road points
  * on the FIRST ring that has any; otherwise the first usable one wins (the warp's
  * and respawn's "nearest"). Returns 1 and fills the outputs on success. The caller
@@ -14468,6 +14495,17 @@ static int MpFindRoadSpotNear(int cx, int cy, int cz, int seed,
 
 			if (!MpWarpSpotOk(px, pz))
 				continue;
+
+			/* The car must fit the road here, not just touch it: the centre cell
+			 * being road is how a spawn lands on the shoulder. Probe the car's
+			 * half-width to each side of the road's heading; a spot whose body
+			 * overhangs the drivable surface is refused and the search goes on. */
+			{
+				int fdir = -1;
+
+				if (MpRoadHeadingAt(px, cy, pz, &fdir) && !MpRoadFootprintOk(px, cy, pz, fdir))
+					continue;
+			}
 
 			cand[n++] = i;
 
@@ -15882,6 +15920,19 @@ static void MpMarkChaseTick(void)
 		gc = &car_data[gp->carId];
 		gx = gc->hd.where.t[0];
 		gz = gc->hd.where.t[2];
+
+		/* The baseline is captured when the getaway's car is first VISIBLE, not
+		 * when the countdown began: on the first round its car may not exist here
+		 * yet, and a 0 baseline makes "has it moved?" pass at once -- the cops
+		 * then line up behind the getaway's session-spawn pose, not its map-wide
+		 * one. */
+		if (!gMpChaseFromSet)
+		{
+			gMpChaseFromSet = 1;
+			gMpChaseFromX = gx;
+			gMpChaseFromZ = gz;
+		}
+
 		mx = (long long)gx - gMpChaseFromX;
 		mz = (long long)gz - gMpChaseFromZ;
 

@@ -122,7 +122,7 @@ and passes `gMp.gamemode`:
 | `MpRespawnAfterDeath`, `MpRespawnOnRoad` | `MpModeRespawnHeld` (the referee phase) | 0: never held |
 | `MpChangeCar` | `MpModeCarChangeRefusal` | NULL: never refused |
 | `MpCarListForCity` | `MpModeFilterCarPool` | the list, untouched |
-| `MpNameTagColour` (mp_ui.c), `MpOnPedDraw` (mp.c), chat ink (`MpSendChat`, `MpHandleChat`) | `MpModePlayerColour` | the player's own colour and on/off |
+| `MpNameTagColour` (mp_ui.c), `MpOnPedDraw` (core/mp_enginehooks.c), chat ink (`MpSendChat`, `MpHandleChat`) | `MpModePlayerColour` | the player's own colour and on/off |
 | `MpSpawnLateJoiners`, `MpOnNetSpawn` | `MpModeLateJoinPolicy`, `MpModeSpawnRule` | live, the session's own placement (`CLUSTER` seats the same way) |
 | `MpMarkPresentTick` -> `MpMarkClusterTick` | `MpModeSpawnRule` == `CLUSTER` | never reached (no `JPMK` in mode 0) |
 | referee gate (`mp_mark.c`, `markref.py`), `MpRoundHoldsCar` | `MpModeHasPreGame` / `MpModeWantsCountdown` and the four wait/countdown fields | 0: no wait, no countdown, no pad hold |
@@ -658,7 +658,7 @@ yet played in game. These are later phases, and none of them is wired:
 - **The switch** is the dedicated server's: every peer is kicked with
   `MP_KICK_FLAG_REJOIN` and rejoins on its own. A game host then leaves the level
   and STARTs again on the new map from the frontend (`MpRelaunchTick`, driven by
-  `mp.c`), keeping its listener and session.
+  `core/mp_frame.c`), keeping its listener and session.
 - **Stops.** `{city, map mode/shape, arena, area}`. The default order is every
   city's two multiplayer maps, areas within a city before the next city. `area`
   is reserved (`-1`) for stops inside one map, for the arena work.

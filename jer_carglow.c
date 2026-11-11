@@ -1,3 +1,10 @@
+/*
+
+This is a neat little halo functionality that highlights a car with a glowing shell.
+I'll almost certainly be using this in Caine's Crossfire but it makes for a good Fox n Hounds highlight.
+
+*/
+
 #include "jer_carglow.h"
 
 #include "driver2.h"
@@ -19,7 +26,7 @@
  * pos + R*(v + cog). The car position / visual centre is model point -cog.
  * Scaling about 0 with trans=pos left the shell growing from the mesh
  * origin, off the body. */
-#define JER_CARGLOW_SCALE	4588
+#define JER_CARGLOW_SCALE	4268
 
 static CAR_DATA* gGlowCar;
 static int gGlowR, gGlowG, gGlowB;

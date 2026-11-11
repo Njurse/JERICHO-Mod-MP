@@ -171,7 +171,7 @@ join handshake then admits or refuses clients by their enabled-mod manifest.
 
 | File | Role |
 |---|---|
-| `mp.c` | the module's engine-facing entry point and hooks |
+| `core/` | the engine-facing entry and hooks, split into `mp_entry.c` (entry/lifecycle), `mp_frontend.c` (launch flow), `mp_frame.c` (frame/sim drive), `mp_panel.c` (player list), `mp_menu.c` (pause menu), `mp_chat.c` (chat keyboard), `mp_enginehooks.c` (car/ped/game hooks) |
 | `mp_net.c` | sockets: TCP session + UDP discovery, framing, per-peer ping |
 | `mp_session.c` | handshake, start, owner-authoritative car sync, roster, chat, dispatch |
 | `mp_players.c` | the player registry and the car accessors built on it |
@@ -239,7 +239,7 @@ no wanted level, and the session carries on.
 
 **The ini's port is the base; the command line can move it -- but not under the shipped
 launchers.** `mp.ini` is read at module activation, *before* the arguments are parsed, so it
-supplies the default port; a plain `-host 4000` masks it (`mp.c`, the `-host` handler), and
+supplies the default port; a plain `-host 4000` masks it (`core/mp_frontend.c`, the `-host` handler), and
 the listener opens on 4000. What actually *pins* a session to the ini's port is
 `MP_AUTOSTART`, which the packaged launchers set: that opens the listener at BOOT, on the
 ini's port, and the later `-host` has nothing left to do (`MpBeginHost` returns early when

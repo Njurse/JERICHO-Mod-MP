@@ -45,7 +45,7 @@ extern "C" {
 #endif
 
 #define MP_MARK_TAG_COOLDOWN_MS	2000	/* after a transfer (and a go-live), no tag */
-#define MP_MARK_INTERMISSION_MS	9000	/* ENDED -> the next round (0.24.0 polish: was 10 s) */
+#define MP_MARK_INTERMISSION_MS	6000	/* ENDED -> the next round (0.24.0 polish: was 10 s) */
 #define MP_MARK_COUNTDOWN_MS	4000	/* COUNTDOWN -> LIVE: GET READY (the cluster
 					 * placement), then 3, 2, 1 -- a second each */
 #define MP_MARK_COUNTDOWN_SPAWN_MS	1000	/* the first slice: placement, no digit yet */
@@ -65,7 +65,7 @@ extern "C" {
 #define MP_MARK_CNR_DRIVE_BASE		10	/* the getaway's points per second alive */
 #define MP_MARK_CNR_DRIVE_BONUS		5	/* + up to this many per second at speed */
 #define MP_MARK_CNR_DRIVE_TOPSPEED	300	/* whole units/frame (~90 mph) for the full bonus */
-#define MP_MARK_CNR_ESCAPE_DIST		24000	/* x/z units from EVERY cop (~1.5x draw distance; 0.24.0 polish: was 32000) */
+#define MP_MARK_CNR_ESCAPE_DIST		18000	/* x/z units from EVERY cop (~1.5x draw distance; 0.24.0 polish: was 32000) */
 #define MP_MARK_CNR_ESCAPE_HOLD_MS	5000	/* ...held this long (the host's caller) */
 /* The meter follows the getaway's REAL damage: its carstate rows carry its
  * totalDamage and wreck point (v24; 0.23.4 sent them as the optional JPDM). Until

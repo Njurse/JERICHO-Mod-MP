@@ -229,7 +229,7 @@ the code disagree, **the code and [`SYNC_CHECKLIST.md`](SYNC_CHECKLIST.md) win.*
 
 | what | where |
 | --- | --- |
-| the mod | `JERICHO/MODS/mp/` — `mp.c` (hooks/registry), `mp_net.c` (transport), `mp_session.c` (session + sync), `mp_ui.c` (frontend), `mp_players.c`, `mp_bot.c` (test bot) |
+| the mod | `JERICHO/MODS/mp/` — `core/` (entry + hooks: `mp_entry.c`, `mp_frame.c`, `mp_frontend.c`, `mp_menu.c`, `mp_panel.c`, `mp_chat.c`, `mp_enginehooks.c`), `mp_net.c` (transport), `mp_session.c` (session + sync), `mp_ui.c` (frontend), `mp_players.c`, `mp_bot.c` (test bot) |
 | config | `JERICHO/CONFIG/mp.ini` (port, name, version strictness, colour, local Super Turbo) |
 | command line | `-host [port]`, `-join <host>[:port]`, `-mpcar [city:]<model\|slotN>` (a host may be a **domain**, not just an IP) |
 | how to run it | `README.md` in this folder, and `tools/README.md` for every harness |

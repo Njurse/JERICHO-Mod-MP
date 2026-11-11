@@ -796,6 +796,68 @@ void MpClientBye(void);		/* tell the host WE are ending (a deliberate quit) */
  * whole. */
 int  MpRespawnAfterDeath(void);
 
+/* ------------------------------------------------------------------ */
+/* Core event handlers, chat keys, and shared state                    */
+/* (mp.c, split into core/)                                            */
+/* ------------------------------------------------------------------ */
+/* The JER_EVENT_* handlers the module entry (core/mp_entry.c) registers.
+ * Each lives in its core/ module; declared here so the entry can see them. */
+int MpOnBoot(void* userdata, void* args);
+int MpOnShutdown(void* userdata, void* args);
+int MpOnFrame(void* userdata, void* args);
+int MpOnPreSim(void* userdata, void* args);
+int MpOnDrawOverlay(void* userdata, void* args);
+int MpOnFrontendConfirm(void* userdata, void* args);
+int MpOnMpFrontend(void* userdata, void* args);
+int MpOnCmdLine(void* userdata, void* args);
+int MpOnFrontendEntered(void* userdata, void* args);
+int MpOnFrontendIdle(void* userdata, void* args);
+int MpOnFrontendDraw(void* userdata, void* args);
+int MpOnPauseMenu(void* userdata, void* args);
+int MpOnGameQuit(void* userdata, void* args);
+int MpOnCarDrawColor(void* userdata, void* args);
+int MpOnCarEngine(void* userdata, void* args);
+int MpOnPedDraw(void* userdata, void* args);
+int MpOnNetInput(void* userdata, void* args);
+int MpOnPedInput(void* userdata, void* args);
+int MpOnGameStart(void* userdata, void* args);
+int MpOnNetRecv(void* userdata, void* args);
+int MpOnLevelLaunch(void* userdata, void* args);
+
+/* The chat's keyboard bindings (raw PsyX scancodes). The frame hook's
+ * MP_TEST_CHATKEY lever drives the same keys, so they live here, shared. */
+#define MP_KEY_CHAT_OPEN	23	/* SDL_SCANCODE_T */
+#define MP_KEY_CHAT_SEND	40	/* SDL_SCANCODE_RETURN */
+#define MP_KEY_CHAT_SEND_KP	88	/* SDL_SCANCODE_KP_ENTER */
+#define MP_KEY_CHAT_CANCEL	41	/* SDL_SCANCODE_ESCAPE */
+#define MP_KEY_CHAT_PGUP	75	/* SDL_SCANCODE_PAGEUP */
+#define MP_KEY_CHAT_PGDN	78	/* SDL_SCANCODE_PAGEDOWN */
+
+/* Small helpers shared between the core/ modules. */
+void MpChatInstall(void);			/* mp_chat.c: chain PsyX's debug-key slot */
+void MpChatGrabKeyboard(int on);
+void MpOnDebugKey(int nKey, char down);
+void MpOnTextInput(const char* text);
+void MpMenuRegister(void);			/* mp_menu.c: register the MP pause menu */
+int  MpHostLeftMatch(void);
+void MpAutostartFromEnv(void);
+void MpLogPlayerList(void);
+void MpDrawPlayerList(void);
+int  MpOptToggleInvincible(void* ud, int dir);
+int  MpOptToggleImmune(void* ud, int dir);
+int  MpOptRepair(void* ud, int dir);
+int  MpOptClearFelony(void* ud, int dir);
+
+/* Shared core state (was static in mp.c). */
+extern int gReturnToMenu;	/* a lost connection must land us on the main menu */
+extern int gMpShowPlayers;	/* the pause panel is on screen */
+extern int gMpPauseOpened;	/* the player opened the engine PAUSE (not another menu) */
+extern int gAutoHostStart;	/* MP_AUTOSTART/-host: auto-launch when N players are in */
+extern int gAutoHostFrames;
+extern int gAutoHostTarget;
+extern int gAutoHostSettle;
+extern int gHostInWorld;	/* the host actually reached the running level */
+
 #ifdef __cplusplus
 }
 #endif

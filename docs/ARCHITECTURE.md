@@ -446,7 +446,7 @@ else keeps driving, so the two states would disagree the moment play resumes.
 
 mp does **not** claim START for this (it used to; an earlier version of this section
 still said so). In a live match the `JER_EVENT_PAUSE_MENU` hook (`MpOnPauseMenu`,
-mp.c) returns `JER_RESULT_CONTINUE` and lets the ENGINE'S pause menu open, so the
+core/mp_menu.c) returns `JER_RESULT_CONTINUE` and lets the ENGINE'S pause menu open, so the
 player gets the menu they expect, with the JERICHO Addons tree in it. It only
 records `gMpPauseOpened = 1`. The world keeps running because `MpOnDrawOverlay`,
 which fires on every drawn frame including while paused, calls the exported
@@ -1246,7 +1246,7 @@ are reachable from the Multiplayer pause page.
 
 ### Vehicle Options (the car page)
 
-`Multiplayer` -> `Vehicle Options` is a four-row page (`mp.c`): a city cycler, a car
+`Multiplayer` -> `Vehicle Options` is a four-row page (`core/mp_menu.c`): a city cycler, a car
 cycler, `Respawn as this car`, then `Repair car`. It is a CYCLER and not a list because
 the pause menu's item set is fixed when the page opens and a module menu cannot nest a
 second level (`jer_pause_menu.h`) -- so a long roster is reached by cycling. (It began as
@@ -1336,7 +1336,7 @@ state at that moment (`tools/mpshots.py`, which also works against a hand-played
 
 ### Player options
 
-`Multiplayer` -> `Player options` (`mp.c`): **Invincible car** and **Player
+`Multiplayer` -> `Player options` (`core/mp_menu.c`): **Invincible car** and **Player
 immunity** flip the engine's own per-machine switches (`gInvincibleCar` /
 `gPlayerImmune`, `mission.h`) — the same ones the cheat codes set, so they are the
 engine's behaviour, not new behaviour. **Repair car** and **Clear felony** are
@@ -1354,7 +1354,7 @@ for a headless check.)
 
 ### Kick player
 
-`Multiplayer` -> `Kick player` (`mp.c`): HOST ONLY. A target cycler walks the
+`Multiplayer` -> `Kick player` (`core/mp_menu.c`): HOST ONLY. A target cycler walks the
 connected players (the host and yourself excluded) and a "Confirm kick \<name\>"
 row sends `MP_TAG_KICK` (`JPKK`) to that peer via `MpKickPlayer`. The confirm row
 IS the confirmation step — a kick is a deliberate second press on a row that names

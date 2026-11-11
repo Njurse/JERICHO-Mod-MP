@@ -542,8 +542,8 @@ does not own.
   so it works through latency.
 - The counters: `[mp] hit summary: sent=.. rx=.. applied=.. kept=.. separated=.. rejected=..`.
 - Rigs: `mp_localpair.py --lag-ms 150` (TCP relay, one-way), then
-  `--lag-ms 700 --until "ghost hit rejected"` for the stale path. Enable JerAI
-  (`JerAI = 1` in `modlist.ini`, `--bot off`) when the mp test bot's driving is not
+  `--lag-ms 700 --until "ghost hit rejected"` for the stale path. Enable Alleycat
+  (`Alleycat = 1` in `modlist.ini`, `--bot off`) when the mp test bot's driving is not
   wanted.
 
 **Pass** — At 0 and 150 ms the **same contact** shows as "we bumped" on one seat and
@@ -551,7 +551,7 @@ does not own.
 names a 47-frame-old pose is rejected with distance logged and nothing moves.
 `lost=0`, `dumps=0`.
 
-**Status** — Verified headless (JerAI driving at 0 and 150 ms; stale path at 700 ms).
+**Status** — Verified headless (Alleycat driving at 0 and 150 ms; stale path at 700 ms).
 
 ---
 
