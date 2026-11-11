@@ -15181,8 +15181,9 @@ int MpWarpToPlayer(int playerId)
 
 	for (i = 0; i < (int)(sizeof(kWarpAlong) / sizeof(kWarpAlong[0])); i++)
 	{
-		int px = tx + ((fx * kWarpAlong[i] + rx * kWarpAcross[i]) >> 12);
-		int pz = tz + ((fz * kWarpAlong[i] + rz * kWarpAcross[i]) >> 12);
+		int k = (i + me->id) % (int)(sizeof(kWarpAlong) / sizeof(kWarpAlong[0]));	/* two warpers never take the same spot */
+		int px = tx + ((fx * kWarpAlong[k] + rx * kWarpAcross[k]) >> 12);
+		int pz = tz + ((fz * kWarpAlong[k] + rz * kWarpAcross[k]) >> 12);
 		int onRoad;
 
 		/* Test the GROUND this candidate stands on, not the target's: a region
@@ -15515,7 +15516,8 @@ int MpRespawnOnRoad(void)
 /* (the round still starts).                                            */
 #define MP_CLUSTER_STEP		(MP_JOIN_CLEAR + 1200)	/* 3200: the join spawn's retry step */
 #define MP_CLUSTER_RADIUS	(3 * MP_CLUSTER_STEP)	/* 9600: furthest a car lands from the anchor */
-#define MP_CLUSTER_PER_RING	8	/* slots on one ring: 2*3200*sin(pi/8) ~ 2450 apart, > MP_JOIN_CLEAR */
+#define MP_CLUSTER_PER_RING	6	/* slots on one ring: 2*3200*sin(pi/6) = 3200 apart */
+#define MP_CLUSTER_DRIFT	1000	/* a slot's road spot stays this close to it, so two slots never snap together */
 #define MP_CLUSTER_GIVEUP_FRAMES	(MP_MARK_COUNTDOWN_SPAWN_MS * 30 / 1000 + 30)	/* 2 s */
 #define MP_CLUSTER_TRIES_PER_FRAME	4
 
@@ -15698,7 +15700,7 @@ static void MpMarkClusterTick(void)
 	{
 		int ringNo = 1 + rank / MP_CLUSTER_PER_RING;
 		int ang = ((rank % MP_CLUSTER_PER_RING) * 4096 / MP_CLUSTER_PER_RING +
-			(gMpClusterTries * MP_CLUSTER_TRIES_PER_FRAME + t) * 331) & 0xfff;
+			((gMpClusterTries - 1) * MP_CLUSTER_TRIES_PER_FRAME + t) * 331) & 0xfff;	/* first candidate = the rank's own slot */
 		int r = ringNo * MP_CLUSTER_STEP;
 		int cx = ax + (int)(((long)rsin(ang) * r) >> 12);
 		int cz = az + (int)(((long)rcos(ang) * r) >> 12);
@@ -15713,6 +15715,12 @@ static void MpMarkClusterTick(void)
 
 		if (dx * dx + dz * dz > (long long)MP_CLUSTER_RADIUS * MP_CLUSTER_RADIUS)
 			continue;	/* the nearest road to the slot is too far from the anchor */
+
+		dx = (long long)x - cx;
+		dz = (long long)z - cz;
+
+		if (dx * dx + dz * dz > (long long)MP_CLUSTER_DRIFT * MP_CLUSTER_DRIFT)
+			continue;	/* snapped into a neighbour's slot: the other machine cannot see us yet */
 
 		if (!MpJoinSpotClearOfPlayers(x, z, me->id, me->carId))
 			continue;
@@ -15760,12 +15768,11 @@ static void MpMarkClusterTick(void)
 /*    the road's heading at each step (the way closer to the getaway's),*/
 /*    so a bend is followed. Distance behind, by the cop's place among  */
 /*    the cops (rank 0, 1, 2 ... by id):                                */
-/*        MP_CHASE_FIRST + rank * MP_CHASE_GAP + random(0..MP_CHASE_JITTER) */
-/*      = 4000-5500 for the first cop, 7000-8500 the second, 10000-11500 */
-/*        the third, and so on (a car is ~1000 long; the bands never    */
-/*        overlap, so two cops never pick the same spot);              */
+/*        MP_CHASE_FIRST + rank * MP_CHASE_GAP                          */
+/*      = 4000 for the first cop, 7000 the second, 10000 the third ...  */
 /*    a spot not clear of other players walks on, at most              */
-/*    MP_CHASE_EXTRA further. A dead end (no road within MP_CHASE_SNAP  */
+/*    MP_CHASE_EXTRA further -- short of the next band, so two cops     */
+/*    never pick the same spot. A dead end (no road within MP_CHASE_SNAP*/
 /*    of the next step) stops the walk where it is.                     */
 /* Failing all that by MP_CHASE_GIVEUP_FRAMES: the start cluster's      */
 /* fallback (the pause menu's warp beside the getaway), then where the  */
@@ -15773,12 +15780,12 @@ static void MpMarkClusterTick(void)
 /* ------------------------------------------------------------------ */
 #define MP_CHASE_FIRST		4000
 #define MP_CHASE_GAP		3000
-#define MP_CHASE_JITTER		1500
-#define MP_CHASE_EXTRA		6000
+#define MP_CHASE_JITTER		0	/* none: every machine computes the same line */
+#define MP_CHASE_EXTRA		1000	/* <= MP_CHASE_GAP - MP_JOIN_CLEAR: never into the next cop's band */
 #define MP_CHASE_STEP		1000
 #define MP_CHASE_SNAP		1800	/* a step off the road snaps back this far, at most */
 #define MP_CHASE_MOVED		2000
-#define MP_CHASE_WAIT_FRAMES	60	/* 2 s at 30 Hz */
+#define MP_CHASE_WAIT_FRAMES	90	/* 3 s: the getaway's map-wide search can take most of the countdown */
 #define MP_CHASE_GIVEUP_FRAMES	105	/* 3.5 s: inside the 4 s round countdown */
 
 /* the road's heading at (x,z), turned to the way closer to `want` -- along the
