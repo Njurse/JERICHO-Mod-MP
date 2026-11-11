@@ -46,7 +46,7 @@ static const MP_MODE_DESC kModes[] =
 		0,			/* teamColours */
 
 		MP_MODE_RESPAWN_INSTANT, 0,	/* as Take a Ride */
-		MP_MODE_LATEJOIN_LIVE,	/* a late joiner drives at once, as a hound — only after GO */
+		MP_MODE_LATEJOIN_SPECTATE,	/* v24: a joiner after GO waits for the next round */
 		2, 1, 5, 3,		/* wait for 2, wait for cars, 5-4-3-2-1 first map, 3-2-1 later */
 		0,			/* carChangeLocked */
 		MP_MODE_CARPOOL_ALL,
@@ -69,7 +69,7 @@ static const MP_MODE_DESC kModes[] =
 		0,			/* teamColours */
 
 		MP_MODE_RESPAWN_INSTANT, 0,
-		MP_MODE_LATEJOIN_LIVE,	/* a late joiner drives at once, without the bomb — only after GO */
+		MP_MODE_LATEJOIN_SPECTATE,	/* v24: a joiner after GO waits for the next round */
 		2, 1, 5, 3,		/* wait for 2, wait for cars, 5-4-3-2-1 first map, 3-2-1 later */
 		0,			/* carChangeLocked */
 		MP_MODE_CARPOOL_ALL,
@@ -92,7 +92,7 @@ static const MP_MODE_DESC kModes[] =
 		0,			/* teamColours */
 
 		MP_MODE_RESPAWN_INSTANT, 0,
-		MP_MODE_LATEJOIN_LIVE,	/* a late joiner drives at once, as a cop — only after GO */
+		MP_MODE_LATEJOIN_SPECTATE,	/* v24: a joiner after GO waits for the next round */
 		2, 1, 5, 3,		/* wait for 2, wait for cars, 5-4-3-2-1 first map, 3-2-1 later */
 		0,			/* carChangeLocked: the role swap at the countdown needs a change */
 		MP_MODE_CARPOOL_ROLE,	/* cops: police cars; the getaway: anything else */
@@ -206,6 +206,13 @@ const char* MpModeDisplayName(int id)
 int MpModeRespawnPolicy(int mode)
 {
 	return MpModeBehaviour(mode)->respawn;
+}
+
+int MpModeRespawnDelayFrames(int mode)
+{
+	const MP_MODE_DESC* d = MpModeBehaviour(mode);
+
+	return d->respawn == MP_MODE_RESPAWN_DELAY && d->respawnDelayFrames > 0 ? d->respawnDelayFrames : 0;
 }
 
 int MpModeLateJoinPolicy(int mode)

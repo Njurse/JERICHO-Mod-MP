@@ -118,9 +118,10 @@ def connect(server, name):
     return ours
 
 
-def carstate(pid, x, z, vx=0, vz=0, model=1):
-    row = m.CARSTATE_ENTRY.pack(pid, 1, 0, model, 0xFF, 0, 0, 0, 4096, x, -200, z, 0,
-                                0, 0, 0, vx, 0, vz, 0, 0, 0, 2)
+def carstate(pid, x, z, vx=0, vz=0, model=1, dmg=0, maxd=0, flags=1):
+    """One MP_CARSTATE_ENTRY (61 bytes, proto 24: + totalDamage, maxDamage)."""
+    row = m.CARSTATE_ENTRY.pack(pid, flags, 0, model, 0xFF, 0, 0, 0, 4096, x, -200, z, 0,
+                                0, 0, 0, vx, 0, vz, 0, 0, 0, 2, dmg, maxd)
     return m.CARSTATE.pack(1, 1, 0, 0, 0) + row
 
 
@@ -194,7 +195,7 @@ def check_foxhounds(tmp):
         tags = [f[1] for f in seen]
         check("a joiner gets ROSTER, WELCOME, START, ROUND, then MARK",
               tags[:5] == [m.TAG["roster"], m.TAG["welcome"], m.TAG["start"], m.TAG["round"], m.TAG["mark"]], tags)
-        check("every envelope says proto 23", seen and all(f[0] == 23 for f in seen), [f[0] for f in seen])
+        check("every envelope says proto 24", seen and all(f[0] == m.PROTO == 24 for f in seen), [f[0] for f in seen])
         mk = m.parse_mark(seen[-1][2]) if seen else None
         check("one player: waiting, nobody marked, a full 3:00", mk is not None and
               mk["phase"] == m.MARK_PHASE_WAITING and mk["marked"] == -1 and mk["rows"] == [(1, 1800)]
@@ -401,6 +402,13 @@ def check_bombtag(tmp):
         c = connect(server, "Cat")
         frames_until(c, m.TAG["mark"])
         check("a late joiner has no bomb", server.mark.marked == other and 3 in server.mark.present)
+        check("proto 24: a join after GO waits for the next round (benched, JPRD WAITING)",
+              server.mark.bench.get(3) == m.MARK_ENTRY_F_WAITING and not server.mark.in_round(3) and
+              server.round.players[3]["state"] == m.ROUND_PLAYER_WAITING,
+              (server.mark.bench, server.round.players.get(3)))
+        server.broadcast_mark_if_due(force=True)
+        mk = last_mark(c)
+        check("...and JPMK flags them WAITING", mk is not None and mk["waiting"] == [3], mk)
         server._mark_step(58000)
         check("the holder at 0:00 loses: ended, still marked, no winner",
               server.mark.phase == m.MARK_PHASE_ENDED and server.mark.marked == other and
@@ -485,6 +493,7 @@ def check_copsrobbers(tmp):
             s1 = server.round.players[g]["score"]
         check("CnR: a second alive at top speed = 15 points", s1 - s0 == 15, (s0, s1))
         m.send_frame(socks[g], m.TAG["carstate"], carstate(g, 0, 0))
+        settle(server, [a, b])          # the getaway's stop lands before the cop's row
         m.send_frame(socks[cop], m.TAG["carstate"], carstate(cop, 600, 0, vx=-10 * 4096))
         settle(server, [a, b])
         check("CnR: a cop's contact scores for the cop (push 6 -> 30), the getaway stays",
@@ -493,18 +502,25 @@ def check_copsrobbers(tmp):
         m.send_frame(socks[cop], m.TAG["carstate"], carstate(cop, 600, 0, vx=-10 * 4096))
         settle(server, [a, b])
         check("CnR: ...not again inside the cop's 1 s cooldown", server.round.players[cop]["score"] == 30)
-        # 0.23.4: the getaway's own damage (JPDM) drives the meter from here
-        m.send_frame(socks[cop], m.TAG["damage"], m.DAMAGE.pack(cop, 0, 1, 9000, 30000))
-        m.send_frame(socks[g], m.TAG["damage"], m.DAMAGE.pack(g, 0, 1, 0, 30000))
+        # proto 24: the getaway's own damage rides its carstate rows from here
+        m.send_frame(socks[cop], m.TAG["carstate"], carstate(cop, 20000, 0, dmg=9000, maxd=30000))
         settle(server, [a, b])
-        check("CnR: a cop's JPDM is refused; the getaway's turns real damage on",
+        check("CnR: a cop's carstate damage is not the meter's", not server.mark.dmg_live and
+              server.mark.heat == 30, (server.mark.dmg_live, server.mark.heat))
+        m.send_frame(socks[g], m.TAG["carstate"], carstate(g, 0, 0, dmg=0, maxd=30000))
+        settle(server, [a, b])
+        check("CnR: the getaway's carstate turns real damage on",
               server.mark.dmg_live and server.mark.heat == 30, (server.mark.dmg_live, server.mark.heat))
+        with server.lock:
+            mk = m.parse_mark(server.mark.to_bytes())
+        check("CnR: ...and JPMK says so (MARK_F_DAMAGE)", mk is not None and mk["flags"] & m.MARK_F_DAMAGE,
+              mk and mk["flags"])
         server._mark_step(1000)
         m.send_frame(socks[cop], m.TAG["carstate"], carstate(cop, 600, 0, vx=-10 * 4096))
         settle(server, [a, b])
         check("CnR: with real damage on, a contact only names the cop (no points)",
               server.round.players[cop]["score"] == 30 and server.mark.last_cop == cop)
-        m.send_frame(socks[g], m.TAG["damage"], m.DAMAGE.pack(g, 0, 2, 3000, 30000))
+        m.send_frame(socks[g], m.TAG["carstate"], carstate(g, 0, 0, dmg=3000, maxd=30000))
         settle(server, [a, b])
         check("CnR: 10% damage = +100 on the meter, scored for the cop in contact",
               server.mark.heat == 130 and server.round.players[cop]["score"] == 130,
@@ -604,12 +620,52 @@ def check_take_a_ride(tmp):
         server.stop.set()
 
 
+def check_out(tmp):
+    """Proto 24: a carstate row flagged MP_CARSTATE_OUT (died, respawn NONE) benches its
+    sender until the next round: JPMK OUT, JPRD SPECTATING, no contacts."""
+    server = server_for(tmp, gamemode=m.GAMEMODE_FOXHOUNDS, mode_time=1)
+    try:
+        socks = {}
+        for i, name in enumerate(("Ada", "Bea", "Cy")):
+            socks[i + 1] = connect(server, name)
+            frames_until(socks[i + 1], m.TAG["mark"])
+        for s in socks.values():
+            pick(s)
+        check("out: three picks land", all(wait_ready(server, p) for p in socks))
+        server._mark_step(0)
+        server._mark_step(5000)
+        fox = server.mark.marked
+        hound = [p for p in socks if p != fox][0]
+        check("out: live, a fox", server.mark.phase == m.MARK_PHASE_LIVE and fox in socks)
+        m.send_frame(socks[hound], m.TAG["carstate"],
+                     carstate(hound, 0, 0, flags=1 | m.CARSTATE_OUT))
+        settle(server, list(socks.values()))
+        check("out: an OUT row benches the sender (JPMK OUT, JPRD SPECTATING)",
+              server.mark.bench.get(hound) == m.MARK_ENTRY_F_OUT and not server.mark.in_round(hound) and
+              server.round.players[hound]["state"] == m.ROUND_PLAYER_SPECTATING,
+              (server.mark.bench, server.round.players.get(hound)))
+        check("out: a benched player cannot take the mark", not server.mark.contact(hound, fox) and
+              server.mark.marked == fox)
+        m.send_frame(socks[fox], m.TAG["carstate"], carstate(fox, 0, 0, flags=1 | m.CARSTATE_OUT))
+        settle(server, list(socks.values()))
+        last = [p for p in socks if p not in (fox, hound)][0]
+        check("out: the fox out with one left -> void (nobody wins)",
+              server.mark.phase == m.MARK_PHASE_ENDED and server.mark.winner == -1 and
+              server.mark.end_reason == m.MARK_END_VOID, (server.mark.phase, server.mark.end_reason, last))
+        for s in socks.values():
+            m.send_frame(s, m.TAG["leave"], b"")
+            s.close()
+    finally:
+        server.stop.set()
+
+
 def main():
     tmp = tempfile.mkdtemp()
     check_minutes(tmp)
     check_foxhounds(tmp)
     check_bombtag(tmp)
     check_copsrobbers(tmp)
+    check_out(tmp)
     check_mark_loop(tmp)
     check_take_a_ride(tmp)
     print("%d failure(s)" % fails)

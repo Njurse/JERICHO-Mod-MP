@@ -1,4 +1,4 @@
-"""The round state (MP_TAG_ROUND, proto 22; the wire is proto 23 since JPMK) on the
+"""The round state (MP_TAG_ROUND, proto 22; the wire is proto 24 since round lifecycle v2) on the
 dedicated server, over a real socket.
 
   * a joiner gets ROSTER, WELCOME, START and then the round state: Take a Ride's
@@ -6,8 +6,10 @@ dedicated server, over a real socket.
   * a second joiner is announced to the first at once, and a leaver's row goes;
   * a client cannot write the round state: its JPRD is never forwarded, and the
     sender is answered with the server's own;
-  * every envelope says proto 23, and proto-21 and proto-22 HELLOs are refused
+  * every envelope says proto 24, and proto-21, -22 and -23 HELLOs are refused
     (REJECT VERSION);
+  * proto 24: an admin's row carries ROUND_ENTRY_F_ADMIN; the arena is 0..3 in
+    the session spare's bits 8-9;
   * a config with no "gamemode" key referees mode 0.
 
 The server's serve() runs on one end of a socketpair; no ports, no game.
@@ -100,7 +102,7 @@ def main():
         tags = [f[1] for f in seen]
         check("a joiner gets ROSTER, WELCOME, START, then the round state",
               tags[:4] == [m.TAG["roster"], m.TAG["welcome"], m.TAG["start"], m.TAG["round"]], tags)
-        check("every envelope says proto 23", m.PROTO == 23 and all(f[0] == 23 for f in seen),
+        check("every envelope says proto 24", m.PROTO == 24 and all(f[0] == 24 for f in seen),
               [f[0] for f in seen])
         rd = m.parse_round(seen[-1][2]) if seen and seen[-1][1] == m.TAG["round"] else None
         check("Take a Ride snapshot: mode 0, round 1, live, Alice playing, no team, score 0",
@@ -149,8 +151,31 @@ def main():
         check("a leaver's row goes, the round goes on", rd_l == (0, m.ROUND_PHASE_LIVE, 1,
               [(1, m.ROUND_PLAYER_PLAYING, -1, 0)]), rd_l)
 
-        # -- proto-21 and proto-22 peers are refused
-        for proto in (21, 22):
+        # -- proto 24: the ADMIN bit rides the round row
+        with server.lock:
+            for info in server.clients.values():
+                if info["id"] == 1:
+                    info["admin"] = True
+        server.broadcast_round_if_changed()
+        adm = frames_until(alice, m.TAG["round"])
+        raw = adm[-1][2] if adm and adm[-1][1] == m.TAG["round"] else b""
+        row = m.ROUND_ENTRY.unpack_from(raw, m.ROUND.size) if len(raw) >= m.ROUND.size + m.ROUND_ENTRY.size else None
+        check("an admin's round row carries ROUND_ENTRY_F_ADMIN", row is not None and row[0] == 1 and
+              row[3] == m.ROUND_ENTRY_F_ADMIN, row)
+        # -- proto 24: arenas 0..3, bits 8-9 of the session spare
+        server.set_arena(3)
+        check("arena 3 rides the session spare's bits 8-9",
+              (server.session_spare() >> m.SESSION_ARENA_SHIFT) & m.SESSION_ARENA_MASK == 3, hex(server.session_spare()))
+        try:
+            server.set_arena(4)
+            bad = False
+        except ValueError:
+            bad = True
+        check("arena 4 is refused", bad)
+        server.set_arena(0)
+
+        # -- proto-21, -22 and -23 peers are refused
+        for proto in (21, 22, 23):
             old, _to = connect(server, "Old%d" % proto, proto=proto)
             f = recv_env(old)
             check("a proto-%d HELLO is refused with REJECT VERSION" % proto,

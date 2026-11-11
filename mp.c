@@ -93,7 +93,7 @@ JERICHO_CONTEXT* gMpCtx;
  * Single Player / Multiplayer answer writes them through MpSetMapShape, and the
  * session publishes them to clients, so they are read/written here too. */
 extern int gBootMpLevel;	/* 1 = a multiplayer map, 0 = the full city */
-extern int gBootMpArena;	/* which multiplayer map (0/1) */
+extern int gBootMpArena;	/* which multiplayer map (0..MP_ARENA_MAX) */
 
 /* The engine's frontend screen table, to answer "is the player back on the main
  * menu" from the frame hook without a dedicated getter. Screen 0 is the main
@@ -308,7 +308,7 @@ static int MpOnMpFrontend(void* userdata, void* args)
 			 * answer already set the shape to the full city (MpSetMapShape(0,0)),
 			 * for which this is a no-op. */
 			if (gBootMpLevel)
-				gBootMpArena = gSubGameNumber & 1;
+				gBootMpArena = gSubGameNumber & MP_SESSION_ARENA_MASK;
 
 			MpStartMatch();
 		}
@@ -3740,7 +3740,10 @@ JER_MODULE_ENTRY(jer_module_mp_entry)(JERICHO_CONTEXT* ctx)
 	 * to be unattended needs a human to click OK. Same dump, no dialog. */
 	MpSuppressCrashDialogs();
 
-	/* The version is mod.toml's (0.23.4: round hold, pre-round repair, one centre line,
+	/* The version is mod.toml's (0.24.0: MP_PROTO_VERSION 24, round lifecycle v2 --
+	 * end reasons, damage on the carstate row, arenas 0..3, admin bit, late joiners and
+	 * the out-of-round spectate, engine-style 3-2-1 and GO;
+	 * 0.23.4 was round hold, pre-round repair, one centre line,
 	 * the getaway's own damage (optional JPDM), Fox N Hounds digit timers, radio rotation;
 	 * 0.23.3 was respawn hold at round end/countdown, join/leave sounds;
 	 * 0.23.2 was role-car picks kept per connection, not saved;
@@ -3753,7 +3756,7 @@ JER_MODULE_ENTRY(jer_module_mp_entry)(JERICHO_CONTEXT* ctx)
 	 * The core lets the manifest win over this argument (jerCtxRegisterModule), so
 	 * this is only the fallback; it is kept equal to mod.toml rather than a stale
 	 * "0.1.0" so the two never disagree in a log. Bump both together. */
-	ctx->jer_register_module(ctx, "mp", "Multiplayer", "0.23.4", "JERICHO",
+	ctx->jer_register_module(ctx, "mp", "Multiplayer", "0.24.0", "JERICHO",
 		"LAN multiplayer: host/join, UDP discovery, JERICHO addon net bridge, "
 		"owner-authoritative car sync (each machine drives its own car and "
 		"broadcasts its state; peers adopt it verbatim), and in-match chat.",

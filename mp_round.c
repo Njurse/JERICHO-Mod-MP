@@ -17,6 +17,7 @@ typedef struct MP_ROUND_PLAYER
 	int state;	/* MP_ROUND_PLAYER_* */
 	int score;
 	int team;	/* -1 = none */
+	int flags;	/* MP_ROUND_ENTRY_F_* (v24) */
 } MP_ROUND_PLAYER;
 
 static struct
@@ -50,10 +51,11 @@ static int MpRoundArrivalState(int mode)
 	if (gRound.phase != MP_ROUND_PHASE_LIVE)
 		return MP_ROUND_PLAYER_WAITING;
 
-	/* Take a Ride (MP_MODE_LATEJOIN_LIVE): straight in. A SPECTATE policy is
-	 * still played live until Phase 2 implements the wait -- the joiner IS spawned
-	 * live (MpSpawnLateJoiners logs that fallback), so the state says so. */
-	(void)mode;
+	/* Take a Ride (MP_MODE_LATEJOIN_LIVE): straight in. A SPECTATE mode (v24):
+	 * WAITING until the next round begins (MpRoundBegin), held and watching. */
+	if (MpModeLateJoinPolicy(mode) == MP_MODE_LATEJOIN_SPECTATE)
+		return MP_ROUND_PLAYER_WAITING;
+
 	return MP_ROUND_PLAYER_PLAYING;
 }
 
@@ -128,6 +130,42 @@ int MpRoundAddScore(int playerId, int points)
 	return 1;
 }
 
+int MpRoundSetState(int playerId, int state)
+{
+	MP_ROUND_PLAYER* p;
+
+	if (!MpRoundIdOk(playerId) || !gRound.players[playerId].present)
+		return 0;
+
+	p = &gRound.players[playerId];
+	if (p->state == state)
+		return 0;
+
+	p->state = state;
+	gRound.have = 1;
+	gRound.revision++;
+	return 1;
+}
+
+int MpRoundSetAdmin(int playerId, int admin)
+{
+	MP_ROUND_PLAYER* p;
+	int want;
+
+	if (!MpRoundIdOk(playerId) || !gRound.players[playerId].present)
+		return 0;
+
+	p = &gRound.players[playerId];
+	want = admin ? (p->flags | MP_ROUND_ENTRY_F_ADMIN) : (p->flags & ~MP_ROUND_ENTRY_F_ADMIN);
+	if (want == p->flags)
+		return 0;
+
+	p->flags = want;
+	gRound.have = 1;
+	gRound.revision++;
+	return 1;
+}
+
 int MpRoundSyncPresent(const int* present, int mode)
 {
 	int i, changed = 0;
@@ -145,6 +183,7 @@ int MpRoundSyncPresent(const int* present, int mode)
 
 		p->present = want;
 		p->score = 0;
+		p->flags = 0;
 		p->team = want ? MpRoundTeamFor(mode, i) : -1;
 		p->state = want ? MpRoundArrivalState(mode) : MP_ROUND_PLAYER_PLAYING;
 		changed = 1;
@@ -193,6 +232,7 @@ int MpRoundBuild(unsigned char* out, int cap)
 		e.playerId = (uint8_t)i;
 		e.state = (uint8_t)p->state;
 		e.team = (uint8_t)(p->team < 0 ? MP_ROUND_TEAM_NONE : p->team);
+		e.flags = (uint8_t)p->flags;
 		e.score = (int32_t)p->score;
 		memcpy(out + sizeof(h) + (size_t)n * sizeof(e), &e, sizeof(e));
 		n++;
@@ -231,6 +271,7 @@ int MpRoundApply(const unsigned char* p, int len)
 		gRound.players[i].state = MP_ROUND_PLAYER_PLAYING;
 		gRound.players[i].score = 0;
 		gRound.players[i].team = -1;
+		gRound.players[i].flags = 0;
 	}
 
 	for (i = 0; i < h.count; i++)
@@ -246,6 +287,7 @@ int MpRoundApply(const unsigned char* p, int len)
 		r = &gRound.players[e.playerId];
 		r->present = 1;
 		r->state = e.state;
+		r->flags = e.flags;
 		r->score = (int)e.score;
 		r->team = (e.team == MP_ROUND_TEAM_NONE || e.team >= MP_MODE_MAX_TEAMS) ? -1 : (int)e.team;
 	}
@@ -306,4 +348,10 @@ int MpRoundPlayerTeam(int playerId)
 		return -1;
 
 	return gRound.players[playerId].team;
+}
+
+int MpRoundPlayerIsAdmin(int playerId)
+{
+	return MpRoundIdOk(playerId) && gRound.players[playerId].present &&
+		(gRound.players[playerId].flags & MP_ROUND_ENTRY_F_ADMIN) ? 1 : 0;
 }

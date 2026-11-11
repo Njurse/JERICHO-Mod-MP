@@ -1,6 +1,6 @@
 /*
  * test_mp_mark.cpp -- the standalone check for the marked-player referee (mp_mark.c)
- * and its wire format (MP_MARK / MP_MARK_ENTRY, MP_TAG_MARK, proto 23).
+ * and its wire format (MP_MARK / MP_MARK_ENTRY, MP_TAG_MARK, proto 24).
  *
  * Two ways to run it:
  *   test_mp_mark            the rule checks below (exit 0 = every rule holds)
@@ -13,6 +13,9 @@
  *                             ready <id>...           (the whole ready-set)
  *                             tick <ms> <rnd>
  *                             contact <a> <b>
+ *                             hit <a> <b> <strength> / drive <ms> <speed> / escape
+ *                             damage <from> <damage> <max>
+ *                             out <id> <rnd>          (v24: no respawn this round)
  *                           Each prints "STEP <n> <events> <hex>".
  *
  * Builds against mp_mark.c, mp_mode.c and mp_round.c alone (.cpp so the mod
@@ -32,8 +35,8 @@ static int gChecks = 0;
 #define CHECK(cond) do { gChecks++; if (!(cond)) { gFails++; \
 	printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); } } while (0)
 
-static_assert(MP_PROTO_VERSION == 23, "the marked-player state is proto 23");
-static_assert(sizeof(MP_MARK) == 12, "MP_MARK");
+static_assert(MP_PROTO_VERSION == 24, "round lifecycle v2 is proto 24");
+static_assert(sizeof(MP_MARK) == 16, "MP_MARK (v24: endReason, flags, spare)");
 static_assert(sizeof(MP_MARK_ENTRY) == 4, "MP_MARK_ENTRY");
 static_assert(sizeof(MP_ROUND) == 8 && sizeof(MP_ROUND_ENTRY) == 8, "JPRD is untouched");
 static_assert(sizeof(MP_ROSTER_ENTRY) == 32, "the roster entry is untouched");
@@ -651,6 +654,120 @@ static void CheckLeaversAndDamage(void)
 	CHECK(MpMarkHeat() == MP_MARK_CNR_BUST_POINTS);
 }
 
+/* Proto 24: end reasons, late joiners benched until the next round, out. */
+static void CheckRoundV2(void)
+{
+	int two25[] = { 2, 5 }, three257[] = { 2, 5, 7 }, two27[] = { 2, 7 };
+	int three146[] = { 1, 4, 6 }, two14[] = { 1, 4 };
+	unsigned char buf[SNAP_MAX];
+	MP_MARK h;
+	MP_MARK_ENTRY e;
+	int len, ev = 0, cop = -1;
+
+	/* Fox N Hounds: a join after GO waits; the fox leaving the waiter alone is void */
+	MpMarkReset(MP_GAMEMODE_FOXHOUNDS, 3);
+	AllReady();
+	Present(two25, 2, 0);
+	MpMarkTick(0, 0);
+	CHECK(MpMarkTick(5 * 1000, 1) == MP_MARK_EV_BEGIN && MpMarkMarked() == 5);
+	CHECK(MpMarkEndReason() == MP_MARK_END_NONE);
+	Present(three257, 3, 0);
+	CHECK(MpMarkPresent(7) && !MpMarkInRound(7) && MpMarkBench(7) == MP_MARK_ENTRY_F_WAITING);
+	MpMarkTick(3000, 0);
+	CHECK(MpMarkContact(5, 7) == 0 && MpMarkMarked() == 5);	/* not in this round */
+	len = MpMarkBuild(buf, (int)sizeof(buf));
+	CHECK(len == (int)(sizeof(MP_MARK) + 3 * sizeof(MP_MARK_ENTRY)));
+	memcpy(&e, buf + sizeof(MP_MARK) + 2 * sizeof(e), sizeof(e));
+	CHECK(e.playerId == 7 && (e.flags & MP_MARK_ENTRY_F_WAITING) && (e.flags & MP_MARK_ENTRY_F_READY));
+	Present(two27, 2, 0);	/* the fox leaves: one in the round, one waiting */
+	CHECK(MpMarkPhase() == MP_MARK_PHASE_ENDED && MpMarkMarked() == -1 && MpMarkWinner() == -1);
+	CHECK(MpMarkEndReason() == MP_MARK_END_VOID);
+	len = MpMarkBuild(buf, (int)sizeof(buf));
+	memcpy(&h, buf, sizeof(h));
+	CHECK(h.endReason == MP_MARK_END_VOID && h.flags == 0 && h.spare == 0);
+	/* the client mirror */
+	CHECK(MpMarkApply(buf, len) == 1 && MpMarkEndReason() == MP_MARK_END_VOID && MpMarkBench(7) == MP_MARK_ENTRY_F_WAITING);
+
+	/* ...the next countdown puts the waiter in */
+	MpMarkReset(MP_GAMEMODE_FOXHOUNDS, 1);
+	AllReady();
+	Present(two25, 2, 0);
+	MpMarkTick(0, 0);
+	MpMarkTick(5 * 1000, 0);
+	Present(three257, 3, 0);
+	CHECK(MpMarkBench(7) == MP_MARK_ENTRY_F_WAITING);
+	CHECK(MpMarkTick(60 * 1000, 0) == MP_MARK_EV_END && MpMarkEndReason() == MP_MARK_END_CLOCK);
+	CHECK(MpMarkWinner() >= 0);
+	CHECK(MpMarkTick(MP_MARK_INTERMISSION_MS, 0) == MP_MARK_EV_COUNTDOWN);
+	CHECK(MpMarkInRound(7) && MpMarkBench(7) == 0 && MpMarkEndReason() == MP_MARK_END_NONE);
+
+	/* Take a Ride never benches (no referee); a join during COUNTDOWN is in */
+	MpMarkReset(MP_GAMEMODE_BOMBTAG, 1);
+	AllReady();
+	Present(two14, 2, 0);
+	MpMarkTick(0, 0);
+	Present(three146, 3, 0);
+	CHECK(MpMarkInRound(6));
+	MpMarkTick(5 * 1000, 0);
+	CHECK(MpMarkTick(60 * 1000, 0) == MP_MARK_EV_END && MpMarkEndReason() == MP_MARK_END_CLOCK);
+
+	/* Cops n Robbers: escape, bust (damage flag on the wire), leave, out */
+	MpMarkReset(MP_GAMEMODE_COPSROBBERS, 1);
+	AllReady();
+	Present(three146, 3, 0);
+	MpMarkTick(0, 0);
+	CHECK(MpMarkTick(5 * 1000, 0) == MP_MARK_EV_BEGIN && MpMarkMarked() == 1);
+	CHECK(MpMarkEscape() == MP_MARK_EV_END && MpMarkEndReason() == MP_MARK_END_ESCAPE && MpMarkWinner() == 1);
+
+	MpMarkReset(MP_GAMEMODE_COPSROBBERS, 1);
+	AllReady();
+	Present(three146, 3, 0);
+	MpMarkTick(0, 0);
+	MpMarkTick(5 * 1000, 0);
+	CHECK(MpMarkDamage(1, 100, 30000, &cop, &ev) > 0 && (MpMarkFlags() & MP_MARK_F_DAMAGE));
+	len = MpMarkBuild(buf, (int)sizeof(buf));
+	memcpy(&h, buf, sizeof(h));
+	CHECK(h.flags == MP_MARK_F_DAMAGE && h.endReason == MP_MARK_END_NONE);
+	CHECK(MpMarkDamage(1, 30000, 30000, &cop, &ev) > 0 && ev == MP_MARK_EV_END);
+	CHECK(MpMarkEndReason() == MP_MARK_END_BUST);
+
+	MpMarkReset(MP_GAMEMODE_COPSROBBERS, 1);
+	AllReady();
+	Present(three146, 3, 0);
+	MpMarkTick(0, 0);
+	MpMarkTick(5 * 1000, 0);
+	{
+		int cops46[] = { 4, 6 };
+		Present(cops46, 2, 0);	/* the getaway leaves */
+	}
+	CHECK(MpMarkPhase() == MP_MARK_PHASE_ENDED && MpMarkEndReason() == MP_MARK_END_LEAVE);
+
+	/* MpMarkOut: a cop out of three stays benched, the round goes on; the
+	 * getaway out is caught; out outside LIVE is nothing */
+	MpMarkReset(MP_GAMEMODE_COPSROBBERS, 1);
+	AllReady();
+	Present(three146, 3, 0);
+	MpMarkTick(0, 0);
+	CHECK(MpMarkOut(4, 0) == 0 && MpMarkInRound(4));	/* COUNTDOWN: nothing */
+	MpMarkTick(5 * 1000, 0);
+	CHECK(MpMarkOut(4, 0) == 0 && MpMarkBench(4) == MP_MARK_ENTRY_F_OUT && !MpMarkInRound(4));
+	CHECK(MpMarkOut(4, 0) == 0);	/* already out */
+	CHECK(MpMarkHit(1, 4, 20, &ev) == 0);	/* out of the round: no hit */
+	CHECK(MpMarkTick(33, 0) == 0 && MpMarkPhase() == MP_MARK_PHASE_LIVE);
+	CHECK(MpMarkOut(1, 0) == MP_MARK_EV_END && MpMarkEndReason() == MP_MARK_END_BUST);
+
+	/* Car Bomb Tag: the holder out with two left in -> a new holder with the grace */
+	MpMarkReset(MP_GAMEMODE_BOMBTAG, 1);
+	AllReady();
+	Present(three146, 3, 0);
+	MpMarkTick(0, 0);
+	MpMarkTick(5 * 1000, 0);
+	CHECK(MpMarkMarked() == 1);
+	CHECK(MpMarkOut(1, 0) == MP_MARK_EV_MOVED && MpMarkMarked() == 4);
+	CHECK(MpMarkOut(6, 0) == 0);	/* one left in the round: void on the tick */
+	CHECK(MpMarkTick(33, 0) == MP_MARK_EV_END && MpMarkEndReason() == MP_MARK_END_VOID && MpMarkMarked() == -1);
+}
+
 static int RunScript(void)
 {
 	char line[256];
@@ -721,6 +838,12 @@ static int RunScript(void)
 		}
 		else if (strcmp(tok, "escape") == 0)
 			ev = MpMarkEscape();
+		else if (strcmp(tok, "out") == 0)
+		{
+			int id = atoi(strtok(NULL, " \t\r\n"));
+			unsigned rnd = (unsigned)strtoul(strtok(NULL, " \t\r\n"), NULL, 10);
+			ev = MpMarkOut(id, rnd);
+		}
 		else if (strcmp(tok, "damage") == 0)
 		{
 			int from = atoi(strtok(NULL, " \t\r\n"));
@@ -759,6 +882,7 @@ int main(int argc, char** argv)
 	CheckJoinDuringWait();
 	CheckJoinDuringCountdown();
 	CheckLeaversAndDamage();
+	CheckRoundV2();
 
 	printf("mp_mark: %d check(s), %d failure(s)\n", gChecks, gFails);
 	return gFails == 0 ? 0 : 1;
