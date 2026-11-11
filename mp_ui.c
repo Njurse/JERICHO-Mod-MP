@@ -1803,7 +1803,8 @@ void MpUiTick(void)
 		}
 	}
 
-	if (gLobbyBuiltCount >= 0 && gMp.playerCount != gLobbyBuiltCount)
+	/* lobby only: after Leave/Back the count stays stale and refreshed every other menu every frame */
+	if (MpMenuIs(M_LOBBY) && gLobbyBuiltCount >= 0 && gMp.playerCount != gLobbyBuiltCount)
 		jer_frontend_refresh();
 
 	/* the lobby's "Connecting to ..." row clears itself the moment the join
