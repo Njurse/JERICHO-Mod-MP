@@ -499,13 +499,20 @@ carries the cops' damage meter (0..1000 points; every other row 0).
   `DAMAGE n%` under it; the getaway has the red arrow over it on everyone else's
   screen (no glow shell since 0.24.0); the map flashes red/blue for the whole round on every machine
   (`gJerMapForceFlash`, core), and the getaway's blip flashes red/blue.
-- **Police radio.** The engine's own cop phrases (the host city's phrase bank,
-  the one the level loaded), said from the cop players' cars on the engine's own
-  cues: `10/11` (+ heading) at GO, `6` when the damage meter rises, `15..17`
-  (+ heading) as chatter no sooner than the engine's 720-frame gap. The speaker
-  is the cop nearest the getaway; one line at a time per listener, and never
-  over the engine's own cop speech. Presentation only. There is no regional
-  police-radio setting in this tree to follow.
+- **Police radio.** The engine's own cop phrases, said from the cop players' cars
+  on the engine's own cues: `10/11` (+ heading) at GO, `6` when the damage meter
+  rises, `15..17` (+ heading) as chatter no sooner than the engine's 720-frame
+  gap. The speaker is the cop nearest the getaway; one line at a time per
+  listener, and never over the engine's own cop speech. Presentation only.
+  **Which lines: the speaking car's source city** (`GetCopPhraseSample`,
+  core `gamesnd.c`). A Driver 2 cop imported from another city speaks that
+  city's stock phrase banks; a Driver 1 cop (any city past the four, BETAMIAMI
+  included) speaks its bank's baked `LUMP_POLICE_VOICES` (203), else Driver 1
+  Miami's. Those lines are loaded into `VOICES` beside the host's when the car
+  arrives (bank room and SPU room checked first; `gamesnd: <city> police radio
+  lines -> SOUND_BANK_VOICES samples a..b` in the log). With none resident the
+  host city's lines play. No shipped D1 bank carries lump 203 yet, so a D1 cop
+  uses the host's lines until the bake adds them.
 - **Assets on the multiplayer maps.** A session plays `GAME_TAKEADRIVE`, so the
   level is mission 50 (full city) or 58 (the multiplayer map), + city x 2 +
   night + arena x 440 (`glaunch.c`). For
