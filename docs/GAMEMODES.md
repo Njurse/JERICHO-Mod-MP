@@ -58,7 +58,7 @@ is held and the camera watches the round); `MP_CARSTATE_ENTRY` carries
 `totalDamage` and `maxDamage`, which replaced `JPDM` (`MP_TAG_DAMAGE` is gone);
 `MP_ROUND_ENTRY.flags` has the admin bit; the arena is 0..3 (`MP_SESSION.spare`
 bits 8-9, `WELCOME.arena`); `MP_MODE_RESPAWN_DELAY` / `_NONE` are implemented (no
-shipping mode uses them; `MP_TEST_RESPAWN=delay|none` plays them); and the
+shipping mode uses them; `MP_TEST_RESPAWN_POLICY=delay|none` plays them); and the
 countdown is the engine's own race-start 3-2-1 plus a big GO (`Print321Go`, core
 `pres.c`).
 Everything below "Not yet" is design, not code.
