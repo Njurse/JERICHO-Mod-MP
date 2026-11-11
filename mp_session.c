@@ -13087,7 +13087,7 @@ static int MpRespawnHeldNow(void)
 }
 
 /* v24: the respawn policy for this death (MP_MODE_RESPAWN_*), *outFrames = DELAY's
- * frames. TEST LEVER (MP_TEST_RESPAWN=delay|none): every mode answers a death that
+ * frames. TEST LEVER (MP_TEST_RESPAWN_POLICY=delay|none): every mode answers a death that
  * way (delay = 3 s), so the paths can be played before any mode ships them. Inert
  * unless set. */
 static int MpRespawnPolicyNow(int* outFrames)
@@ -13097,13 +13097,13 @@ static int MpRespawnPolicyNow(int* outFrames)
 
 	if (test == -2)
 	{
-		const char* s = getenv("MP_TEST_RESPAWN");
+		const char* s = getenv("MP_TEST_RESPAWN_POLICY");
 
 		test = (s == NULL) ? -1 : (strcmp(s, "delay") == 0) ? MP_MODE_RESPAWN_DELAY :
 			(strcmp(s, "none") == 0) ? MP_MODE_RESPAWN_NONE : -1;
 
 		if (test >= 0 && gMpCtx != NULL)
-			gMpCtx->jer_log(gMpCtx, "[mp] TEST LEVER MP_TEST_RESPAWN=%s - every mode's respawn policy is %d\n", s, test);
+			gMpCtx->jer_log(gMpCtx, "[mp] TEST LEVER MP_TEST_RESPAWN_POLICY=%s - every mode's respawn policy is %d\n", s, test);
 	}
 
 	policy = (test >= 0) ? test : MpModeRespawnPolicy(gMp.gamemode);
