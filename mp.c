@@ -77,6 +77,7 @@ static int MpIsChatSendKey(int nKey)
 #include "camera.h"
 #include "glaunch.h"
 #include "state.h"
+#include "spool.h"	/* allowSpecSpooling (spool.h:23): no special-car spooling in a session */
 
 #include <string.h>
 #include <stdio.h>
@@ -3222,6 +3223,14 @@ static int MpOnGameStart(void* userdata, void* args)
 
 		return JER_RESULT_CONTINUE;
 	}
+
+	/* No special-car spooling in a session, as the engine already rules for a
+	 * 2-player game (spool.c InitSpecSpool). That spool rewrites
+	 * residentCarModels[SPECIAL_CAR_SLOT] under a player's car, and its forced
+	 * catch-up loop (CheckSpecialSpool) could run past the 2 MiB level heap on PC:
+	 * the Cops n Robbers round-change crash. GAME_START fires after InitSpecSpool
+	 * and QuickSpoolSpecial (main.c), so nothing is in flight here. */
+	allowSpecSpooling = 0;
 
 	if (gMpCtx == NULL)
 		return JER_RESULT_CONTINUE;
