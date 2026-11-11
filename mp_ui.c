@@ -149,6 +149,7 @@ static unsigned long gJoinScanStart;	/* when the browse began (0 = not browsing)
 static void LblEnforce(void* ud, char* o, int n) { (void)ud; snprintf(o, n, "Enforce Mods: < %s >", kModCheckNames[gMp.config.modCheck % 3]); }
 static void LblStrict(void* ud, char* o, int n)  { (void)ud; snprintf(o, n, "Strict Version: < %s >", gMp.config.strictVersion ? "On" : "Off"); }
 static void LblSuperTurbo(void* ud, char* o, int n) { (void)ud; snprintf(o, n, "Super Turbo: < %s >", gMp.config.superTurbo ? "On" : "Off"); }
+static void LblJoinLeaveSounds(void* ud, char* o, int n) { (void)ud; snprintf(o, n, "Join/leave sounds: < %s >", gMp.config.joinLeaveSounds ? "On" : "Off"); }
 static void LblPort(void* ud, char* o, int n)    { (void)ud; snprintf(o, n, "Port: %d", gMp.config.port); }
 static void LblManualGo(void* ud, char* o, int n) { (void)ud; snprintf(o, n, "Connect to %s", gManualIp); }
 
@@ -173,6 +174,10 @@ static int AdjStrict(void* ud, int dir) { (void)ud; gMp.config.strictVersion = (
  * same way Strict Version does. The pause Multiplayer page
  * (MpOptToggleSuperTurbo) writes this same field. The ×10 itself is MpOnCarEngine. */
 static int AdjSuperTurbo(void* ud, int dir) { (void)ud; gMp.config.superTurbo = (gMp.config.superTurbo + dir + 2) & 1; MpConfigSave(); return 1; }
+
+/* Local, like Super Turbo: the menu sample when a player joins or leaves
+ * (MpJoinLeaveNote). The pause Multiplayer page writes the same field. */
+static int AdjJoinLeaveSounds(void* ud, int dir) { (void)ud; gMp.config.joinLeaveSounds = (gMp.config.joinLeaveSounds + dir + 2) & 1; MpConfigSave(); return 1; }
 
 static int AdjPort(void* ud, int dir)
 {
@@ -205,6 +210,52 @@ static void LblCops(void* ud, char* o, int n)    { (void)ud; snprintf(o, n, "Pol
 static void LblCopDiff(void* ud, char* o, int n) { (void)ud; snprintf(o, n, "Cop difficulty: < %d >", gMp.config.copDifficulty); }
 static void LblInvuln(void* ud, char* o, int n)  { (void)ud; snprintf(o, n, "Invulnerability: < %s >", gMp.config.invuln ? "On" : "Off"); }
 static void LblImmune(void* ud, char* o, int n)  { (void)ud; snprintf(o, n, "Immunity: < %s >", gMp.config.immune ? "On" : "Off"); }
+
+/* GAME MODE: the session's mode, cycled over the SELECTABLE registry entries only
+ * (mp_mode.c). Today that is Take a Ride alone, so the row shows it and left/right
+ * stays on it. Not saved to the config: the mode is a per-session choice, reset to
+ * Take a Ride by every MpSessionReset, and rides the WELCOME / START / beacon byte. */
+static void LblGameMode(void* ud, char* o, int n) { (void)ud; snprintf(o, n, "Game mode: < %s >", MpModeName(gMp.gamemode)); }
+
+static int AdjGameMode(void* ud, int dir)
+{
+	(void)ud;
+
+	if (dir != 0)
+		MpSetSessionGamemode(MpModeNextSelectable(gMp.gamemode, dir));
+
+	return 1;
+}
+
+/* TIME: a timer mode's clock (Fox N Hounds: each player's; Car Bomb Tag: the shared
+ * one), 1..5 minutes, default 3. Shown only while the selected mode has a clock, and
+ * like the mode itself only taken before the match runs and never saved. */
+static void LblModeTime(void* ud, char* o, int n)
+{
+	(void)ud;
+	/* Cops n Robbers: the clock is how long the getaway has to last (1..5 min) */
+	snprintf(o, n, "%s: < %d MIN >",
+		MpModeTimerKind(gMp.gamemode) == MP_MODE_TIMER_GETAWAY ? "Getaway time" : "Time",
+		MpSessionModeMinutes());
+}
+
+static int AdjModeTime(void* ud, int dir)
+{
+	int m;
+
+	(void)ud;
+
+	if (dir == 0)
+		return 1;
+
+	/* wraps, like the other cycle rows */
+	m = MpSessionModeMinutes() + (dir > 0 ? 1 : -1);
+	if (m < MP_MARK_MINUTES_MIN) m = MP_MARK_MINUTES_MAX;
+	if (m > MP_MARK_MINUTES_MAX) m = MP_MARK_MINUTES_MIN;
+
+	MpSetSessionModeMinutes(m);
+	return 1;
+}
 
 static int AdjCops(void* ud, int dir)   { (void)ud; gMp.config.cops = (gMp.config.cops + dir + 2) & 1; MpConfigSave(); return 1; }
 static int AdjInvuln(void* ud, int dir) { (void)ud; gMp.config.invuln = (gMp.config.invuln + dir + 2) & 1; MpConfigSave(); return 1; }
@@ -650,13 +701,14 @@ static const JER_FE_MENU kLanMenu = { "mp.lan", kLanItems, 3, NULL, NULL };
 static void LblHostAddr(void* ud, char* o, int n) { char l[8]; (void)ud; MpHostStatusLines(o, (size_t)n, l, sizeof(l), 1); }
 static void LblHostList(void* ud, char* o, int n) { char a[8]; (void)ud; MpHostStatusLines(a, sizeof(a), o, (size_t)n, 1); }
 
-static const JER_FE_ITEM kHostItems[] =
+static const JER_FE_ITEM kHostItems[] =	/* the Time row is inserted after Game mode */
 {
 	{ NULL, LblHostAddr, NULL, NULL, NULL, -1, 0 },
 	{ NULL, LblHostList, NULL, NULL, NULL, -1, 0 },
 
 	/* SESSION RULES first: these are the host's gameplay settings for the match
 	 * about to be set up, and they apply to everyone who joins it. */
+	{ NULL, LblGameMode, NULL, NULL, AdjGameMode, -1, 0 },
 	{ NULL, LblCops,    NULL, NULL, AdjCops,    -1, 0 },
 	{ NULL, LblCopDiff, NULL, NULL, AdjCopDiff, -1, 0 },
 	{ NULL, LblImmune,  NULL, NULL, AdjImmune,  -1, 0 },
@@ -665,7 +717,31 @@ static const JER_FE_ITEM kHostItems[] =
 	{ "Take a Ride", NULL, NULL, ActTakeARide, NULL, -1, 0 },
 	{ "Back",        NULL, NULL, NULL,         NULL, -1, 1 },
 };
-static const JER_FE_MENU kHostMenu = { "mp.host", kHostItems, 8, NULL, NULL };
+#define MP_HOST_ITEMS		((int)(sizeof(kHostItems) / sizeof(kHostItems[0])))
+#define MP_HOST_GAMEMODE_ROW	2	/* kHostItems[2] is Game mode */
+
+static const JER_FE_ITEM kHostTimeItem = { NULL, LblModeTime, NULL, NULL, AdjModeTime, -1, 0 };
+static JER_FE_ITEM gHostItems[MP_HOST_ITEMS + 1];
+static JER_FE_MENU gHostMenu = { "mp.host", gHostItems, 0, NULL, NULL };
+
+/* Rebuilt on every layout (a left/right on Game mode relayouts), so the Time row is
+ * there exactly while the selected mode has a clock. Take a Ride: the stock 9 rows. */
+static void HostOnEnter(void* ud)
+{
+	int i, k = 0;
+
+	(void)ud;
+
+	for (i = 0; i < MP_HOST_ITEMS; i++)
+	{
+		gHostItems[k++] = kHostItems[i];
+
+		if (i == MP_HOST_GAMEMODE_ROW && MpModeUsesTimer(gMp.gamemode))
+			gHostItems[k++] = kHostTimeItem;
+	}
+
+	gHostMenu.item_count = k;
+}
 
 static const JER_FE_ITEM kHostSetItems[] =
 {
@@ -720,10 +796,11 @@ static JER_FE_ITEM kJmpOptionsItems[] ={
 	{ NULL, LblEnforce, NULL, NULL, AdjEnforce, -1,       0 },
 	{ NULL, LblStrict,  NULL, NULL, AdjStrict,  -1,       0 },
 	{ NULL, LblSuperTurbo, NULL, NULL, AdjSuperTurbo, -1, 0 },
+	{ NULL, LblJoinLeaveSounds, NULL, NULL, AdjJoinLeaveSounds, -1, 0 },
 	{ NULL, LblPort,    NULL, NULL, AdjPort,    -1,       0 },
 	{ "Back",           NULL, NULL, NULL,       NULL,      -1,     1 },
 };
-static const JER_FE_MENU kJmpOptionsMenu = { "mp.jmpoptions", kJmpOptionsItems, 7, NULL, NULL };
+static const JER_FE_MENU kJmpOptionsMenu = { "mp.jmpoptions", kJmpOptionsItems, 8, NULL, NULL };
 
 /* Resolve every mp menu by id and point the submenu rows at what they got. The
  * item arrays are written with -1 and wired HERE, because the registered index
@@ -1726,7 +1803,8 @@ void MpUiTick(void)
 		}
 	}
 
-	if (gLobbyBuiltCount >= 0 && gMp.playerCount != gLobbyBuiltCount)
+	/* lobby only: after Leave/Back the count stays stale and refreshed every other menu every frame */
+	if (MpMenuIs(M_LOBBY) && gLobbyBuiltCount >= 0 && gMp.playerCount != gLobbyBuiltCount)
 		jer_frontend_refresh();
 
 	/* the lobby's "Connecting to ..." row clears itself the moment the join
@@ -2071,11 +2149,15 @@ static int MpProjectWorldToScreen(int wx, int wy, int wz, int* sx, int* sy, int*
  * suit colours which are dark). */
 static void MpNameTagColour(const MP_PLAYER* p, unsigned char* r, unsigned char* g, unsigned char* b)
 {
-	if (p->colorOn)
+	int cr, cg, cb;
+
+	/* the game mode's colour override (a team colour); in Take a Ride there are no
+	 * teams and this hands back the player's own colour and on/off untouched */
+	if (MpModePlayerColour(gMp.gamemode, p->id, p->colorOn, p->colorR, p->colorG, p->colorB, &cr, &cg, &cb))
 	{
-		*r = (unsigned char)p->colorR;
-		*g = (unsigned char)p->colorG;
-		*b = (unsigned char)p->colorB;
+		*r = (unsigned char)cr;
+		*g = (unsigned char)cg;
+		*b = (unsigned char)cb;
 	}
 	else
 	{
@@ -2206,6 +2288,7 @@ int MpUiDrawOverlay(void* userdata, void* args)
 	}
 
 	MpDrawNameTags();
+	MpMarkDrawOverlay();	/* fox centre line; no-op when it is not live */
 
 	/* The chat prompt: the line being typed, with a cursor. The ENGINE console
 	 * draws it now, on its own bottom row (jer_console_input), which also keeps
@@ -2271,7 +2354,9 @@ void MpUiInit(void)
 	jer_frontend_register_menu(&kRootMenu);
 	jer_frontend_register_menu(&kLanMenu);
 	jer_frontend_register_menu(&gOnlineMenu);
-	jer_frontend_register_menu(&kHostMenu);
+	gHostMenu.on_enter = HostOnEnter;
+	HostOnEnter(NULL);
+	jer_frontend_register_menu(&gHostMenu);
 	jer_frontend_register_menu(&kHostSetMenu);
 	jer_frontend_register_menu(&gJoinMenu);
 	jer_frontend_register_menu(&gLobbyMenu);

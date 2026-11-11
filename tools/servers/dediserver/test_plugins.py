@@ -317,6 +317,16 @@ def main():
               saved.get("city") == 3 and saved.get("custom_key") == 42, saved)
         check("vote: everyone is told to rejoin (kick)",
               sum(1 for conn, _ in out if conn is not None) == 4, out)
+        # 0.23.4: a city change's rejoin is no leave and no join in chat
+        vs.sent.clear()
+        vs.plugins.call("on_player_leave", d.Player(a, vs.clients[a]))
+        a2 = join(vs, 5, "Ann")
+        check("announce: a rejoin kick's leave and return are quiet",
+              not any("Ann left" in t or "Ann joined" in t for _, t in vs.sent), vs.sent)
+        vs.sent.clear()
+        vs.plugins.call("on_player_leave", d.Player(a2, vs.clients[a2]))
+        check("announce: ...a later real leave is announced again",
+              any("Ann left" in t for _, t in vs.sent), vs.sent)
 
         # -- !vote city <city> [mp 0|1]: one of the city's two multiplayer maps
         ms = build(tmp, city=0, arena=0, vote_duration=30, vote_cooldown=60)

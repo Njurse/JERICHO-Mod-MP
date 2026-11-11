@@ -128,6 +128,25 @@ class ServerAPI:
         rejoin=True tells current clients to reconnect by themselves (a city change)."""
         return self._s.kick_player(player.id, reason, by=by, announce=announce, rejoin=rejoin)
 
+    def is_rejoin(self, player, take=False):
+        """Was `player` kicked to rejoin (a city change) in the last REJOIN_QUIET_S?
+        take=True uses the entry up (their return), so a later real leave and join
+        are announced again."""
+        quiet = getattr(self._s, "rejoin_quiet", None)
+        name = getattr(player, "name", None)
+        if not quiet or name is None:
+            return False
+        with self._s.lock:
+            until = quiet.get(name)
+            if until is None:
+                return False
+            if time.monotonic() >= until:
+                quiet.pop(name, None)
+                return False
+            if take:
+                quiet.pop(name, None)
+            return True
+
     # -- config / rules
     def config_get(self, key, default=None):
         return self._s.cfg.get(key, default)
@@ -149,6 +168,12 @@ class ServerAPI:
 
     def readvertise(self):
         self._s.readvertise()
+
+    def round_info(self):
+        """(round number, True when that round has ended) -- the referee's round."""
+        from .roundstate import m as _m     # mp_test, the protocol's Python twin
+        r = self._s.round
+        return r.number, r.phase == _m.ROUND_PHASE_ENDED
 
     # -- commands
     def register_command(self, name, handler, admin=False, help="", console=False):

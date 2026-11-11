@@ -5,7 +5,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
+import random
 import socket
 import struct
 import sys
@@ -27,6 +29,8 @@ sys.path.insert(0, TOOLS)
 sys.path.insert(0, SERVERS)
 import mp_test as m            # noqa: E402  the single Python source of truth
 from dedi import relay   # noqa: E402  hit / colour / channel routing
+from dedi.roundstate import RoundState   # noqa: E402  the round state (MP_TAG_ROUND)
+from dedi import markref                 # noqa: E402  Fox N Hounds / Car Bomb Tag (MP_TAG_MARK)
 from dedi.plugins import CONSOLE, Player, PluginManager, tick_loop   # noqa: E402
 import proto_check            # noqa: E402  the wire-mirror guard
 
@@ -36,7 +40,7 @@ DEFAULTS = {
     "port": 1318,
     "name": "Dedicated",
     "city": 0,                 # GameLevel the clients should load (0..3)
-    "arena": 0,                # multiplayer arena index (the game's -mp 0 / -mp 1)
+    "arena": 0,                # multiplayer arena index 0..3 (the game's -mp N; proto 24)
     "map_mode": "mp",        # "city" for the full single-player city, "mp" for multiplayer
     "gamemode": 0,
     "max_players": 16,         # a client takes a slot 1..max_players-1 (0 is the server);
@@ -95,6 +99,79 @@ ROSTER_REFRESH_S = 2.0
 # 0 = full city (single-player map), 1 = multiplayer map. Arena selects MP map 0/1.
 MAP_MODE_CITY = "city"
 MAP_MODE_MP = "mp"
+
+# The timer modes (Fox N Hounds / Car Bomb Tag, proto 23). "mode_time" is an OPTIONAL
+# key -- minutes, 1..5 -- deliberately NOT in DEFAULTS, so upgrade_config never writes
+# it into an operator's file; missing or unreadable means 3 (mode_minutes).
+MARK_TICK_S = 0.1          # how often the referee is stepped
+REJOIN_QUIET_S = 55.0      # mp_session.c MP_REJOIN_QUIET_MS (52.5 s): a city-change rejoin is no join/leave
+MARK_SEND_LIVE_S = 1.0     # JPMK cadence while a round is live (the host: 30 frames)
+MARK_SEND_IDLE_S = 4.0     # ...and otherwise (the host: 120 frames)
+TAG_RADIUS = 900           # mp_session.c MP_HIT_RADIUS: car body scale, world units
+TAG_MIN_CLOSING = 4        # mp_session.c MP_HIT_MIN_CLOSING: whole units per frame
+TAG_ARM_S = 4.0            # mp_session.c MP_HIT_ARM_FRAMES (120) at 30 Hz: a spawn bump is no tag
+TAG_ROW_FRESH_S = 0.5      # the other car's row must be this recent to compare against
+TAG_REPORT_RADIUS = 1800   # a client's JPHI claim: twice the body scale, for the link lag
+FIXEDH = 4096              # the velocity fix point (1 world unit/frame << 12)
+HIT_PUSH = 60              # mp_session.c MP_HIT_PUSH: per-cent of the closing speed
+HIT_MAX_PUSH = 20          # mp_session.c MP_HIT_MAX_PUSH: whole units/frame
+
+
+def mode_minutes(cfg):
+    """The timer modes' time: cfg "mode_time" (minutes), missing/bad -> 3, clamped 1..5."""
+    try:
+        v = cfg.get("mode_time")
+        return markref.clamp_minutes(int(v)) if v is not None else m.MARK_MINUTES_DEFAULT
+    except (TypeError, ValueError):
+        return m.MARK_MINUTES_DEFAULT
+
+
+def car_pose(row):
+    """(x, y, z, vx, vy, vz) from a kept MP_CARSTATE_ENTRY, or None when on foot."""
+    f = m.CARSTATE_ENTRY.unpack(row)
+    if f[3] == 0xFF:                 # model MP_CARSTATE_NO_CAR: on foot, no car to tag
+        return None
+    return f[9], f[10], f[11], f[16], f[17], f[18]
+
+
+def contact_between(a, b, radius=TAG_RADIUS, min_closing=TAG_MIN_CLOSING):
+    """The carstate tag test: cars within `radius` and closing at >= `min_closing`
+    whole units/frame (mp_session.c MpContactNormal's units). `min_closing` None
+    skips the closing test (a client's report already passed its own)."""
+    if a is None or b is None:
+        return False
+    dx, dy, dz = b[0] - a[0], b[1] - a[1], b[2] - a[2]
+    d = math.sqrt(dx * dx + dy * dy + dz * dz)
+    if d == 0 or d > radius:
+        return False
+    if min_closing is None:
+        return True
+    closing = ((a[3] - b[3]) * dx + (a[4] - b[4]) * dy + (a[5] - b[5]) * dz) / d / FIXEDH
+    return closing >= min_closing
+
+
+def contact_strength(a, b):
+    """Cops n Robbers' hit strength from two poses: mp_session.c MpContactPush's
+    push (60% of the closing speed, whole units/frame, capped at 20); 0 = none."""
+    if a is None or b is None:
+        return 0
+    dx, dy, dz = b[0] - a[0], b[1] - a[1], b[2] - a[2]
+    d = math.sqrt(dx * dx + dy * dy + dz * dz)
+    if d == 0:
+        return 0
+    closing = abs(((a[3] - b[3]) * dx + (a[4] - b[4]) * dy + (a[5] - b[5]) * dz) / d / FIXEDH)
+    return min(HIT_MAX_PUSH, int(closing) * HIT_PUSH // 100)
+
+
+def impulse_strength(impulse):
+    """A JPHI's impulse (normal * push << 12) back to its push, capped."""
+    v = math.sqrt(sum(float(c) * c for c in impulse)) / FIXEDH
+    return max(0, min(HIT_MAX_PUSH, int(v)))
+
+
+def flat_dist(a, b):
+    return math.hypot(b[0] - a[0], b[2] - a[2])
+
 
 CONFIG_NAME = "dediserver.json"
 EXAMPLE_NAME = "dediserver.example.json"   # tracked; dediserver.json is the operator's, untracked
@@ -378,6 +455,25 @@ class Dedicated:
         self.stop = threading.Event()
         self.started = time.time()
 
+        # The round state (proto 22). This server is a match in progress from the
+        # start -- every joiner gets a START -- so round 1 is live from here.
+        self.round = RoundState(int(cfg.get("gamemode", 0) or 0))
+        # A timer mode (Fox N Hounds / Car Bomb Tag, proto 23) does not: its referee
+        # starts round 1 once two players are in (mark_loop), and until then the round
+        # state is round 0, idle, everyone waiting -- the in-game host's rule too.
+        self.mark = markref.MarkReferee(self.round.gamemode, mode_minutes(cfg))
+        if not self.mark.active:
+            self.round.begin()
+        self.round_sent = -1     # the revision last broadcast
+        self.mark_sent = -1      # the JPMK revision last broadcast
+        self.escape_ms = 0       # Cops n Robbers: how long the getaway has been clear
+        self.mark_rng = random.Random()
+        self.car_seen = {}       # playerId -> monotonic time its carstate row arrived
+        self.joined_at = {}      # playerId -> monotonic time it joined (the tag arm)
+        # name -> monotonic deadline: kicked to rejoin (a city change), so its leave
+        # and its return are not announced (the game's MP_REJOIN_QUIET_MS, ~52 s)
+        self.rejoin_quiet = {}
+
         # Reported by the console. The beacon can be turned off from there (a LAN
         # you do not want to appear on) without stopping anything else, so the
         # loop reads this rather than the config value directly.
@@ -424,10 +520,11 @@ class Dedicated:
         return 1 if self.map_mode == MAP_MODE_MP else 0
 
     def session_spare(self):
-        """MP_SESSION.spare: bit 0 is map shape, bits 1.. are rules, bit 8 is arena."""
+        """MP_SESSION.spare: bit 0 is map shape, bits 1.. are rules, bits 8-9 are the
+        arena (0..3, proto 24)."""
         arena = self.arena if self.map_shape else 0
         return ((self.map_shape & 1) | ((int(self.cfg["rules"]) & 0x7F) << 1)
-                | ((arena & 1) << 8))
+                | ((arena & m.SESSION_ARENA_MASK) << m.SESSION_ARENA_SHIFT))
 
     # -- the plugin-facing surface (dedi/plugins.py ServerAPI calls these)
     def player_views(self):
@@ -504,8 +601,8 @@ class Dedicated:
 
     def set_arena(self, arena):
         arena = int(arena)
-        if not 0 <= arena <= 1:
-            raise ValueError("arena is 0..1")
+        if not 0 <= arena <= m.ARENA_MAX:
+            raise ValueError("arena is 0..%d" % m.ARENA_MAX)
         self.cfg["arena"] = arena
         self.log.info("multiplayer map now %d (new joiners load it)" % arena)
         self.readvertise()
@@ -627,6 +724,9 @@ class Dedicated:
             # ...and a PING, as the host's keepalive does: the client echoes the tick
             # in a PONG, and that round trip is the roster's `ping` (MpPingForPlayer)
             _send(conn, m.TAG["ping"], struct.pack("<I", _ms32()))
+            # ...and the round state, on the host's same cadence (MpHostRoundTick), so
+            # a lost one is repaired
+            _send(conn, m.TAG["round"], self.round_bytes())
         except OSError:
             return False, now
         except Exception as e:
@@ -653,6 +753,269 @@ class Dedicated:
             n += 1
         out[0] = n
         return bytes(out)
+
+    def round_bytes(self):
+        """MP_ROUND for the clients connected right now (mp_round.c MpRoundBuild).
+        The present-set follows the clients, so a join or a leave is a change."""
+        with self.lock:
+            self.round.sync(info["id"] for info in self.clients.values())
+            self.round.set_admins(info["id"] for info in self.clients.values() if info.get("admin"))
+            return self.round.to_bytes()
+
+    def broadcast_round_if_changed(self, force=False, skip=None):
+        """The in-game host's MpHostRoundTick: everyone hears the round state when it
+        changed (a join, a leave) -- or always, with force. `skip` is a connection
+        that already has this snapshot (the joiner). True when sent."""
+        payload = self.round_bytes()
+        with self.lock:
+            due = force or self.round.revision != self.round_sent
+            if due:
+                self.round_sent = self.round.revision
+        if due:
+            self.broadcast(payload, m.TAG["round"], skip=skip)
+        return due
+
+    # -- the timer modes (JPMK). The server referees exactly as an in-game host: the
+    # referee is dedi/markref.py (mp_mark.c's twin), the clock is wall time, and a
+    # tag is decided HERE from the carstates it already keeps -- a client never moves
+    # the mark itself.
+    def mark_bytes(self):
+        with self.lock:
+            return self.mark.to_bytes()
+
+    def _mark_step(self, ms):
+        """One referee step under the lock: sync, tick, drive the round. Returns
+        True when the round state changed (begin / end)."""
+        with self.lock:
+            ids = [info["id"] for info in self.clients.values()]
+            # the round-start gate: a player is ready once their JPCC (the car they
+            # picked) has landed -- MpHandleCar's carConfirmed on an in-game host
+            ready = [info["id"] for info in self.clients.values() if info.get("car") is not None]
+            self.round.sync(ids)
+            ev = self.mark.sync(ids, self.mark_rng.randrange(1 << 15))
+            self.mark.set_ready(ready)
+            ev |= self.mark.tick(ms, self.mark_rng.randrange(1 << 15))
+            if ev & markref.EV_BEGIN:
+                self.round.begin()
+                self.escape_ms = 0
+            ev |= self._getaway_step(ms)
+            if ev & markref.EV_END:
+                self.round.end()
+            marked, winner = self.mark.marked, self.mark.winner
+        if ev & markref.EV_LOBBY:
+            self.log.info("mark: a new map - the pre-game 5-4-3-2-1 (%d ms) before the first round"
+                          % markref.LOBBY_MS)
+        if ev & markref.EV_COUNTDOWN:
+            self.log.info("mark: every car is in - countdown to round %d (%d ms); each game "
+                          "puts its own car in the start cluster" % (self.round.number + 1, markref.COUNTDOWN_MS))
+        if ev & markref.EV_BEGIN:
+            self.log.info("mark: round %d live, player %d is marked (%d min)"
+                          % (self.round.number, marked, self.mark.minutes))
+        if ev & markref.EV_END:
+            self.log.info("mark: round %d over - winner %d, marked %d"
+                          % (self.round.number, winner, marked))
+        if ev & markref.EV_MOVED:
+            self.log.info("mark: the marked player left - player %d is marked now" % marked)
+        return bool(ev & (markref.EV_BEGIN | markref.EV_END | markref.EV_COUNTDOWN | markref.EV_LOBBY))
+
+    def _getaway_step(self, ms):
+        """Cops n Robbers, under the lock: the getaway's drive points and the escape
+        (clear of every cop by CNR_ESCAPE_DIST for CNR_ESCAPE_HOLD_MS). EV_* bits."""
+        if self.mark.timer != m.MODE_TIMER_GETAWAY or self.mark.phase != m.MARK_PHASE_LIVE:
+            return 0
+        g = self.mark.marked
+        mine = car_pose(self.cars[g]) if g in self.cars else None
+        speed = math.hypot(mine[3], mine[5]) / FIXEDH if mine is not None else 0
+        pts = self.mark.drive(ms, int(speed))
+        if pts:
+            self.round.add_score(g, pts)
+        cops = [car_pose(self.cars[o]) for o in self.mark.present
+                if o != g and o in self.cars and self.mark.in_round(o)]
+        cops = [c for c in cops if c is not None]
+        if mine is not None and cops and all(flat_dist(mine, c) >= markref.CNR_ESCAPE_DIST for c in cops):
+            self.escape_ms += ms
+        else:
+            self.escape_ms = 0
+        if self.escape_ms >= markref.CNR_ESCAPE_HOLD_MS:
+            self.escape_ms = 0
+            ev = self.mark.escape()
+            if ev & markref.EV_END:
+                self.log.info("mark: player %d got away - clear of every cop" % g)
+            return ev
+        return 0
+
+    def _getaway_hit(self, a, b, strength, why):
+        """Cops n Robbers, under the lock: a contact is a hit, scored for the cop."""
+        pts, ev = self.mark.hit(a, b, strength)
+        if not pts:
+            return False
+        cop = b if a == self.mark.marked else a
+        self.round.add_score(cop, pts)
+        self.log.info("mark: player %d hit the getaway for %d (%s), heat %d/%d"
+                      % (cop, pts, why, self.mark.heat, markref.CNR_BUST_POINTS))
+        if ev & markref.EV_END:
+            self.round.end()
+            self.log.info("mark: round %d over - busted" % self.round.number)
+        return True
+
+    def mark_carstate_round(self, pid):
+        """Proto 24, from `pid`'s carstate row just kept: MP_CARSTATE_OUT (died with no
+        respawn) benches them for the round; in Cops n Robbers the getaway's row carries
+        its own totalDamage and wreck point, which the meter follows (markref.damage),
+        the cop in contact within CNR_CREDIT_MS scoring the points (mp_session.c
+        MpMarkHostCarRow)."""
+        changed = False
+        with self.lock:
+            row = self.cars.get(pid)
+            if row is None or len(row) != m.CARSTATE_ENTRY.size:
+                return False
+            f = m.CARSTATE_ENTRY.unpack(row)
+            flags, model, damage, max_damage = f[1], f[3], f[23], f[24]
+            if flags & m.CARSTATE_OUT and self.mark.in_round(pid):
+                ev = self.mark.out(pid, self.mark_rng.randrange(1 << 15))
+                if self.mark.bench.get(pid) == m.MARK_ENTRY_F_OUT:
+                    self.round.set_state(pid, m.ROUND_PLAYER_SPECTATING)
+                    self.log.info("mark: player %d is out until the next round (no respawn)" % pid)
+                    changed = True
+                if ev & markref.EV_END:
+                    self.round.end()
+                    self.log.info("mark: round %d over - the marked player is out" % self.round.number)
+                elif ev & markref.EV_MOVED:
+                    self.log.info("mark: the marked player is out - player %d is marked now" % self.mark.marked)
+        if changed:
+            self.broadcast_mark_if_due()
+            self.broadcast_round_if_changed()
+        if model == 0xFF or not flags & 1 or max_damage <= 0:
+            return changed          # on foot / no body: no damage to read
+        return self.mark_damage(pid, damage, max_damage) or changed
+
+    def mark_damage(self, pid, damage, max_damage):
+        """Cops n Robbers: the getaway's own damage out of its wreck point."""
+        with self.lock:
+            if self.mark.timer != m.MODE_TIMER_GETAWAY or self.mark.phase != m.MARK_PHASE_LIVE:
+                return False
+            if pid != self.mark.marked:
+                return False
+            first = not self.mark.dmg_live
+            pts, cop, ev = self.mark.damage(pid, damage, max_damage)
+            if first and self.mark.dmg_live:
+                self.log.info("mark: getaway %d reports its own damage (max %d) - the meter follows it"
+                              % (pid, max_damage))
+            if not pts:
+                return False
+            if cop >= 0:
+                self.round.add_score(cop, pts)
+            self.log.info("mark: getaway %d damage %d/%d -> meter +%d = %d/%d, %s"
+                          % (pid, damage, max_damage, pts, self.mark.heat, markref.CNR_BUST_POINTS,
+                             ("player %d scores" % cop) if cop >= 0 else "no cop in contact (no points)"))
+            if ev & markref.EV_END:
+                self.round.end()
+                self.log.info("mark: round %d over - busted (wrecked)" % self.round.number)
+        self.broadcast_mark_if_due()
+        self.broadcast_round_if_changed()
+        return True
+
+    def broadcast_mark_if_due(self, force=False):
+        with self.lock:
+            due = force or self.mark.revision != self.mark_sent
+            if due:
+                self.mark_sent = self.mark.revision
+            payload = self.mark.to_bytes()
+        if due:
+            self.broadcast(payload, m.TAG["mark"])
+        return due
+
+    def mark_loop(self):
+        last = time.monotonic()
+        last_send = 0.0
+        last_round = 0.0
+        while not self.stop.wait(MARK_TICK_S):
+            now = time.monotonic()
+            ms = int((now - last) * 1000)
+            last += ms / 1000.0
+            try:
+                # scores move every step in Cops n Robbers: JPRD at most once a second
+                if self._mark_step(ms) or now - last_round >= 1.0:
+                    if self.broadcast_round_if_changed():
+                        last_round = now
+                every = (MARK_SEND_LIVE_S if self.mark.phase in (m.MARK_PHASE_LIVE, m.MARK_PHASE_COUNTDOWN)
+                         else MARK_SEND_IDLE_S)
+                if self.broadcast_mark_if_due(force=now - last_send >= every):
+                    last_send = now
+            except Exception as e:
+                self.log.debug("mark step failed: %s" % e)
+
+    def _armed(self, pid, now):
+        t = self.joined_at.get(pid)
+        return t is not None and now - t >= TAG_ARM_S
+
+    def mark_carstate(self, pid):
+        """A carstate row from `pid` just landed: a tag when its car is touching the
+        marked car's (or, when it is marked, any other player's) -- the position path."""
+        now = time.monotonic()
+        moved = None
+        with self.lock:
+            if self.mark.phase != m.MARK_PHASE_LIVE or not self._armed(pid, now):
+                return False
+            marked = self.mark.marked
+            if marked < 0:
+                return False
+            others = [marked] if pid != marked else [o for o in self.cars if o != pid]
+            mine = car_pose(self.cars[pid]) if pid in self.cars else None
+            for other in others:
+                if other not in self.cars or not self._armed(other, now):
+                    continue
+                if now - self.car_seen.get(other, 0) > TAG_ROW_FRESH_S:
+                    continue
+                theirs = car_pose(self.cars[other])
+                if self.mark.timer == m.MODE_TIMER_GETAWAY:
+                    if contact_between(mine, theirs) and \
+                            self._getaway_hit(pid, other, contact_strength(mine, theirs), "carstate contact"):
+                        moved = -1
+                        break
+                    continue
+                if contact_between(mine, theirs) and self.mark.contact(pid, other):
+                    moved = self.mark.marked
+                    break
+        if moved is None:
+            return False
+        if moved >= 0:
+            self.log.info("mark: tag %d, player %d is marked (carstate contact)" % (pid, moved))
+        self.broadcast_mark_if_due()
+        self.broadcast_round_if_changed()
+        return True
+
+    def mark_hit_report(self, pid, payload):
+        """A client's JPHI is a tag CLAIM (the fallback path): it counts only when the
+        cars the server keeps are near each other too."""
+        if len(payload) < m.HIT.size:
+            return False
+        f = m.HIT.unpack_from(payload, 0)
+        target, flags, impulse = f[0], f[1], f[2:5]
+        if flags & m.HIT_F_TRAFFIC:
+            return False
+        now = time.monotonic()
+        with self.lock:
+            if self.mark.phase != m.MARK_PHASE_LIVE:
+                return False
+            if not (self._armed(pid, now) and self._armed(target, now)):
+                return False
+            a = car_pose(self.cars[pid]) if pid in self.cars else None
+            b = car_pose(self.cars[target]) if target in self.cars else None
+            if self.mark.timer == m.MODE_TIMER_GETAWAY:
+                if not contact_between(a, b, TAG_REPORT_RADIUS, None) or \
+                        not self._getaway_hit(pid, target, impulse_strength(impulse), "reported contact"):
+                    return False
+                moved = -1
+            elif not contact_between(a, b, TAG_REPORT_RADIUS, None) or not self.mark.contact(pid, target):
+                return False
+            else:
+                moved = self.mark.marked
+        if moved >= 0:
+            self.log.info("mark: tag %d-%d, player %d is marked (reported contact)" % (pid, target, moved))
+        self.broadcast_mark_if_due()
+        self.broadcast_round_if_changed()
+        return True
 
     def note_car_pick(self, conn, payload):
         """JPCC, the car a player picked: kept for the roster, which the caller
@@ -918,8 +1281,23 @@ class Dedicated:
                          self._welcome(pid, running=1 if self.cfg["live"] else 0,
                                        matched=matched, seed=seed))
             _send(conn, m.TAG["start"], sess)
+            # The round state after the WELCOME (proto 22), as the in-game host's
+            # MpSendWelcome does: the joiner has it before it plays...
+            _send(conn, m.TAG["round"], self.round_bytes())
+            # ...and in a timer mode the marked player and the clocks (proto 23)
+            if self.mark.active:
+                with self.lock:
+                    self.joined_at[pid] = time.monotonic()
+                    self.mark.sync([info["id"] for info in self.clients.values()],
+                                   self.mark_rng.randrange(1 << 15))
+                _send(conn, m.TAG["mark"], self.mark_bytes())
         except OSError:
             pass
+        # ...and everyone else hears of the new row now, not at the next cadence.
+        try:
+            self.broadcast_round_if_changed(skip=conn)
+        except Exception as e:
+            self.log.debug("join round broadcast failed: %s" % e)
 
         # THE MOTD, and only to THIS connection: it is a greeting, not an
         # announcement. It goes down the chat channel because that is already the
@@ -1008,6 +1386,7 @@ class Dedicated:
                                 # a row may only describe its sender (as for JPPD)
                                 if len(e) == m.CARSTATE_ENTRY.size and e[0] == pid:
                                     self.cars[e[0]] = e
+                                    self.car_seen[pid] = time.monotonic()
                     except Exception:
                         # a malformed frame is this connection's problem, not the
                         # server's: skip it and keep serving
@@ -1016,10 +1395,15 @@ class Dedicated:
                         continue
                     self.broadcast(self.carstate_union(int(time.time() * 30)),
                                    m.TAG["carstate"], skip=conn)
+                    if self.mark.active:
+                        self.mark_carstate(pid)
+                        self.mark_carstate_round(pid)
                 elif tag in (m.TAG["ped"], m.TAG["traffic"]):
                     self.relay_peer_state(conn, tag, payload, pid)
                 elif tag == m.TAG["hit"]:
                     relay.hit(self, conn, pid, payload)
+                    if self.mark.active:
+                        self.mark_hit_report(pid, payload)
                 elif tag == m.TAG["color"]:
                     relay.color(self, conn, pid, payload)
                 elif tag == m.TAG["channel"]:
@@ -1038,6 +1422,10 @@ class Dedicated:
                         self.broadcast(self.roster_bytes(), m.TAG["roster"])
                 elif tag == m.TAG["pong"]:
                     self.note_pong(conn, payload)
+                elif tag == m.TAG["round"]:
+                    relay.round_state(self, conn, pid, payload)
+                elif tag == m.TAG["mark"]:
+                    relay.mark_state(self, conn, pid, payload)
                 elif tag == m.TAG["leave"]:
                     break
         finally:
@@ -1045,6 +1433,8 @@ class Dedicated:
                 info = self.clients.pop(conn, None)
                 if info:
                     self.cars.pop(info["id"], None)
+                    self.car_seen.pop(info["id"], None)
+                    self.joined_at.pop(info["id"], None)
                     self.colors.pop(info["id"], None)
                     self.ped_models.pop(info["id"], None)
                 _NET.pop(conn, None)
@@ -1061,6 +1451,11 @@ class Dedicated:
                     self.broadcast(self.roster_bytes(), m.TAG["roster"])
                 except Exception as e:
                     self.log.debug("leave roster broadcast failed: %s" % e)
+                # ...and the round state without their row
+                try:
+                    self.broadcast_round_if_changed()
+                except Exception as e:
+                    self.log.debug("leave round broadcast failed: %s" % e)
             try:
                 conn.close()
             except OSError:
@@ -1276,8 +1671,19 @@ class Dedicated:
             "session:   TCP/%d%s" % (self.port, adv),
             "city:      %d" % self.city,
             "map mode:  %s" % ("multiplayer" if self.map_shape else "single-player city"),
-            "arena:     %d (of the city's two multiplayer maps)" % self.arena,
+            "arena:     %d (multiplayer map 0..%d)" % (self.arena, m.ARENA_MAX),
             "gamemode:  %d" % int(self.cfg["gamemode"]),
+            "round:     %d (%s)" % (self.round.number,
+                                    {m.ROUND_PHASE_IDLE: "idle", m.ROUND_PHASE_LIVE: "live",
+                                     m.ROUND_PHASE_ENDED: "ended"}.get(self.round.phase, "?")),
+        ] + ([
+            "mark:      %s, %d min, %s, marked %s" % (
+                m.mode_name(self.mark.gamemode), self.mark.minutes,
+                {m.MARK_PHASE_WAITING: "waiting", m.MARK_PHASE_LIVE: "live",
+                 m.MARK_PHASE_ENDED: "ended",
+                 m.MARK_PHASE_COUNTDOWN: "countdown"}.get(self.mark.phase, "?"),
+                self.mark.marked if self.mark.marked >= 0 else "nobody")
+        ] if self.mark.active else []) + [
             "rules:     %s" % rules_text(int(self.cfg["rules"])),
             "time:      %s, %s" % (TIMES_OF_DAY[time_of_day_index(self.cfg)],
                                    WEATHERS[weather_index(self.cfg)]),
@@ -1348,6 +1754,9 @@ class Dedicated:
         # rejoin: KICK reserved[0] flag -- new clients reconnect on their own (and
         # keep their car); old ones just see the kick text.
         payload = m.KICK.pack(pid, m.KICK_FLAG_REJOIN if rejoin else 0, 0, 0)
+        if rejoin:
+            with self.lock:
+                self.rejoin_quiet[c["name"]] = time.monotonic() + REJOIN_QUIET_S
         if reason:
             payload += self.kick_text(by, reason).encode("utf-8").ljust(m.KICK_TEXT_LEN, b"\0")
         try:
@@ -1433,6 +1842,8 @@ class Dedicated:
             threads.append(threading.Thread(target=self.master_loop, daemon=True))
         threads.append(threading.Thread(target=tick_loop, args=(self.plugins, self.stop),
                                         daemon=True))
+        if self.mark.active:
+            threads.append(threading.Thread(target=self.mark_loop, daemon=True))
         for t in threads:
             t.start()
 
@@ -1466,9 +1877,11 @@ def parse_args(argv):
     ap.add_argument("--name")
     ap.add_argument("--city", type=int, help="GameLevel the clients load (0..3)")
     ap.add_argument("--arena", type=int,
-                    help="which of the city's two multiplayer maps clients load (0 or 1; "
-                         "the game's -mp 0 / -mp 1)")
+                    help="which multiplayer map clients load (0..3; the game's -mp N; "
+                         "Driver 2 ships 0 and 1 per city)")
     ap.add_argument("--gamemode", type=int)
+    ap.add_argument("--mode-time", type=int, dest="mode_time", metavar="MIN",
+                    help="Fox N Hounds / Car Bomb Tag time in minutes, 1..5 (default 3)")
     ap.add_argument("--max-players", type=int)
     ap.add_argument("--beacon", dest="beacon", action="store_true", default=None)
     ap.add_argument("--no-beacon", dest="beacon", action="store_false")
@@ -1581,7 +1994,7 @@ def build_config(argv):
     cfg = load_config(path, DEFAULTS)
     apply_overrides(cfg, args, (
         ("port", "port"), ("name", "name"), ("city", "city"), ("arena", "arena"),
-        ("gamemode", "gamemode"),
+        ("gamemode", "gamemode"), ("mode_time", "mode_time"),
         ("max_players", "max_players"), ("beacon", "beacon"), ("beacon_ms", "beacon_ms"),
         ("idle_drop_s", "idle_drop_s"), ("cops", "cops"),
         ("cop_difficulty", "cop_difficulty"), ("cop_immunity", "cop_immunity"),
@@ -1654,9 +2067,9 @@ def main(argv=None):
         mode = MAP_MODE_MP
     cfg["map_mode"] = mode
     arena = int(cfg["arena"])
-    if arena not in (0, 1):
-        log.warning("arena %d is not 0 or 1 (the two multiplayer maps of a city); "
-                    "using 0" % arena)
+    if not 0 <= arena <= m.ARENA_MAX:
+        log.warning("arena %d is not 0..%d (a city's multiplayer maps); using 0"
+                    % (arena, m.ARENA_MAX))
         arena = 0
     cfg["arena"] = arena
 

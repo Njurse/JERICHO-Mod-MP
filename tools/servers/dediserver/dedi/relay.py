@@ -126,3 +126,33 @@ def channel(server, conn, pid, payload):
     frame[m.CHANNEL_FROM_OFFSET] = pid & 0xFF
     server.broadcast(bytes(frame), m.TAG["channel"])
     return True
+
+
+def round_state(server, conn, pid, payload):
+    """JPRD from a client. Only the host writes the round state, so the in-game host
+    drops one a peer sends (MpHandleRound) and so does this server: it is never
+    forwarded, or a client could write its own score or team. The sender is answered
+    with the server's own snapshot instead, so its copy is the server's again.
+    Returns False (nothing was relayed)."""
+    server.log.debug("player %d sent a round state (%d bytes): ignored, only the server writes it"
+                     % (pid, len(payload)))
+    try:
+        server.send_to(conn, m.TAG["round"], server.round_bytes())
+    except OSError:
+        pass
+    return False
+
+
+def mark_state(server, conn, pid, payload):
+    """JPMK from a client (proto 23). Only the server referees the timer modes, so,
+    like a JPRD, it is never forwarded -- a client could otherwise name itself the
+    winner or hand the bomb on. In a timer mode the sender gets the server's own
+    snapshot back. Returns False (nothing was relayed)."""
+    server.log.debug("player %d sent a mark state (%d bytes): ignored, only the server writes it"
+                     % (pid, len(payload)))
+    if server.mark.active:
+        try:
+            server.send_to(conn, m.TAG["mark"], server.mark_bytes())
+        except OSError:
+            pass
+    return False

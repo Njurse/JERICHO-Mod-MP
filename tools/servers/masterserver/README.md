@@ -88,11 +88,13 @@ the previous entry and issues a fresh token.
   "name": "Bob's Game",     // 1..31 chars; the name shown in a browser
   "port": 1318,             // the host's TCP session port (the port clients connect to)
   "city": 1,                // 0..3, the GameLevel clients should load
-  "gamemode": 0,
+  "gamemode": 0,             // MP_GAMEMODE_* (mp_proto.h): 0 = TAKE A RIDE, the
+                            // only mode so far; an unknown id is shown as "-"
   "rules": 1,               // MP_RULES_PACK'd session rules (mp_proto.h). The
                             // SAME packed byte the LAN beacon carries, so a
-                            // browser names the mode from either. Optional, 0
-                            // default; 1 = COPS N ROBBERS, 0 = TAKE A RIDE
+                            // browser reads them from either. Optional, 0
+                            // default. Bit 0 is "police cars on"; the rules
+                            // never rename the mode -- that is "gamemode"
   "players": 0,             // current players
   "maxPlayers": 8,
   "inProgress": 0,          // 1 once the host's level has launched

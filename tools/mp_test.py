@@ -27,9 +27,9 @@ import sys
 import threading
 import time
 
-PROTO = 21                    # mp_proto.h MP_PROTO_VERSION (21: a car's city byte past the stock rows is a bank NAME code 0x80..0xFE; 20: MP_ROSTER_ENTRY carries leftModel/leftModelCity, 32 bytes; 19: dynamic JMPPED entries on top of 18's ped model id) -- the game drops any frame whose envelope version differs
+PROTO = 24                    # mp_proto.h MP_PROTO_VERSION (24: round lifecycle v2 -- MP_MARK 16 bytes (endReason, flags, spare), MP_MARK_ENTRY WAITING/OUT flags, MP_CARSTATE_ENTRY totalDamage + maxDamage (61 bytes) and MP_CARSTATE_OUT, MP_ROUND_ENTRY flags (ADMIN), arena 0..3, JPDM retired; 23: the marked-player state, MP_TAG_MARK "JPMK", MP_MARK + MP_MARK_ENTRY, Fox N Hounds / Car Bomb Tag; 22: the round state, MP_TAG_ROUND "JPRD", MP_ROUND + MP_ROUND_ENTRY; 21: a car's city byte past the stock rows is a bank NAME code 0x80..0xFE; 20: MP_ROSTER_ENTRY carries leftModel/leftModelCity, 32 bytes; 19: dynamic JMPPED entries on top of 18's ped model id) -- the game drops any frame whose envelope version differs
 SDK = 3                       # JERICHO_SDK_VERSION
-MP_VER = "0.17.0"             # JERICHO/MODS/mp/mod.toml version -- always advertised
+MP_VER = "0.24.0"             # JERICHO/MODS/mp/mod.toml version -- always advertised (0.24.0: proto 24, round lifecycle v2; 0.20.0 came with proto 23; 0.21.0: the timer modes' round start; 0.22.0: bomb tick/wreck/HUD/glow; 0.22.1: countdown beep, centred glow, framework pre-game; 0.22.2: countdown-start respawn and wreck-lock clear; 0.22.3: local bomb-beep without doppler, halved beep pace, same proto; 0.23.0: Cops n Robbers, mode id 3, same proto; 0.23.1: role cars at join, same proto; 0.23.2: role-car picks per connection, same proto; 0.23.3: respawn hold, join/leave sounds, same proto; 0.23.4: round hold, own-damage JPDM (optional), fox digit timers, same proto)
 NUL = bytes([0])
 
 # Shared protocol constants, mirrored from mp_proto.h so the tools never hard-code
@@ -56,12 +56,74 @@ CITY_WIRE_CODE_LAST = 0xFE
 MP_RULE_COPS = 0x1            # 1 = police cars spawn
 
 
-GAMEMODE_NAMES = {0: "TAKE A RIDE"}      # MP_GAMEMODE_* (mp_proto.h)
+GAMEMODE_NAMES = {0: "TAKE A RIDE", 1: "FOX N HOUNDS", 2: "CAR BOMB TAG", 3: "COPS N ROBBERS"}      # MP_GAMEMODE_* (mp_proto.h)
+GAMEMODE_FOXHOUNDS = 1        # mp_proto.h MP_GAMEMODE_FOXHOUNDS
+GAMEMODE_BOMBTAG = 2          # mp_proto.h MP_GAMEMODE_BOMBTAG
+GAMEMODE_COPSROBBERS = 3      # mp_proto.h MP_GAMEMODE_COPSROBBERS
+# mp_mode.c kModes[].timer / .music for each id (MP_MODE_TIMER_*, MP_MODE_MUSIC_*);
+# tools/mode_check checks this against the C table.
+MODE_TIMER_NONE, MODE_TIMER_PERSONAL, MODE_TIMER_SHARED, MODE_TIMER_GETAWAY = 0, 1, 2, 3
+MODE_MUSIC_AUTO, MODE_MUSIC_CALM, MODE_MUSIC_PURSUIT = 0, 1, 2
+GAMEMODE_TIMER = {0: MODE_TIMER_NONE, 1: MODE_TIMER_PERSONAL, 2: MODE_TIMER_SHARED, 3: MODE_TIMER_GETAWAY}
+GAMEMODE_MUSIC = {0: MODE_MUSIC_AUTO, 1: MODE_MUSIC_PURSUIT, 2: MODE_MUSIC_PURSUIT, 3: MODE_MUSIC_PURSUIT}
+# mp_mode.c kModes[].keepScore: 1 = scores run across rounds (MpModeKeepsScore)
+GAMEMODE_KEEP_SCORE = {3: 1}
+# mp_mode.c kModes[] pre-game: 0 = off (Take a Ride). Fox/Bomb wait for 2 players
+# and a car each, then 5 s on a fresh map and 3 s on later rounds.
+GAMEMODE_WAIT_MIN = {0: 0, 1: 2, 2: 2, 3: 2}
+GAMEMODE_WAIT_CARS = {0: 0, 1: 1, 2: 1, 3: 1}
+GAMEMODE_FIRST_COUNTDOWN = {0: 0, 1: 5, 2: 5, 3: 5}
+GAMEMODE_ROUND_COUNTDOWN = {0: 0, 1: 3, 2: 3, 3: 3}
+# 1 = a first-load or per-round count is set (MpModeWantsCountdown)
+GAMEMODE_COUNTDOWN = {0: 0, 1: 1, 2: 1, 3: 1}
+# mp_mode.c kModes[].lateJoin (MP_MODE_LATEJOIN_*): v24 the round modes' late
+# joiners wait for the next round; .respawn (MP_MODE_RESPAWN_*) is instant for all.
+MODE_LATEJOIN_LIVE, MODE_LATEJOIN_SPECTATE = 0, 1
+MODE_RESPAWN_INSTANT, MODE_RESPAWN_DELAY, MODE_RESPAWN_NONE = 0, 1, 2
+GAMEMODE_LATEJOIN = {0: MODE_LATEJOIN_LIVE, 1: MODE_LATEJOIN_SPECTATE, 2: MODE_LATEJOIN_SPECTATE, 3: MODE_LATEJOIN_SPECTATE}
+GAMEMODE_RESPAWN = {0: MODE_RESPAWN_INSTANT, 1: MODE_RESPAWN_INSTANT, 2: MODE_RESPAWN_INSTANT, 3: MODE_RESPAWN_INSTANT}
+
+
+def mode_timer(gamemode):
+    """MpModeTimerKind: an unknown id behaves as Take a Ride (no timer)."""
+    return GAMEMODE_TIMER.get(gamemode, MODE_TIMER_NONE)
+
+
+def mode_keeps_score(gamemode):
+    """MpModeKeepsScore: 1 = MpRoundBegin keeps each player's score."""
+    return GAMEMODE_KEEP_SCORE.get(gamemode, 0)
+
+
+def mode_countdown(gamemode):
+    """MpModeWantsCountdown: 1 = a first-load or per-round count is set."""
+    return GAMEMODE_COUNTDOWN.get(gamemode, 0)
+
+def mode_latejoin(gamemode):
+    """MpModeLateJoinPolicy: an unknown id behaves as Take a Ride (straight in)."""
+    return GAMEMODE_LATEJOIN.get(gamemode, MODE_LATEJOIN_LIVE)
+
+def mode_wait_min(gamemode):
+    return GAMEMODE_WAIT_MIN.get(gamemode, 0)
+
+def mode_wait_cars(gamemode):
+    return GAMEMODE_WAIT_CARS.get(gamemode, 0)
+
+def mode_first_countdown(gamemode):
+    return GAMEMODE_FIRST_COUNTDOWN.get(gamemode, 0)
+
+def mode_round_countdown(gamemode):
+    return GAMEMODE_ROUND_COUNTDOWN.get(gamemode, 0)
+
+def mode_has_pre_game(gamemode):
+    d = (mode_wait_min(gamemode), mode_wait_cars(gamemode),
+         mode_first_countdown(gamemode), mode_round_countdown(gamemode))
+    return any(d)
 
 
 def mode_name(gamemode):
     """The name a browser shows for a server's gamemode id. Session rules (cops
-    on/off) never rename the mode. Keep in step with MpModeName (mp_session.c)."""
+    on/off) never rename the mode. Keep in step with kModes[] (mp_mode.c);
+    tools/mode_check/run_mode_check.py fails when they differ."""
     return GAMEMODE_NAMES.get(gamemode, "-")
 
 
@@ -77,8 +139,10 @@ TAG = {
     "channel": b"JPCH", "leave": b"JPLV", "kick": b"JPKK", "chat": b"JPCX",
     "roster": b"JPRS", "car": b"JPCC",
     "ped": b"JPPD", "traffic": b"JPTF", "hit": b"JPHI", "color": b"JPCL",
-    "stats": b"JPSX",
+    "stats": b"JPSX", "round": b"JPRD", "mark": b"JPMK",
 }
+# 'JPDM' (MP_DAMAGE, the getaway's optional damage report of mp 0.23.4) is retired
+# in proto 24: the damage rides MP_CARSTATE_ENTRY.
 # NOTE: no "session" entry. 'JPSS' was retired from mp_proto.h -- it was reserved for
 # a standalone session/lobby broadcast that nothing ever sent or handled. Keep this
 # table to the tags the code actually has; a retired one is dropped here too.
@@ -139,8 +203,12 @@ SESSION = struct.Struct("<4BIBBH")       # 12 bytes (gamemode,city,tod,weather,s
 INPUT = struct.Struct("<B3B")            # count, reserved[3] = 4 (the frame byte was dropped)
 PLAYER_INPUT = struct.Struct("<BHB")     # playerId, pad, spare = 4
 CARSTATE = struct.Struct("<IB3B")        # frame, count, reserved[3] = 8
-CARSTATE_ENTRY = struct.Struct("<BBBBB4h3ii3i3iBBBB")  # pid, flags, palette, model, modelCity, orient[4], x,y,z, heading, angVel[3], vel[3], leftModel, leftModelCity, hubcaps, crushScale = 57 (model 0xFF = on foot; modelCity 0xFF = the session city; hubcaps low nibble = lost wheel hubcaps; crushScale = owner's body-crush multiplier in half steps, 2 = 1.0x, 20 = 10.0x)
+CARSTATE_ENTRY = struct.Struct("<BBBBB4h3ii3i3iBBBBHH")  # pid, flags, palette, model, modelCity, orient[4], x,y,z, heading, angVel[3], vel[3], leftModel, leftModelCity, hubcaps, crushScale, totalDamage, maxDamage = 61 (v24 added the two damage u16s; model 0xFF = on foot; modelCity 0xFF = the session city; hubcaps low nibble = lost wheel hubcaps; crushScale = owner's body-crush multiplier in half steps, 2 = 1.0x, 20 = 10.0x)
 CARSTATE_LEFT_CAR = 4          # mp_proto.h MP_CARSTATE_LEFT_CAR: the NO_CAR row also names the parked car
+CARSTATE_OUT = 0x10            # mp_proto.h MP_CARSTATE_OUT (v24): the owner is out until the next round
+ARENA_MAX = 3                  # mp_proto.h MP_ARENA_MAX (v24: arenas 0..3)
+SESSION_ARENA_SHIFT = 8        # mp_proto.h MP_SESSION_ARENA_SHIFT: MP_SESSION.spare bits 8-9
+SESSION_ARENA_MASK = 0x3       # mp_proto.h MP_SESSION_ARENA_MASK
 
 # The roster (JPRS). The HOST broadcasts it before a launch and refreshes it every
 # couple of seconds; a client learns its PEERS only from it, and adopts their cars
@@ -152,6 +220,115 @@ ROSTER_FLAG_HOST = 1          # mp_proto.h MP_ROSTER_FLAG_HOST
 ROSTER_FLAG_CAR_READY = 2     # mp_proto.h MP_ROSTER_FLAG_CAR_READY
 ROSTER = struct.Struct("<4B")          # count, reserved[3] = 4
 ROSTER_ENTRY = struct.Struct("<6B2H2B20s")  # id, carId, model, modelCity, flags, pedModel, ping, palette, leftModel, leftModelCity, name[20] = 32 (model 0xFF = on foot)
+
+# The round state (JPRD, proto 22). Host-authored like the roster: the host -- the
+# game's listen host or the dedicated server (dedi/roundstate.py) -- is the only
+# writer; a client replaces its copy with each one. Header + `count` rows, present
+# players only, ascending id. A missing row / no snapshot reads as Take a Ride:
+# playing, no team, score 0.
+ROUND = struct.Struct("<BBHB3x")        # gamemode, phase, round, count, reserved[3] = 8
+ROUND_ENTRY = struct.Struct("<BBBBi")   # playerId, state, team (0xFF none), flags (v24), int32 score = 8
+ROUND_ENTRY_F_ADMIN = 0x01              # mp_proto.h MP_ROUND_ENTRY_F_ADMIN (v24)
+ROUND_PHASE_IDLE = 0                    # mp_proto.h MP_ROUND_PHASE_*
+ROUND_PHASE_LIVE = 1
+ROUND_PHASE_ENDED = 2
+ROUND_PLAYER_PLAYING = 0                # mp_proto.h MP_ROUND_PLAYER_*
+ROUND_PLAYER_SPECTATING = 1
+ROUND_PLAYER_WAITING = 2
+ROUND_TEAM_NONE = 0xFF                  # mp_proto.h MP_ROUND_TEAM_NONE
+
+
+def build_round(gamemode, phase, round_no, rows):
+    """MP_ROUND + MP_ROUND_ENTRY rows. `rows` is [(playerId, state, team, score)]
+    or [(playerId, state, team, score, flags)] (ROUND_ENTRY_F_*), team None/-1 =
+    MP_ROUND_TEAM_NONE; written in ascending player id."""
+    rows = sorted(rows)[:MAX_PLAYERS]
+    out = bytearray(ROUND.pack(gamemode & 0xFF, phase & 0xFF, round_no & 0xFFFF, len(rows)))
+    for row in rows:
+        pid, state, team, score = row[:4]
+        flags = row[4] if len(row) > 4 else 0
+        t = ROUND_TEAM_NONE if team is None or team < 0 else team & 0xFF
+        out += ROUND_ENTRY.pack(pid & 0xFF, state & 0xFF, t, flags & 0xFF, int(score))
+    return bytes(out)
+
+
+def parse_round(payload):
+    """(gamemode, phase, round, [(playerId, state, team or -1, score)]), or None
+    when the frame is short or its count is out of range (mp_round.c MpRoundApply)."""
+    if len(payload) < ROUND.size:
+        return None
+    gm, phase, rnd, count = ROUND.unpack_from(payload, 0)
+    if count > MAX_PLAYERS or len(payload) < ROUND.size + count * ROUND_ENTRY.size:
+        return None
+    rows = []
+    for i in range(count):
+        pid, state, team, _flags, score = ROUND_ENTRY.unpack_from(payload, ROUND.size + i * ROUND_ENTRY.size)
+        rows.append((pid, state, -1 if team == ROUND_TEAM_NONE else team, score))
+    return gm, phase, rnd, rows
+
+
+# The marked-player state (JPMK, proto 23): Fox N Hounds / Car Bomb Tag. Host-authored
+# like JPRD (the referee is mp_mark.c / dedi/markref.py) and only sent in a mode that
+# uses it. Clocks are deciseconds remaining, rounded up.
+MARK = struct.Struct("<6BHHHBBH")      # gamemode, phase, marked, winner, minutes, count, seq, sharedDs, countdownDs, endReason, flags, spare = 16 (v24)
+MARK_ENTRY = struct.Struct("<BBH")     # playerId, flags, remainDs = 4
+MARK_PHASE_WAITING = 0                  # mp_proto.h MP_MARK_PHASE_*
+MARK_PHASE_LIVE = 1
+MARK_PHASE_ENDED = 2
+MARK_PHASE_COUNTDOWN = 3                # every car is in: 3-2-1 before LIVE (same byte, no bump)
+MARK_PHASE_LOBBY = 4                    # retired (unused on the wire; proto 23 keeps the value)
+MARK_ENTRY_F_READY = 0x01               # mp_proto.h MP_MARK_ENTRY_F_READY: has picked a car
+MARK_ENTRY_F_WAITING = 0x02             # v24: joined mid-round, waits for the next COUNTDOWN
+MARK_ENTRY_F_OUT = 0x04                 # v24: no respawn this round
+MARK_END_NONE = 0                       # mp_proto.h MP_MARK_END_* (v24)
+MARK_END_CLOCK = 1
+MARK_END_BUST = 2
+MARK_END_ESCAPE = 3
+MARK_END_LEAVE = 4
+MARK_END_VOID = 5
+MARK_F_DAMAGE = 0x01                    # mp_proto.h MP_MARK_F_DAMAGE (v24)
+MARK_NONE = 0xFF                        # mp_proto.h MP_MARK_NONE
+MARK_MINUTES_MIN = 1                    # mp_proto.h MP_MARK_MINUTES_*
+MARK_MINUTES_MAX = 5
+MARK_MINUTES_DEFAULT = 3
+
+
+def build_mark(gamemode, phase, marked, winner, minutes, seq, shared_ds, rows, countdown_ds=0,
+               end_reason=0, flags=0):
+    """MP_MARK + MP_MARK_ENTRY rows. `rows` is [(playerId, remainDs)] or
+    [(playerId, remainDs, flags)] (MARK_ENTRY_F_*); marked / winner None or -1 =
+    MP_MARK_NONE; end_reason MARK_END_*, flags MARK_F_* (v24); written in
+    ascending player id."""
+    rows = sorted(rows)[:MAX_PLAYERS]
+    mk = MARK_NONE if marked is None or marked < 0 else marked & 0xFF
+    wn = MARK_NONE if winner is None or winner < 0 else winner & 0xFF
+    out = bytearray(MARK.pack(gamemode & 0xFF, phase & 0xFF, mk, wn, minutes & 0xFF, len(rows),
+                              seq & 0xFFFF, min(int(shared_ds), 0xFFFF),
+                              min(int(countdown_ds), 0xFFFF), end_reason & 0xFF, flags & 0xFF, 0))
+    for row in rows:
+        pid, ds = row[0], row[1]
+        flags = row[2] if len(row) > 2 else 0
+        out += MARK_ENTRY.pack(pid & 0xFF, flags & 0xFF, min(int(ds), 0xFFFF))
+    return bytes(out)
+
+
+def parse_mark(payload):
+    """dict of the snapshot, or None when short / count out of range (MpMarkApply)."""
+    if len(payload) < MARK.size:
+        return None
+    gm, phase, mk, wn, minutes, count, seq, shared, countdown, end_reason, mflags, _spare = MARK.unpack_from(payload, 0)
+    if count > MAX_PLAYERS or len(payload) < MARK.size + count * MARK_ENTRY.size:
+        return None
+    raw = [MARK_ENTRY.unpack_from(payload, MARK.size + i * MARK_ENTRY.size) for i in range(count)]
+    return {"gamemode": gm, "phase": phase, "marked": -1 if mk == MARK_NONE else mk,
+            "winner": -1 if wn == MARK_NONE else wn, "minutes": minutes, "seq": seq,
+            "shared_ds": shared, "countdown_ds": countdown,
+            "end_reason": end_reason, "flags": mflags,
+            "rows": [(pid, ds) for pid, _f, ds in raw],
+            "ready": sorted(pid for pid, f, _ds in raw if f & MARK_ENTRY_F_READY),
+            "waiting": sorted(pid for pid, f, _ds in raw if f & MARK_ENTRY_F_WAITING),
+            "out": sorted(pid for pid, f, _ds in raw if f & MARK_ENTRY_F_OUT)}
+
 
 REJECT_NAMES = {0: "NONE", 1: "FULL", 2: "VERSION", 3: "MODS", 4: "INPROGRESS", 5: "CUSTOM"}
 REJECT_IDS = {v.lower(): k for k, v in REJECT_NAMES.items() if k != 0}
@@ -331,6 +508,16 @@ def mode_host(args):
         send_frame(conn, TAG["start"], sess)
         print(f"[mock-host] sent START (city={args.city})")
 
+    # ...and the round state, as the real host does after a WELCOME (proto 22): Take a
+    # Ride's round 1, live once started, the fake host (0) and the client (1) playing.
+    if args.start:
+        rd = build_round(0, ROUND_PHASE_LIVE, 1, [(0, ROUND_PLAYER_PLAYING, -1, 0),
+                                                  (1, ROUND_PLAYER_PLAYING, -1, 0)])
+    else:
+        rd = build_round(0, ROUND_PHASE_IDLE, 0, [(0, ROUND_PLAYER_WAITING, -1, 0),
+                                                  (1, ROUND_PLAYER_WAITING, -1, 0)])
+    send_frame(conn, TAG["round"], rd)
+
     # Service the connection. A real host does NOT hang up the moment it has said
     # hello: it answers keepalives and stays up. Closing 0.5 s after WELCOME is
     # exactly why a joining client logged "Lost the server" seconds into an
@@ -366,7 +553,7 @@ def mode_host(args):
         elif tag == TAG["carstate"] and args.lockstep and not args.no_carstate:
             frame, count, _a, _b, _c = CARSTATE.unpack_from(payload, 0)
             if count >= 1:
-                pid, _fl, _pal, _md, _mcy, _o0, _o1, _o2, _o3, x, y, z, hd, _a0, _a1, _a2, _v0, _v1, _v2, _lm, _lmc, _hub, _crush = CARSTATE_ENTRY.unpack_from(payload, CARSTATE.size)
+                pid, _fl, _pal, _md, _mcy, _o0, _o1, _o2, _o3, x, y, z, hd, _a0, _a1, _a2, _v0, _v1, _v2, _lm, _lmc, _hub, _crush, _dmg, _dmax = CARSTATE_ENTRY.unpack_from(payload, CARSTATE.size)
                 last = (x, y, z, hd)
                 if not hasattr(args, "_fixed") or args._fixed is None:
                     args._fixed = (x + args.peer_dist, y, z)
@@ -378,7 +565,7 @@ def mode_host(args):
                 fx, fy, fz = args._fixed
                 # static "host" car: it must NOT follow the client's car
                 cs = CARSTATE.pack(frame, 1, 0, 0, 0)
-                cs += CARSTATE_ENTRY.pack(0, 1, 0, 0, 0xFF, 0, 0, 0, 0, fx, fy, fz, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2)
+                cs += CARSTATE_ENTRY.pack(0, 1, 0, 0, 0xFF, 0, 0, 0, 0, fx, fy, fz, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0)
                 send_frame(conn, TAG["carstate"], cs)
                 carstate += 1
     print(f"[mock-host] served {seen} input / {carstate} car-state frame(s); last client car {last}")
@@ -516,7 +703,7 @@ def mode_client(args):
                     if t == TAG["carstate"]:
                         _fr, _cnt, _a, _b, _c = CARSTATE.unpack_from(pl, 0)
                         for k in range(_cnt):
-                            pk, _fl, _pal, _md, _mcy, _sl, _o0, _o1, _o2, _o3, xk, yk, zk, hk, _a0, _a1, _a2, _v0, _v1, _v2, _lm, _lmc, _hub, _crush = CARSTATE_ENTRY.unpack_from(
+                            pk, _fl, _pal, _md, _mcy, _o0, _o1, _o2, _o3, xk, yk, zk, hk, _a0, _a1, _a2, _v0, _v1, _v2, _lm, _lmc, _hub, _crush, _dmg, _dmax = CARSTATE_ENTRY.unpack_from(
                                 pl, CARSTATE.size + k * CARSTATE_ENTRY.size)
                             if pk == 0:
                                 hx, hz, hy = xk, zk, yk
@@ -534,7 +721,7 @@ def mode_client(args):
                 for f in range(900):
                     x += dxs
                     cs = CARSTATE.pack(f, 1, 0, 0, 0)
-                    cs += CARSTATE_ENTRY.pack(pid, 1, 0, 0, 0xFF, 0xFF, 0, 0, 0, 0, x, hy, lane, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2)   # pid = us, at the host's ground height
+                    cs += CARSTATE_ENTRY.pack(pid, 1, 0, 0, 0xFF, 0, 0, 0, 0, x, hy, lane, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0)   # pid = us, at the host's ground height
                     send_frame(s, TAG["carstate"], cs)
                     lane += dzs
                     try:

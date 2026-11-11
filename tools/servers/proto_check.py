@@ -59,6 +59,10 @@ MIRROR = {
     "MP_TRAFFIC_ENTRY": "TRAFFIC_ENTRY",
     "MP_COLOR_ENTRY": "COLOR_ENTRY",
     "MP_STATS_ENTRY": "STATS_ENTRY",
+    "MP_ROUND": "ROUND",
+    "MP_ROUND_ENTRY": "ROUND_ENTRY",
+    "MP_MARK": "MARK",
+    "MP_MARK_ENTRY": "MARK_ENTRY",
 }
 
 # C #define -> the Python constant that must carry the same value.
@@ -70,6 +74,45 @@ CONSTANTS = {
     "MP_MOD_ID_MAX": "MOD_ID_MAX",
     "MP_MOD_VER_MAX": "MOD_VER_MAX",
     "MP_CARSTATE_LEFT_CAR": "CARSTATE_LEFT_CAR",
+    "MP_ROUND_TEAM_NONE": "ROUND_TEAM_NONE",
+    "MP_MARK_NONE": "MARK_NONE",
+    "MP_MARK_MINUTES_MIN": "MARK_MINUTES_MIN",
+    "MP_MARK_MINUTES_MAX": "MARK_MINUTES_MAX",
+    "MP_MARK_MINUTES_DEFAULT": "MARK_MINUTES_DEFAULT",
+    "MP_MARK_ENTRY_F_READY": "MARK_ENTRY_F_READY",
+    "MP_MARK_ENTRY_F_WAITING": "MARK_ENTRY_F_WAITING",
+    "MP_MARK_ENTRY_F_OUT": "MARK_ENTRY_F_OUT",
+    "MP_MARK_F_DAMAGE": "MARK_F_DAMAGE",
+    "MP_ROUND_ENTRY_F_ADMIN": "ROUND_ENTRY_F_ADMIN",
+    "MP_CARSTATE_OUT": "CARSTATE_OUT",
+    "MP_ARENA_MAX": "ARENA_MAX",
+    "MP_SESSION_ARENA_SHIFT": "SESSION_ARENA_SHIFT",
+    "MP_SESSION_ARENA_MASK": "SESSION_ARENA_MASK",
+}
+
+# C enum member -> the Python constant that must carry the same value. Enum members
+# are not #defines, so they are read as `NAME = N` (every one here is explicit).
+ENUMS = {
+    "MP_ROUND_PHASE_IDLE": "ROUND_PHASE_IDLE",
+    "MP_ROUND_PHASE_LIVE": "ROUND_PHASE_LIVE",
+    "MP_ROUND_PHASE_ENDED": "ROUND_PHASE_ENDED",
+    "MP_ROUND_PLAYER_PLAYING": "ROUND_PLAYER_PLAYING",
+    "MP_ROUND_PLAYER_SPECTATING": "ROUND_PLAYER_SPECTATING",
+    "MP_ROUND_PLAYER_WAITING": "ROUND_PLAYER_WAITING",
+    "MP_MARK_PHASE_WAITING": "MARK_PHASE_WAITING",
+    "MP_MARK_PHASE_LIVE": "MARK_PHASE_LIVE",
+    "MP_MARK_PHASE_ENDED": "MARK_PHASE_ENDED",
+    "MP_MARK_PHASE_COUNTDOWN": "MARK_PHASE_COUNTDOWN",
+    "MP_MARK_PHASE_LOBBY": "MARK_PHASE_LOBBY",
+    "MP_GAMEMODE_FOXHOUNDS": "GAMEMODE_FOXHOUNDS",
+    "MP_GAMEMODE_BOMBTAG": "GAMEMODE_BOMBTAG",
+    "MP_GAMEMODE_COPSROBBERS": "GAMEMODE_COPSROBBERS",
+    "MP_MARK_END_NONE": "MARK_END_NONE",
+    "MP_MARK_END_CLOCK": "MARK_END_CLOCK",
+    "MP_MARK_END_BUST": "MARK_END_BUST",
+    "MP_MARK_END_ESCAPE": "MARK_END_ESCAPE",
+    "MP_MARK_END_LEAVE": "MARK_END_LEAVE",
+    "MP_MARK_END_VOID": "MARK_END_VOID",
 }
 
 
@@ -94,6 +137,20 @@ def c_define(name, text):
     if not mm:
         return None
     return int(mm.group(1), 0)
+
+
+def c_enum(name, text):
+    """Integer value of an explicit enum member `<name> = <int>`, or None."""
+    mm = re.search(r"\b%s\s*=\s*(0x[0-9A-Fa-f]+|\d+)\b" % re.escape(name), text)
+    if not mm:
+        return None
+    return int(mm.group(1), 0)
+
+
+def c_tags(text):
+    """{MP_TAG_X: b"JPxx"} from every `#define MP_TAG_X "JPxx"`."""
+    return {mm.group(1): mm.group(2).encode()
+            for mm in re.finditer(r'#define\s+(MP_TAG_[A-Z0-9_]+)\s+"([A-Za-z0-9]{4})"', text)}
 
 
 def check(proto_text=None, tool=None):
@@ -138,6 +195,28 @@ def check(proto_text=None, tool=None):
                 % (cname, cval, pyname, pval)
             )
 
+    for cname, pyname in sorted(ENUMS.items()):
+        cval = c_enum(cname, proto_text)
+        if cval is None:
+            problems.append("mp_proto.h no longer sets %s = N" % cname)
+            continue
+        pval = getattr(tool, pyname, None)
+        if pval is None:
+            problems.append("mp_test.py defines no %s (mirrors %s)" % (pyname, cname))
+            continue
+        if pval != cval:
+            problems.append("%s is %s in mp_proto.h but mp_test.py %s is %s"
+                            % (cname, cval, pyname, pval))
+
+    # Every message tag, both ways: a tag the C side sends that the tools cannot
+    # name is a frame the servers drop or mis-route without a word.
+    ctags = set(c_tags(proto_text).values())
+    ptags = set(getattr(tool, "TAG", {}).values())
+    for t in sorted(ctags - ptags):
+        problems.append("mp_proto.h tag %r is missing from mp_test.py TAG" % t)
+    for t in sorted(ptags - ctags):
+        problems.append("mp_test.py TAG %r is not an MP_TAG_* in mp_proto.h" % t)
+
     return problems
 
 
@@ -171,8 +250,9 @@ def main():
             print("  - " + p)
         return 1
     print(
-        "proto_check: OK -- %d mirrored struct size(s) and %d shared constant(s) match "
-        "mp_proto.h" % (len(MIRROR), len(CONSTANTS))
+        "proto_check: OK -- %d mirrored struct size(s), %d shared constant(s), %d enum "
+        "value(s) and %d tag(s) match mp_proto.h"
+        % (len(MIRROR), len(CONSTANTS), len(ENUMS), len(c_tags(_read(PROTO_H))))
     )
     return 0
 

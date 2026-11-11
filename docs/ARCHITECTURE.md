@@ -98,6 +98,8 @@ host: protocol/SDK version check, mod-match policy, capacity
 host ── ROSTER ──▶ client        (who is in the match, BEFORE the welcome)
 host ── WELCOME {playerId, maxPlayers, running, subGame, city, time, weather,
                  seed, modsEnforced, modsMatched} ──▶ client
+host ── ROUND ──▶ client         (the round state, AFTER the welcome; proto 22)
+host ── MARK ──▶ client          (timer modes only: the marked player; proto 23)
    or ── REJECT {reason} ──▶ client
 ```
 
@@ -118,7 +120,8 @@ unattended — asks to launch.
 ### Starting a match
 
 Host `MpStartMatch()`: clamp unset lobby values, set `running`, **start
-advertising**, build the seed, broadcast `START`, launch locally.
+advertising**, build the seed, broadcast `ROSTER`, begin round 1 and broadcast
+`ROUND` (`MpHostRoundBegin`), broadcast `START`, launch locally.
 
 `running` is the flag the whole system turns on: it gates the input loop, the
 snapshot resync, the roster refresh, and what the beacon reports.
@@ -199,6 +202,8 @@ flushed as the socket accepts them (§10, trap 2).
 | `JPLV` | both | LEAVE |
 | `JPKK` | host -> client | KICK — the host removes a player. The kicked client prints "kicked by the host", then takes the same clean-leave path a deliberate quit uses (`MpLeaveSession`), so the roster row and the car leave every machine identically. Host-only (`MpKickPlayer`); a non-zero player id only. |
 | `JPCX` | both | chat line (T to open, Enter to send, Esc to cancel; drawn in the status console — the speaker's name in their own colour, or cream when custom colour is off, and the message in a flat 240,240,240) |
+| `JPRD` | H→all | ROUND (proto 22): the round number and phase, and per player the round state (playing / spectating / waiting), score and team (`MP_ROUND` + `MP_ROUND_ENTRY`, `mp_round.c`). Only the host or the dedicated server writes it: after a WELCOME, at START, whenever it changes, and on the roster's 120-frame cadence. A host drops one a client sends; it is never relayed. See `docs/GAMEMODES.md`. |
+| `JPMK` | H→all | MARK (proto 23), sent only in a timer mode (Fox N Hounds, Car Bomb Tag): the phase (waiting / live / ended), the marked player, the winner, the minutes, a change sequence, the shared clock, and each player's own clock in deciseconds (`MP_MARK` + `MP_MARK_ENTRY`, `mp_mark.c`). Only the host or the dedicated server writes it: after a WELCOME, at START, on every change, and every 30 frames while live (120 otherwise). Clients only report contacts (`JPHI`); a host drops a client's `JPMK`, and it is never relayed. See `docs/GAMEMODES.md`. |
 | `JPCC` | client -> host | the car this player picked in the car select. Sent when the pick becomes known (at launch), because the `JPHL` hello goes out at CONNECT time, long before the player has chosen. The host records it, republishes `JPRS`, and - in a match already running - builds the vehicle then rather than at hello. No car is built for a player until this arrives, so a joiner's vehicle never appears before they have picked it. |
 
 `JPSS` was reserved here for a standalone session/lobby broadcast. It is now **retired**:
@@ -436,14 +441,24 @@ colour") was missing *exactly* in multiplayer and present in single player. Both
 branches now splice it. A two-player split-screen match had the same hole.
 
 In single player the START press opens the engine pause, which freezes the
-simulation. In a network session that freezes only THIS machine while everyone else
-keeps driving, so the two states disagree the moment play resumes. mp therefore
-claims the press in a live match (the `JER_EVENT_PAUSE_MENU` hook, returning
-`JER_RESULT_STOP` -- the same mechanism the sandbox overlay uses), so the engine
-pause never opens and `pauseflag` is never set: the world keeps running.
+simulation. In a network session that would freeze only THIS machine while everyone
+else keeps driving, so the two states would disagree the moment play resumes.
 
-The press toggles mp's own non-freezing player list instead: a small status panel
-down the left, one line per player.
+mp does **not** claim START for this (it used to; an earlier version of this section
+still said so). In a live match the `JER_EVENT_PAUSE_MENU` hook (`MpOnPauseMenu`,
+mp.c) returns `JER_RESULT_CONTINUE` and lets the ENGINE'S pause menu open, so the
+player gets the menu they expect, with the JERICHO Addons tree in it. It only
+records `gMpPauseOpened = 1`. The world keeps running because `MpOnDrawOverlay`,
+which fires on every drawn frame including while paused, calls the exported
+`StepSim()` itself while `gMp.running && pauseflag != 0`, and undoes the engine's
+audio pause once on the way in (`UnPauseSound`). It does not call the lockstep again:
+`StepSim` fires `JER_EVENT_PRE_SIM`, which runs it, and a second call advanced the
+pausing machine two frames per frame. START is still claimed in exactly one case:
+while the chat prompt is open, where START is the player's RETURN.
+
+On top of that menu, and only on the engine's PAUSE screen (`gMpPauseOpened &&
+gDrawPauseMenus`, not game over, mission complete or a pad error), mp draws its
+non-freezing player list: a small status panel down the left, one line per player.
 
 **It is drawn at HALF SIZE, and that is what makes one line per player possible.**
 At the default 0.275 only about 33 characters fit across the 320-px screen, which is

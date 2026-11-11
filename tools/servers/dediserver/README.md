@@ -24,7 +24,7 @@ supervisor (or a test) can pipe commands in.
 
 | command | what it does |
 | --- | --- |
-| `status` | name, session port, city and multiplayer map, gamemode, rules (readable), players, uptime, beacon, master |
+| `status` | name, session port, city and multiplayer map, gamemode, round, rules (readable), players, uptime, beacon, master |
 | `list` | connected players: id, name, address, how long connected |
 | `say <text>` | one line into every player's console, prefixed `SERVER:` |
 | `kick <id> [reason]` | drop a player — the protocol's own kick message; with a reason they see "Kicked by admin: <reason>" (cut to 63 bytes) and chat is told |
@@ -42,7 +42,9 @@ supervisor (or a test) can pipe commands in.
 --city N             GameLevel the clients should load (0..3)
 --arena N            which of that city's two multiplayer maps (0 or 1; the game's
                      -mp 0 / -mp 1). Default 0
---gamemode N
+--gamemode N         the session's game mode id (default 0 = TAKE A RIDE; 1 = FOX N
+                     HOUNDS, 2 = CAR BOMB TAG; see "gamemode" below)
+--mode-time N        Fox N Hounds / Car Bomb Tag time in minutes, 1..5 (default 3)
 --max-players N      slots 1..N-1 are given to clients (0 belongs to the server)
 --beacon / --no-beacon
 --beacon-ms N        beacon cadence (default 1000)
@@ -95,7 +97,15 @@ existing file). Updates and `git pull` therefore leave your settings alone.
   "arena": 0,               // which of the city's two multiplayer maps (0/1;
                             // the game's -mp 0 / -mp 1). The server hosts the
                             // multiplayer map, never the full single-player city
-  "gamemode": 0,
+  "gamemode": 0,            // the game mode id, MP_GAMEMODE_* (mp_proto.h). 0 =
+                            // TAKE A RIDE, 1 = FOX N HOUNDS, 2 = CAR BOMB TAG.
+                            // Optional: a file without it runs mode 0. Sent in the
+                            // welcome, the start, the beacon and the master advert;
+                            // see ../../../docs/GAMEMODES.md
+  // "mode_time": 3,        // OPTIONAL, not in the defaults: modes 1 and 2's time
+                            // in minutes, clamped 1..5; missing = 3. The server
+                            // referees them itself (tags from the carstates it
+                            // keeps) and sends JPMK; never written into your file
   "max_players": 16,        // 16 is the protocol cap (MP_MAX_PLAYERS); slot 0 is the server
   "motd": "Welcome to JERICHO - drive safe, mind the traffic.",
                             // said to each joiner as a SERVER chat line. One line only:
@@ -172,6 +182,19 @@ before deploying it publicly.
 Keys: `"vote"` (`false` turns `!vote` off), `"vote_duration"` (seconds, 30),
 `"vote_threshold"` (fraction that must be exceeded, 0.5), `"vote_cooldown"` (60).
 
+### Map rotation
+
+`"rounds_per_map"` (default `0`, off): after that many rounds end on one map,
+the server announces the next stop, waits 4 s, switches and reconnects everyone
+(the same rejoin as a vote). `"rotation"` is the ordered list of stops, each
+`"chicago mp 0"`, `"havana mp 1"`, `"vegas city"`, or
+`{"city": 1, "map_mode": "mp", "arena": 0, "area": -1}`. Without it the order is
+every city's two multiplayer maps, city by city. `area` is reserved for stops
+inside one map (arenas within the big city map) and must be `-1` for now. A
+rotation step is never saved: `dediserver.json` is not rewritten, and neither key
+is added to it (both default in code). A vote resets the round count. The
+listen host's mp.ini `rounds_per_map` follows the same default order.
+
 Session settings in `dediserver.json`: `"city"` (`0`-`3`) and `"arena"` (`0`/`1`,
 the city's two multiplayer maps), `"map_mode"` (`"city"` or `"mp"`), `"time_of_day"` (`dawn`, `day`, `dusk`, `night`)
 and `"weather"` (`clear`, `rain`, `wet`), or `--city` / `--arena` /
@@ -213,6 +236,10 @@ not delete yours (keep your own names; `example_hello.py` is overwritten).
 "plugins_disabled": ["example"], // ... minus these
 "plugins_dir": "plugins"
 ```
+
+Built-ins that are off by default: `modes` (the game-mode skeleton: logs the
+session's `gamemode` and adds a read-only `!mode`; it changes nothing yet -- see
+`docs/GAMEMODES.md`). Name it in `"plugins"` to load it.
 
 `"plugins": ["commands", "admin", "mine"]` loads exactly those, in that order. A
 plugin that fails to import or raises is logged and disabled; the server keeps
@@ -351,6 +378,15 @@ A client that **never** appears has a transport problem (firewall, wrong address
 A client that joins and then leaves on its own has a client-side problem. That
 distinction is the whole point of logging joins and leaves.
 
+## The round state
+
+The server referees the round (`dedi/roundstate.py`, the Python twin of the game's
+`mp_round.c`). It is a match in progress from the moment it starts, so round 1 is
+live from then. Each joiner gets the `JPRD` snapshot right after its WELCOME and
+START, everyone gets it when a player joins or leaves, and it rides the roster's
+2-second cadence. For Take a Ride every player is playing, on no team, with score 0,
+and the round never ends. `status` shows the round. No config key controls it.
+
 ## Liveness
 
 The server answers a client's `PING` with a `PONG` echoing the tick, and pings on
@@ -366,4 +402,25 @@ master restart, and unregister-on-shutdown — no game, no assets:
 
 ```sh
 python JERICHO/MODS/mp/tools/servers/rigs/test_e2e.py
+```
+
+`test_modes.py` covers the game-mode scaffold: `gamemode` defaults to 0 (TAKE A
+RIDE), a config without the key still loads, no mode keys were added to the
+defaults, and the `modes` plugin stays off unless named:
+
+```sh
+python JERICHO/MODS/mp/tools/servers/dediserver/test_modes.py
+```
+
+`test_round.py` covers the round state (`JPRD`, proto 22; the wire is proto 24)
+over a real socket: a joiner gets ROSTER, WELCOME, START and then round 1 live
+with every player playing, no team and score 0; joins and leaves reach everyone
+at once; a client's own `JPRD` is never forwarded; proto-21 and proto-22 HELLOs
+are refused. `test_marks.py` covers Fox N Hounds and Car Bomb Tag (`JPMK`): two
+players start a round, carstate contacts tag, a client's `JPMK` is never
+forwarded, the clocks win and lose, and `mode_time` is optional:
+
+```sh
+python JERICHO/MODS/mp/tools/servers/dediserver/test_round.py
+python JERICHO/MODS/mp/tools/servers/dediserver/test_marks.py
 ```

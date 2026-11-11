@@ -1,0 +1,281 @@
+#include "jer_carglow.h"
+
+#include "driver2.h"
+#include "cars.h"
+#include "cosmetic.h"	/* carCos->cog: DrawCarObject places the body here */
+#include "main.h"	/* ActiveCheats.cheat13: mini cars, same cog scale as DrawCarObject */
+#include "camera.h"
+#include "draw.h"
+#include "system.h"
+#include "debris.h"	/* smoke_texture: the stock explosion material */
+#include "glaunch.h"	/* NoPlayerControl */
+#include "ASM/rndrasm.h"
+#include "dr2math.h"
+#include "jericho.h"
+
+/* ~1.12x about the body centre, fixed (the pulse is the alpha). DrawCarObject (cars.c:3964-3983) does not
+ * draw verts about the model origin: it sets trans to pos, transforms
+ * carCos->cog, and uses that as the model trans, so a vertex v appears at
+ * pos + R*(v + cog). The car position / visual centre is model point -cog.
+ * Scaling about 0 with trans=pos left the shell growing from the mesh
+ * origin, off the body. */
+#define JER_CARGLOW_SCALE	4588
+
+static CAR_DATA* gGlowCar;
+static int gGlowR, gGlowG, gGlowB;
+static SVECTOR gGlowVerts[MAX_DENTING_VERTS];
+
+void jer_carglow_set(void* car, int r, int g, int b)
+{
+	CAR_DATA* cp = (CAR_DATA*)car;
+
+	if (cp == NULL || cp->id < 0 || cp->id >= MAX_CARS)
+	{
+		gGlowCar = NULL;
+		return;
+	}
+
+	gGlowCar = cp;
+	gGlowR = r < 0 ? 0 : (r > 255 ? 255 : r);
+	gGlowG = g < 0 ? 0 : (g > 255 ? 255 : g);
+	gGlowB = b < 0 ? 0 : (b > 255 ? 255 : b);
+}
+
+void jer_carglow_clear(void)
+{
+	gGlowCar = NULL;
+}
+
+/* Scale the LOW-LOD template verts about model-space -cog, the point
+ * DrawCarObject places on the car position. Then the same trans path
+ * (pos, then + R*cog) keeps the shell centred on the body.
+ *
+ * The verts must be NewLowCarModel.vlist, not gTempCarVertDump.
+ * DrawCar (cars.c:4400-4433) remaps only the HI-LOD NewCarModel.vlist
+ * (and both nlists) to the dent dump; the low model keeps its own vlist
+ * and plotNewCarModel draws pFT3/pGT3/pB3 from that vlist
+ * (cars.c:2678-2703). The dump is the hi-LOD dented mesh. Feeding it to
+ * low-LOD poly indices is the mangled holo: the triangles name the
+ * wrong points. */
+static int JerCarGlowCopyVerts(CAR_MODEL* mdl, int model, int scale, SVECTOR cog)
+{
+	int i, n;
+	const SVECTOR* src;
+	int cx, cy, cz;
+	MODEL* low;
+
+	if (mdl == NULL || mdl->vlist == NULL)
+		return 0;
+
+	src = mdl->vlist;
+	n = 0;
+	if (model >= 0 && model < MAX_CAR_RESIDENT_MODELS)
+	{
+		low = gCarLowModelPtr[model];
+		if (low != NULL)
+			n = low->num_vertices;
+	}
+
+	if (n <= 0)
+		return 0;
+
+	if (n > MAX_DENTING_VERTS)
+		n = MAX_DENTING_VERTS;
+
+	cx = -cog.vx;
+	cy = -cog.vy;
+	cz = -cog.vz;
+
+	for (i = 0; i < n; i++)
+	{
+		gGlowVerts[i].vx = (short)(cx + (((src[i].vx - cx) * scale) >> 12));
+		gGlowVerts[i].vy = (short)(cy + (((src[i].vy - cy) * scale) >> 12));
+		gGlowVerts[i].vz = (short)(cz + (((src[i].vz - cz) * scale) >> 12));
+		gGlowVerts[i].pad = src[i].pad;
+	}
+
+	return n;
+}
+
+static void JerCarGlowTris(const CAR_POLY* src, int num, int nverts, u_int rgb)
+{
+	POLY_FT3* prim;
+	int Z, otz;
+	int indices;
+	const SVECTOR *v0, *v1, *v2;
+	const TEXTURE_DETAILS* tex;
+	u_int u0, u1, u2;
+
+	if (src == NULL || num <= 0 || current == NULL || current->primptr == NULL)
+		return;
+
+	/* The material: the level's SMOKE texture (InitDebrisNames, debris.c). A level
+	 * whose texture names have no SMOKE leaves it at GetTextureDetails' miss value
+	 * (tpage 0, clut 0 -- texture.c), which draws whatever sits at VRAM 0,0; use the
+	 * LIGHT halo then, and draw nothing when neither is there. */
+	tex = &smoke_texture;
+
+	if (tex->tpageid == 0 && tex->clutid == 0)
+		tex = &light_texture;
+
+	if (tex->tpageid == 0 && tex->clutid == 0)
+	{
+		static int saidNoTexture;
+
+		if (!saidNoTexture)
+			printInfo("[jer_carglow] no SMOKE or LIGHT texture in this level - no glow\n");
+		saidNoTexture = 1;
+		return;
+	}
+
+	/* one pair of UVs, animated a little so the material loops */
+	u0 = ((u_int)tex->clutid << 16) |
+		((u_int)(u_char)(tex->coords.u0 + (CameraCnt & 15))) |
+		((u_int)(u_char)(tex->coords.v0 + ((CameraCnt * 2) & 15)) << 8);
+	u1 = ((u_int)(tex->tpageid | 0x20) << 16) |
+		((u_int)(u_char)(tex->coords.u1 + (CameraCnt & 15))) |
+		((u_int)(u_char)(tex->coords.v1 + ((CameraCnt * 2) & 15)) << 8);
+	u2 = ((u_int)(u_char)(tex->coords.u2 + (CameraCnt & 15))) |
+		((u_int)(u_char)(tex->coords.v2 + ((CameraCnt * 2) & 15)) << 8);
+
+	while (num > 0)
+	{
+		indices = src->vindices;
+		v0 = gGlowVerts + (indices & 0xff);
+		v1 = gGlowVerts + ((indices >> 8) & 0xff);
+		v2 = gGlowVerts + ((indices >> 16) & 0xff);
+
+		/* stay inside the copied low-LOD verts */
+		if ((indices & 0xff) >= nverts ||
+		    ((indices >> 8) & 0xff) >= nverts ||
+		    ((indices >> 16) & 0xff) >= nverts)
+		{
+			num--;
+			src++;
+			continue;
+		}
+
+		if (current->primptr + sizeof(POLY_FT3) >= current->primtab + PRIMTAB_SIZE)
+			return;
+
+		prim = (POLY_FT3*)current->primptr;
+
+		gte_ldv3(v0, v1, v2);
+		gte_rtpt();
+		gte_stsxy3(&prim->x0, &prim->x1, &prim->x2);
+		gte_avsz3();
+		gte_stotz(&Z);
+
+		otz = Z >> 1;
+		if (otz > 0 && otz < OTSIZE)
+		{
+			*(u_int*)&prim->r0 = rgb;
+			*(u_int*)&prim->u0 = u0;
+			*(u_int*)&prim->u1 = u1;
+			*(u_short*)&prim->u2 = (u_short)u2;
+			setPolyFT3(prim);
+			setSemiTrans(prim, 1);
+			addPrim(current->ot + otz, prim);
+			current->primptr += sizeof(POLY_FT3);
+		}
+
+		num--;
+		src++;
+	}
+}
+
+int jer_carglow_on_draw_world(void* userdata, void* args)
+{
+	CAR_DATA* cp = gGlowCar;
+	VECTOR pos;
+	MATRIX workmatrix;
+	CAR_MODEL* mdl;
+	int model, wave, scale, pulse, r, g, b, nverts;
+	u_int rgb;
+
+	(void)userdata;
+	(void)args;
+
+	if (cp == NULL || NoPlayerControl || current == NULL)
+		return JER_RESULT_CONTINUE;
+
+	if (cp->id < 0 || cp->id >= MAX_CARS || !JerCarSlotDrawable(cp->id))
+		return JER_RESULT_CONTINUE;
+
+	model = cp->ap.model;
+	if (model < 0 || model >= MAX_CAR_RESIDENT_MODELS)
+		return JER_RESULT_CONTINUE;
+
+	mdl = &NewLowCarModel[model];
+	if ((mdl->numFT3 <= 0 && mdl->numGT3 <= 0) ||
+	    (mdl->pFT3 == NULL && mdl->pGT3 == NULL))
+		return JER_RESULT_CONTINUE;
+
+	pos.vx = cp->hd.where.t[0];
+	pos.vz = cp->hd.where.t[2];
+	pos.vy = -cp->hd.where.t[1];
+
+	if (FrustrumCheck(&pos, 800) == -1)
+		return JER_RESULT_CONTINUE;
+
+	pos.vx -= camera_position.vx;
+	pos.vy -= camera_position.vy;
+	pos.vz -= camera_position.vz;
+	Apply_Inv_CameraMatrix(&pos);
+	MulMatrix0(&inv_camera_matrix, &cp->hd.drawCarMat, &workmatrix);
+
+	if (cp->ap.carCos == NULL)
+		return JER_RESULT_CONTINUE;
+
+	{
+		VECTOR modelLocation;
+		SVECTOR cog = cp->ap.carCos->cog;
+
+		/* same mini-car adjustment DrawCarObject applies to cog (cars.c:3966-3971) */
+		if (ActiveCheats.cheat13 != 0)
+		{
+			cog.vx <<= 1;
+			cog.vy <<= 1;
+			cog.vz <<= 1;
+		}
+
+		/* DrawCarObject cars.c:3973-3983 */
+		gte_SetRotMatrix(&workmatrix);
+		gte_SetTransVector(&pos);
+		gte_ldv0(&cog);
+		gte_rtv0tr();
+		gte_stlvnl(&modelLocation);
+		gte_SetTransVector(&modelLocation);
+
+		/* A FIXED SIZE, A PULSING ALPHA: the shell stays at the middle of the old
+		 * size pulse (4388..4788), just bigger than the car, and the pulse is in
+		 * its brightness -- the additive blend (semiTrans 1) makes that its alpha. */
+		wave = RSIN(CameraCnt * 96);
+		scale = JER_CARGLOW_SCALE;
+
+		pulse = 140 + ((wave * 90) >> 12);	/* 50..230 */
+		if (pulse < 40)
+			pulse = 40;
+		else if (pulse > 255)
+			pulse = 255;
+
+		r = (gGlowR * pulse) / 255;
+		g = (gGlowG * pulse) / 255;
+		b = (gGlowB * pulse) / 255;
+		/* packed B<<16 | G<<8 | R, same as DrawExplosion */
+		rgb = ((u_int)b << 16) | ((u_int)g << 8) | (u_int)r;
+
+		nverts = JerCarGlowCopyVerts(mdl, model, scale, cog);
+		if (!nverts)
+			return JER_RESULT_CONTINUE;
+
+		/* same lists plotNewCarModel walks, in the same vindices format
+		 * (plotCarPolyFT3/GT3/B3: three bytes in vindices). pB3 is the
+		 * wheel-arc / underbody fill, so the silhouette is a whole car. */
+		JerCarGlowTris(mdl->pFT3, mdl->numFT3, nverts, rgb);
+		JerCarGlowTris(mdl->pGT3, mdl->numGT3, nverts, rgb);
+		JerCarGlowTris(mdl->pB3, mdl->numB3, nverts, rgb);
+	}
+
+	return JER_RESULT_CONTINUE;
+}

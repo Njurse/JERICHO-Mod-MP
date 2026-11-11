@@ -21,6 +21,9 @@
 #define MP_H
 
 #include "mp_proto.h"
+#include "mp_mode.h"	/* the game-mode registry and its decision points */
+#include "mp_round.h"	/* the round lifecycle and per-player round state (MP_TAG_ROUND) */
+#include "mp_mark.h"	/* the Fox N Hounds / Car Bomb Tag referee (MP_TAG_MARK) */
 
 #ifdef __cplusplus
 extern "C" {
@@ -50,6 +53,13 @@ typedef struct MP_CONFIG
 	 * applied to anyone else's car.
 	 * 1 = multiply the local player's engine thrust by 10 (JER_EVENT_CAR_ENGINE). */
 	int  superTurbo;
+
+	/* JMP Options and the pause Multiplayer page, this machine only (0.23.3).
+	 * 1 = a player joining or leaving the match plays a frontend menu sample
+	 * (join: JER_MENU_SFX_ACCEPT, leave: JER_MENU_SFX_BACK), except for the
+	 * players coming back after a server city change. [mp] join_leave_sounds,
+	 * default 1. */
+	int  joinLeaveSounds;
 
 	/* SESSION RULES -- the host's per-session gameplay settings, chosen in the
 	 * Host Game menu and applied on EVERY machine (they ride the wire: see
@@ -195,6 +205,8 @@ typedef struct MP_STATE
 
 	/* agreed lobby config */
 	int gamemode;			/* MP_GAMEMODE_* */
+	int modeMinutes;		/* host: a timer mode's time, MP_MARK_MINUTES_MIN..MAX
+					 * (Fox N Hounds / Car Bomb Tag); per session, not saved */
 	int city;			/* GameLevel 0..3 */
 	int subGame;			/* multiplayer sub-level (gSubGameNumber) */
 	int timeOfDay;			/* TIME_* (or -1 = mission default) */
@@ -282,6 +294,23 @@ void MpCarReadinessTick(void);
  * assigned a player who has not picked? carhacks must not put an assignment into the
  * session's import set: it takes a resident slot nobody drives. */
 int MpLocalCarChosen(void);
+
+/* JERICHO round hold (the timer modes with a countdown): 1 while the referee's 3-2-1
+ * (MP_MARK_PHASE_COUNTDOWN) or the result screen (MP_MARK_PHASE_ENDED) runs -- the
+ * local car is stopped the engine's way and the on-foot pad held (mp.c MpOnNetInput
+ * / MpOnPedInput), released on GO. v24: also 1 while the local player is benched in
+ * a live round (a late joiner WAITING, or OUT with no respawn) and spectates. 0 in
+ * the WAITING lobby, in Take a Ride and outside a match. (mp 0.23.4; was
+ * MpRoundStartHoldsCar, COUNTDOWN only) */
+int MpRoundHoldsCar(void);
+
+/* Cops n Robbers: the getaway driver's id while a round is live, else -1 (the
+ * map flashes their blip red/blue, mp_map.c). */
+int MpMarkChaseGetaway(void);
+
+/* Persistent "You're the fox!" / "<name> is the fox!" centre line, drawn
+ * from DRAW_OVERLAY while Fox N Hounds is live. */
+void MpMarkDrawOverlay(void);
 MP_PLAYER* MpAddPlayer(int id, const char* name, int isLocal);
 void       MpRemovePlayer(int id);
 void       MpCleanupLeaverWorld(MP_PLAYER* p);	/* a leaver's stand-in ped + abandoned car */
@@ -640,7 +669,24 @@ int MpChangeCar(int city, int model);
 void MpRejoinTick(void);
 void MpPlaceSelfTick(void);	/* live join: move our car off the level start */
 int  MpRejoinActive(void);
+
+/* Listen-host map switch (a passed !vote or the rounds_per_map rotation):
+ * mp_session.c. mp.c's frame hook drives it; while active the "host left the
+ * match" teardown must not run. */
+#define MP_RELAUNCH_NONE	0
+#define MP_RELAUNCH_BUSY	1
+#define MP_RELAUNCH_END_LEVEL	2
+int  MpRelaunchActive(void);
+int  MpRelaunchTick(int inFrontend);
 void MpRejoinCancel(const char* why);
+
+/* JOIN / LEAVE SOUNDS (0.23.3, mp_session.c). mp_players.c reports every remote
+ * row that is added new (joined 1) or removed (joined 0); the tick plays a
+ * pending leave. Quiet unless gMp.config.joinLeaveSounds, outside a running
+ * match, and for the players coming back after a server city change. */
+void MpJoinLeaveNote(int joined, const char* name);
+void MpJoinLeaveTick(void);
+void MpJoinLeaveLeftLine(const char* name);	/* "<name> left": once, delayed, none for a rejoin kick */
 
 /* A city's display name (a 0..3 index, or -1 for the session's own city). */
 const char* MpCarCityName(int city);
@@ -649,6 +695,17 @@ const char* MpCarCityName(int city);
  * rules such as cops never rename it. Paired with the tools' mode_name() in mp_test.py. */
 void MpFormatPlayerId(const unsigned char* id, char* out);	/* dashed UUID, out >= 37 chars */
 const char* MpModeName(int gamemode);	/* MP_GAMEMODE_* -> display name */
+
+/* The HOST's lobby choice of game mode (the mp.host page's Game Mode row). Only a
+ * selectable mode is taken and only before the match runs -- a running session keeps
+ * the mode it was launched with. Returns the mode now in force for the session. */
+int MpSetSessionGamemode(int gamemode);
+
+/* The HOST's lobby choice of a timer mode's time (the mp.host page's Time row), in
+ * minutes, clamped to MP_MARK_MINUTES_MIN..MAX. Like the mode: only before the match
+ * runs, never saved. Returns the minutes now in force. */
+int MpSetSessionModeMinutes(int minutes);
+int MpSessionModeMinutes(void);		/* the minutes in force (default MP_MARK_MINUTES_DEFAULT) */
 
 /* The city name for a row of SOMEONE ELSE'S server: the engine's name, or "-"
  * when the engine has no row for that city. Not MpCarCityName, which says "the
@@ -682,6 +739,10 @@ int MpCarQuerySlots(int city, int* slots, int* models, int max);
  * the FRONTEND car screen and a session started with -host/-join never opens it. So polling
  * it in game is what made the picker offer four cars a city. */
 int MpCarListForCity(int city, int* slots, int* models, int max);
+/* Role cars (jer_carquery.h JER_CARQ_ROLES / JER_CARQ_ROLEPICK): the join car
+ * select asks how many cars the mode wants and reports each pick (mp_session.c). */
+int MpOnCarqRoles(void* userdata, void* args);
+int MpOnCarqRolePick(void* userdata, void* args);
 
 /* The multiplayer meaning of Restart: put this player back at the level's own
  * start, in their car, repaired, with no felony, and KEEP the session (the

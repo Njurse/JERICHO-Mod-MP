@@ -22,6 +22,10 @@
 #include "jer_colour.h"		/* a player's suit colour is a canonical JER_COLOUR */
 #include "jer_ped_palette.h"	/* a player's own Tanner in their own colour */
 #include "jer_npc.h"		/* JerNpc: the stand-in we drew for a remote player */
+#include "jer_carexplode.h"	/* request bank 54 at entry; wreck is driven from the session */
+#include "jer_carglow.h"	/* JER_EVENT_DRAW_WORLD: the fox / bomb-car glow */
+#include "jer_carquery.h"	/* JER_CARQ_ROLES / _ROLEPICK: mp answers the join car select */
+#include "jer_sound.h"		/* jer_sound_request_menu_bank: the join/leave sounds */
 
 /* The chat key needs PsyX's debug-key hook, but NOT its header: PsyX_public.h and
  * SDL_scancode.h both pull in math/SDL defines that collide with the game's in
@@ -89,7 +93,7 @@ JERICHO_CONTEXT* gMpCtx;
  * Single Player / Multiplayer answer writes them through MpSetMapShape, and the
  * session publishes them to clients, so they are read/written here too. */
 extern int gBootMpLevel;	/* 1 = a multiplayer map, 0 = the full city */
-extern int gBootMpArena;	/* which multiplayer map (0/1) */
+extern int gBootMpArena;	/* which multiplayer map (0..MP_ARENA_MAX) */
 
 /* The engine's frontend screen table, to answer "is the player back on the main
  * menu" from the frame hook without a dedicated getter. Screen 0 is the main
@@ -304,7 +308,7 @@ static int MpOnMpFrontend(void* userdata, void* args)
 			 * answer already set the shape to the full city (MpSetMapShape(0,0)),
 			 * for which this is a no-op. */
 			if (gBootMpLevel)
-				gBootMpArena = gSubGameNumber & 1;
+				gBootMpArena = gSubGameNumber & MP_SESSION_ARENA_MASK;
 
 			MpStartMatch();
 		}
@@ -1154,6 +1158,7 @@ static int MpOnFrame(void* userdata, void* args)
 	MpChatGrabKeyboard((gMp.chatOpen || MpUiManualEditing()) ? 1 : 0);
 	jer_input_block(gMp.chatOpen);	/* typing never drives the car, horn, camera or pause */
 	MpRejoinTick();		/* a server city change: rejoin, then restore our car */
+	MpJoinLeaveTick();	/* a pending leave sound */
 
 	/* Test lever: MP_TEST_CITYCONFIRM=<secs>[,<gameType>[,<role>]] fires the
 	 * take-a-ride CITY CONFIRM the way the frontend does (CutSceneCitySelectScreen
@@ -1456,9 +1461,21 @@ static int MpOnFrame(void* userdata, void* args)
 		jer_frontend_goto(0);
 	}
 
+	/* A listen-host map switch (MpRelaunchTick): leave the level, then START
+	 * again on the new map -- the session is NOT over, so none of the teardowns
+	 * below may see this as the host leaving. */
+	{
+		int rl = MpRelaunchTick(gInFrontend);
+
+		if (rl == MP_RELAUNCH_END_LEVEL && !gInFrontend)
+			EndGame(GAMEMODE_QUIT);
+		if (rl != MP_RELAUNCH_NONE)
+			gHostInWorld = 0;
+	}
+
 	/* The host quit the match: it is back in the frontend while the session
 	 * is still live, so tell the clients and tear everything down. */
-	if (MpHostLeftMatch())
+	if (!MpRelaunchActive() && MpHostLeftMatch())
 	{
 		if (gMpCtx != NULL)
 			gMpCtx->jer_log(gMpCtx, "[mp] host left the match - notifying clients\n");
@@ -1697,6 +1714,7 @@ static u_char MpInk(int v)
 #define MP_COL_RX		164
 #define MP_COL_TX		206
 #define MP_COL_LOSS		250
+#define MP_COL_PTS		280	/* a timer mode's points (MpRoundPlayerScore) */
 
 #define MP_PANEL_Y_TITLE	6
 #define MP_PANEL_Y_IDENT	15
@@ -1768,6 +1786,9 @@ static void MpDrawPlayerList(void)
 	MpPanelText("RX",     MP_COL_RX,   MP_PANEL_Y_HEAD);
 	MpPanelText("TX",     MP_COL_TX,   MP_PANEL_Y_HEAD);
 	MpPanelText("LOSS",   MP_COL_LOSS, MP_PANEL_Y_HEAD);
+
+	if (MpModeUsesTimer(gMp.gamemode))
+		MpPanelText("PTS", MP_COL_PTS, MP_PANEL_Y_HEAD);
 
 	for (id = 0; id < MP_MAX_PLAYERS; id++)
 	{
@@ -1883,6 +1904,16 @@ static void MpDrawPlayerList(void)
 			SetTextColour(MP_INK(MP_PANEL_LABEL_R, MP_PANEL_LABEL_G, MP_PANEL_LABEL_B));
 
 		MpPanelText(loss, MP_COL_LOSS, y);
+
+		/* the mode's points, from the round state (the host's JPRD) */
+		if (MpModeUsesTimer(gMp.gamemode))
+		{
+			char pts[16];
+
+			snprintf(pts, sizeof(pts), "%d", MpRoundPlayerScore(p->id));
+			SetTextColour(MP_INK(MP_PANEL_LABEL_R, MP_PANEL_LABEL_G, MP_PANEL_LABEL_B));
+			MpPanelText(pts, MP_COL_PTS, y);
+		}
 
 		/* so the list can be checked without eyes on the screen */
 		if (MpDebugOn() && gMpCtx != NULL)
@@ -2149,12 +2180,11 @@ static int MpOnDrawOverlay(void* userdata, void* args)
 }
 
 /* JERICHO-HOOK: the engine pause freezes the simulation -- which in a network
- * session freezes only THIS machine. Everyone else keeps driving, so the moment
- * play resumes the two disagree. In a live match the START press must therefore
- * not open it: claim the press (JER_RESULT_STOP, so the engine pause never
- * opens and pauseflag is never set) and toggle our own non-freezing player list.
- * A press while a session is only being set up, and stock single-player, keep
- * the normal pause. */
+ * session would freeze only THIS machine while everyone else keeps driving. In a
+ * live match the engine pause still OPENS (this returns JER_RESULT_CONTINUE): the
+ * world keeps running because MpOnDrawOverlay steps it while pauseflag is set, and
+ * the player list rides on the engine's menu. START is claimed only while the chat
+ * prompt is up. See docs/ARCHITECTURE.md section 8. */
 /* ------------------------------------------------------------------ */
 /* The MP pause menu.                                                  */
 /*                                                                     */
@@ -2189,7 +2219,7 @@ static int MpMenuWriteDiag(void* userdata, int direction)
 static int MpOnPedDraw(void* userdata, void* args)
 {
 	JER_ARGS_PED_DRAW* a = (JER_ARGS_PED_DRAW*)args;
-	int i, on = 0, r = 0, g = 0, b = 0;
+	int i, on = 0, r = 0, g = 0, b = 0, who = -1;
 
 	(void)userdata;
 
@@ -2210,6 +2240,7 @@ static int MpOnPedDraw(void* userdata, void* args)
 		r = gMp.config.colorR;
 		g = gMp.config.colorG;
 		b = gMp.config.colorB;
+		who = gMp.localPlayerId;
 	}
 	else
 	{
@@ -2226,10 +2257,15 @@ static int MpOnPedDraw(void* userdata, void* args)
 				r = p->colorR;
 				g = p->colorG;
 				b = p->colorB;
+				who = p->id;
 				break;
 			}
 		}
 	}
+
+	/* GAME-MODE DECISION POINT: a team colour would replace the suit colour here.
+	 * Take a Ride has no teams, so on/r/g/b come back exactly as they went in. */
+	on = MpModePlayerColour(gMp.gamemode, who, on, r, g, b, &r, &g, &b);
 
 	if (!on)
 	{
@@ -2922,6 +2958,17 @@ static int MpOnNetInput(void* userdata, void* args)
 				in->pad = 0;
 				in->handled = 1;
 			}
+			else if (MpRoundHoldsCar())
+			{
+				/* ...and the ROUND holds everyone still through the 3-2-1 and the
+				 * result screen (the timer modes; never Take a Ride, never the
+				 * WAITING lobby). Not a zeroed pad, which lets a moving car roll:
+				 * the engine's own stop (handling.c's "can't drive" lock) --
+				 * the handbrake, or the brake while the wheels still turn fast.
+				 * Bot included; GO (the referee's LIVE) gives the pad back. */
+				in->pad = (car_data[carId].hd.wheel_speed > 36864) ? CAR_PAD_BRAKE : CAR_PAD_HANDBRAKE;
+				in->handled = 1;
+			}
 			else if (MpBotEnabled())
 			{
 				if ((gMp.frame % 60) == 0 && gMpCtx != NULL)
@@ -3044,6 +3091,9 @@ static int MpOnFrontendEntered(void* userdata, void* args)
 	if (gMp.role == MP_ROLE_NONE || !gMp.running)
 		return JER_RESULT_CONTINUE;
 
+	if (MpRelaunchActive())
+		return JER_RESULT_CONTINUE;	/* a listen-host map switch: the session goes on */
+
 	if (gMpCtx != NULL)
 		gMpCtx->jer_log(gMpCtx, "[mp] back in the frontend from a match - leaving the session (role %d)\n",
 			(int)gMp.role);
@@ -3069,9 +3119,11 @@ static int MpOnPedInput(void* userdata, void* args)
 	/* The pause menu owns the pad while it is up: hold the ped still too, so
 	 * menu navigation never walks the player. The chat prompt owns the KEYBOARD the
 	 * same way -- the ped pad comes from the same raw keyboard state -- so typing a
-	 * line must not walk us either. (No `handled` field on this hook, so zeroing
+	 * line must not walk us either, and the round hold (the 3-2-1 and the result
+	 * screen, MpRoundHoldsCar) keeps us standing.
+	 * (No `handled` field on this hook, so zeroing
 	 * the bits is the swallow.) */
-	if ((pauseflag != 0 || gMp.chatOpen) && (PLAYER*)in->player == &player[0])
+	if ((pauseflag != 0 || gMp.chatOpen || MpRoundHoldsCar()) && (PLAYER*)in->player == &player[0])
 	{
 		in->pad = 0;
 		return JER_RESULT_CONTINUE;
@@ -3550,6 +3602,28 @@ static int MpOptToggleSuperTurbo(void* ud, int dir)
 	return JER_PAUSE_QUIT_NONE;
 }
 
+/* Same field the JMP Options row writes (AdjJoinLeaveSounds in mp_ui.c). */
+static void MpOptLabelJoinLeaveSounds(void* ud, char* out, int max)
+{
+	(void)ud;
+	snprintf(out, max, "Join/leave sounds: < %s >", gMp.config.joinLeaveSounds ? "On" : "Off");
+}
+
+static int MpOptToggleJoinLeaveSounds(void* ud, int dir)
+{
+	(void)ud;
+	(void)dir;
+
+	gMp.config.joinLeaveSounds = gMp.config.joinLeaveSounds ? 0 : 1;
+	MpConfigSave();
+
+	if (gMpCtx != NULL)
+		gMpCtx->jer_log(gMpCtx, "[mp] player option: join/leave sounds %s\n",
+			gMp.config.joinLeaveSounds ? "On" : "Off");
+
+	return JER_PAUSE_QUIT_NONE;
+}
+
 static int MpOptRepair(void* ud, int dir)
 {
 	(void)ud;
@@ -3606,6 +3680,7 @@ static const JER_PAUSE_MENU_ITEM mpPauseItems[] =
 	{ NULL, MpOptLabelInvincible, MpOptToggleInvincible, NULL, NULL, 0 },
 	{ NULL, MpOptLabelImmune, MpOptToggleImmune, NULL, NULL, 0 },
 	{ NULL, MpOptLabelSuperTurbo, MpOptToggleSuperTurbo, NULL, NULL, 1 },
+	{ NULL, MpOptLabelJoinLeaveSounds, MpOptToggleJoinLeaveSounds, NULL, NULL, 1 },
 	{ "Kick player", NULL, NULL, NULL, &mpKickMenu, 0 },
 	{ "Reload all cars", NULL, MpMenuReloadCars, NULL, NULL, 0 },
 	{ "Write diagnostics now", NULL, MpMenuWriteDiag, NULL, NULL, 0 },
@@ -3680,7 +3755,23 @@ JER_MODULE_ENTRY(jer_module_mp_entry)(JERICHO_CONTEXT* ctx)
 	 * to be unattended needs a human to click OK. Same dump, no dialog. */
 	MpSuppressCrashDialogs();
 
-	ctx->jer_register_module(ctx, "mp", "Multiplayer", "0.1.0", "JERICHO",
+	/* The version is mod.toml's (0.24.0: MP_PROTO_VERSION 24, round lifecycle v2 --
+	 * end reasons, damage on the carstate row, arenas 0..3, admin bit, late joiners and
+	 * the out-of-round spectate, engine-style 3-2-1 and GO;
+	 * 0.23.4 was round hold, pre-round repair, one centre line,
+	 * the getaway's own damage (optional JPDM), Fox N Hounds digit timers, radio rotation;
+	 * 0.23.3 was respawn hold at round end/countdown, join/leave sounds;
+	 * 0.23.2 was role-car picks kept per connection, not saved;
+	 * 0.23.1 was role cars at join, imported police cars, remote cop cones;
+	 * 0.23.0 was Cops n Robbers, game mode 3, on proto 23;
+	 * 0.22.3 was local bomb-beep without doppler, halved beep pace;
+	 * 0.22.2 was countdown-start respawn and wreck-lock clear;
+	 * 0.22.1 was countdown beep, centred glow, framework pre-game;
+	 * 0.21.0 was the timer modes' round start; 0.20.0 came with MP_PROTO_VERSION 23).
+	 * The core lets the manifest win over this argument (jerCtxRegisterModule), so
+	 * this is only the fallback; it is kept equal to mod.toml rather than a stale
+	 * "0.1.0" so the two never disagree in a log. Bump both together. */
+	ctx->jer_register_module(ctx, "mp", "Multiplayer", "0.24.0", "JERICHO",
 		"LAN multiplayer: host/join, UDP discovery, JERICHO addon net bridge, "
 		"owner-authoritative car sync (each machine drives its own car and "
 		"broadcasts its state; peers adopt it verbatim), and in-match chat.",
@@ -3704,12 +3795,23 @@ JER_MODULE_ENTRY(jer_module_mp_entry)(JERICHO_CONTEXT* ctx)
 
 	MpUiInit();		/* register the native frontend menus */
 
+	/* Mission 23's tick and bang, appended to SFX before the car-import memtop.
+	 * Asked here so any later timer-mode session has the samples. */
+	jer_carexplode_request_banks();
+
+	/* The frontend menu samples (VOICES2.BLK lump 0, the four JER_MENU_SFX_*),
+	 * appended to SFX at every level load: the join/leave sounds play them. */
+	jer_sound_request_menu_bank();
+
 	ctx->jer_register_hook(ctx, JER_EVENT_BOOT, MpOnBoot, NULL, 0);
 	ctx->jer_register_hook(ctx, JER_EVENT_SHUTDOWN, MpOnShutdown, NULL, 0);
 	ctx->jer_register_hook(ctx, JER_EVENT_FRAME, MpOnFrame, NULL, 0);
 	ctx->jer_register_hook(ctx, JER_EVENT_DRAW_OVERLAY, MpUiDrawOverlay, NULL, 0);
 	ctx->jer_register_hook(ctx, JER_EVENT_DRAW_OVERLAY, MpOnDrawOverlay, NULL, 10);
+	ctx->jer_register_hook(ctx, JER_EVENT_DRAW_WORLD, jer_carglow_on_draw_world, NULL, 0);
 	ctx->jer_register_hook(ctx, JER_EVENT_CAR_DRAW_COLOR, MpOnCarDrawColor, NULL, 0);
+	ctx->jer_register_hook(ctx, JER_CARQ_ROLES, MpOnCarqRoles, NULL, 0);	/* role cars: the join car select asks */
+	ctx->jer_register_hook(ctx, JER_CARQ_ROLEPICK, MpOnCarqRolePick, NULL, 0);
 	/* Local Super Turbo. Runs for every car ProcessCarPad steps; the handler
 	 * itself ignores anything that is not this machine's seat. */
 	ctx->jer_register_hook(ctx, JER_EVENT_CAR_ENGINE, MpOnCarEngine, NULL, 0);

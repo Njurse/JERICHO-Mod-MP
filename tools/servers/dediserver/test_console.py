@@ -64,7 +64,7 @@ def main():
     check("status shows the session port", "TCP/1400" in st)
     check("status shows the city", "city:      2" in st)
     check("status shows the multiplayer map",
-          "arena:     0 (of the city's two multiplayer maps)" in st, st)
+          "arena:     0 (multiplayer map 0..3)" in st, st)
     check("status shows the player count", "players:   0/8" in st)
 
     # -- the map the server publishes: shape 1 (a multiplayer map) and its arena
@@ -85,12 +85,15 @@ def main():
     check("session spare: shape bit 0, rules in 1.., arena in bit 8",
           spare & 1 == 1 and (spare >> 1) & 0x7F == server.cfg["rules"] & 0x7F
           and (spare >> 8) & 1 == 1, hex(spare))
+    server.set_arena(3)
+    check("proto 24: arena 3 rides bits 8-9", (server.session_spare() >> 8) & 3 == 3,
+          hex(server.session_spare()))
     try:
-        server.set_arena(2)
+        server.set_arena(4)
         bad = False
     except ValueError:
         bad = True
-    check("set_arena refuses anything but 0/1", bad)
+    check("set_arena refuses anything outside 0..3", bad)
     server.set_arena(0)
 
     # -- list with nobody connected
@@ -201,6 +204,12 @@ def main():
     third = got(5, 1.0)
     check("the roster cadence also PINGs the client", third is not None and third[0] == m.TAG["ping"]
           and len(third[1]) == 4, repr(third))
+    fourth = got(5, 1.0)
+    parsed = m.parse_round(fourth[1]) if fourth is not None and fourth[0] == m.TAG["round"] else None
+    check("the roster cadence also sends the round state (MP_TAG_ROUND): round 1 live, all playing",
+          parsed is not None and parsed[1] == m.ROUND_PHASE_LIVE and parsed[2] == 1
+          and [r[0] for r in parsed[3]] == [4, 5, 6]
+          and all(r[1:] == (m.ROUND_PLAYER_PLAYING, -1, 0) for r in parsed[3]), repr(parsed))
     # the client echoes the tick in a PONG; the round trip becomes its roster ping
     import struct as _st
     from dedi import core as _core
@@ -265,7 +274,7 @@ def main():
     # away) builds the correct one from the corrected roster.
     server.note_car_pick(pairs[6][0], m.CAR_PICK.pack(9, 1))          # stale: session city 1
     server.cars[6] = m.CARSTATE_ENTRY.pack(6, 1, 0, 9, 11,            # swapped to BETAMIAMI (11)
-                                           0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2)
+                                           0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0)
     rows = server.roster_bytes()
     picked = {}
     for i in range(m.ROSTER.unpack_from(rows, 0)[0]):
