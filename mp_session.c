@@ -15785,7 +15785,7 @@ static void MpMarkClusterTick(void)
 #define MP_CHASE_STEP		1000
 #define MP_CHASE_SNAP		1800	/* a step off the road snaps back this far, at most */
 #define MP_CHASE_MOVED		2000
-#define MP_CHASE_WAIT_FRAMES	90	/* 3 s: the getaway's map-wide search can take most of the countdown */
+#define MP_CHASE_WAIT_FRAMES	60	/* 2 s at 30 Hz */
 #define MP_CHASE_GIVEUP_FRAMES	105	/* 3.5 s: inside the 4 s round countdown */
 
 /* the road's heading at (x,z), turned to the way closer to `want` -- along the
@@ -15923,6 +15923,13 @@ static void MpMarkChaseTick(void)
 				if (ddx * ddx + ddz * ddz > (long long)MP_CHASE_SNAP * MP_CHASE_SNAP)
 					break;	/* a dead end: the road does not go on behind */
 
+				ddx = (long long)sx - x;
+				ddz = (long long)sz - z;
+
+				if (ddx * ddx + ddz * ddz < (long long)(MP_CHASE_STEP / 2) * (MP_CHASE_STEP / 2))
+					break;	/* snapped back onto the last spot: `walked` grew, the car did not --
+						 * every cop then landed on this one spot (Babou log, 30060,7938) */
+
 				nx = sx;
 				nz = sz;
 			}
@@ -15955,6 +15962,8 @@ static void MpMarkChaseTick(void)
 			int dir = -1;
 
 			if (MpFindRoadSpotNear(bx, 0, bz, me->id + gMpClusterTries * 64, &x, &z, &dir, NULL) &&
+				((long long)(x - bx) * (x - bx) + (long long)(z - bz) * (z - bz)) <=
+					(long long)MP_CLUSTER_DRIFT * MP_CLUSTER_DRIFT &&	/* our band, not the next cop's */
 				MpJoinSpotClearOfPlayers(x, z, me->id, me->carId) &&
 				MpClusterPlace(me, cp, x, z, MpChaseHeading(x, z, gc->hd.direction & 0xfff), marked,
 					"cop, near the road behind the getaway"))
