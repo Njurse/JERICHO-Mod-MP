@@ -36,7 +36,7 @@ Dedicated holds its lock around every call.
 import mp_test as m
 
 TAG_COOLDOWN_MS = 2000       # mp_mark.h MP_MARK_TAG_COOLDOWN_MS
-INTERMISSION_MS = 10000      # mp_mark.h MP_MARK_INTERMISSION_MS
+INTERMISSION_MS = 9000       # mp_mark.h MP_MARK_INTERMISSION_MS
 COUNTDOWN_MS = 4000          # default later-round total: SPAWN + 3 s
 COUNTDOWN_SPAWN_MS = 1000    # mp_mark.h MP_MARK_COUNTDOWN_SPAWN_MS
 LOBBY_MS = 5000              # default firstCountdownSec (5-4-3-2-1), in ms
@@ -55,7 +55,7 @@ CNR_BUST_POINTS = 1000
 CNR_DRIVE_BASE = 10
 CNR_DRIVE_BONUS = 5
 CNR_DRIVE_TOPSPEED = 300
-CNR_ESCAPE_DIST = 32000
+CNR_ESCAPE_DIST = 24000
 CNR_ESCAPE_HOLD_MS = 5000
 CNR_CREDIT_MS = 2000         # mp_mark.h MP_MARK_CNR_CREDIT_MS: a contact earns the damage after it
 BOMB_GRACE_MS = 12000        # mp_mark.h MP_MARK_BOMB_GRACE_MS: a new holder after a leave

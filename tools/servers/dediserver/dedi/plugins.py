@@ -169,6 +169,12 @@ class ServerAPI:
     def readvertise(self):
         self._s.readvertise()
 
+    def round_info(self):
+        """(round number, True when that round has ended) -- the referee's round."""
+        from .roundstate import m as _m     # mp_test, the protocol's Python twin
+        r = self._s.round
+        return r.number, r.phase == _m.ROUND_PHASE_ENDED
+
     # -- commands
     def register_command(self, name, handler, admin=False, help="", console=False):
         """handler(caller, args) -> str reply (or None). `caller` is a Player, or

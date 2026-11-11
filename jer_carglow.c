@@ -13,7 +13,7 @@
 #include "dr2math.h"
 #include "jericho.h"
 
-/* ~1.12x about the body centre. DrawCarObject (cars.c:3964-3983) does not
+/* ~1.12x about the body centre, fixed (the pulse is the alpha). DrawCarObject (cars.c:3964-3983) does not
  * draw verts about the model origin: it sets trans to pos, transforms
  * carCos->cog, and uses that as the model trans, so a vertex v appears at
  * pos + R*(v + cog). The car position / visual centre is model point -cog.
@@ -247,12 +247,13 @@ int jer_carglow_on_draw_world(void* userdata, void* args)
 		gte_stlvnl(&modelLocation);
 		gte_SetTransVector(&modelLocation);
 
+		/* A FIXED SIZE, A PULSING ALPHA: the shell stays at the middle of the old
+		 * size pulse (4388..4788), just bigger than the car, and the pulse is in
+		 * its brightness -- the additive blend (semiTrans 1) makes that its alpha. */
 		wave = RSIN(CameraCnt * 96);
-		scale = JER_CARGLOW_SCALE + ((wave * 200) >> 12);
-		if (scale < 4096)
-			scale = 4096;
+		scale = JER_CARGLOW_SCALE;
 
-		pulse = 160 + ((wave * 70) >> 12);
+		pulse = 140 + ((wave * 90) >> 12);	/* 50..230 */
 		if (pulse < 40)
 			pulse = 40;
 		else if (pulse > 255)

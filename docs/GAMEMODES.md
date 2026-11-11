@@ -278,7 +278,7 @@ reaches 0:00 loses, and everyone else wins.
   player leaves and two or more remain, a new marked player is picked at random.
 - A late joiner is a hound with a full, frozen clock (Fox N Hounds), or a player
   without the bomb (Car Bomb Tag).
-- `ENDED` lasts 10 s (`MP_MARK_INTERMISSION_MS`). Then the same wait-then-countdown
+- `ENDED` lasts 9 s (`MP_MARK_INTERMISSION_MS`; 10 s before 0.24.0). Then the same wait-then-countdown
   gate, with the first-load count only if everyone left meanwhile (a new map).
   Otherwise `COUNTDOWN` is the per-round count (a new start cluster, 3-2-1, GO
   with fresh clocks and a new random marked player) when the wait is satisfied,
@@ -360,6 +360,15 @@ contacts, and the host originates every state.
 - The pre-game lobby: `5`, `4`, `3`, `2`, `1` (priority 4, 1 s each).
 - The countdown: `GET READY`, `3`, `2`, `1` (priority 4, 1 s), then the GO line
   above (priority 4, 3 s). Each count is shown once and only ever downward.
+- **The HUD timer (0.24.0, every timer mode).** Once the first countdown is
+  over, the clocks are core `PrintTimer` digits (the JERICHO HUD timer
+  convention, core `JERICHO/docs/HOOKS.md`), titled at y 4 and drawn at y 18.
+  Fox N Hounds: your clock top centre, everyone else's smaller down the right
+  edge of the SCREEN (`jer_screen_edges`, so widescreen moves the column out),
+  each fading grey to cyan while they are the fox. Car Bomb Tag: the round clock
+  top centre, titled `YOU HAVE THE BOMB!` / `<NAME> HAS THE BOMB!`, white, fading
+  to red while YOU hold the bomb and back to white once you pass it (no flash).
+  Cops n Robbers: below. The panel below is then only the lobby states.
 - The clock as a `jer_hud_panel` at the top centre (0.22.0 to 0.22.3: top right): `PRE-GAME n`,
   `WAITING FOR PLAYERS`, `WAITING FOR CARS r/n`,
   `FOX m:ss` / `HOUND m:ss`, or `BOMB m:ss` / `TIMER m:ss`. It fades to cream
@@ -396,7 +405,9 @@ contacts, and the host originates every state.
   scaled low-LOD copy of the car body (the same `NewLowCarModel` vlist
   `plotNewCarModel` uses, scaled about model-space `-cog`, with the same
   DrawCarObject trans path), drawn semi-transparent with the explosion smoke
-  texture and pulsed. It does not use `gTempCarVertDump` — that dump is the
+  texture. Its size is fixed (about 1.12x, `JER_CARGLOW_SCALE`); its additive
+  brightness, i.e. its alpha, pulses (0.24.0: the size no longer pulses). Fox N
+  Hounds and Car Bomb Tag only; Cops n Robbers has no shell. It does not use `gTempCarVertDump` — that dump is the
   hi-LOD dented mesh, and pairing it with low-LOD polys mangled the holo.
   The fox uses the player's colour if they have one set, otherwise cyan; the
   bomb car is always red.
@@ -429,8 +440,8 @@ carries the cops' damage meter (0..1000 points; every other row 0).
   meter (`MP_MARK_CNR_BUST_POINTS`, 1000) is a bust: the round ends, no winner.
   No tag ever moves the getaway.
 - **Escape.** The getaway also wins when it is at least
-  `MP_MARK_CNR_ESCAPE_DIST` (32000 world units, x/z, about twice the draw
-  distance) from EVERY cop with a car, held for `MP_MARK_CNR_ESCAPE_HOLD_MS`
+  `MP_MARK_CNR_ESCAPE_DIST` (24000 world units, x/z, about one and a half draw
+  distances; 32000 before 0.24.0) from EVERY cop with a car, held for `MP_MARK_CNR_ESCAPE_HOLD_MS`
   (5 s). The host measures (`MpHostCnrTick`, `dedi/core.py _getaway_step`);
   `MpMarkEscape` decides.
 - **Scores** are added as they are earned (`MpRoundAddScore` /
@@ -483,10 +494,10 @@ carries the cops' damage meter (0..1000 points; every other row 0).
   sets core `gJerMapCopCars` (overmap.h, a bit per `car_data` slot) every
   frame: every other player in a police car, and in Cops n Robbers every live
   cop player. The getaway is never set.
-- **What you see.** The top-centre panel reads `GETAWAY m:ss DMG n%` or
-  `COP m:ss DMG n%`; the centre line names the getaway from the countdown on; the
-  getaway's car glows red and has the red arrow over it on everyone else's
-  screen; the map flashes red/blue for the whole round on every machine
+- **What you see.** The round clock in the HUD timer digits (white), titled
+  `YOU'RE THE GETAWAY!` or `<NAME> IS THE GETAWAY!` from the countdown on, with
+  `DAMAGE n%` under it; the getaway has the red arrow over it on everyone else's
+  screen (no glow shell since 0.24.0); the map flashes red/blue for the whole round on every machine
   (`gJerMapForceFlash`, core), and the getaway's blip flashes red/blue.
 - **Police radio.** The engine's own cop phrases (the host city's phrase bank,
   the one the level loaded), said from the cop players' cars on the engine's own
@@ -617,3 +628,24 @@ yet played in game. These are later phases, and none of them is wired:
 - Cops n Robbers, not yet: an in-game pass; the regional police-radio choice;
   role cars for the dedicated server's own records (it never sees them; they
   are a client matter).
+
+## Map votes and rotation (0.24.0)
+
+- **`!vote` on a game (listen) host.** The host runs the dedicated server's
+  grammar itself (`mp_session.c` `MpListenVote`): `!vote city <city> [mp [0|1]]`,
+  `!vote mp [0|1]`, `!vote` (the tally), `!vote cancel` (the host only). One yes
+  per player, passes at more than half of the players, 30 s, then a 60 s
+  cooldown. Peers' `!vote` lines reach the host and are never relayed; every
+  other chat command is still dropped unseen.
+- **`rounds_per_map`.** Dedicated server: `dediserver.json` `"rounds_per_map"`
+  and `"rotation"` (`dedi/builtin/rotation.py`, README). Game host:
+  `JERICHO/CONFIG/mp.ini` `[mp] rounds_per_map`. Default `0` = off, set in code;
+  neither file is written by the feature. After that many rounds END on one map,
+  the next stop is announced and taken 4 s later.
+- **The switch** is the dedicated server's: every peer is kicked with
+  `MP_KICK_FLAG_REJOIN` and rejoins on its own. A game host then leaves the level
+  and STARTs again on the new map from the frontend (`MpRelaunchTick`, driven by
+  `mp.c`), keeping its listener and session.
+- **Stops.** `{city, map mode/shape, arena, area}`. The default order is every
+  city's two multiplayer maps, areas within a city before the next city. `area`
+  is reserved (`-1`) for stops inside one map, for the arena work.
