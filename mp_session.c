@@ -1348,8 +1348,9 @@ static void MpMarkGlowFor(int marked, int myId, int bomb)
 /*   chatter        15..17 + heading, no repeat, no sooner than the      */
 /*                  engine's own TimeSinceLastSpeech > 720 frames.       */
 /* The heading clip (sample direction + 1, GetCarDirectionOfTravel of   */
-/* the getaway) follows exactly where CopSay plays one (gamesnd.c: 10   */
-/* for cop banks 2/3, 15 for 1/4; cop_bank = mission % 4 + 1).          */
+/* the getaway) follows where the speaking car's lines want one         */
+/* (CopPhraseWantsHeading, gamesnd.c): stock D2 lines as CopSay -- 10   */
+/* for cop banks 2/3, 15 for 1/4; a baked D1/bank set after 10 and 15.  */
 /* The speaker ROTATES among the cop players within MP_RADIO_RANGE of  */
 /* the getaway (round-robin by player id after the last speaker), so    */
 /* the chatter stays on the cars in the action; no cop in range = no    */
@@ -1468,7 +1469,7 @@ static void MpCnrRadioTick(int on, int marked, int myId)
 	static unsigned lastLine;
 	MP_PLAYER* gp;
 	CAR_DATA* gc;
-	int id, best = -1, bank, phrase = 0, heading, follow = 0, speaker = -1;
+	int id, best = -1, phrase = 0, heading, follow = 0, speaker = -1;
 	int inRange[MP_MAX_PLAYERS], nIn = 0, i;
 	const long long range2 = (long long)MP_RADIO_RANGE * MP_RADIO_RANGE;
 
@@ -1565,7 +1566,6 @@ static void MpCnrRadioTick(int on, int marked, int myId)
 
 	rnd = rnd * 1103515245u + 12345u;
 	heading = GetCarDirectionOfTravel(gc);
-	bank = gCurrentMissionNumber % 4 + 1;
 
 	if (!gMpRadioSaidGo)
 	{
@@ -1620,7 +1620,9 @@ static void MpCnrRadioTick(int on, int marked, int myId)
 	best = MpGetPlayer(speaker)->carId;
 	gMpRadioLastSpeaker = speaker;
 
-	if ((phrase == 10 && (bank == 2 || bank == 3)) || (phrase == 15 && (bank == 1 || bank == 4)))
+	/* the speaking car's lines decide: the stock D2 sets follow 10 (banks 2/3)
+	 * and 15 (banks 1/4) with a heading clip; a baked D1/bank set always does */
+	if (CopPhraseWantsHeading(car_data[best].ap.model, phrase))
 		follow = heading + 1;
 
 	{
