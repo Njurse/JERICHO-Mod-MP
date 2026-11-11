@@ -1394,8 +1394,51 @@ static unsigned gMpRadioPlayFrame;		/* when the playing line started */
 
 extern int gDoCopSpeech;	/* gamesnd.c: 0 on the gang missions */
 
+/* NO "HIT ANOTHER VEHICLE" FOR COP-VS-ROBBER. The engine says that line
+ * (felony.c NoteFelony, CopSay 7/8 on a felony type 4 car hit) whenever the
+ * local car collides with another car. In a live Cops n Robbers round a cop
+ * ramming the getaway, or the getaway ramming a cop, is the game itself, not
+ * "the suspect hit a vehicle": core's gJerCopHitLineVeto asks us, with the car
+ * the local car collided with. Silenced: on a cop's machine, the getaway's
+ * car; on the getaway's machine, any cop player's car. Every other hit
+ * (traffic, parked cars) keeps the line. Presentation only. */
+static int gMpCnrHitMarked = -1;	/* the getaway's player id while the veto is set */
+
+static int MpCnrHitLineVeto(int victimCarId)
+{
+	MP_PLAYER* me = MpLocalPlayer();
+	MP_PLAYER* rob = (gMpCnrHitMarked >= 0) ? MpGetPlayer(gMpCnrHitMarked) : NULL;
+	int id;
+
+	if (me == NULL || rob == NULL || victimCarId < 0)
+		return 0;
+
+	if (me->id == gMpCnrHitMarked)
+	{
+		for (id = 0; id < MP_MAX_PLAYERS; id++)
+		{
+			MP_PLAYER* p;
+
+			if (id == gMpCnrHitMarked || !MpMarkPresent(id))
+				continue;
+
+			p = MpGetPlayer(id);
+
+			if (p != NULL && p->carId == victimCarId)
+				return 1;
+		}
+
+		return 0;
+	}
+
+	return MpMarkPresent(me->id) && rob->carId >= 0 && victimCarId == rob->carId;
+}
+
 static void MpCnrRadioClear(void)
 {
+	gJerCopHitLineVeto = NULL;
+	gMpCnrHitMarked = -1;
+
 	if (gMpRadioChan >= 0)
 		jer_sound_unlock(gMpRadioChan);
 
@@ -2098,6 +2141,10 @@ static void MpMarkPresentTick(void)
 		 * every machine (overmap.c gJerMapForceFlash), and the cops' radio */
 		gJerMapForceFlash = (cnrKind && live) ? 1 : 0;
 		MpCnrRadioTick(cnrKind && live, marked, myId);
+
+		/* ...and no "hit another vehicle" line for a cop-vs-getaway hit */
+		gMpCnrHitMarked = (cnrKind && live) ? marked : -1;
+		gJerCopHitLineVeto = (cnrKind && live && marked >= 0) ? MpCnrHitLineVeto : NULL;
 
 		gMpFoxLinesOn = 0;
 		gMpFoxLine1[0] = '\0';

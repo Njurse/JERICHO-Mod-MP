@@ -515,6 +515,10 @@ carries the cops' damage meter (0..1000 points; every other row 0).
   uses the host's lines until the bake adds them. The heading clip follows the
   speaking car's lines (`CopPhraseWantsHeading`): stock D2 lines after `10`
   (cop banks 2/3) or `15` (banks 1/4), a baked D1/bank set after both.
+  The engine's own "suspect hit another vehicle" line (`felony.c` NoteFelony,
+  `CopSay(7/8)` on a car hit) is silenced while a round is live when the hit is
+  cop-vs-getaway, either way round (core `gJerCopHitLineVeto`); hits on traffic
+  keep it.
 - **Assets on the multiplayer maps.** A session plays `GAME_TAKEADRIVE`, so the
   level is mission 50 (full city) or 58 (the multiplayer map), + city x 2 +
   night + arena x 440 (`glaunch.c`). For
