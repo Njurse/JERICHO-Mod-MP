@@ -48,7 +48,19 @@ two left (two or more left: a random new holder with a 12 s grace), sets the
 bomb off only at 0:00, scores Cops n Robbers from the getaway's own reported
 damage (the optional `JPDM`; an older getaway falls back to contact strength),
 rotates the police radio among the cops near the getaway, and draws the Fox N
-Hounds clocks in the mission-timer digits.
+Hounds clocks in the mission-timer digits. 0.24.0 is **protocol 24** (round
+lifecycle v2; a proto-23 peer is refused): `MP_MARK` carries why a round ended
+(`endReason`: clock, bust, escape, leave, void) and `flags` (`MP_MARK_F_DAMAGE`);
+an entry's flags bench a player (`MP_MARK_ENTRY_F_WAITING` for a join after GO,
+`MP_MARK_ENTRY_F_OUT` for a death with `MP_MODE_RESPAWN_NONE`) until the next
+COUNTDOWN; the three round modes are `MP_MODE_LATEJOIN_SPECTATE` (the joiner's car
+is held and the camera watches the round); `MP_CARSTATE_ENTRY` carries
+`totalDamage` and `maxDamage`, which replaced `JPDM` (`MP_TAG_DAMAGE` is gone);
+`MP_ROUND_ENTRY.flags` has the admin bit; the arena is 0..3 (`MP_SESSION.spare`
+bits 8-9, `WELCOME.arena`); `MP_MODE_RESPAWN_DELAY` / `_NONE` are implemented (no
+shipping mode uses them; `MP_TEST_RESPAWN=delay|none` plays them); and the
+countdown is the engine's own race-start 3-2-1 plus a big GO (`Print321Go`, core
+`pres.c`).
 Everything below "Not yet" is design, not code.
 
 ## The model
@@ -571,8 +583,8 @@ server-side rules. It has `ENABLED_BY_DEFAULT = False`. When it is named in
   - Take a Ride sends no `JPMK` and its snapshot is unchanged.
 - `python tools/servers/dediserver/test_round.py` checks the dedicated server's
   round state over a real socket: the order ROSTER, WELCOME, START, ROUND; round 1
-  live with everyone playing; proto 23 on every envelope; proto-21 and proto-22
-  HELLOs refused; a client's `JPRD` not forwarded.
+  live with everyone playing; proto 24 on every envelope; proto-21, -22 and -23
+  HELLOs refused; a client's `JPRD` not forwarded; the admin bit; arenas 0..3.
 - `python tools/servers/proto_check.py` checks the wire mirror: struct sizes
   (now with `MP_ROUND`, `MP_ROUND_ENTRY`, `MP_MARK` and `MP_MARK_ENTRY`), shared
   constants, the round, mark and mode enum values, and every `MP_TAG_*` against

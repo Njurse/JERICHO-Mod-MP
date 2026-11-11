@@ -44,15 +44,18 @@ extern "C" {
 typedef enum
 {
 	MP_MODE_RESPAWN_INSTANT = 0,	/* back on the map at once (Take a Ride) */
-	MP_MODE_RESPAWN_DELAY,		/* after respawnDelayFrames (not implemented yet) */
-	MP_MODE_RESPAWN_NONE		/* out until the next round (not implemented yet) */
+	MP_MODE_RESPAWN_DELAY,		/* after respawnDelayFrames (30 fps), the camera on the wreck */
+	MP_MODE_RESPAWN_NONE		/* out until the next round, spectating (round modes:
+					 * the host benches them, MP_MARK_ENTRY_F_OUT) */
 } MP_MODE_RESPAWN;
 
 /* What a player who joins while a round is running gets. */
 typedef enum
 {
 	MP_MODE_LATEJOIN_LIVE = 0,	/* a car at once (Take a Ride) */
-	MP_MODE_LATEJOIN_SPECTATE	/* watch until the next round (not implemented yet) */
+	MP_MODE_LATEJOIN_SPECTATE	/* a join while a round is LIVE waits, car held and the
+					 * camera on a player in the round, until the next
+					 * COUNTDOWN (MP_MARK_ENTRY_F_WAITING; JPRD WAITING) */
 } MP_MODE_LATEJOIN;
 
 /* Which cars the pickers may offer. Filters are named by id so a descriptor stays
@@ -217,6 +220,7 @@ const char*         MpModeDisplayName(int id);		/* "-" for an unknown id */
 /* ---- the decision points ------------------------------------------------- */
 /* Each takes the session's gamemode id. Mode 0 answers are today's behaviour. */
 int         MpModeRespawnPolicy(int mode);		/* MP_MODE_RESPAWN_* */
+int         MpModeRespawnDelayFrames(int mode);	/* MP_MODE_RESPAWN_DELAY's frames, else 0 */
 int         MpModeLateJoinPolicy(int mode);		/* MP_MODE_LATEJOIN_* */
 int         MpModeSpawnRule(int mode);			/* MP_MODE_SPAWN_* */
 int         MpModeWantsCountdown(int mode);	/* 1 = a first-load or per-round count is set */

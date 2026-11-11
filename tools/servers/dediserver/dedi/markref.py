@@ -1,4 +1,10 @@
-"""dedi.markref -- the marked-player referee (MP_TAG_MARK 'JPMK', proto 23).
+"""dedi.markref -- the marked-player referee (MP_TAG_MARK 'JPMK', proto 24).
+
+Proto 24 (round lifecycle v2): every end carries a reason (MARK_END_*); a player
+who arrives while a round is LIVE in a mode whose late joiners wait
+(MODE_LATEJOIN_SPECTATE) is BENCHED (MARK_ENTRY_F_WAITING) until the next
+COUNTDOWN; out() benches a player who died with no respawn (MARK_ENTRY_F_OUT).
+A benched player is never marked, tagged or counted as "in the round".
 
 Pre-game (modes that opt in via mp_mode.c: waitMinPlayers, waitForCars,
 firstCountdownSec, roundCountdownSec): after a map load -- reset(), or the
@@ -106,6 +112,8 @@ class MarkReferee:
         self.dmg_acc = 0
         self.last_cop = -1           # the last cop in contact with the getaway
         self.last_cop_ms = 0
+        self.end_reason = m.MARK_END_NONE
+        self.bench = {}              # pid -> MARK_ENTRY_F_WAITING / MARK_ENTRY_F_OUT (v24)
 
     @property
     def active(self):
@@ -129,8 +137,14 @@ class MarkReferee:
     def _full_ms(self):
         return self.minutes * 60 * 1000
 
+    def _in(self, pid):
+        return pid in self.present and not self.bench.get(pid, 0)
+
+    def _in_round(self):
+        return sorted(pid for pid in self.present if not self.bench.get(pid, 0))
+
     def _pick(self, rnd):
-        ids = sorted(self.present)
+        ids = self._in_round()
         return ids[rnd % len(ids)] if ids else -1
 
     def _fresh_clocks(self):
@@ -150,6 +164,8 @@ class MarkReferee:
     def _begin(self, rnd):
         self.phase = m.MARK_PHASE_LIVE
         self.winner = -1
+        self.end_reason = m.MARK_END_NONE
+        self.bench = {}
         self.countdown_ms = 0
         self.countdown_total_ms = 0
         self.countdown_first = False
@@ -175,9 +191,11 @@ class MarkReferee:
 
     def _countdown(self, first, rnd=0):
         self.phase = m.MARK_PHASE_COUNTDOWN
+        self.bench = {}                         # v24: everyone present is in this round
         self.marked = self._next_getaway(rnd) if self.timer == m.MODE_TIMER_GETAWAY else -1
         self.heat = 0
         self.winner = -1
+        self.end_reason = m.MARK_END_NONE
         self.countdown_first = bool(first)
         if first and self.first_sec > 0:
             ms = self.first_sec * 1000
@@ -199,11 +217,31 @@ class MarkReferee:
         self._begin(rnd)
         return EV_BEGIN
 
-    def _end(self, winner):
+    def _end(self, winner, reason):
         self.phase = m.MARK_PHASE_ENDED
         self.winner = winner
+        self.end_reason = reason
         self.intermission_ms = INTERMISSION_MS
         self.revision += 1
+
+    def _marked_gone(self, rnd, getaway_reason):
+        """MpMarkMarkedGone: the marked player left a LIVE round (or went out)."""
+        if self.timer == m.MODE_TIMER_GETAWAY:
+            self._end(-1, getaway_reason)       # nobody won it
+            return EV_END
+        if len(self._in_round()) < 2:
+            self.marked = -1                    # nobody to play against: void, no bomb goes off
+            self._end(-1, m.MARK_END_VOID)
+            return EV_END
+        self.marked = self._pick(rnd)
+        self.cooldown_until = self.clock_ms + TAG_COOLDOWN_MS
+        if self.timer == m.MODE_TIMER_SHARED:   # bomb: a grace for the new holder
+            self.cooldown_until = self.clock_ms + BOMB_GRACE_MS
+            if self.shared_ms < BOMB_GRACE_MS:
+                self.shared_ms = BOMB_GRACE_MS
+        self.seq = (self.seq + 1) & 0xFFFF
+        self.revision += 1
+        return EV_MOVED
 
     def sync(self, ids, rnd=0):
         """MpMarkSync: present-set = `ids`. Returns EV_* bits."""
@@ -211,6 +249,8 @@ class MarkReferee:
             return 0
         ids = {int(i) for i in ids if 0 <= int(i) < m.MAX_PLAYERS}
         changed = marked_left = False
+        late_wait = (self.phase == m.MARK_PHASE_LIVE and
+                     m.mode_latejoin(self.gamemode) == m.MODE_LATEJOIN_SPECTATE)
         for pid in range(m.MAX_PLAYERS):
             want = pid in ids
             if want == (pid in self.present):
@@ -219,28 +259,19 @@ class MarkReferee:
             if want:
                 self.present.add(pid)
                 self.remain_ms[pid] = self._full_ms() if self.timer == m.MODE_TIMER_PERSONAL else 0
+                if late_wait:                   # v24: a mid-round arrival sits this round out
+                    self.bench[pid] = m.MARK_ENTRY_F_WAITING
+                else:
+                    self.bench.pop(pid, None)
             else:
                 self.present.discard(pid)
                 self.remain_ms.pop(pid, None)
+                self.bench.pop(pid, None)
                 if pid == self.marked:
                     marked_left = True
         ev = 0
-        if marked_left and self.phase == m.MARK_PHASE_LIVE and self.timer == m.MODE_TIMER_GETAWAY:
-            self._end(-1)                       # the getaway left: nobody won it
-            ev |= EV_END
-        elif marked_left and self.phase == m.MARK_PHASE_LIVE and len(self.present) < 2:
-            self.marked = -1                    # nobody to play against: void, no bomb goes off
-            self._end(-1)
-            ev |= EV_END
-        elif marked_left and self.phase == m.MARK_PHASE_LIVE:
-            self.marked = self._pick(rnd)
-            self.cooldown_until = self.clock_ms + TAG_COOLDOWN_MS
-            if self.timer == m.MODE_TIMER_SHARED:   # bomb: a grace for the new holder
-                self.cooldown_until = self.clock_ms + BOMB_GRACE_MS
-                if self.shared_ms < BOMB_GRACE_MS:
-                    self.shared_ms = BOMB_GRACE_MS
-            self.seq = (self.seq + 1) & 0xFFFF
-            ev |= EV_MOVED
+        if marked_left and self.phase == m.MARK_PHASE_LIVE:
+            ev |= self._marked_gone(rnd, m.MARK_END_LEAVE)
         elif marked_left:
             self.marked = -1
         if changed:
@@ -265,7 +296,6 @@ class MarkReferee:
         if not self.active or ms < 0:
             return 0
         self.clock_ms += ms
-        n = len(self.present)
         if self.phase == m.MARK_PHASE_WAITING:
             if self._startable():
                 return self._start(rnd)
@@ -295,10 +325,10 @@ class MarkReferee:
             self._begin(rnd)                        # GO
             return EV_BEGIN
         if self.phase == m.MARK_PHASE_LIVE:
-            if n < 2:
+            if len(self._in_round()) < 2:
                 if self.timer != m.MODE_TIMER_GETAWAY:
                     self.marked = -1                # not the clock: nobody stays marked
-                self._end(-1)
+                self._end(-1, m.MARK_END_VOID)
                 return EV_END
             if self.timer == m.MODE_TIMER_PERSONAL:
                 if self.marked not in self.remain_ms:
@@ -306,14 +336,14 @@ class MarkReferee:
                 self.remain_ms[self.marked] -= ms
                 if self.remain_ms[self.marked] <= 0:
                     self.remain_ms[self.marked] = 0
-                    self._end(self.marked)          # first to 0:00 wins
+                    self._end(self.marked, m.MARK_END_CLOCK)    # first to 0:00 wins
                     return EV_END
             else:
                 self.shared_ms -= ms
                 if self.shared_ms <= 0:
                     self.shared_ms = 0
                     # bomb: the holder loses; Cops n Robbers: the getaway lasted and wins
-                    self._end(self.marked if self.timer == m.MODE_TIMER_GETAWAY else -1)
+                    self._end(self.marked if self.timer == m.MODE_TIMER_GETAWAY else -1, m.MARK_END_CLOCK)
                     return EV_END
             return 0
         # ENDED
@@ -332,8 +362,8 @@ class MarkReferee:
         """MpMarkContact: True when the contact moved the mark."""
         if self.phase != m.MARK_PHASE_LIVE or not self.active or self.timer == m.MODE_TIMER_GETAWAY:
             return False
-        if a == b or a not in self.present or b not in self.present:
-            return False
+        if a == b or not self._in(a) or not self._in(b):
+            return False                        # v24: a benched player is not in this round
         if self.marked == a:
             to = b
         elif self.marked == b:
@@ -352,7 +382,7 @@ class MarkReferee:
         """MpMarkHit: (points the cop earned, EV_* bits)."""
         if self.phase != m.MARK_PHASE_LIVE or self.timer != m.MODE_TIMER_GETAWAY:
             return 0, 0
-        if a == b or a not in self.present or b not in self.present:
+        if a == b or not self._in(a) or not self._in(b):
             return 0, 0
         if self.marked == a:
             cop = b
@@ -373,7 +403,7 @@ class MarkReferee:
         self.revision += 1
         if self.heat >= CNR_BUST_POINTS:
             self.heat = CNR_BUST_POINTS
-            self._end(-1)                       # busted: the cops win
+            self._end(-1, m.MARK_END_BUST)      # busted: the cops win
             return pts, EV_END
         return pts, 0
 
@@ -401,12 +431,12 @@ class MarkReferee:
         self.heat += pts
         self.revision += 1
         cop = -1
-        if (0 <= self.last_cop < m.MAX_PLAYERS and self.last_cop in self.present and
+        if (0 <= self.last_cop < m.MAX_PLAYERS and self._in(self.last_cop) and
                 self.last_cop != self.marked and self.clock_ms - self.last_cop_ms <= CNR_CREDIT_MS):
             cop = self.last_cop
         if self.heat >= CNR_BUST_POINTS:
             self.heat = CNR_BUST_POINTS
-            self._end(-1)                       # wrecked: busted
+            self._end(-1, m.MARK_END_BUST)      # wrecked: busted
             return pts, cop, EV_END
         return pts, cop, 0
 
@@ -425,16 +455,34 @@ class MarkReferee:
         """MpMarkEscape: the getaway is clear of every cop -> it wins now."""
         if self.phase != m.MARK_PHASE_LIVE or self.timer != m.MODE_TIMER_GETAWAY or self.marked < 0:
             return 0
-        self._end(self.marked)
+        self._end(self.marked, m.MARK_END_ESCAPE)
         return EV_END
 
+    def out(self, pid, rnd=0):
+        """MpMarkOut: `pid` died with no respawn -> benched OUT until the next round."""
+        if self.phase != m.MARK_PHASE_LIVE or not self.active or not 0 <= pid < m.MAX_PLAYERS or not self._in(pid):
+            return 0
+        self.bench[pid] = m.MARK_ENTRY_F_OUT
+        self.revision += 1
+        if pid == self.marked:
+            return self._marked_gone(rnd, m.MARK_END_BUST)
+        return 0
+
+    def in_round(self, pid):
+        return self._in(pid)
+
+    def _flags(self, pid):
+        return (m.MARK_ENTRY_F_READY if pid in self.ready else 0) | self.bench.get(pid, 0)
+
     def to_bytes(self):
+        end = self.end_reason if self.phase == m.MARK_PHASE_ENDED else m.MARK_END_NONE
+        flags = m.MARK_F_DAMAGE if (self.timer == m.MODE_TIMER_GETAWAY and self.dmg_live) else 0
         if self.timer == m.MODE_TIMER_GETAWAY:   # the getaway's row carries the heat meter
-            rows = [(pid, self.heat if pid == self.marked else 0,
-                     m.MARK_ENTRY_F_READY if pid in self.ready else 0) for pid in sorted(self.present)]
-            return m.build_mark(self.gamemode, self.phase, self.marked, self.winner, self.minutes,
-                                self.seq, _ds(self.shared_ms), rows, _ds(self.countdown_ms))
-        rows = [(pid, _ds(self.remain_ms.get(pid, 0)),
-                 m.MARK_ENTRY_F_READY if pid in self.ready else 0) for pid in sorted(self.present)]
+            rows = [(pid, self.heat if pid == self.marked else 0, self._flags(pid))
+                    for pid in sorted(self.present)]
+        else:
+            rows = [(pid, _ds(self.remain_ms.get(pid, 0)), self._flags(pid))
+                    for pid in sorted(self.present)]
         return m.build_mark(self.gamemode, self.phase, self.marked, self.winner, self.minutes,
-                            self.seq, _ds(self.shared_ms), rows, _ds(self.countdown_ms))
+                            self.seq, _ds(self.shared_ms), rows, _ds(self.countdown_ms),
+                            end, flags)

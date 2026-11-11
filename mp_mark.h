@@ -67,11 +67,12 @@ extern "C" {
 #define MP_MARK_CNR_DRIVE_TOPSPEED	300	/* whole units/frame (~90 mph) for the full bonus */
 #define MP_MARK_CNR_ESCAPE_DIST		32000	/* x/z units from EVERY cop (~2x draw distance) */
 #define MP_MARK_CNR_ESCAPE_HOLD_MS	5000	/* ...held this long (the host's caller) */
-/* 0.23.4: the meter follows the getaway's REAL damage when its owner reports it
- * (MP_TAG_DAMAGE, optional: a build that does not send it keeps the contact
- * strength above). The meter is damage / maxDamage of BUST_POINTS, so a full
- * meter is a fully wrecked car; the points go to the last cop that touched the
- * getaway within CREDIT_MS (none: the meter still fills, nobody scores). */
+/* The meter follows the getaway's REAL damage: its carstate rows carry its
+ * totalDamage and wreck point (v24; 0.23.4 sent them as the optional JPDM). Until
+ * the first row of a round arrives the contact strength above scores. The meter
+ * is damage / maxDamage of BUST_POINTS, so a full meter is a fully wrecked car;
+ * the points go to the last cop that touched the getaway within CREDIT_MS (none:
+ * the meter still fills, nobody scores). */
 #define MP_MARK_CNR_CREDIT_MS		2000	/* a cop's contact earns the damage that follows it */
 
 /* Car Bomb Tag (0.23.4): the holder left and two or more are still in -- a random
@@ -119,7 +120,7 @@ int  MpMarkContact(int a, int b);
 int  MpMarkHit(int a, int b, int strength, int* outEv);
 
 /* Cops n Robbers, host: the getaway `from` reports its own car's damage (its
- * totalDamage out of `maxDamage`, MP_TAG_DAMAGE, or the host's own car). From the
+ * totalDamage out of `maxDamage`: its carstate row, or the host's own car). From the
  * first report of a round the contacts above stop scoring and only mark who
  * touched the getaway; the meter moves by the damage it gained since the last
  * report, scaled to BUST_POINTS per maxDamage, and fills when the car is wrecked.
@@ -128,6 +129,16 @@ int  MpMarkHit(int a, int b, int strength, int* outEv);
  * is not the live getaway's, or one that did not add damage. */
 int  MpMarkDamage(int from, int damage, int maxDamage, int* outCop, int* outEv);
 int  MpMarkDamageLive(void);		/* host: this round's meter follows reported damage */
+
+/* ROUND LIFECYCLE v2 (proto 24), host. A player who arrives while a round is LIVE
+ * in a mode whose late joiners wait (MP_MODE_LATEJOIN_SPECTATE) is present but
+ * BENCHED (MP_MARK_ENTRY_F_WAITING): not marked, not tagged, not counted as "in
+ * the round", until the next COUNTDOWN (or GO) puts everyone in. MpMarkOut benches
+ * a player who died in a mode with no respawn (MP_MODE_RESPAWN_NONE,
+ * MP_MARK_ENTRY_F_OUT): if they were marked it is handled like the marked player
+ * leaving (Cops n Robbers: busted). Returns MP_MARK_EV_* bits; 0 when not LIVE or
+ * the player is not in the round. `rnd` picks a new marked player. */
+int  MpMarkOut(int playerId, unsigned rnd);
 
 /* Cops n Robbers, host: `ms` more alive at `speed` whole units/frame. Returns the
  * whole points the GETAWAY earned (MP_MARK_CNR_DRIVE_BASE a second, plus up to
@@ -157,6 +168,10 @@ int  MpMarkPresent(int playerId);
 int  MpMarkPlayerReady(int playerId);	/* present and has picked a car */
 int  MpMarkCountWaiting(int* outReady);	/* present players; *outReady = how many have a car */
 int  MpMarkHeat(void);			/* Cops n Robbers: the damage meter, 0..BUST; else 0 */
+int  MpMarkEndReason(void);		/* MP_MARK_END_*: why the round in ENDED ended */
+int  MpMarkFlags(void);			/* MP_MARK_F_* */
+int  MpMarkInRound(int playerId);	/* present and not benched (WAITING / OUT) */
+int  MpMarkBench(int playerId);		/* 0, MP_MARK_ENTRY_F_WAITING or MP_MARK_ENTRY_F_OUT */
 
 /* COUNTDOWN: ms until GO; 0 otherwise. `sinceMs` is run on like MpMarkClockMs. */
 int  MpMarkCountdownMs(int sinceMs);

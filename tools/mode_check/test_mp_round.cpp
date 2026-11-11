@@ -26,7 +26,7 @@ static int gChecks = 0;
 	printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); } } while (0)
 
 /* The wire, pinned. */
-static_assert(MP_PROTO_VERSION == 23, "the round state came with proto 22; 23 added JPMK beside it");
+static_assert(MP_PROTO_VERSION == 24, "the round state came with proto 22; 24 made its spare byte flags (ADMIN)");
 static_assert(sizeof(MP_ROUND) == 8, "MP_ROUND");
 static_assert(sizeof(MP_ROUND_ENTRY) == 8, "MP_ROUND_ENTRY");
 static_assert(sizeof(MP_ROSTER_ENTRY) == 32, "the roster entry is untouched");
@@ -133,7 +133,7 @@ static void CheckTakeARideLifecycle(void)
 		CHECK(e.playerId == ids3[i]);		/* ascending id */
 		CHECK(e.state == MP_ROUND_PLAYER_PLAYING);
 		CHECK(e.team == MP_ROUND_TEAM_NONE);
-		CHECK(e.reserved == 0);
+		CHECK(e.flags == 0);
 		CHECK(e.score == 0);
 	}
 
@@ -278,6 +278,52 @@ static void CheckScoreAdds(void)
 	MpRoundReset();
 }
 
+/* Proto 24: a round mode's late joiner waits, SPECTATING by state, the ADMIN bit. */
+static void CheckRoundV2(void)
+{
+	int present[MP_MAX_PLAYERS];
+	unsigned char buf[SNAP_MAX];
+	int ids2[] = { 0, 3 }, ids3[] = { 0, 3, 5 };
+	MP_ROUND_ENTRY e;
+	int len;
+
+	MpRoundReset();
+	SetPresent(present, ids2, 2);
+	MpRoundSyncPresent(present, MP_GAMEMODE_FOXHOUNDS);
+	MpRoundBegin(MP_GAMEMODE_FOXHOUNDS);
+	SetPresent(present, ids3, 3);
+	MpRoundSyncPresent(present, MP_GAMEMODE_FOXHOUNDS);
+	CHECK(MpRoundPlayerState(5) == MP_ROUND_PLAYER_WAITING);	/* waits for the next round */
+	CHECK(MpRoundSetState(3, MP_ROUND_PLAYER_SPECTATING) == 1 && MpRoundSetState(3, MP_ROUND_PLAYER_SPECTATING) == 0);
+	CHECK(MpRoundSetState(9, MP_ROUND_PLAYER_SPECTATING) == 0);	/* not present */
+	CHECK(MpRoundSetAdmin(0, 1) == 1 && MpRoundSetAdmin(0, 1) == 0 && MpRoundPlayerIsAdmin(0));
+	CHECK(MpRoundSetAdmin(9, 1) == 0 && !MpRoundPlayerIsAdmin(3));
+	len = MpRoundBuild(buf, (int)sizeof(buf));
+	memcpy(&e, buf + sizeof(MP_ROUND), sizeof(e));
+	CHECK(e.playerId == 0 && e.flags == MP_ROUND_ENTRY_F_ADMIN);
+	memcpy(&e, buf + sizeof(MP_ROUND) + sizeof(e), sizeof(e));
+	CHECK(e.playerId == 3 && e.state == MP_ROUND_PLAYER_SPECTATING && e.flags == 0);
+	CHECK(MpRoundApply(buf, len) == 1 && MpRoundPlayerIsAdmin(0) && MpRoundPlayerState(5) == MP_ROUND_PLAYER_WAITING);
+	MpRoundEnd();
+	MpRoundBegin(MP_GAMEMODE_FOXHOUNDS);	/* everyone plays the next round; admin kept */
+	CHECK(MpRoundPlayerState(5) == MP_ROUND_PLAYER_PLAYING && MpRoundPlayerState(3) == MP_ROUND_PLAYER_PLAYING);
+	CHECK(MpRoundPlayerIsAdmin(0));
+	SetPresent(present, ids2, 2);
+	MpRoundSyncPresent(present, MP_GAMEMODE_FOXHOUNDS);
+	SetPresent(present, ids3, 3);
+	MpRoundSyncPresent(present, MP_GAMEMODE_FOXHOUNDS);
+	CHECK(MpRoundPlayerState(5) == MP_ROUND_PLAYER_WAITING);
+	/* Take a Ride's late joiner still plays at once */
+	MpRoundReset();
+	SetPresent(present, ids2, 2);
+	MpRoundSyncPresent(present, MP_GAMEMODE_TAKEADRIDE);
+	MpRoundBegin(MP_GAMEMODE_TAKEADRIDE);
+	SetPresent(present, ids3, 3);
+	MpRoundSyncPresent(present, MP_GAMEMODE_TAKEADRIDE);
+	CHECK(MpRoundPlayerState(5) == MP_ROUND_PLAYER_PLAYING);
+	MpRoundReset();
+}
+
 int main(void)
 {
 	CheckTag();
@@ -285,6 +331,7 @@ int main(void)
 	CheckTakeARideLifecycle();
 	CheckApply();
 	CheckScoreAdds();
+	CheckRoundV2();
 	CheckDefaults();	/* a reset forgets everything */
 	PrintCanonical();
 

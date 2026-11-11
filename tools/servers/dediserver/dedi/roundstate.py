@@ -1,4 +1,5 @@
-"""dedi.roundstate -- the round state this server referees (MP_TAG_ROUND, proto 22).
+"""dedi.roundstate -- the round state this server referees (MP_TAG_ROUND, proto 22;
+proto 24: flags with ADMIN, a round mode's late joiner WAITING, set_state).
 
 The Python twin of mp_round.c's host half. A dedicated server is a match in
 progress from the moment it starts (every joiner gets a START), so round 1 begins
@@ -20,7 +21,7 @@ class RoundState:
         self.gamemode = int(gamemode)
         self.number = 0
         self.phase = m.ROUND_PHASE_IDLE
-        self.players = {}        # playerId -> {"state", "team", "score"}
+        self.players = {}        # playerId -> {"state", "team", "score", "flags"}
         self.revision = 0
 
     def begin(self, gamemode=None):
@@ -49,8 +50,35 @@ class RoundState:
             self.revision += 1
 
     def _arrival_state(self):
-        # MP_MODE_LATEJOIN_LIVE (Take a Ride): straight in. Not in a live round: wait.
-        return m.ROUND_PLAYER_PLAYING if self.phase == m.ROUND_PHASE_LIVE else m.ROUND_PLAYER_WAITING
+        # MP_MODE_LATEJOIN_LIVE (Take a Ride): straight in. Not in a live round, or a
+        # round mode whose late joiners wait (v24, MODE_LATEJOIN_SPECTATE): WAITING.
+        if self.phase != m.ROUND_PHASE_LIVE:
+            return m.ROUND_PLAYER_WAITING
+        if m.mode_latejoin(self.gamemode) == m.MODE_LATEJOIN_SPECTATE:
+            return m.ROUND_PLAYER_WAITING
+        return m.ROUND_PLAYER_PLAYING
+
+    def set_state(self, pid, state):
+        """MpRoundSetState: True when a present player's state changed."""
+        row = self.players.get(int(pid))
+        if row is None or row["state"] == state:
+            return False
+        row["state"] = state
+        self.revision += 1
+        return True
+
+    def set_admins(self, ids):
+        """MpRoundSetAdmin for every present player: ADMIN on exactly `ids`."""
+        ids = {int(i) for i in ids}
+        changed = False
+        for pid, row in self.players.items():
+            want = (row["flags"] | m.ROUND_ENTRY_F_ADMIN) if pid in ids else (row["flags"] & ~m.ROUND_ENTRY_F_ADMIN)
+            if want != row["flags"]:
+                row["flags"] = want
+                changed = True
+        if changed:
+            self.revision += 1
+        return changed
 
     def sync(self, ids):
         """Make the present-set equal `ids`. True when anything changed."""
@@ -62,14 +90,14 @@ class RoundState:
                 changed = True
         for pid in ids:
             if pid not in self.players:
-                self.players[pid] = {"state": self._arrival_state(), "team": -1, "score": 0}
+                self.players[pid] = {"state": self._arrival_state(), "team": -1, "score": 0, "flags": 0}
                 changed = True
         if changed:
             self.revision += 1
         return changed
 
     def rows(self):
-        return [(pid, r["state"], r["team"], r["score"]) for pid, r in sorted(self.players.items())]
+        return [(pid, r["state"], r["team"], r["score"], r["flags"]) for pid, r in sorted(self.players.items())]
 
     def to_bytes(self):
         return m.build_round(self.gamemode, self.phase, self.number, self.rows())

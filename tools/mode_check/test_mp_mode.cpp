@@ -115,7 +115,9 @@ static void CheckMarkModes(void)
 		CHECK(d->music == MP_MODE_MUSIC_PURSUIT && MpModeMusic(kRows[i].id) == MP_MODE_MUSIC_PURSUIT);
 		CHECK(d->teamCount == 0 && d->teamColours == 0);
 		CHECK(d->respawn == MP_MODE_RESPAWN_INSTANT);	/* instant respawn, as Take a Ride */
-		CHECK(d->lateJoin == MP_MODE_LATEJOIN_LIVE);
+		/* v24: a join after GO waits for the next round */
+		CHECK(d->lateJoin == MP_MODE_LATEJOIN_SPECTATE && MpModeLateJoinPolicy(kRows[i].id) == MP_MODE_LATEJOIN_SPECTATE);
+		CHECK(MpModeRespawnDelayFrames(kRows[i].id) == 0);
 		/* the round start: wait for 2 and every car, 5-4-3-2-1 first map, 3-2-1 later, GO */
 		CHECK(d->spawn == MP_MODE_SPAWN_CLUSTER && MpModeSpawnRule(kRows[i].id) == MP_MODE_SPAWN_CLUSTER);
 		CHECK(d->waitMinPlayers == 2 && MpModeWaitMinPlayers(kRows[i].id) == 2);
@@ -266,6 +268,7 @@ static void CheckAnswersAreToday(int mode, const char* expectName)
 
 	/* MpRespawnAfterDeath: an instant respawn (and, separately, never a game over) */
 	CHECK(MpModeRespawnPolicy(mode) == MP_MODE_RESPAWN_INSTANT);
+	CHECK(MpModeRespawnDelayFrames(mode) == 0);
 
 	/* MpSpawnLateJoiners / MpOnNetSpawn: seat at once, at the session's placement */
 	CHECK(MpModeLateJoinPolicy(mode) == MP_MODE_LATEJOIN_LIVE);
@@ -387,8 +390,9 @@ int main(void)
 		int i;
 
 		for (i = 0; i < MpModeCount(); i++)
-			printf("MODEROW %d %d %d %d\n", MpModeAt(i)->id, MpModeAt(i)->timer, MpModeAt(i)->music,
-				MpModeWantsCountdown(MpModeAt(i)->id));
+			printf("MODEROW %d %d %d %d %d %d\n", MpModeAt(i)->id, MpModeAt(i)->timer, MpModeAt(i)->music,
+				MpModeWantsCountdown(MpModeAt(i)->id), MpModeLateJoinPolicy(MpModeAt(i)->id),
+				MpModeRespawnPolicy(MpModeAt(i)->id));
 	}
 
 	printf("mp_mode: %d check(s), %d failure(s)\n", gChecks, gFails);

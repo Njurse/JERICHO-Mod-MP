@@ -40,7 +40,7 @@ DEFAULTS = {
     "port": 1318,
     "name": "Dedicated",
     "city": 0,                 # GameLevel the clients should load (0..3)
-    "arena": 0,                # multiplayer arena index (the game's -mp 0 / -mp 1)
+    "arena": 0,                # multiplayer arena index 0..3 (the game's -mp N; proto 24)
     "map_mode": "mp",        # "city" for the full single-player city, "mp" for multiplayer
     "gamemode": 0,
     "max_players": 16,         # a client takes a slot 1..max_players-1 (0 is the server);
@@ -520,10 +520,11 @@ class Dedicated:
         return 1 if self.map_mode == MAP_MODE_MP else 0
 
     def session_spare(self):
-        """MP_SESSION.spare: bit 0 is map shape, bits 1.. are rules, bit 8 is arena."""
+        """MP_SESSION.spare: bit 0 is map shape, bits 1.. are rules, bits 8-9 are the
+        arena (0..3, proto 24)."""
         arena = self.arena if self.map_shape else 0
         return ((self.map_shape & 1) | ((int(self.cfg["rules"]) & 0x7F) << 1)
-                | ((arena & 1) << 8))
+                | ((arena & m.SESSION_ARENA_MASK) << m.SESSION_ARENA_SHIFT))
 
     # -- the plugin-facing surface (dedi/plugins.py ServerAPI calls these)
     def player_views(self):
@@ -600,8 +601,8 @@ class Dedicated:
 
     def set_arena(self, arena):
         arena = int(arena)
-        if not 0 <= arena <= 1:
-            raise ValueError("arena is 0..1")
+        if not 0 <= arena <= m.ARENA_MAX:
+            raise ValueError("arena is 0..%d" % m.ARENA_MAX)
         self.cfg["arena"] = arena
         self.log.info("multiplayer map now %d (new joiners load it)" % arena)
         self.readvertise()
@@ -758,6 +759,7 @@ class Dedicated:
         The present-set follows the clients, so a join or a leave is a change."""
         with self.lock:
             self.round.sync(info["id"] for info in self.clients.values())
+            self.round.set_admins(info["id"] for info in self.clients.values() if info.get("admin"))
             return self.round.to_bytes()
 
     def broadcast_round_if_changed(self, force=False, skip=None):
@@ -827,7 +829,8 @@ class Dedicated:
         pts = self.mark.drive(ms, int(speed))
         if pts:
             self.round.add_score(g, pts)
-        cops = [car_pose(self.cars[o]) for o in self.mark.present if o != g and o in self.cars]
+        cops = [car_pose(self.cars[o]) for o in self.mark.present
+                if o != g and o in self.cars and self.mark.in_round(o)]
         cops = [c for c in cops if c is not None]
         if mine is not None and cops and all(flat_dist(mine, c) >= markref.CNR_ESCAPE_DIST for c in cops):
             self.escape_ms += ms
@@ -855,18 +858,43 @@ class Dedicated:
             self.log.info("mark: round %d over - busted" % self.round.number)
         return True
 
-    def mark_damage_report(self, pid, payload):
-        """Cops n Robbers: the getaway's own JPDM (its engine's totalDamage and wreck
-        point). The meter follows it (markref.damage), the cop in contact within
-        CNR_CREDIT_MS scores the points; a getaway that never sends one is scored by
-        contact strength as before (mp_session.c MpMarkHostDamage)."""
-        if len(payload) < m.DAMAGE.size:
-            return False
-        frm, _flags, _seq, damage, max_damage = m.DAMAGE.unpack_from(payload, 0)
-        if frm != pid or max_damage <= 0 or max_damage > (1 << 20):
-            return False
+    def mark_carstate_round(self, pid):
+        """Proto 24, from `pid`'s carstate row just kept: MP_CARSTATE_OUT (died with no
+        respawn) benches them for the round; in Cops n Robbers the getaway's row carries
+        its own totalDamage and wreck point, which the meter follows (markref.damage),
+        the cop in contact within CNR_CREDIT_MS scoring the points (mp_session.c
+        MpMarkHostCarRow)."""
+        changed = False
+        with self.lock:
+            row = self.cars.get(pid)
+            if row is None or len(row) != m.CARSTATE_ENTRY.size:
+                return False
+            f = m.CARSTATE_ENTRY.unpack(row)
+            flags, model, damage, max_damage = f[1], f[3], f[23], f[24]
+            if flags & m.CARSTATE_OUT and self.mark.in_round(pid):
+                ev = self.mark.out(pid, self.mark_rng.randrange(1 << 15))
+                if self.mark.bench.get(pid) == m.MARK_ENTRY_F_OUT:
+                    self.round.set_state(pid, m.ROUND_PLAYER_SPECTATING)
+                    self.log.info("mark: player %d is out until the next round (no respawn)" % pid)
+                    changed = True
+                if ev & markref.EV_END:
+                    self.round.end()
+                    self.log.info("mark: round %d over - the marked player is out" % self.round.number)
+                elif ev & markref.EV_MOVED:
+                    self.log.info("mark: the marked player is out - player %d is marked now" % self.mark.marked)
+        if changed:
+            self.broadcast_mark_if_due()
+            self.broadcast_round_if_changed()
+        if model == 0xFF or not flags & 1 or max_damage <= 0:
+            return changed          # on foot / no body: no damage to read
+        return self.mark_damage(pid, damage, max_damage) or changed
+
+    def mark_damage(self, pid, damage, max_damage):
+        """Cops n Robbers: the getaway's own damage out of its wreck point."""
         with self.lock:
             if self.mark.timer != m.MODE_TIMER_GETAWAY or self.mark.phase != m.MARK_PHASE_LIVE:
+                return False
+            if pid != self.mark.marked:
                 return False
             first = not self.mark.dmg_live
             pts, cop, ev = self.mark.damage(pid, damage, max_damage)
@@ -1369,6 +1397,7 @@ class Dedicated:
                                    m.TAG["carstate"], skip=conn)
                     if self.mark.active:
                         self.mark_carstate(pid)
+                        self.mark_carstate_round(pid)
                 elif tag in (m.TAG["ped"], m.TAG["traffic"]):
                     self.relay_peer_state(conn, tag, payload, pid)
                 elif tag == m.TAG["hit"]:
@@ -1397,10 +1426,6 @@ class Dedicated:
                     relay.round_state(self, conn, pid, payload)
                 elif tag == m.TAG["mark"]:
                     relay.mark_state(self, conn, pid, payload)
-                elif tag == m.TAG["damage"]:
-                    # optional (mp 0.23.4): the getaway's own damage; never relayed
-                    if self.mark.active:
-                        self.mark_damage_report(pid, payload)
                 elif tag == m.TAG["leave"]:
                     break
         finally:
@@ -1646,7 +1671,7 @@ class Dedicated:
             "session:   TCP/%d%s" % (self.port, adv),
             "city:      %d" % self.city,
             "map mode:  %s" % ("multiplayer" if self.map_shape else "single-player city"),
-            "arena:     %d (of the city's two multiplayer maps)" % self.arena,
+            "arena:     %d (multiplayer map 0..%d)" % (self.arena, m.ARENA_MAX),
             "gamemode:  %d" % int(self.cfg["gamemode"]),
             "round:     %d (%s)" % (self.round.number,
                                     {m.ROUND_PHASE_IDLE: "idle", m.ROUND_PHASE_LIVE: "live",
@@ -1852,8 +1877,8 @@ def parse_args(argv):
     ap.add_argument("--name")
     ap.add_argument("--city", type=int, help="GameLevel the clients load (0..3)")
     ap.add_argument("--arena", type=int,
-                    help="which of the city's two multiplayer maps clients load (0 or 1; "
-                         "the game's -mp 0 / -mp 1)")
+                    help="which multiplayer map clients load (0..3; the game's -mp N; "
+                         "Driver 2 ships 0 and 1 per city)")
     ap.add_argument("--gamemode", type=int)
     ap.add_argument("--mode-time", type=int, dest="mode_time", metavar="MIN",
                     help="Fox N Hounds / Car Bomb Tag time in minutes, 1..5 (default 3)")
@@ -2042,9 +2067,9 @@ def main(argv=None):
         mode = MAP_MODE_MP
     cfg["map_mode"] = mode
     arena = int(cfg["arena"])
-    if arena not in (0, 1):
-        log.warning("arena %d is not 0 or 1 (the two multiplayer maps of a city); "
-                    "using 0" % arena)
+    if not 0 <= arena <= m.ARENA_MAX:
+        log.warning("arena %d is not 0..%d (a city's multiplayer maps); using 0"
+                    % (arena, m.ARENA_MAX))
         arena = 0
     cfg["arena"] = arena
 

@@ -38,7 +38,18 @@
 extern "C" {
 #endif
 
-#define MP_PROTO_VERSION	23	/* 23: the MARKED-PLAYER state, MP_TAG_MARK ('JPMK'):
+#define MP_PROTO_VERSION	24	/* 24: round lifecycle v2 (mp 0.24.0). MP_MARK grows to
+				 *     16 bytes: endReason (MP_MARK_END_*: clock, bust,
+				 *     escape, leave, void), flags (MP_MARK_F_*) and a
+				 *     spare u16; MP_MARK_ENTRY.flags adds WAITING (joined
+				 *     mid-round) and OUT (no respawn this round).
+				 *     MP_CARSTATE_ENTRY carries the owner's totalDamage
+				 *     and wreck point (61 bytes) and MP_CARSTATE_OUT;
+				 *     the optional JPDM / MP_DAMAGE of 0.23.4 is gone.
+				 *     MP_ROUND_ENTRY.reserved is flags (ADMIN). The
+				 *     arena is 0..3 everywhere (WELCOME.arena, the
+				 *     session spare's bits 8-9).
+				 * 23: the MARKED-PLAYER state, MP_TAG_MARK ('JPMK'):
 				 *     Fox N Hounds / Car Bomb Tag (modes 1, 2) -- the
 				 *     host's time setting, who is marked (fox / bomb
 				 *     holder), the winner, a transfer counter, and
@@ -259,10 +270,6 @@ typedef struct MP_ROSTER
 #define MP_TAG_MARK	"JPMK"	/* host -> all: the marked-player state of a timer mode
 				 * (MP_MARK + MP_MARK_ENTRY rows; v23). Host-only like
 				 * JPRD, and only sent in a mode that uses it. */
-#define MP_TAG_DAMAGE	"JPDM"	/* getaway -> host: its own car's damage (MP_DAMAGE), Cops n
-				 * Robbers while LIVE (mp 0.23.4). OPTIONAL like JPSX: a host
-				 * or server that does not know it drops it and keeps scoring
-				 * contacts, so it needs no protocol bump. Never relayed. */
 
 /* Envelope flags */
 #define MP_FLAG_RELIABLE	0x01	/* sender wants an ordered/reliable channel */
@@ -418,7 +425,7 @@ typedef struct MP_WELCOME
 	uint8_t  running;	/* 1 = the host's match is already live (join in progress) */
 	uint8_t  subGame;	/* the multiplayer sub-level (gSubGameNumber) */
 	uint8_t  mpLevel;	/* 1 = the host is on a multiplayer map, 0 = the full city */
-	uint8_t  arena;		/* which multiplayer map, 0/1 (gBootMpArena) - keeps the struct 16 bytes */
+	uint8_t  arena;		/* which multiplayer map, 0..MP_ARENA_MAX (gBootMpArena; v24: 0..3) */
 	uint8_t  gamemode;
 	uint8_t  city;
 	uint8_t  timeOfDay;
@@ -428,6 +435,12 @@ typedef struct MP_WELCOME
 	uint8_t  rules;		/* the host's SESSION RULES, MP_RULES_PACK'd (v11) -- what a
 				 * client joining a match IN PROGRESS must adopt */
 } MP_WELCOME;
+
+/* Which multiplayer map of a city (v24: 0..3; Driver 2 ships two per city, 2 and 3
+ * are for added maps). It rides MP_WELCOME.arena and MP_SESSION.spare's bits 8-9. */
+#define MP_ARENA_MAX		3
+#define MP_SESSION_ARENA_SHIFT	8
+#define MP_SESSION_ARENA_MASK	0x3
 
 /* 'JPRJ' -- host -> client, refused. */
 typedef struct MP_REJECT
@@ -589,6 +602,9 @@ typedef struct MP_COLOR
  * (MpAdoptRemoteCar). */
 #define MP_CARSTATE_HAS_BODY	1
 #define MP_CARSTATE_SIREN	8	/* owner has siren/lights on (police car) */
+#define MP_CARSTATE_OUT		0x10	/* v24: the owner died in a mode with no respawn
+					 * (MP_MODE_RESPAWN_NONE) and is out until the
+					 * next round; the host benches them (MP_MARK_ENTRY_F_OUT) */
 /* The body we are in now is the SAME `car_data` slot we last got out of (this
  * machine's slot -- the peers know which body they released for us). The owner
  * sets it whenever they walk back into the car they left, or use the pause menu's
@@ -638,6 +654,9 @@ typedef struct MP_CARSTATE_ENTRY
 				 * 2 = 1.0x, 20 = 10.0x (0/1 read as 1.0x). Per CAR,
 				 * not per player -- mp applies it to the car this row
 				 * names, so every machine deforms that body alike. */
+	uint16_t totalDamage;	/* v24: the owner's CAR_DATA.totalDamage (0 on foot) --
+				 * Cops n Robbers' meter reads the getaway's */
+	uint16_t maxDamage;	/* v24: the owner's wreck point, MaxPlayerDamage[0] */
 } MP_CARSTATE_ENTRY;
 
 /* ------------------------------------------------------------------ */
@@ -819,12 +838,16 @@ enum
 
 #define MP_ROUND_TEAM_NONE	0xFF	/* not on a team (every Take a Ride player) */
 
+/* MP_ROUND_ENTRY.flags (v24) */
+#define MP_ROUND_ENTRY_F_ADMIN	0x01	/* the host says this player is an admin (a listen
+					 * host is its own; a dedicated server's admins) */
+
 typedef struct MP_ROUND_ENTRY
 {
 	uint8_t  playerId;
 	uint8_t  state;		/* MP_ROUND_PLAYER_* */
 	uint8_t  team;		/* 0..MP_MODE_MAX_TEAMS-1, MP_ROUND_TEAM_NONE = none */
-	uint8_t  reserved;
+	uint8_t  flags;		/* MP_ROUND_ENTRY_F_* (v24; was reserved) */
 	int32_t  score;		/* this round's score, starts at 0 */
 } MP_ROUND_ENTRY;		/* 8 bytes */
 
@@ -861,6 +884,27 @@ enum
 
 /* MP_MARK_ENTRY.flags */
 #define MP_MARK_ENTRY_F_READY	0x01	/* this player has picked a car (the round-start gate) */
+#define MP_MARK_ENTRY_F_WAITING	0x02	/* v24: joined while the round was live, in a mode whose
+					 * late joiners wait (MP_MODE_LATEJOIN_SPECTATE): not
+					 * in this round until the next COUNTDOWN */
+#define MP_MARK_ENTRY_F_OUT	0x04	/* v24: died with no respawn (MP_MODE_RESPAWN_NONE):
+					 * out of this round until the next COUNTDOWN */
+
+/* MP_MARK.endReason (v24): why the round in ENDED ended. NONE outside ENDED. */
+enum
+{
+	MP_MARK_END_NONE = 0,
+	MP_MARK_END_CLOCK = 1,		/* a clock reached 0:00 (fox crowned, bomb went off,
+					 * the getaway lasted) */
+	MP_MARK_END_BUST = 2,		/* Cops n Robbers: the meter filled / the getaway wrecked */
+	MP_MARK_END_ESCAPE = 3,		/* Cops n Robbers: the getaway got clear of every cop */
+	MP_MARK_END_LEAVE = 4,		/* the getaway left (or went out) */
+	MP_MARK_END_VOID = 5		/* fewer than two left in the round: nobody won */
+};
+
+/* MP_MARK.flags (v24) */
+#define MP_MARK_F_DAMAGE	0x01	/* Cops n Robbers: this round's meter follows the
+					 * getaway's real damage (its carstate rows) */
 
 #define MP_MARK_NONE		0xFF	/* no marked player / no winner */
 #define MP_MARK_MINUTES_MIN	1
@@ -886,19 +930,10 @@ typedef struct MP_MARK
 	uint16_t sharedDs;	/* Car Bomb Tag: the bomb's clock; Fox N Hounds: 0 */
 	uint16_t countdownDs;	/* COUNTDOWN: time to GO; LOBBY: time left in the
 				 * pre-game count; else 0 (was reserved) */
-} MP_MARK;			/* 12 bytes: header only, the rows follow */
-
-/* MP_TAG_DAMAGE: the sender's OWN car, as its engine has it -- the meter's only
- * real-damage source (player carstate rows carry no damage). `playerId` must be
- * the sender (the host checks it against the connection). */
-typedef struct MP_DAMAGE
-{
-	uint8_t  playerId;	/* the sender */
-	uint8_t  flags;		/* reserved, 0 */
-	uint16_t seq;		/* +1 per report (diagnostic) */
-	int32_t  totalDamage;	/* CAR_DATA.totalDamage */
-	int32_t  maxDamage;	/* MaxPlayerDamage[0]: the wreck point on the sender */
-} MP_DAMAGE;			/* 12 bytes */
+	uint8_t  endReason;	/* v24: MP_MARK_END_*, set in ENDED */
+	uint8_t  flags;		/* v24: MP_MARK_F_* */
+	uint16_t spare;		/* v24: 0 */
+} MP_MARK;			/* 16 bytes: header only, the rows follow */
 
 typedef struct MP_HIT
 {
@@ -938,7 +973,7 @@ static_assert(sizeof(MP_SESSION) == 12, "MP_SESSION layout");
 static_assert(sizeof(MP_PLAYER_INPUT) == 4, "MP_PLAYER_INPUT layout");
 static_assert(sizeof(MP_INPUT) == 4, "MP_INPUT layout");
 static_assert(sizeof(MP_ROSTER_ENTRY) == 32, "MP_ROSTER_ENTRY layout");
-static_assert(sizeof(MP_CARSTATE_ENTRY) == 57, "MP_CARSTATE_ENTRY layout");
+static_assert(sizeof(MP_CARSTATE_ENTRY) == 61, "MP_CARSTATE_ENTRY layout");	/* v24 */
 static_assert(sizeof(MP_HIT) == 32, "MP_HIT layout");
 static_assert(sizeof(MP_STATS_ENTRY) == 12, "MP_STATS_ENTRY layout");
 static_assert(sizeof(MP_CARSTATE) == 8, "MP_CARSTATE layout");
@@ -947,9 +982,8 @@ static_assert(sizeof(MP_TRAFFIC) == 8, "MP_TRAFFIC layout");
 static_assert(sizeof(MP_CHANNEL) == 26, "MP_CHANNEL layout");
 static_assert(sizeof(MP_ROUND) == 8, "MP_ROUND layout");		/* v22 */
 static_assert(sizeof(MP_ROUND_ENTRY) == 8, "MP_ROUND_ENTRY layout");	/* v22 */
-static_assert(sizeof(MP_MARK) == 12, "MP_MARK layout");		/* v23 */
+static_assert(sizeof(MP_MARK) == 16, "MP_MARK layout");		/* v24 */
 static_assert(sizeof(MP_MARK_ENTRY) == 4, "MP_MARK_ENTRY layout");	/* v23 */
-static_assert(sizeof(MP_DAMAGE) == 12, "MP_DAMAGE layout");	/* optional, mp 0.23.4 */
 
 #endif
 

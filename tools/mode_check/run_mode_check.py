@@ -79,14 +79,15 @@ def check_snapshot(output):
 
 
 def check_mode_rows(output):
-    """test_mp_mode's MODEROW lines (id timer music countdown) vs the Python mirror."""
+    """test_mp_mode's MODEROW lines (id timer music countdown lateJoin respawn) vs the Python mirror."""
     import mp_test
-    rows = {int(i): (int(t), int(mu), int(cd)) for i, t, mu, cd in
-            re.findall(r"^MODEROW (\d+) (\d+) (\d+) (\d+)$", output, re.M)}
-    py = {i: (mp_test.GAMEMODE_TIMER.get(i), mp_test.GAMEMODE_MUSIC.get(i), mp_test.GAMEMODE_COUNTDOWN.get(i))
+    rows = {int(i): (int(t), int(mu), int(cd), int(lj), int(rs)) for i, t, mu, cd, lj, rs in
+            re.findall(r"^MODEROW (\d+) (\d+) (\d+) (\d+) (\d+) (\d+)$", output, re.M)}
+    py = {i: (mp_test.GAMEMODE_TIMER.get(i), mp_test.GAMEMODE_MUSIC.get(i), mp_test.GAMEMODE_COUNTDOWN.get(i),
+              mp_test.GAMEMODE_LATEJOIN.get(i), mp_test.GAMEMODE_RESPAWN.get(i))
           for i in mp_test.GAMEMODE_NAMES}
     ok = bool(rows) and rows == py
-    print("mode clock/music/countdown: C %r vs mp_test %r -> %s" % (rows, py, "OK" if ok else "MISMATCH"), flush=True)
+    print("mode clock/music/countdown/latejoin/respawn: C %r vs mp_test %r -> %s" % (rows, py, "OK" if ok else "MISMATCH"), flush=True)
     return ok
 
 
@@ -187,6 +188,20 @@ def mark_scripts():
          "sync 0 4", "tick 33 0"],
         ["reset %s 2" % fox, "ready %s" % everyone, "sync 0 2 5", "tick 0 0", "tick 5000 0",
          "sync 0 5", "tick 33 0"],
+        # Proto 24: a join after GO is benched (WAITING) and never tagged / hit;
+        # the marked player leaving a waiter alone is void; the next countdown
+        # puts the waiter in; out benches (the getaway out = bust, the holder out
+        # = a new holder with the grace); every end carries its reason.
+        ["reset %s 2" % fox, "ready %s" % everyone, "sync 0 2 5", "tick 0 0", "tick 5000 1",
+         "sync 0 2 5 7", "tick 3000 0", "contact 5 7", "contact 2 7", "tick 2000 0",
+         "contact 2 5", "sync 0 2 7", "tick 33 0", "tick 10000 0", "tick 33 0", "tick 4000 0"],
+        ["reset %s 1" % bomb, "ready %s" % everyone, "sync 0 1 4 6", "tick 0 0", "tick 5000 0",
+         "out 1 1", "out 1 0", "contact 4 6", "tick 13000 0", "sync 0 1 4 6 9", "out 9 0",
+         "out 6 0", "tick 33 0", "tick 10000 0", "tick 4000 0", "out 4 0"],
+        ["reset %s 1" % cnr, "ready %s" % everyone, "sync 0 1 4 6", "out 4 0", "tick 0 0",
+         "tick 5000 0", "out 4 0", "hit 1 4 20", "hit 1 6 20", "damage 1 3000 30000",
+         "sync 0 1 4 6 8", "hit 8 1 20", "tick 33 0", "out 1 0", "tick 10000 0", "tick 4000 0",
+         "escape", "tick 10000 0", "tick 4000 0", "sync 0 4 6 8", "tick 33 0"],
         # Take a Ride: inert; and the minutes clamp.
         ["reset 0 3", "sync 0 0 1 2", "tick 1000 0", "contact 0 1"],
         ["reset %s 0" % fox, "reset %s 9" % bomb, "sync 0 3 4", "tick 1 0"],
@@ -214,6 +229,8 @@ def mark_scripts():
                 steps.append("drive %d %d" % (rng.choice([0, 33, 34, 500, 1000]), rng.randrange(-10, 400)))
             elif mode == cnr and r < 0.63:
                 steps.append("escape")
+            elif r < 0.66 and r >= 0.63:
+                steps.append("out %d %d" % (rng.randrange(0, 6), rng.randrange(1000)))
             elif mode == cnr and r < 0.70:
                 steps.append("damage %d %d %d" % (rng.randrange(0, 6), rng.choice([0, 1, 500, 3333, 15000, 29999, 30000, 40000]),
                                                  rng.choice([0, 1000, 30000])))
@@ -251,6 +268,8 @@ def python_mark_run(steps):
         elif t[0] == "damage":
             pts, cop, dev = ref.damage(int(t[1]), int(t[2]), int(t[3]))
             ev = pts * 65536 + (cop + 1) * 256 + dev
+        elif t[0] == "out":
+            ev = ref.out(int(t[1]), int(t[2]))
         out.append("STEP %d %d %s" % (n, ev, ref.to_bytes().hex()))
     return out
 

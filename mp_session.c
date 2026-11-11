@@ -38,7 +38,7 @@
 #include "models.h"	/* JerCarIsPolice / JerCarSlotIsPolice: the engine's police-car answer */
 #include "jer_config.h"	/* the role-car picks, kept per mode in mp's config */
 extern int gBootMpLevel;	/* main.c: 1 = the small multiplayer map, 0 = the full city */
-extern int gBootMpArena;	/* main.c: which multiplayer map (0/1) */
+extern int gBootMpArena;	/* main.c: which multiplayer map (0..MP_ARENA_MAX) */
 extern int gWantNight;		/* glaunch.c: 1 = the night take-a-ride level variant */
 #include "players.h"	/* InitPlayer: a late joiner needs a car the same way the engine makes one */
 #include "ai.h"		/* TannerCanEnterCar: the gate the enter-left test lever checks */
@@ -251,9 +251,7 @@ static void MpFailsafeNoteCar(int slot);
  * for anything but that behaviour, so for Take a Ride this never logs. */
 enum
 {
-	MP_MODE_FALLBACK_RESPAWN = 0,
-	MP_MODE_FALLBACK_LATEJOIN,
-	MP_MODE_FALLBACK_SPAWN,
+	MP_MODE_FALLBACK_SPAWN = 0,
 	MP_MODE_FALLBACK_KINDS
 };
 
@@ -338,6 +336,14 @@ static void MpRoundHostSync(void)
 		present[id] = MpGetPlayer(id) != NULL;
 
 	MpRoundSyncPresent(present, gMp.gamemode);
+
+	/* v24: a listen host is its own session's admin (MP_ROUND_ENTRY_F_ADMIN) */
+	{
+		MP_PLAYER* me = MpLocalPlayer();
+
+		if (MpIsHost() && me != NULL)
+			MpRoundSetAdmin(me->id, 1);
+	}
 }
 
 /* Send the host's snapshot to one connection, or to everyone with connIndex < 0. */
@@ -534,6 +540,16 @@ static void MpMarkChaseTick(void);
 static void MpMarkRoundReset(void);
 static void MpRespawnHoldTick(void);
 static int gMpRespawnDeferred;		/* RESPAWN HOLD: a held death waits for the hold to end */
+static int gMpRespawnDelayArmed;	/* v24 MP_MODE_RESPAWN_DELAY: a death waits until... */
+static unsigned gMpRespawnDelayAt;	/* ...this frame (MpRespawnHoldTick) */
+static int gMpRespawnDelayShown;	/* the "Respawn in N" second last noticed */
+static int gMpRespawnDelayNow;		/* the delayed respawn itself is running */
+static int gMpRespawnOut;		/* v24 MP_MODE_RESPAWN_NONE: out until the next COUNTDOWN */
+static int gMpSpectating;		/* v24: benched (WAITING / OUT), the camera on another car */
+static int gMpSpectateCar = -1;		/* the car slot the camera was last put on */
+static int gMp321Count;			/* v24 engine-style 3-2-1 (MpMarkDrawOverlay): the digit, 0 = none */
+static int gMp321Scale;			/* ...its PrintScaledString scale, 32 shrinking to 1 */
+static int gMpGoFrame = -1;		/* the frame the round went live straight out of a countdown */
 static int gMpRespawnHeldLogged;	/* one log line per hold, not one per engine ask */
 static void MpRoleCarApply(void);
 static void MpRolePicksForget(const char* why);
@@ -683,8 +699,8 @@ static int MpHostCnrTick(int ms)
 		MP_PLAYER* p;
 		long long dx, dz;
 
-		if (id == MpMarkMarked() || !MpMarkPresent(id))
-			continue;
+		if (id == MpMarkMarked() || !MpMarkInRound(id))
+			continue;	/* v24: a benched player is no cop */
 
 		p = MpGetPlayer(id);
 
@@ -929,6 +945,10 @@ static void MpMarkPresentClear(void)
 		jer_music_force(JER_MUSIC_AUTO);
 
 	gMpMarkPanelOn = gMpMarkArrowOn = gMpMarkMusicOn = 0;
+	gMp321Count = 0;
+	gMpGoFrame = -1;
+	gMpSpectating = 0;
+	gMpSpectateCar = -1;
 	gMpMarkShownSeq = -1;
 	gMpMarkShownPhase = -1;
 	gMpMarkShownCount = -1;
@@ -1002,9 +1022,11 @@ int MpMarkChaseGetaway(void)
 
 /* JERICHO round hold (mp 0.23.4): is the local car held still -- the COUNTDOWN and
  * the ENDED result screen of a countdown mode, never WAITING (the lobby drives
- * free) and never Take a Ride. See mp.h. */
+ * free) and never Take a Ride. v24: also while this player is benched in a live
+ * round (a late joiner WAITING, or OUT with no respawn) -- they spectate. See mp.h. */
 int MpRoundHoldsCar(void)
 {
+	MP_PLAYER* me;
 	int ph;
 
 	if (!gMp.running || !MpModeUsesTimer(gMp.gamemode) || !MpModeWantsCountdown(gMp.gamemode) ||
@@ -1012,6 +1034,13 @@ int MpRoundHoldsCar(void)
 		return 0;
 
 	ph = MpMarkPhase();
+
+	if (ph == MP_MARK_PHASE_LIVE)
+	{
+		me = MpLocalPlayer();
+		return me != NULL && MpMarkPresent(me->id) && !MpMarkInRound(me->id);
+	}
+
 	return ph == MP_MARK_PHASE_COUNTDOWN || ph == MP_MARK_PHASE_ENDED;
 }
 
@@ -1023,10 +1052,14 @@ static void MpMarkNotices(int me, int since)
 	int go = gMpMarkShownPhase == MP_MARK_PHASE_COUNTDOWN;	/* LIVE straight out of the 3-2-1 */
 	char line[JER_NOTIFY_TEXT_MAX];
 
-	/* ONE COUNTDOWN, the engine's own golden notice, one a second, each shown once;
-	 * a client runs the time on from its last snapshot, as it does the clocks.
-	 *   first-load: firstCountdownSec as N..1, then GO below;
-	 *   later rounds: GET READY while the cluster is placed, then N..1, then GO. */
+	/* ONE COUNTDOWN, a client running the time on from its last snapshot, as it
+	 * does the clocks:
+	 *   first-load: firstCountdownSec as N..1, then GO;
+	 *   later rounds: GET READY while the cluster is placed, then N..1, then GO.
+	 * v24: N..1 and GO are the engine's own race-start digits, drawn by
+	 * MpMarkDrawOverlay (Print321Go); only GET READY is a golden notice. */
+	gMp321Count = 0;
+
 	if (phase == MP_MARK_PHASE_COUNTDOWN)
 	{
 		int left = MpMarkCountdownMs(since);
@@ -1039,14 +1072,32 @@ static void MpMarkNotices(int me, int since)
 
 		/* only ever DOWN: a client's next snapshot (rounded up to 0.1 s) must not
 		 * put a "3" back after the "2" at a boundary */
-		if (count > 0 && (gMpMarkShownCount < 0 || count < gMpMarkShownCount))
+		if (count > 0 && (gMpMarkShownCount < 0 || count <= gMpMarkShownCount))
 		{
 			if (spawn && count >= 4)
-				snprintf(line, sizeof(line), "GET READY");
+			{
+				if (gMpMarkShownCount != count)
+					jer_notify("GET READY", 4, 1);
+			}
 			else
-				snprintf(line, sizeof(line), "%d", count);
-			jer_notify(line, 4, 1);
+			{
+				/* mdraw.c DrawMission: 32 - (g321GoDelay & 31), each digit
+				 * shrinking from full size over its second */
+				int into = 1000 - (left - (count - 1) * 1000);
+
+				gMp321Count = count;
+				gMp321Scale = 32 - into * 32 / 1000;
+				if (gMp321Scale < 1)
+					gMp321Scale = 1;
+				if (gMp321Scale > 32)
+					gMp321Scale = 32;
+			}
 			gMpMarkShownCount = count;
+		}
+		else if (gMpMarkShownCount > 0 && gMpMarkShownCount < 4)
+		{
+			gMp321Count = gMpMarkShownCount;	/* a late snapshot: hold the digit, smallest */
+			gMp321Scale = 1;
 		}
 
 		gMpMarkShownSeq = seq;
@@ -1056,33 +1107,44 @@ static void MpMarkNotices(int me, int since)
 
 	gMpMarkShownCount = -1;
 
+	/* the big GO, for a second, when the round goes live out of the count */
+	if (phase == MP_MARK_PHASE_LIVE && go)
+		gMpGoFrame = (int)gMp.frame;
+	else if (phase != MP_MARK_PHASE_LIVE)
+		gMpGoFrame = -1;
+
 	/* a round ended since we last looked (not one we only joined into) */
 	if (phase == MP_MARK_PHASE_ENDED && gMpMarkShownPhase == MP_MARK_PHASE_LIVE)
 	{
 		line[0] = '\0';
 
-		if (cnr)
+		int why = MpMarkEndReason();	/* v24: the referee says why (MP_MARK_END_*) */
+
+		if (why == MP_MARK_END_VOID || why == MP_MARK_END_NONE)
+			snprintf(line, sizeof(line), "Round over - not enough players");
+		else if (cnr)
 		{
-			/* the getaway wins by the clock or by getting clear; a full heat
-			 * meter is a bust; no winner and no bust = the getaway left */
-			if (MpMarkWinner() >= 0)
+			/* the getaway wins by the clock or by getting clear; a full meter (or
+			 * the getaway out of the round) is a bust; or the getaway left */
+			if ((why == MP_MARK_END_CLOCK || why == MP_MARK_END_ESCAPE) && MpMarkWinner() >= 0)
 			{
 				if (MpMarkWinner() == me)
-					snprintf(line, sizeof(line), "You got away!");
+					snprintf(line, sizeof(line), why == MP_MARK_END_ESCAPE ? "You got away!" : "Time's up - you got away!");
 				else
-					snprintf(line, sizeof(line), "%s got away!", MpMarkName(MpMarkWinner()));
+					snprintf(line, sizeof(line), why == MP_MARK_END_ESCAPE ? "%s got away!" : "Time's up - %s got away!",
+						MpMarkName(MpMarkWinner()));
 			}
-			else if (MpMarkHeat() >= MP_MARK_CNR_BUST_POINTS && marked >= 0)
+			else if (why == MP_MARK_END_BUST && marked >= 0)
 			{
 				if (marked == me)
 					snprintf(line, sizeof(line), "BUSTED!");
 				else
 					snprintf(line, sizeof(line), "%s is busted!", MpMarkName(marked));
 			}
-			else if (marked >= 0 && !MpMarkPresent(marked))
+			else if (why == MP_MARK_END_LEAVE)
 				snprintf(line, sizeof(line), "The getaway left - round over");
 			else
-				snprintf(line, sizeof(line), "Round over - not enough players");
+				snprintf(line, sizeof(line), "Round over");
 		}
 		else if (!bomb && MpMarkWinner() >= 0)
 		{
@@ -1107,7 +1169,7 @@ static void MpMarkNotices(int me, int since)
 	/* the fox / the bomb changed hands (or a round went live) */
 	else if (phase == MP_MARK_PHASE_LIVE && seq != gMpMarkShownSeq && marked >= 0)
 	{
-		const char* lead = go ? "GO! " : "";	/* one line: the GO and who is marked */
+		const char* lead = "";	/* v24: the big GO (Print321Go) says GO */
 
 		line[0] = '\0';
 
@@ -1131,8 +1193,6 @@ static void MpMarkNotices(int me, int since)
 		{
 			if (marked == me)
 				snprintf(line, sizeof(line), "%sYou are now the fox!", lead);
-			else if (go)
-				snprintf(line, sizeof(line), "GO!");
 		}
 
 		if (line[0] != '\0')
@@ -1551,8 +1611,9 @@ static void MpCnrRadioTick(int on, int marked, int myId)
 	(void)myId;
 }
 
-/* Cops n Robbers, host: the getaway's own damage (its JPDM, or our own car when
- * the host drives it). MpMarkDamage moves the meter; the cop it credits scores. */
+/* Cops n Robbers, host: the getaway's own damage (its carstate row's totalDamage /
+ * maxDamage, v24, or our own car when the host drives it). MpMarkDamage moves the
+ * meter; the cop it credits scores. */
 static void MpMarkHostDamage(int from, int damage, int maxDamage, const char* how)
 {
 	static int loggedRound = -1;
@@ -1596,46 +1657,71 @@ static void MpMarkHostDamage(int from, int damage, int maxDamage, const char* ho
 	MpHostSendRound(-1);
 }
 
-/* Host: a getaway's MP_TAG_DAMAGE. Optional: an older host never gets here. */
-static void MpHandleDamage(int connIndex, const unsigned char* p, int len)
+/* v24, host: a player is out of the live round (died with MP_MODE_RESPAWN_NONE).
+ * Benched (MP_MARK_ENTRY_F_OUT, JPRD SPECTATING) until the next COUNTDOWN; if they
+ * were marked, MpMarkOut moves the mark or ends the round (Cops n Robbers: busted).
+ * dedi/core.py mark_carstate_round is the server's twin. */
+static void MpHostBenchOut(int id, const char* how)
 {
-	static int refusedLogged;
-	MP_DAMAGE d;
-	int from;
+	int ev;
 
-	if (!MpIsHost() || len < (int)sizeof(d))
+	if (!MpIsHost() || !MpModeUsesTimer(gMp.gamemode) || MpMarkPhase() != MP_MARK_PHASE_LIVE ||
+		!MpMarkInRound(id))
 		return;
 
-	memcpy(&d, p, sizeof(d));
-	from = MpConnPlayerId(connIndex);
+	if (id == MpMarkMarked())
+		MpHostCnrFlush();	/* the getaway's points so far are banked first */
 
-	if (from < 0 || d.playerId != from || d.maxDamage <= 0 || d.maxDamage > (1 << 20))
+	ev = MpMarkOut(id, MpMarkRand());
+
+	if (MpMarkBench(id) == MP_MARK_ENTRY_F_OUT)
+		MpRoundSetState(id, MP_ROUND_PLAYER_SPECTATING);
+
+	if (gMpCtx != NULL)
+		gMpCtx->jer_log(gMpCtx, "[mp] mark: player %d is out until the next round (%s, no respawn)\n", id, how);
+
+	if (ev & MP_MARK_EV_END)
 	{
-		if (!refusedLogged && gMpCtx != NULL)
-			gMpCtx->jer_log(gMpCtx, "[mp] damage report from conn %d ignored (player %d says %d, max %d)\n",
-				connIndex, from, (int)d.playerId, (int)d.maxDamage);
-		refusedLogged = 1;
-		return;
-	}
+		gMpCnrPending = 0;
+		MpRoundEnd();
 
-	MpMarkHostDamage(from, d.totalDamage, d.maxDamage, "reported");
+		if (gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx, "[mp] mark: round %d over - the marked player is out (end reason %d)\n",
+				MpRoundNumber(), MpMarkEndReason());
+	}
+	else if ((ev & MP_MARK_EV_MOVED) && gMpCtx != NULL)
+		gMpCtx->jer_log(gMpCtx, "[mp] mark: the marked player is out - player %d is marked now\n", MpMarkMarked());
+
+	MpHostSendMark(-1);
+	MpHostSendRound(-1);
 }
 
-/* Cops n Robbers, the getaway's own machine: say what its engine says the car's
- * damage is -- on a change (at most 10 a second) and every half second while
- * live, so a lost packet is soon made good. The host drives the referee itself. */
-#define MP_DAMAGE_MIN_FRAMES	3
-#define MP_DAMAGE_KEEP_FRAMES	15
+/* v24, host: the round side of a client's carstate row, after the forged-row check
+ * (MpHandleCarState). MP_CARSTATE_OUT benches the sender; in Cops n Robbers the
+ * getaway's own totalDamage / maxDamage move the meter (this replaced MP_TAG_DAMAGE). */
+static void MpHostCarRowRound(int from, const MP_CARSTATE_ENTRY* e)
+{
+	if (!MpIsHost() || !MpModeUsesTimer(gMp.gamemode) || !MpMarkHaveState() || MpMarkMode() != gMp.gamemode)
+		return;
 
+	if ((e->flags & MP_CARSTATE_OUT) && MpMarkInRound(from))
+		MpHostBenchOut(from, "carstate");
+
+	if (e->model == MP_CARSTATE_NO_CAR || !(e->flags & MP_CARSTATE_HAS_BODY) || e->maxDamage == 0)
+		return;	/* on foot / no body: no damage to read */
+
+	MpMarkHostDamage(from, e->totalDamage, e->maxDamage, "carstate");
+}
+
+/* Cops n Robbers, host driving the getaway: our own car's damage straight into
+ * the referee (a client's rides its carstate rows, MpHostCarRowRound). */
 static void MpCnrDamageTick(int phase, int marked, int myId)
 {
 	static int lastSent = -1;
-	static unsigned lastFrame;
-	static uint16_t seq;
 	MP_PLAYER* me = MpLocalPlayer();
-	int dmg, change;
+	int dmg;
 
-	if (MpModeTimerKind(gMp.gamemode) != MP_MODE_TIMER_GETAWAY || phase != MP_MARK_PHASE_LIVE ||
+	if (!MpIsHost() || MpModeTimerKind(gMp.gamemode) != MP_MODE_TIMER_GETAWAY || phase != MP_MARK_PHASE_LIVE ||
 		myId < 0 || marked != myId || me == NULL || me->carId < 0 || me->carId >= MAX_CARS ||
 		player[0].playerType == PLAYER_TYPE_PEDESTRIAN)
 	{
@@ -1644,33 +1730,11 @@ static void MpCnrDamageTick(int phase, int marked, int myId)
 	}
 
 	dmg = car_data[me->carId].totalDamage;
-	change = dmg != lastSent;
 
-	if (MpIsHost())
-	{
-		if (change)
-			MpMarkHostDamage(myId, dmg, MaxPlayerDamage[0], "own car");
-		lastSent = dmg;
-		return;
-	}
-
-	if (lastSent >= 0 && !(change && gMp.frame - lastFrame >= (unsigned)MP_DAMAGE_MIN_FRAMES) &&
-		gMp.frame - lastFrame < (unsigned)MP_DAMAGE_KEEP_FRAMES)
-		return;
-
-	{
-		MP_DAMAGE d;
-
-		memset(&d, 0, sizeof(d));
-		d.playerId = (uint8_t)myId;
-		d.seq = ++seq;
-		d.totalDamage = dmg;
-		d.maxDamage = MaxPlayerDamage[0];
-		MpSendToHost(MP_TAG_DAMAGE, 0, &d, sizeof(d));
-	}
+	if (dmg != lastSent)
+		MpMarkHostDamage(myId, dmg, MaxPlayerDamage[0], "own car");
 
 	lastSent = dmg;
-	lastFrame = gMp.frame;
 }
 
 /* A3: the full pre-round repair, after the role-car swap has landed. */
@@ -1695,6 +1759,68 @@ static void MpRoundRepairTick(void)
 			"[mp] round start: car repaired after the role car (slot %d model %d): damage %d, hubcaps lost 0x%x, felony %d/%d\n",
 			me->carId, (int)cp->ap.model, cp->totalDamage, (int)(cp->ap.flags & 0xF),
 			cp->felonyRating, pedestrianFelony);
+}
+
+/* v24: benched in a live round (a late joiner WAITING, or OUT), the camera watches
+ * the round -- the marked player's car, else the first in-round car -- and comes
+ * back to our own car when we are in again. The car itself is held
+ * (MpRoundHoldsCar); MpCarFailsafeTick still re-seats a camera left on no body. */
+static void MpSpectateTick(int phase, int myId)
+{
+	MP_PLAYER* me = MpLocalPlayer();
+	int want, target = -1, id;
+
+	want = me != NULL && myId >= 0 && phase == MP_MARK_PHASE_LIVE && MpMarkPresent(myId) &&
+		!MpMarkInRound(myId) && player[0].playerType == PLAYER_TYPE_CAR &&
+		me->carId >= 0 && me->carId < MAX_CARS;
+
+	if (want)
+	{
+		for (id = -1; id < MP_MAX_PLAYERS && target < 0; id++)
+		{
+			int pid = (id < 0) ? MpMarkMarked() : id;
+			MP_PLAYER* p = (pid >= 0 && pid != myId && MpMarkInRound(pid)) ? MpGetPlayer(pid) : NULL;
+
+			if (p != NULL && p->carId >= 0 && p->carId < MAX_CARS &&
+				car_data[p->carId].controlType != CONTROL_TYPE_NONE && JerCarSlotUsable(car_data[p->carId].ap.model))
+				target = p->carId;
+		}
+	}
+
+	if (!want || target < 0)
+	{
+		if (gMpSpectating && me != NULL && me->carId >= 0 && me->carId < MAX_CARS &&
+			player[0].playerType == PLAYER_TYPE_CAR)
+		{
+			player[0].cameraCarId = me->carId;
+			player[0].cameraAngle = car_data[me->carId].hd.direction + 1536;
+
+			if (gMpCtx != NULL)
+				gMpCtx->jer_log(gMpCtx, "[mp] spectate: back on our own car (slot %d)\n", me->carId);
+		}
+
+		gMpSpectating = 0;
+		gMpSpectateCar = -1;
+		return;
+	}
+
+	if (!gMpSpectating)
+	{
+		if (MpMarkBench(myId) == MP_MARK_ENTRY_F_WAITING)
+			jer_notify("Round in progress - spectating until the next one", 3, 4);
+	}
+
+	if (player[0].cameraCarId != target)
+	{
+		player[0].cameraCarId = target;
+		player[0].cameraAngle = car_data[target].hd.direction + 1536;
+	}
+
+	if (target != gMpSpectateCar && gMpCtx != NULL)
+		gMpCtx->jer_log(gMpCtx, "[mp] spectate: watching car slot %d (bench 0x%x)\n", target, MpMarkBench(myId));
+
+	gMpSpectating = 1;
+	gMpSpectateCar = target;
 }
 
 /* Every machine, once a frame in a match. */
@@ -1816,6 +1942,7 @@ static void MpMarkPresentTick(void)
 	}
 
 	MpCnrDamageTick(phase, marked, myId);
+	MpSpectateTick(phase, myId);
 	MpFoxHudBuild(phase, marked, myId, since);
 
 	/* own clock, top centre (0.23.0: back from the top right): cream while it is
@@ -1923,7 +2050,7 @@ static void MpMarkPresentTick(void)
 		{
 			/* only the clock sets it off: a round that ended any other way
 			 * (a leaver, MpMarkSync / MpMarkTick) has nobody marked anyway */
-			if (phase == MP_MARK_PHASE_ENDED && MpMarkClockMs(-1, 0) == 0)
+			if (phase == MP_MARK_PHASE_ENDED && MpMarkEndReason() == MP_MARK_END_CLOCK)
 				jer_carexplode(markedCar);
 
 			jer_carexplode_hold(markedCar);
@@ -2069,6 +2196,19 @@ void MpMarkDrawOverlay(void)
 
 	if (gShowMap)
 		return;	/* the full map is up: it owns the screen */
+
+	/* v24: the race start's own 3-2-1 (mdraw.c DrawMission: y 96, golden, each
+	 * digit shrinking over its second), then a big GO for a second */
+	if (gMp321Count > 0)
+	{
+		SetTextColour(128, 128, 64);
+		Print321Go(96, gMp321Count, gMp321Scale);
+	}
+	else if (gMpGoFrame >= 0 && (int)gMp.frame - gMpGoFrame < 30)
+	{
+		SetTextColour(128, 128, 64);
+		Print321Go(96, 0, 32 - ((int)gMp.frame - gMpGoFrame) * 16 / 30);	/* 32 -> 16 */
+	}
 
 	if (gMpFoxLinesOn && gMpFoxLine1[0] != '\0')
 	{
@@ -3375,17 +3515,15 @@ void MpSpawnLateJoiners(void)
 		return;
 	}
 
-	/* GAME-MODE DECISION POINTS. Take a Ride seats a late joiner at once
-	 * (LATEJOIN_LIVE) at the session's own placement below (SPAWN_SESSION: the level
-	 * start / a per-player road spot, x/z only, the engine resolving the ground).
-	 * Spectating until the next round and mode-chosen spawns (arenas) need state this
-	 * build does not have yet; such a mode gets the session behaviour and one log line. */
+	/* GAME-MODE DECISION POINTS. A late joiner is seated at once at the session's
+	 * own placement below (SPAWN_SESSION: the level start / a per-player road spot,
+	 * x/z only, the engine resolving the ground). v24 LATEJOIN_SPECTATE (the round
+	 * modes) seats them the same way; the referee benches them WAITING until the next
+	 * COUNTDOWN, and MpRoundHoldsCar / MpSpectateTick hold the car and watch the
+	 * round. Mode-chosen spawns (arenas) still get the session placement and one log
+	 * line. */
 	{
-		int late = MpModeLateJoinPolicy(gMp.gamemode);
 		int rule = MpModeSpawnRule(gMp.gamemode);
-
-		if (late != MP_MODE_LATEJOIN_LIVE)
-			MpModeFallbackOnce(MP_MODE_FALLBACK_LATEJOIN, "late-join policy", late);
 
 		/* CLUSTER seats a joiner exactly as SESSION does; the cluster itself is a
 		 * round-start placement (MpMarkClusterTick), not a seat */
@@ -3968,7 +4106,7 @@ static void MpHandleRoster(const unsigned char* p, int len)
 void MpSetMapShape(int mpLevel, int arena)
 {
 	gBootMpLevel = mpLevel ? 1 : 0;
-	gBootMpArena = arena & 1;
+	gBootMpArena = arena & MP_SESSION_ARENA_MASK;
 }
 
 /* The host's SESSION RULES, packed for the wire. ONE packed byte (MP_RULES_*),
@@ -4132,8 +4270,8 @@ int MpStartMatch(void)
 		MpRulesAdopt(rules, "the host's launch");
 
 		st.session.spare = (uint16_t)((gBootMpLevel ? 1 : 0) |
-			((uint16_t)rules << 1) |
-			((gBootMpArena & 1) << 8));
+			((uint16_t)(rules & 0x7F) << 1) |
+			((gBootMpArena & MP_SESSION_ARENA_MASK) << MP_SESSION_ARENA_SHIFT));
 	}
 
 	/* The roster goes first, so a client knows how many player cars to spawn
@@ -4335,7 +4473,7 @@ static void MpSendWelcome(int connIndex, int playerId, int matched)
 	w.running = (uint8_t)(gMp.running ? 1 : 0);
 	w.subGame = (uint8_t)(gSubGameNumber & 0xff);
 	w.mpLevel = (uint8_t)(gBootMpLevel ? 1 : 0);	/* the map SHAPE, not the arena */
-	w.arena = (uint8_t)(gBootMpArena & 0x01);	/* which shape: the arena belongs in the session, not a local -mp */
+	w.arena = (uint8_t)(gBootMpArena & MP_SESSION_ARENA_MASK);	/* which map, 0..MP_ARENA_MAX: the arena belongs in the session, not a local -mp */
 	w.rules = (uint8_t)MpRulesForPeer();	/* the session rules a joiner must adopt */
 	w.gamemode = (uint8_t)gMp.gamemode;
 	w.city = (uint8_t)gMp.city;
@@ -5406,7 +5544,7 @@ static void MpHandleWelcome(const unsigned char* p, int len)
 	 * which shape the level is and the client loads that, whatever its own
 	 * arguments said. */
 	gBootMpLevel = w.mpLevel ? 1 : 0;
-	gBootMpArena = (int)w.arena;
+	gBootMpArena = (int)(w.arena & MP_SESSION_ARENA_MASK);
 
 	/* The host's session rules (what this match is being played under). The
 	 * welcome is the only way a client that joins a match IN PROGRESS ever
@@ -5695,7 +5833,7 @@ static void MpHandleStart(const unsigned char* p, int len)
 	 * whatever its own -mp said - the exact drift the host-as-authority rule
 	 * exists to prevent. MpLaunchLocal derives gSubGameNumber from these. */
 	gBootMpLevel = st.session.spare & 1;
-	gBootMpArena = (st.session.spare >> 8) & 1;
+	gBootMpArena = (st.session.spare >> MP_SESSION_ARENA_SHIFT) & MP_SESSION_ARENA_MASK;
 
 	/* The host's session rules, in spare's free bits beside the shape (bit 0 is
 	 * the shape, so they are shifted up by one). Adopted BEFORE the level loads
@@ -10729,8 +10867,17 @@ static void MpSendOwnCarState(void)
 		}
 	}
 
+	/* v24: out of the live round (no respawn) -- the host benches us on it */
+	if (gMpRespawnOut)
+		e.flags |= MP_CARSTATE_OUT;
+
 	if (cp != NULL)
 	{
+		/* v24: the car's damage and wreck point (Cops n Robbers' meter reads the
+		 * getaway's); saturated to the wire's 16 bits */
+		e.totalDamage = (uint16_t)(cp->totalDamage < 0 ? 0 : cp->totalDamage > 0xFFFF ? 0xFFFF : cp->totalDamage);
+		e.maxDamage = (uint16_t)(MaxPlayerDamage[0] < 0 ? 0 : MaxPlayerDamage[0] > 0xFFFF ? 0xFFFF : MaxPlayerDamage[0]);
+
 		/* Say it when this is the body we last got OUT of: the peers released it on
 		 * the NO_CAR row and can re-seat us on it instead of building a second
 		 * vehicle (MpHandleCarState). Kept on every frame while we drive that same
@@ -12939,6 +13086,78 @@ static int MpRespawnHeldNow(void)
 	return MpModeRespawnHeld(gMp.gamemode, MpMarkPhase());
 }
 
+/* v24: the respawn policy for this death (MP_MODE_RESPAWN_*), *outFrames = DELAY's
+ * frames. TEST LEVER (MP_TEST_RESPAWN=delay|none): every mode answers a death that
+ * way (delay = 3 s), so the paths can be played before any mode ships them. Inert
+ * unless set. */
+static int MpRespawnPolicyNow(int* outFrames)
+{
+	static int test = -2;
+	int policy;
+
+	if (test == -2)
+	{
+		const char* s = getenv("MP_TEST_RESPAWN");
+
+		test = (s == NULL) ? -1 : (strcmp(s, "delay") == 0) ? MP_MODE_RESPAWN_DELAY :
+			(strcmp(s, "none") == 0) ? MP_MODE_RESPAWN_NONE : -1;
+
+		if (test >= 0 && gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx, "[mp] TEST LEVER MP_TEST_RESPAWN=%s - every mode's respawn policy is %d\n", s, test);
+	}
+
+	policy = (test >= 0) ? test : MpModeRespawnPolicy(gMp.gamemode);
+	*outFrames = (policy != MP_MODE_RESPAWN_DELAY) ? 0 :
+		(test >= 0) ? 90 : MpModeRespawnDelayFrames(gMp.gamemode);
+	return policy;
+}
+
+/* v24: a round mode's live round, with us in it -- where RESPAWN_NONE means out. */
+static int MpRespawnRoundLive(void)
+{
+	MP_PLAYER* me = MpLocalPlayer();
+
+	return me != NULL && MpModeUsesTimer(gMp.gamemode) && MpMarkHaveState() &&
+		MpMarkMode() == gMp.gamemode && MpMarkPhase() == MP_MARK_PHASE_LIVE && MpMarkInRound(me->id);
+}
+
+/* v24: out, or waiting for the delayed respawn -- the pause menu's respawn is refused. */
+static int MpRespawnWaiting(void)
+{
+	return gMpRespawnOut || gMpRespawnDelayArmed;
+}
+
+/* v24 MP_MODE_RESPAWN_DELAY, every frame: "Respawn in N", then the placement. */
+static void MpRespawnDelayTick(void)
+{
+	int left;
+
+	if (!gMpRespawnDelayArmed)
+		return;
+
+	left = (int)(gMpRespawnDelayAt - gMp.frame);
+
+	if (left > 0)
+	{
+		int sec = (left + 29) / 30;
+
+		if (sec != gMpRespawnDelayShown)
+		{
+			char line[32];
+
+			snprintf(line, sizeof(line), "Respawn in %d", sec);
+			jer_notify(line, 3, 1);
+			gMpRespawnDelayShown = sec;
+		}
+		return;
+	}
+
+	gMpRespawnDelayArmed = 0;
+	gMpRespawnDelayNow = 1;
+	MpRespawnAfterDeath();
+	gMpRespawnDelayNow = 0;
+}
+
 /* Every frame in a match (MpMarkPresentTick). */
 static void MpRespawnHoldTick(void)
 {
@@ -12946,11 +13165,26 @@ static void MpRespawnHoldTick(void)
 	{
 		gMpRespawnDeferred = 0;
 		gMpRespawnHeldLogged = 0;
+		gMpRespawnDelayArmed = 0;
+		gMpRespawnOut = 0;
 		return;
 	}
 
+	/* v24: OUT lasts only while the round it happened in is live */
+	if (gMpRespawnOut && !(MpModeUsesTimer(gMp.gamemode) && MpMarkHaveState() &&
+		MpMarkMode() == gMp.gamemode && MpMarkPhase() == MP_MARK_PHASE_LIVE))
+	{
+		gMpRespawnOut = 0;
+		gMpRespawnDeferred = 1;	/* answered below, or by the round reset */
+	}
+
 	if (MpRespawnHeldNow())
+	{
+		gMpRespawnDelayArmed = 0;	/* the round reset places the car */
 		return;
+	}
+
+	MpRespawnDelayTick();
 
 	gMpRespawnHeldLogged = 0;
 
@@ -13000,18 +13234,6 @@ int MpRespawnAfterDeath(void)
 	if (!gMp.running)
 		return 0;
 
-	/* GAME-MODE DECISION POINT: the mode chooses HOW a death is answered, never
-	 * WHETHER -- whatever it says, the game over below is refused. Take a Ride asks
-	 * for an instant respawn, which is the placement that follows. A delayed or
-	 * disabled respawn needs the round state (docs/GAMEMODES.md); until it exists
-	 * such a mode is respawned instantly too, and the log says so once. */
-	{
-		int policy = MpModeRespawnPolicy(gMp.gamemode);
-
-		if (policy != MP_MODE_RESPAWN_INSTANT)
-			MpModeFallbackOnce(MP_MODE_FALLBACK_RESPAWN, "respawn policy", policy);
-	}
-
 	/* GAME-MODE DECISION POINT: the mode may HOLD the respawn (the round is over
 	 * or counting down). Still no game over: the death state is cleared and the
 	 * car is left where it is, wreck latch and all, for the round reset. */
@@ -13027,6 +13249,57 @@ int MpRespawnAfterDeath(void)
 		gMpRespawnHeldLogged = 1;
 
 		return 1;
+	}
+
+	/* GAME-MODE DECISION POINT (v24): the mode chooses HOW a death is answered,
+	 * never WHETHER -- whatever it says, the game over is refused. INSTANT is the
+	 * placement below; DELAY leaves the wreck where it is for the mode's frames
+	 * (MpRespawnHoldTick places it then); NONE, in a live round, takes this player
+	 * out until the next COUNTDOWN: the car stays put, the host benches them
+	 * (MpHostBenchOut, or MP_CARSTATE_OUT on our rows) and MpSpectateTick watches
+	 * the round. */
+	{
+		int frames = 0;
+		int policy = MpRespawnPolicyNow(&frames);
+
+		if (gMpRespawnOut || (policy == MP_MODE_RESPAWN_NONE && MpRespawnRoundLive()))
+		{
+			MpClearDeathState();
+
+			if (!gMpRespawnOut)
+			{
+				MP_PLAYER* outMe = MpLocalPlayer();
+
+				gMpRespawnOut = 1;
+				jer_notify("You're out - spectating until the next round", 4, 4);
+
+				if (gMpCtx != NULL)
+					gMpCtx->jer_log(gMpCtx, "[mp] death in mode %d with no respawn - out until the next round\n",
+						gMp.gamemode);
+
+				if (MpIsHost() && outMe != NULL)
+					MpHostBenchOut(outMe->id, "own car");
+			}
+
+			return 1;
+		}
+
+		if (policy == MP_MODE_RESPAWN_DELAY && frames > 0 && !gMpRespawnDelayNow)
+		{
+			MpClearDeathState();
+
+			if (!gMpRespawnDelayArmed)
+			{
+				gMpRespawnDelayArmed = 1;
+				gMpRespawnDelayAt = gMp.frame + (unsigned)frames;
+				gMpRespawnDelayShown = -1;
+
+				if (gMpCtx != NULL)
+					gMpCtx->jer_log(gMpCtx, "[mp] death in mode %d - respawn in %d frames\n", gMp.gamemode, frames);
+			}
+
+			return 1;
+		}
 	}
 
 	me = MpLocalPlayer();
@@ -14391,6 +14664,13 @@ int MpRespawnOnRoad(void)
 
 	me = MpLocalPlayer();
 
+	/* v24: out of the round, or the delayed respawn is coming */
+	if (MpRespawnWaiting())
+	{
+		MpNotify(gMpRespawnOut ? "Respawn: out until the next round" : "Respawn: on its way");
+		return 0;
+	}
+
 	/* The mode holds the respawn (the round is over or counting down): the
 	 * countdown's own respawn places everyone. */
 	if (MpRespawnHeldNow())
@@ -14606,6 +14886,8 @@ static void MpMarkRoundReset(void)
 	jer_carexplode_reset(-1);
 	jer_carglow_clear();
 	MpClearDeathState();
+	gMpRespawnOut = 0;		/* v24: everyone is back in at the countdown */
+	gMpRespawnDelayArmed = 0;
 
 	if (me == NULL || me->carId < 0 || me->carId >= MAX_CARS)
 		return;
@@ -15368,6 +15650,10 @@ static void MpHandleCarState(int connIndex, const unsigned char* p, int len)
 
 		if (pl == NULL || pl->isLocal)
 			continue;
+
+		/* v24: OUT and the getaway's damage, for the referee */
+		if (MpIsHost() && connIndex >= 0)
+			MpHostCarRowRound(pl->id, &e);
 
 		/* NO CAR: the owner is on foot. Let the car we were driving for them go
 		 * back to the world -- it stays where they left it (their own engine
@@ -16429,12 +16715,6 @@ void MpHandleMessage(int connIndex, const char* tag, const unsigned char* payloa
 	if (memcmp(tag, MP_TAG_MARK, 4) == 0)
 	{
 		MpHandleMark(connIndex, payload, len);
-		return;
-	}
-
-	if (memcmp(tag, MP_TAG_DAMAGE, 4) == 0)
-	{
-		MpHandleDamage(connIndex, payload, len);
 		return;
 	}
 

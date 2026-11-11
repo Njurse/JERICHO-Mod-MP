@@ -51,6 +51,13 @@ int MpRoundAddScore(int playerId, int points);
  * A player who leaves loses theirs. Returns 1 when anything changed. */
 int MpRoundSyncPresent(const int* present, int mode);
 
+/* v24, host: a present player's state (MP_ROUND_PLAYER_*: SPECTATING when the
+ * mode's no-respawn put them out), and the ADMIN bit (MP_ROUND_ENTRY_F_ADMIN: a
+ * listen host is its own admin; a dedicated server sets its admins). An arrival
+ * starts with no flags. Return 1 when anything changed. */
+int MpRoundSetState(int playerId, int state);
+int MpRoundSetAdmin(int playerId, int admin);
+
 /* The snapshot to send: header + one row per present player, in ascending id.
  * Returns the byte count written, 0 if `cap` is too small. */
 int MpRoundBuild(unsigned char* out, int cap);
@@ -73,6 +80,7 @@ int MpRoundPlayerPresent(int playerId);	/* 1 = has a row in the round state */
 int MpRoundPlayerState(int playerId);	/* MP_ROUND_PLAYER_*; PLAYING when unknown */
 int MpRoundPlayerScore(int playerId);	/* 0 when unknown */
 int MpRoundPlayerTeam(int playerId);	/* team index, -1 for none / unknown */
+int MpRoundPlayerIsAdmin(int playerId);	/* v24: the host says they are an admin */
 
 #ifdef __cplusplus
 }

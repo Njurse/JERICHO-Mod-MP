@@ -399,7 +399,7 @@ defaults, and the `modes` plugin stays off unless named:
 python JERICHO/MODS/mp/tools/servers/dediserver/test_modes.py
 ```
 
-`test_round.py` covers the round state (`JPRD`, proto 22; the wire is proto 23)
+`test_round.py` covers the round state (`JPRD`, proto 22; the wire is proto 24)
 over a real socket: a joiner gets ROSTER, WELCOME, START and then round 1 live
 with every player playing, no team and score 0; joins and leaves reach everyone
 at once; a client's own `JPRD` is never forwarded; proto-21 and proto-22 HELLOs
