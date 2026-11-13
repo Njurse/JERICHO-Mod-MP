@@ -16921,7 +16921,15 @@ static void MpHandleCarState(int connIndex, const unsigned char* p, int len)
 						}
 					}
 
-					if (gMpCtx != NULL)
+					/* once per outcome: a late joiner re-gathers on every carstate and the
+					 * same line repeated every frame */
+					static int sGatherLogKey = -1;
+					int gatherKey = (region + 1) * 4 + (resident ? 2 : 0) + (placed ? 1 : 0);
+					int gatherNew = (gatherKey != sGatherLogKey);
+
+					sGatherLogKey = gatherKey;
+
+					if (gMpCtx != NULL && gatherNew)
 						gMpCtx->jer_log(gMpCtx,
 							"[mp] gather ground: region %d (resident=%d, hasData=%d) at %d,%d - MapHeight before %d, after %d, %s\n",
 							region, resident, hasData, gx, gz, before, after,
