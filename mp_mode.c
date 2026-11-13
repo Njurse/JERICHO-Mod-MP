@@ -18,7 +18,7 @@
 static const MP_MODE_DESC kModes[] =
 {
 	{
-		MP_GAMEMODE_TAKEADRIDE,	/* id */
+		MP_GAMEMODE_TAKEADRIDE,	/* id -- GAMEMODE: Take a Ride (0), the table row */
 		"TAKE A RIDE",		/* name: the string browsers have always shown */
 		1,			/* selectable */
 
@@ -37,7 +37,7 @@ static const MP_MODE_DESC kModes[] =
 		MP_MODE_MUSIC_AUTO	/* music: the engine's own (cop chases) */
 	},
 	{
-		MP_GAMEMODE_FOXHOUNDS,	/* id */
+		MP_GAMEMODE_FOXHOUNDS,	/* id -- GAMEMODE: Fox n Hounds (1), the table row */
 		"FOX N HOUNDS",		/* name */
 		1,			/* selectable */
 
@@ -60,7 +60,7 @@ static const MP_MODE_DESC kModes[] =
 			MP_MODE_RESPAWN_HOLD_BIT(MP_MARK_PHASE_COUNTDOWN)	/* the end or into the count */
 	},
 	{
-		MP_GAMEMODE_BOMBTAG,	/* id */
+		MP_GAMEMODE_BOMBTAG,	/* id -- GAMEMODE: Car Bomb Tag (2), the table row */
 		"CAR BOMB TAG",		/* name */
 		1,			/* selectable */
 
@@ -83,7 +83,7 @@ static const MP_MODE_DESC kModes[] =
 			MP_MODE_RESPAWN_HOLD_BIT(MP_MARK_PHASE_COUNTDOWN)	/* the end or into the count */
 	},
 	{
-		MP_GAMEMODE_COPSROBBERS,	/* id */
+		MP_GAMEMODE_COPSROBBERS,	/* id -- GAMEMODE: Cops n Robbers (3), the table row */
 		"COPS N ROBBERS",	/* name */
 		1,			/* selectable */
 

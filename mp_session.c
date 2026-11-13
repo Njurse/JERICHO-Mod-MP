@@ -677,6 +677,7 @@ static void MpHostCnrFlush(void)
 /* Cops n Robbers, host, once a frame while live: the getaway's drive points and
  * the escape -- clear of EVERY cop by MP_MARK_CNR_ESCAPE_DIST (x/z) for
  * MP_MARK_CNR_ESCAPE_HOLD_MS. dedi/core.py _getaway_step is the server's twin. */
+/* GAMEMODE: Cops n Robbers -- host-side round logic */
 static int MpHostCnrTick(int ms)
 {
 	MP_PLAYER* gp;
@@ -1794,6 +1795,7 @@ static void MpHostCarRowRound(int from, const MP_CARSTATE_ENTRY* e)
 
 /* Cops n Robbers, host driving the getaway: our own car's damage straight into
  * the referee (a client's rides its carstate rows, MpHostCarRowRound). */
+/* GAMEMODE: Cops n Robbers -- the getaway's damage meter */
 static void MpCnrDamageTick(int phase, int marked, int myId)
 {
 	static int lastSent = -1;
@@ -2218,6 +2220,7 @@ static int MpFoxDrawTimer(int id, int ms, int right, int y, int scale)
 #define MP_FOX_SIDE_SCALE	10	/* 10/16 of the mission timer */
 
 /* Every frame from MpMarkPresentTick: what the overlay draws, and the fades. */
+/* GAMEMODE: Fox n Hounds / Car Bomb Tag / Cops n Robbers -- the timer HUD */
 static void MpFoxHudBuild(int phase, int marked, int myId, int since)
 {
 	int id, live = phase == MP_MARK_PHASE_LIVE;
@@ -15654,6 +15657,7 @@ static int MpClusterPlace(MP_PLAYER* me, CAR_DATA* cp, int x, int z, int dir, in
 	return 1;
 }
 
+/* GAMEMODE: Fox n Hounds / Car Bomb Tag -- round-start cluster spawn */
 static void MpMarkClusterTick(void)
 {
 	MP_PLAYER* me = MpLocalPlayer();
@@ -15850,6 +15854,7 @@ static int MpChaseHeading(int x, int z, int want)
 	return dir;
 }
 
+/* GAMEMODE: Cops n Robbers -- round-start chase spawn */
 static void MpMarkChaseTick(void)
 {
 	MP_PLAYER* me = MpLocalPlayer();
@@ -16057,6 +16062,7 @@ static void MpMarkChaseTick(void)
  * is not a police car. Through the pause picker's own door (MpChangeCarRun),
  * so an import waits and retries and the change travels as any other. Nothing
  * to do when the car already fits. */
+/* GAMEMODE: Cops n Robbers -- role cars at the countdown */
 static void MpRoleCarApply(void)
 {
 	MP_PLAYER* me = MpLocalPlayer();
