@@ -2358,7 +2358,7 @@ void MpMarkDrawOverlay(void)
 
 	if (gMpFoxHud.on)
 	{
-		int id, row = 0, more = 0, sideX;
+		int id, row = 0, more = 0, hidden = -1, sideX;
 
 		jer_screen_edges(NULL, &sideX);
 		sideX -= MP_FOX_SIDE_INSET;
@@ -2393,7 +2393,8 @@ void MpMarkDrawOverlay(void)
 
 			if (row >= MP_FOX_SIDE_ROWS)
 			{
-				more++;
+				if (more++ == 0)
+					hidden = id;	/* one left over is named, not "+1" */
 				continue;
 			}
 
@@ -2411,9 +2412,12 @@ void MpMarkDrawOverlay(void)
 
 		if (more > 0)
 		{
-			char extra[8];
+			char extra[24];
 
-			snprintf(extra, sizeof(extra), "+%d", more);
+			if (more == 1 && MpMarkName(hidden)[0] != '\0')
+				snprintf(extra, sizeof(extra), "+%.8s", MpMarkName(hidden));
+			else
+				snprintf(extra, sizeof(extra), "+%d more", more);
 			SetTextColour(72, 72, 72);
 			PrintStringRightAligned(extra, sideX, MP_FOX_SIDE_Y + row * MP_FOX_SIDE_STEP + 3);
 		}
