@@ -677,6 +677,7 @@ static void MpHostCnrFlush(void)
 /* Cops n Robbers, host, once a frame while live: the getaway's drive points and
  * the escape -- clear of EVERY cop by MP_MARK_CNR_ESCAPE_DIST (x/z) for
  * MP_MARK_CNR_ESCAPE_HOLD_MS. dedi/core.py _getaway_step is the server's twin. */
+/* GAMEMODE: Cops n Robbers -- host-side round logic */
 static int MpHostCnrTick(int ms)
 {
 	MP_PLAYER* gp;
@@ -1794,6 +1795,7 @@ static void MpHostCarRowRound(int from, const MP_CARSTATE_ENTRY* e)
 
 /* Cops n Robbers, host driving the getaway: our own car's damage straight into
  * the referee (a client's rides its carstate rows, MpHostCarRowRound). */
+/* GAMEMODE: Cops n Robbers -- the getaway's damage meter */
 static void MpCnrDamageTick(int phase, int marked, int myId)
 {
 	static int lastSent = -1;
@@ -2218,6 +2220,7 @@ static int MpFoxDrawTimer(int id, int ms, int right, int y, int scale)
 #define MP_FOX_SIDE_SCALE	10	/* 10/16 of the mission timer */
 
 /* Every frame from MpMarkPresentTick: what the overlay draws, and the fades. */
+/* GAMEMODE: Fox n Hounds / Car Bomb Tag / Cops n Robbers -- the timer HUD */
 static void MpFoxHudBuild(int phase, int marked, int myId, int since)
 {
 	int id, live = phase == MP_MARK_PHASE_LIVE;
@@ -2358,7 +2361,7 @@ void MpMarkDrawOverlay(void)
 
 	if (gMpFoxHud.on)
 	{
-		int id, row = 0, more = 0, sideX;
+		int id, row = 0, more = 0, hidden = -1, sideX;
 
 		jer_screen_edges(NULL, &sideX);
 		sideX -= MP_FOX_SIDE_INSET;
@@ -2393,7 +2396,8 @@ void MpMarkDrawOverlay(void)
 
 			if (row >= MP_FOX_SIDE_ROWS)
 			{
-				more++;
+				if (more++ == 0)
+					hidden = id;	/* one left over is named, not "+1" */
 				continue;
 			}
 
@@ -2411,9 +2415,12 @@ void MpMarkDrawOverlay(void)
 
 		if (more > 0)
 		{
-			char extra[8];
+			char extra[24];
 
-			snprintf(extra, sizeof(extra), "+%d", more);
+			if (more == 1 && MpMarkName(hidden)[0] != '\0')
+				snprintf(extra, sizeof(extra), "+%.8s", MpMarkName(hidden));
+			else
+				snprintf(extra, sizeof(extra), "+%d more", more);
 			SetTextColour(72, 72, 72);
 			PrintStringRightAligned(extra, sideX, MP_FOX_SIDE_Y + row * MP_FOX_SIDE_STEP + 3);
 		}
@@ -6808,10 +6815,15 @@ static void MpHandleInput(int connIndex, const unsigned char* p, int len)
 		 * a row that names someone else is not a mistake, it is the spoof. */
 		if (!MpRowOwnerOk(from, (int)r.playerId))
 		{
-			if (gMpCtx != NULL)
+			/* logged at the 1st, 2nd, 4th, 8th... drop per pair: one spoofing peer
+			 * sends a row every frame and buried the log (2159 lines) */
+			static unsigned int sDropped[MP_MAX_PLAYERS][MP_MAX_PLAYERS];
+			unsigned int n = (from >= 0 && from < MP_MAX_PLAYERS) ? ++sDropped[from][r.playerId] : 1;
+
+			if (gMpCtx != NULL && (n & (n - 1)) == 0)
 				gMpCtx->jer_log(gMpCtx,
-					"[mp] input: dropped a row from player %d claiming player %d\n",
-					from, (int)r.playerId);
+					"[mp] input: dropped a row from player %d claiming player %d (%u so far)\n",
+					from, (int)r.playerId, n);
 
 			continue;
 		}
@@ -15645,6 +15657,7 @@ static int MpClusterPlace(MP_PLAYER* me, CAR_DATA* cp, int x, int z, int dir, in
 	return 1;
 }
 
+/* GAMEMODE: Fox n Hounds / Car Bomb Tag -- round-start cluster spawn */
 static void MpMarkClusterTick(void)
 {
 	MP_PLAYER* me = MpLocalPlayer();
@@ -15841,6 +15854,7 @@ static int MpChaseHeading(int x, int z, int want)
 	return dir;
 }
 
+/* GAMEMODE: Cops n Robbers -- round-start chase spawn */
 static void MpMarkChaseTick(void)
 {
 	MP_PLAYER* me = MpLocalPlayer();
@@ -16048,6 +16062,7 @@ static void MpMarkChaseTick(void)
  * is not a police car. Through the pause picker's own door (MpChangeCarRun),
  * so an import waits and retries and the change travels as any other. Nothing
  * to do when the car already fits. */
+/* GAMEMODE: Cops n Robbers -- role cars at the countdown */
 static void MpRoleCarApply(void)
 {
 	MP_PLAYER* me = MpLocalPlayer();
@@ -16916,7 +16931,15 @@ static void MpHandleCarState(int connIndex, const unsigned char* p, int len)
 						}
 					}
 
-					if (gMpCtx != NULL)
+					/* once per outcome: a late joiner re-gathers on every carstate and the
+					 * same line repeated every frame */
+					static int sGatherLogKey = -1;
+					int gatherKey = (region + 1) * 4 + (resident ? 2 : 0) + (placed ? 1 : 0);
+					int gatherNew = (gatherKey != sGatherLogKey);
+
+					sGatherLogKey = gatherKey;
+
+					if (gMpCtx != NULL && gatherNew)
 						gMpCtx->jer_log(gMpCtx,
 							"[mp] gather ground: region %d (resident=%d, hasData=%d) at %d,%d - MapHeight before %d, after %d, %s\n",
 							region, resident, hasData, gx, gz, before, after,

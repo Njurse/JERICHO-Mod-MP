@@ -63,6 +63,19 @@ countdown is the engine's own race-start 3-2-1 plus a big GO (`Print321Go`, core
 `pres.c`).
 Everything below "Not yet" is design, not code.
 
+## Where each mode lives
+
+Every mode is a row in `kModes` (`mp_mode.c`), and the ids are `MP_GAMEMODE_*` in
+`mp_proto.h`. Behaviour keys off the row's timer kind (`MpModeTimerKind`), not the
+mode id. Run `rg GAMEMODE:` to list the entry points below.
+
+| Mode (id) | Row | Mode-specific code |
+|---|---|---|
+| Take a Ride (0) | `mp_mode.c:21` | none: the session's own behaviour |
+| Fox n Hounds (1) | `mp_mode.c:40` | `MP_MODE_TIMER_PERSONAL`: referee `MpMarkTick` (`mp_mark.c:414`), cluster spawn `MpMarkClusterTick` (`mp_session.c:15661`), HUD `MpFoxHudBuild` (`mp_session.c:2224`) |
+| Car Bomb Tag (2) | `mp_mode.c:63` | `MP_MODE_TIMER_SHARED`: the same referee, cluster spawn and HUD as Fox n Hounds |
+| Cops n Robbers (3) | `mp_mode.c:86` | `MP_MODE_TIMER_GETAWAY`: `MpHostCnrTick` (`mp_session.c:681`), `MpCnrDamageTick` (`mp_session.c:1799`), chase spawn `MpMarkChaseTick` (`mp_session.c:15858`), role cars `MpRoleCarApply` (`mp_session.c:16066`) |
+
 ## The model
 
 A game mode is a row in one table, `kModes[]` in `mp_mode.c`. The row is an

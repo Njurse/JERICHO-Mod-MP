@@ -410,6 +410,7 @@ void MpMarkReady(const int* ready)
 		gMark.revision++;
 }
 
+/* GAMEMODE: Fox n Hounds / Car Bomb Tag / Cops n Robbers -- the referee's clock and phases */
 int MpMarkTick(int ms, unsigned rnd)
 {
 	if (gMark.timer == MP_MODE_TIMER_NONE || ms < 0)
