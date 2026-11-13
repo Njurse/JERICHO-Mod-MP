@@ -6808,10 +6808,15 @@ static void MpHandleInput(int connIndex, const unsigned char* p, int len)
 		 * a row that names someone else is not a mistake, it is the spoof. */
 		if (!MpRowOwnerOk(from, (int)r.playerId))
 		{
-			if (gMpCtx != NULL)
+			/* logged at the 1st, 2nd, 4th, 8th... drop per pair: one spoofing peer
+			 * sends a row every frame and buried the log (2159 lines) */
+			static unsigned int sDropped[MP_MAX_PLAYERS][MP_MAX_PLAYERS];
+			unsigned int n = (from >= 0 && from < MP_MAX_PLAYERS) ? ++sDropped[from][r.playerId] : 1;
+
+			if (gMpCtx != NULL && (n & (n - 1)) == 0)
 				gMpCtx->jer_log(gMpCtx,
-					"[mp] input: dropped a row from player %d claiming player %d\n",
-					from, (int)r.playerId);
+					"[mp] input: dropped a row from player %d claiming player %d (%u so far)\n",
+					from, (int)r.playerId, n);
 
 			continue;
 		}
