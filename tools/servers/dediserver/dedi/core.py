@@ -788,9 +788,15 @@ class Dedicated:
         True when the round state changed (begin / end)."""
         with self.lock:
             ids = [info["id"] for info in self.clients.values()]
-            # the round-start gate: a player is ready once their JPCC (the car they
-            # picked) has landed -- MpHandleCar's carConfirmed on an in-game host
-            ready = [info["id"] for info in self.clients.values() if info.get("car") is not None]
+            # the round-start gate: a player is ready once the server knows their
+            # car -- from the JPCC they picked, or from the carstate rows every
+            # client sends anyway. These are the same two sources roster_bytes()
+            # uses for MP_ROSTER_FLAG_CAR_READY. Waiting for JPCC alone left the
+            # gate shut on a dedicated session: a client that joins a server sends
+            # carstates but never a pick, so the referee sat in WAITING and no
+            # Fox N Hounds round ever started.
+            ready = [info["id"] for info in self.clients.values()
+                     if info.get("car") is not None or self.cars.get(info["id"]) is not None]
             self.round.sync(ids)
             ev = self.mark.sync(ids, self.mark_rng.randrange(1 << 15))
             self.mark.set_ready(ready)

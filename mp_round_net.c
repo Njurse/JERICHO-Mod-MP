@@ -135,11 +135,31 @@ void MpHandleRound(int connIndex, const unsigned char* p, int len)
 		return;
 	}
 
-	if (MpRoundMode() != gMp.gamemode && !gMpRoundModeLogged && gMpCtx != NULL)
+	/* The round state is the HOST's truth, and it names the mode the session is
+	 * actually playing. A client that has just loaded the level has had its mode
+	 * reset to Take a Ride by MpSessionReset, so take the mode from here. Without
+	 * this a dedicated-server client sat in Take a Ride while the server refereed
+	 * Fox N Hounds ("round state names mode 1, the session is mode 0 - playing it
+	 * as TAKE A RIDE") and no round was ever played on the client. An id this
+	 * build does not know still falls back, and still says so once. */
+	if (MpRoundMode() != gMp.gamemode)
 	{
-		gMpCtx->jer_log(gMpCtx, "[mp] round state names mode %d, the session is mode %d - playing it as %s\n",
-			MpRoundMode(), gMp.gamemode, MpModeName(gMp.gamemode));
-		gMpRoundModeLogged = 1;
+		if (MpModeFind(MpRoundMode()) != NULL)
+		{
+			gMp.gamemode = MpRoundMode();
+			MpModeNoteAdopted(gMp.gamemode, "the round state");
+
+			if (gMpCtx != NULL)
+				gMpCtx->jer_log(gMpCtx,
+					"[mp] round state names mode %d - the session follows the host (%s)\n",
+					MpRoundMode(), MpModeName(gMp.gamemode));
+		}
+		else if (!gMpRoundModeLogged && gMpCtx != NULL)
+		{
+			gMpCtx->jer_log(gMpCtx, "[mp] round state names mode %d, the session is mode %d - playing it as %s\n",
+				MpRoundMode(), gMp.gamemode, MpModeName(gMp.gamemode));
+			gMpRoundModeLogged = 1;
+		}
 	}
 
 	if (MpDebugOn() && gMpCtx != NULL)

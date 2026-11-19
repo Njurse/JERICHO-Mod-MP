@@ -526,6 +526,13 @@ def check_copsrobbers(tmp):
               server.mark.heat == 130 and server.round.players[cop]["score"] == 130,
               (server.mark.heat, server.round.players[cop]))
         mk = last_mark(a)
+        # The escape hold accrues whenever the getaway is CNR_ESCAPE_DIST (the C
+        # value, 18000) from every cop, and the cop's earlier 20000 carstate
+        # already qualified. Put the cop alongside for one step so the boundary
+        # below is timed from zero, not from that leftover.
+        m.send_frame(socks[cop], m.TAG["carstate"], carstate(cop, 600, 0))
+        settle(server, [a, b])
+        server._mark_step(1)
         m.send_frame(socks[cop], m.TAG["carstate"], carstate(cop, 40000, 0))
         m.send_frame(socks[g], m.TAG["carstate"], carstate(g, 0, 0))
         settle(server, [a, b])
