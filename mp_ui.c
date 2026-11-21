@@ -5,7 +5,8 @@
  * Menu tree:
  *   mp.root     Online | LAN | JMP Options | Split-Screen | Back
  *   mp.lan      Host Game | Join Game | Back
- *   mp.host     Take a Ride | Back
+ *   mp.gamemode <every selectable mode, Take a Ride first> | Back   (Host Game lands here)
+ *   mp.host     the session rules for the picked mode | Continue | Back
  *   mp.mode     Single Player | Multiplayer | Back          (the take-a-ride question)
  *   mp.join     <LAN servers...> / Manual IP / Back
  *   mp.lobby    <players...> / Start Match (host) or Leave / Back
@@ -68,6 +69,7 @@ enum
 				 * renamed "JMP Options" (registered id mp.jmpoptions) */
 	M_NAME,
 	M_MANUAL,
+	M_GAMEMODE,	/* "mp.gamemode": the host's first screen, a list of the modes */
 	M_COUNT
 };
 
@@ -75,7 +77,7 @@ enum
  * (-1 = not registered). */
 static const char* const kMenuIds[M_COUNT] = {
 	"mp.root", "mp.lan", "mp.online", "mp.host", "mp.mode", "mp.join",
-	"mp.lobby", "mp.jmpoptions", "mp.name", "mp.manual"
+	"mp.lobby", "mp.jmpoptions", "mp.name", "mp.manual", "mp.gamemode"
 };
 static int gMenuIdx[M_COUNT];
 static int gMenusResolved;	/* set once MpResolveMenus has run: an index is only
@@ -732,7 +734,8 @@ static const JER_FE_ITEM kHostItems[] =	/* the Time row is inserted after Game m
 	{ NULL, LblImmune,  NULL, NULL, AdjImmune,  -1, 0 },
 	{ NULL, LblInvuln,  NULL, NULL, AdjInvuln,  -1, 0 },
 
-	{ "Take a Ride", NULL, NULL, ActTakeARide, NULL, -1, 0 },
+	/* on to the stock chain: city, map, time of day / weather, car (ActTakeARide) */
+	{ "Continue",    NULL, NULL, ActTakeARide, NULL, -1, 0 },
 	{ "Back",        NULL, NULL, NULL,         NULL, -1, 1 },
 };
 #define MP_HOST_ITEMS		((int)(sizeof(kHostItems) / sizeof(kHostItems[0])))
@@ -759,6 +762,57 @@ static void HostOnEnter(void* ud)
 	}
 
 	gHostMenu.item_count = k;
+}
+
+/* GAME MODE LIST: the host's first screen after Host Game, a stock-style list of
+ * every selectable mode with Take a Ride on top (then the table's order, mp_mode.c).
+ * Picking one sets the session's mode and opens mp.host for the rest of the rules. */
+static JER_FE_ITEM gGameModeItems[JER_FE_MAX_ITEMS];
+static JER_FE_MENU gGameModeMenu = { "mp.gamemode", gGameModeItems, 0, NULL, NULL, "GAME MODE" };
+
+static int ActPickGameMode(void* ud)
+{
+	MpSetSessionGamemode((int)(intptr_t)ud);
+	return 0;	/* not handled: the engine follows the row's submenu (mp.host) */
+}
+
+static void GameModeAddRow(int* k, const MP_MODE_DESC* d)
+{
+	JER_FE_ITEM* it = &gGameModeItems[*k];
+
+	memset(it, 0, sizeof(*it));
+	it->label = d->name;
+	it->userdata = (void*)(intptr_t)d->id;
+	it->on_activate = ActPickGameMode;
+	it->submenu = gMenuIdx[M_HOST];
+	(*k)++;
+}
+
+static void GameModeOnEnter(void* ud)
+{
+	int i, k = 0;
+	const MP_MODE_DESC* d = MpModeFind(MP_GAMEMODE_TAKEADRIDE);
+
+	(void)ud;
+
+	if (d != NULL && d->selectable)
+		GameModeAddRow(&k, d);
+
+	for (i = 0; i < MpModeCount() && k < JER_FE_MAX_ITEMS - 1; i++)
+	{
+		d = MpModeAt(i);
+
+		if (d != NULL && d->selectable && d->id != MP_GAMEMODE_TAKEADRIDE)
+			GameModeAddRow(&k, d);
+	}
+
+	memset(&gGameModeItems[k], 0, sizeof(gGameModeItems[k]));
+	gGameModeItems[k].label = "Back";
+	gGameModeItems[k].submenu = -1;
+	gGameModeItems[k].is_back = 1;
+	k++;
+
+	gGameModeMenu.item_count = k;
 }
 
 static const JER_FE_ITEM kHostSetItems[] =
@@ -840,7 +894,7 @@ static void MpResolveMenus(void)
 	kRootItems[0].submenu = gMenuIdx[M_ONLINE];
 	kRootItems[1].submenu = gMenuIdx[M_LAN];
 	kRootItems[2].submenu = gMenuIdx[M_JMP_OPTIONS];
-	kLanItems[0].submenu = gMenuIdx[M_HOST];
+	kLanItems[0].submenu = gMenuIdx[M_GAMEMODE];	/* Host Game: pick the mode first */
 	kLanItems[1].submenu = gMenuIdx[M_JOIN];
 	kJmpOptionsItems[0].submenu = gMenuIdx[M_NAME];
 
@@ -1469,7 +1523,7 @@ static void OnlineOnEnter(void* ud)
 	OnlineRowClear(k);
 	gOnlineItems[k].label = "Host Game";
 	gOnlineItems[k].on_activate = ActHostGame;
-	gOnlineItems[k].submenu = gMenuIdx[M_HOST];
+	gOnlineItems[k].submenu = gMenuIdx[M_GAMEMODE];	/* pick the mode first */
 	k++;
 
 	OnlineRowClear(k);
@@ -2404,6 +2458,8 @@ void MpUiInit(void)
 	jer_frontend_register_menu(&kJmpOptionsMenu);
 	jer_frontend_register_menu(&gNameMenu);
 	jer_frontend_register_menu(&gManualMenu);
+	gGameModeMenu.on_enter = GameModeOnEnter;
+	jer_frontend_register_menu(&gGameModeMenu);
 
 	/* resolve the real registered index of each menu (see MpResolveMenus) */
 	MpResolveMenus();
