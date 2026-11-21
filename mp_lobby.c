@@ -1841,6 +1841,13 @@ void MpListenRotationTick(void)
 		return;
 	}
 
+	/* A game mode stays on the map the host picked: the round count only moves the
+	 * map on for a mode whose table row allows map cycling (mp_mode.c mapCycle, 0
+	 * for every mode), so mp.ini rounds_per_map no longer rotates a mode's rounds.
+	 * A passed !vote still switches (MpListenVote -> MpListenSwitch). */
+	if (!MpModeAllowsMapCycle(gMp.gamemode))
+		return;
+
 	if (!MpModeUsesTimer(gMp.gamemode) || MpMarkPhase() != MP_MARK_PHASE_ENDED ||
 		MpRoundNumber() == gMpRelaunch.lastRound)
 		return;
