@@ -36,7 +36,7 @@ static void CheckTakeARideDescriptor(void)
 	if (d == NULL)
 		return;
 
-	CHECK(strcmp(d->name, "TAKE A RIDE") == 0);	/* the string browsers always showed */
+	CHECK(strcmp(d->name, "Take a Ride") == 0);	/* the string browsers always showed */
 	CHECK(d->selectable == 1);
 	CHECK(d->teamCount == 0);
 	CHECK(d->teamColours == 0);
@@ -90,8 +90,8 @@ static void CheckRespawnHold(void)
 static void CheckMarkModes(void)
 {
 	static const struct { int id; const char* name; int timer; } kRows[] = {
-		{ MP_GAMEMODE_FOXHOUNDS, "FOX N HOUNDS", MP_MODE_TIMER_PERSONAL },
-		{ MP_GAMEMODE_BOMBTAG,   "CAR BOMB TAG", MP_MODE_TIMER_SHARED },
+		{ MP_GAMEMODE_FOXHOUNDS, "Fox n Hounds", MP_MODE_TIMER_PERSONAL },
+		{ MP_GAMEMODE_BOMBTAG,   "Car Bomb Tag", MP_MODE_TIMER_SHARED },
 	};
 	size_t i;
 
@@ -147,7 +147,7 @@ static void CheckCopsRobbers(void)
 	if (d == NULL)
 		return;
 
-	CHECK(strcmp(d->name, "COPS N ROBBERS") == 0 && d->selectable == 1);
+	CHECK(strcmp(d->name, "Cops n Robbers") == 0 && d->selectable == 1);
 	CHECK(d->timer == MP_MODE_TIMER_GETAWAY && MpModeTimerKind(MP_GAMEMODE_COPSROBBERS) == MP_MODE_TIMER_GETAWAY);
 	CHECK(MpModeUsesTimer(MP_GAMEMODE_COPSROBBERS) == 1);
 	CHECK(MpModeMusic(MP_GAMEMODE_COPSROBBERS) == MP_MODE_MUSIC_PURSUIT);
@@ -341,7 +341,7 @@ int main(void)
 	CheckRespawnHold();
 	CheckTable();
 	CheckCopsRobbers();
-	CheckAnswersAreToday(MP_GAMEMODE_TAKEADRIDE, "TAKE A RIDE");
+	CheckAnswersAreToday(MP_GAMEMODE_TAKEADRIDE, "Take a Ride");
 
 	/* an id this build does not know: named "-", plays as Take a Ride (as before) */
 	CHECK(MpModeFind(MP_GAMEMODE_COUNT) == NULL);

@@ -56,7 +56,7 @@ CITY_WIRE_CODE_LAST = 0xFE
 MP_RULE_COPS = 0x1            # 1 = police cars spawn
 
 
-GAMEMODE_NAMES = {0: "TAKE A RIDE", 1: "FOX N HOUNDS", 2: "CAR BOMB TAG", 3: "COPS N ROBBERS"}      # MP_GAMEMODE_* (mp_proto.h)
+GAMEMODE_NAMES = {0: "Take a Ride", 1: "Fox n Hounds", 2: "Car Bomb Tag", 3: "Cops n Robbers"}      # MP_GAMEMODE_* (mp_proto.h)
 GAMEMODE_FOXHOUNDS = 1        # mp_proto.h MP_GAMEMODE_FOXHOUNDS
 GAMEMODE_BOMBTAG = 2          # mp_proto.h MP_GAMEMODE_BOMBTAG
 GAMEMODE_COPSROBBERS = 3      # mp_proto.h MP_GAMEMODE_COPSROBBERS

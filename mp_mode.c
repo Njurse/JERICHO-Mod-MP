@@ -19,7 +19,7 @@ static const MP_MODE_DESC kModes[] =
 {
 	{
 		MP_GAMEMODE_TAKEADRIDE,	/* id */
-		"TAKE A RIDE",		/* name: the string browsers have always shown */
+		"Take a Ride",		/* name: the string browsers have always shown */
 		1,			/* selectable */
 
 		0,			/* teamCount: free roam, nobody is on a team */
@@ -38,7 +38,7 @@ static const MP_MODE_DESC kModes[] =
 	},
 	{
 		MP_GAMEMODE_FOXHOUNDS,	/* id */
-		"FOX N HOUNDS",		/* name */
+		"Fox n Hounds",		/* name */
 		1,			/* selectable */
 
 		0,			/* teamCount: every player for themselves */
@@ -61,7 +61,7 @@ static const MP_MODE_DESC kModes[] =
 	},
 	{
 		MP_GAMEMODE_BOMBTAG,	/* id */
-		"CAR BOMB TAG",		/* name */
+		"Car Bomb Tag",		/* name */
 		1,			/* selectable */
 
 		0,			/* teamCount */
@@ -84,7 +84,7 @@ static const MP_MODE_DESC kModes[] =
 	},
 	{
 		MP_GAMEMODE_COPSROBBERS,	/* id */
-		"COPS N ROBBERS",	/* name */
+		"Cops n Robbers",	/* name */
 		1,			/* selectable */
 
 		0,			/* teamCount: roles ride JPMK (`marked` = the getaway), not teams */

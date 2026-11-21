@@ -59,7 +59,7 @@ def check_names():
     py = dict(mp_test.GAMEMODE_NAMES)
     ok = bool(c) and None not in c and c == py
     print("names: mp_mode.c %r vs mp_test.GAMEMODE_NAMES %r -> %s" % (c, py, "OK" if ok else "MISMATCH"), flush=True)
-    ok = ok and mp_test.mode_name(0) == "TAKE A RIDE"
+    ok = ok and mp_test.mode_name(0) == "Take a Ride"
     return ok
 
 
