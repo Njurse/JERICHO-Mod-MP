@@ -41,9 +41,11 @@
 #define MP_CHASE_WAIT_FRAMES	60	/* 2 s at 30 Hz */
 #define MP_CLUSTER_DRIFT	1000	/* a slot's road spot stays this close to it, so two slots never snap together */
 #define MP_CLUSTER_GIVEUP_FRAMES	(MP_MARK_COUNTDOWN_SPAWN_MS * 30 / 1000 + 30)	/* 2 s */
-#define MP_CLUSTER_PER_RING	6	/* slots on one ring: 2*3200*sin(pi/6) = 3200 apart */
-#define MP_CLUSTER_RADIUS	(3 * MP_CLUSTER_STEP)	/* 9600: furthest a car lands from the anchor */
-#define MP_CLUSTER_STEP		(MP_JOIN_CLEAR + 1200)	/* 3200: the join spawn's retry step */
+#define MP_CLUSTER_PER_RING	6	/* slots on one ring: 2*4800*sin(pi/6) = 4800 apart */
+#define MP_CLUSTER_RADIUS	(3 * MP_CLUSTER_STEP)	/* 14400: furthest a car lands from the anchor */
+#define MP_CLUSTER_STEP		(MP_JOIN_CLEAR + 2800)	/* 4800 (was 3200, the join spawn's retry step):
+							 * Fox N Hounds / Car Bomb Tag rounds start 1.5x
+							 * further apart. Only MP_MODE_SPAWN_CLUSTER uses it. */
 #define MP_CLUSTER_TRIES_PER_FRAME	4
 #define MP_FOX_FADE_FRAMES	12	/* a colour fade, ~0.4 s at 30 fps */
 #define MP_FOX_OWN_Y		18	/* the own timer: under the title, over nothing */

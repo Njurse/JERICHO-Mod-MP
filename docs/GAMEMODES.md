@@ -254,9 +254,9 @@ reaches 0:00 loses, and everyone else wins.
   places nothing. The same tick, the anchor (the lowest present id in the
   `JPMK` rows whose car this machine can see) moves to the nearest road
   (`MpFindRoadSpotNear`). Everyone else searches from a slot on a ring around
-  the anchor's current pose: one slot per player, 8 per ring, rings 3200 units
-  apart (`MP_JOIN_CLEAR` + 1200, the join spawn's retry step). A spot must be
-  on a road, within 9600 units of the anchor, and `MP_JOIN_CLEAR` (2000) from
+  the anchor's current pose: one slot per player, 6 per ring, rings 4800 units
+  apart (`MP_JOIN_CLEAR` + 2800; 3200 before the lobby polish). A spot must be
+  on a road, within 14400 units of the anchor, and `MP_JOIN_CLEAR` (2000) from
   every other player's car; it is streamed (`MpWarpStreamTo`) and landed on
   (`MpPlaceOnGround`). Each car faces along its road's lane (0.23.0; a random heading only where the road gives none), stopped
   and repaired. If the ground is still streaming, placement retries for up to
