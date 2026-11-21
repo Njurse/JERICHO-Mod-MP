@@ -665,7 +665,10 @@ int MpOnFrame(void* userdata, void* args)
 	 * lobby once the player is back on the MAIN MENU (screen 0) with no match.
 	 * The -host / MP_AUTOSTART path is exempt: it has no menus and must keep
 	 * hosting until a player arrives or the user quits. */
-	if (gMp.role != MP_ROLE_NONE && !gMp.running && !gMp.autoSession &&
+	/* A CLIENT that is `running` but never reached the level (it backed out of the
+	 * car select) counts as "no match" too. */
+	if (gMp.role != MP_ROLE_NONE && !gMp.autoSession &&
+	    (!gMp.running || (gMp.role == MP_ROLE_CLIENT && !gMp.gameStarted)) &&
 	    gInFrontend && pCurrScreen == PsxScreens)
 	{
 		if (gMpCtx != NULL)

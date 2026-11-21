@@ -89,6 +89,14 @@ static int gMenusResolved;	/* set once MpResolveMenus has run: an index is only
  * retried while the screens settle. */
 static int gModeMenuArmed;
 
+/* A joiner's car select (MpUiOpenCarSelect): 0 = none, 1 = asked for, 2 = on screen.
+ * Backing out of it before the launch used to land on mp.lobby still CLIENT and
+ * still `running` (the WELCOME / START set it before the car select opened), with
+ * no row to pick a car again -- and the main-menu "cancel the lobby" sweep skips a
+ * running session (core/mp_frame.c), so the half-joined session leaked. MpUiTick
+ * now leaves the session when the player is back on an mp menu. */
+static int gJoinCarSelect;
+
 /* Open the menu `logical`, if it registered. Inert until MpResolveMenus has run,
  * so a caller that fires before the registration pass cannot open index 0 by
  * accident (the array is zero-filled). */
@@ -376,6 +384,16 @@ void MpUiArmModeMenu(void)
  * vehicle; its "Select" is the START the module claims. */
 void MpUiOpenCarSelect(void)
 {
+	/* REPLACE the lobby rather than stack on it, so backing out of the car select
+	 * returns to the screen the join started from (LAN / Online browser, Manual),
+	 * not to a lobby whose session is already running. */
+	if (gMp.role == MP_ROLE_CLIENT)
+	{
+		gJoinCarSelect = 1;
+		jer_frontend_replace(14);
+		return;
+	}
+
 	jer_frontend_goto(14);
 }
 
@@ -1800,6 +1818,29 @@ void MpUiTick(void)
 				gMpCtx->jer_log(gMpCtx,
 					"[mp] the Single Player / Multiplayer menu did not open (idx %d, on screen %d)\n",
 					want, jer_frontend_current_menu());
+		}
+	}
+
+	/* The joiner backed out of its car select without launching: back on one of
+	 * mp's own menus while still CLIENT. Leave the session (says bye to the host,
+	 * clears role/running) so it is a clean browser again, not a half-joined game. */
+	if (gJoinCarSelect != 0)
+	{
+		int onMpMenu = MpMenuIs(M_ROOT) || MpMenuIs(M_LAN) || MpMenuIs(M_ONLINE) ||
+			MpMenuIs(M_JOIN) || MpMenuIs(M_MANUAL) || MpMenuIs(M_LOBBY);
+
+		if (!gInFrontend || gMp.role != MP_ROLE_CLIENT)
+			gJoinCarSelect = 0;		/* launched, or the session already ended */
+		else if (gJoinCarSelect == 1 && !onMpMenu)
+			gJoinCarSelect = 2;		/* the car select is up */
+		else if (gJoinCarSelect == 2 && onMpMenu)
+		{
+			gJoinCarSelect = 0;
+
+			if (gMpCtx != NULL)
+				gMpCtx->jer_log(gMpCtx, "[mp] backed out of the car select before launching - leaving the session\n");
+
+			MpLeaveSession();
 		}
 	}
 
