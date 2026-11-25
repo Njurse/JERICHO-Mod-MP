@@ -436,6 +436,7 @@ static int ActJoinServer(void* ud)
 
 	/* asynchronous: the lobby shows "Connecting to <addr>..." while the
 	 * socket connects, instead of the menu freezing for up to 5 s */
+	gMp.autoSession = 0;	/* a join from the menus is attended: the car select is offered (MpHandleWelcome / MpHandleStart) */
 	if (s != NULL && MpBeginJoinAsync(s->ip, s->port))
 		jer_frontend_open(gMenuIdx[M_LOBBY]);
 
@@ -557,6 +558,7 @@ static int ActManualConnect(void* ud)
 
 	jer_console_log("joining %s:%d", host, port);
 
+	gMp.autoSession = 0;	/* a join from the menus is attended: the car select is offered (MpHandleWelcome / MpHandleStart) */
 	if (MpBeginJoinAsync(host, port))
 		jer_frontend_open(gMenuIdx[M_LOBBY]);
 
@@ -1547,6 +1549,7 @@ static int ActJoinOnline(void* ud)
 
 	/* asynchronous, exactly like the LAN rows: the lobby shows progress while
 	 * the socket connects instead of the menu freezing */
+	gMp.autoSession = 0;	/* a join from the menus is attended: the car select is offered (MpHandleWelcome / MpHandleStart) */
 	if (s != NULL && MpBeginJoinAsync(s->host, s->port))
 		jer_frontend_open(gMenuIdx[M_LOBBY]);
 
