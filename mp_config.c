@@ -466,18 +466,24 @@ void MpConfigLoad(void)
 	if (gMp.config.strictVersion < 0 || gMp.config.strictVersion > 1)
 		gMp.config.strictVersion = 0;
 
-	/* An empty default means "not set yet" -> first run: prompt for a name. */
+	/* An empty player_name means "not set yet" and is filled with the default
+	 * (OS username, or "Player") without writing the ini. A saved name that is
+	 * not the default means the player already chose one -- even on an older
+	 * install that has no first_name_set key -- so the first-run prompt is
+	 * skipped. first_name_set itself is written once the prompt is confirmed
+	 * or dismissed, so a default name the player kept is not asked again. */
 	s = jer_config_get_str("mp", "player_name", "");
 	if (s != NULL && s[0] != '\0')
-	{
 		snprintf(gMp.config.playerName, sizeof(gMp.config.playerName), "%s", s);
-		gMp.config.firstNameSet = 1;
-	}
 	else
-	{
 		snprintf(gMp.config.playerName, sizeof(gMp.config.playerName), "%s", MpDefaultPlayerName());
+
+	if (jer_config_get_int("mp", "first_name_set", 0))
+		gMp.config.firstNameSet = 1;
+	else if (s != NULL && s[0] != '\0' && strcmp(gMp.config.playerName, MpDefaultPlayerName()) != 0)
+		gMp.config.firstNameSet = 1;
+	else
 		gMp.config.firstNameSet = 0;
-	}
 
 	MpLoadPlayerId();
 
@@ -534,6 +540,7 @@ void MpConfigSave(void)
 	jer_config_set_int("mp", "color_b", gMp.config.colorB);
 	jer_config_set_int("mp", "ped_model", gMp.config.pedModel);
 	jer_config_set_str("mp", "player_name", gMp.config.playerName);
+	jer_config_set_int("mp", "first_name_set", gMp.config.firstNameSet ? 1 : 0);
 	jer_config_set_str("mp", "host_name", gMp.config.hostName);
 	jer_config_set_str("mp", "master_url", gMp.config.masterUrl);
 }

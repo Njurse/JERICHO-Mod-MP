@@ -228,6 +228,7 @@ no wanted level, and the session carries on.
 |---|---|---|
 | `port` | `1318` | TCP session port. Discovery always uses a fixed UDP 1318 and advertises the session port in the beacon, so changing this does not hide your game |
 | `player_name` | OS username | your name on the network |
+| `first_name_set` | `0` | `1` once the first-run name prompt has been confirmed or dismissed. A saved `player_name` that is not the default also counts as done, so an older install is not prompted again |
 | `host_name` | `<name>'s game` | the advertised server name |
 | `beacon_ms` | `1000` | discovery beacon interval |
 | `chat_hold_seconds` | `12` | seconds a chat line stays at full brightness before fading (2..120; was a fixed 20) |

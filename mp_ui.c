@@ -11,7 +11,7 @@
  *   mp.join     <LAN servers...> / Manual IP / Back
  *   mp.lobby    <players...> / Start Match (host) or Leave / Back
  *   mp.jmpoptions  Change Name | Enforce Mods | Strict Version | Super Turbo | Port / Back
- *   mp.name     10 character slots / Done / Back
+ *   mp.name     typed name field / Done / Back (also the first-run name prompt)
  *
  * "JMP Options" used to be an "Options" row INSIDE the LAN page. It moved up one
  * level because it is session configuration, not a LAN action: hosting, joining
@@ -123,18 +123,21 @@ static int MpMenuIs(int logical)
 
 static const char* const kModCheckNames[] = { "Off", "By ID", "By ID+Ver" };
 
-/* editor state */
-static char gNameEdit[11];
-static int  gNameInit;
+/* The player's name, TYPED in the same field widget as the manual address and
+ * the passwords (MP_TEXT_FIELD / MpUiManualType). gNameEdit is what the field
+ * types into; a commit copies it into gMp.config.playerName. */
+static char gNameEdit[MP_NAME_MAX];
+static int  gNameSetupPrompt;	/* 1 while the first-run name prompt is on screen */
+static int  gNameSetupArmed;	/* deferred open, same reason as gModeMenuArmed */
+
 /* The manual join target, TYPED rather than dialled an octet at a time: a DNS name
  * or an IPv4, optionally with ":port" -- which is what makes the field usable for a
  * host on the internet, where the address is a NAME and the port is forwarded.
  *
  * gManualIp is the source of truth and holds exactly what was typed. The menu row
  * renders it and an EDIT MODE feeds it keystrokes: no frontend menu item can take
- * text (jer_frontend.h has no keyboard hook -- the same reason the name menu is a
- * row of per-character adjusters), so the field borrows PsyX's text-input slot the
- * way chat does. */
+ * text (jer_frontend.h has no keyboard hook), so the field borrows PsyX's
+ * text-input slot the way chat does. */
 #define MP_MANUAL_MAX	100		/* what the row can show without spilling */
 static char gManualIp[128] = "127.0.0.1";
 static char gManualUndo[128];		/* what Escape restores */
@@ -590,7 +593,38 @@ typedef struct MP_TEXT_FIELD
 static MP_TEXT_FIELD gFieldManual  = { gManualIp, sizeof(gManualIp), MP_MANUAL_MAX - 1, M_MANUAL, 0, 1, "manual address" };
 static MP_TEXT_FIELD gFieldHostPw  = { gMp.config.hostPassword, sizeof(gMp.config.hostPassword), MP_PASSWORD_MAX, M_HOST_ACCESS, 1, 0, "host password" };
 static MP_TEXT_FIELD gFieldJoinPw  = { gMp.config.joinPassword, sizeof(gMp.config.joinPassword), MP_PASSWORD_MAX, M_MANUAL, 1, 0, "join password" };
+static MP_TEXT_FIELD gFieldName    = { gNameEdit, sizeof(gNameEdit), MP_NAME_MAX - 1, M_NAME, 0, 0, "player name" };
 static MP_TEXT_FIELD* gField;		/* the field that is typing, NULL when none */
+
+/* Persist the name field and, on the first-run prompt, leave for mp.root.
+ * keepTyped = 1 keeps what was typed (trimmed; empty becomes the default name);
+ * keepTyped = 0 keeps the current/default name already in the buffer (Escape).
+ * Either way the first-run flag is marked done so the prompt does not return. */
+static void MpNameFinish(int keepTyped, int leaveToRoot)
+{
+	int n;
+
+	if (keepTyped)
+	{
+		n = (int)strlen(gNameEdit);
+		while (n > 0 && gNameEdit[n - 1] == ' ')
+			gNameEdit[--n] = '\0';
+
+		if (gNameEdit[0] == '\0')
+			snprintf(gNameEdit, sizeof(gNameEdit), "%s", MpDefaultPlayerName());
+	}
+
+	snprintf(gMp.config.playerName, sizeof(gMp.config.playerName), "%s", gNameEdit);
+	gMp.config.firstNameSet = 1;
+	MpConfigSave();
+
+	if (leaveToRoot)
+	{
+		gNameSetupPrompt = 0;
+		gNameSetupArmed = 0;
+		MpMenuOpen(M_ROOT);
+	}
+}
 
 int MpUiManualEditing(void)
 {
@@ -625,6 +659,12 @@ void MpUiManualCommit(void)
 	if (f == NULL)
 		return;
 
+	if (f == &gFieldName)
+	{
+		MpNameFinish(1, gNameSetupPrompt);
+		return;
+	}
+
 	if (f->secret)
 		MpConfigSave();		/* passwords persist ([mp] host_password / join_password) */
 
@@ -647,12 +687,18 @@ void MpUiManualCancel(void)
 
 	if (gMpCtx != NULL)
 		gMpCtx->jer_log(gMpCtx, "[mp] %s: undone\n", f->what);
+
+	/* First-run prompt: Escape keeps the current/default name, marks setup
+	 * done (so it does not come back every visit), and continues to mp.root. */
+	if (f == &gFieldName && gNameSetupPrompt)
+		MpNameFinish(0, 1);
 }
 
 /* One typed character (or NULL for backspace) from PsyX, while a field is typing.
  * An address takes what an address can hold (letters, digits, . - : _), so it
  * cannot fill with text no resolver would accept; a password takes any printable
- * ASCII but the space. */
+ * ASCII but the space; a name takes printable ASCII including the space (up to
+ * MP_NAME_MAX-1, the protocol's 31-character limit). */
 void MpUiManualType(const char* text)
 {
 	MP_TEXT_FIELD* f = gField;
@@ -680,7 +726,7 @@ void MpUiManualType(const char* text)
 	if (f->address
 		? !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
 		    c == '.' || c == '-' || c == ':' || c == '_')
-		: (c < 33 || c > 126))
+		: (c < (f->secret ? 33 : 32) || c > 126))
 		return;
 
 	f->buf[len] = c;
@@ -715,6 +761,7 @@ static void MpFieldLabelFwd(int which, char* o, int n)
 
 static void LblHostPassword(void* ud, char* o, int n) { (void)ud; MpFieldLabel(&gFieldHostPw, "Password", "< none >", o, n); }
 static void LblJoinPassword(void* ud, char* o, int n) { (void)ud; MpFieldLabel(&gFieldJoinPw, "Password", "< none >", o, n); }
+static void LblPlayerName(void* ud, char* o, int n)   { (void)ud; MpFieldLabel(&gFieldName, "Name", "", o, n); }
 
 /* Cross on a password row: type, or stop typing. Triangle/Square on it clears it. */
 static int ActPasswordField(void* ud)
@@ -789,22 +836,21 @@ static int ActLobbyNextPage(void* ud)
 	return 1;
 }
 
-/* name editor: one adjustable slot per character */
+/* Cross on Done (or a second Cross on the field, via commit): keep the name.
+ * The first-run prompt returns to mp.root; Change Name returns to JMP Options. */
 static int ActNameDone(void* ud)
 {
-	int n;
+	int first = gNameSetupPrompt;
 	(void)ud;
 
-	n = (int)strlen(gNameEdit);
-	while (n > 0 && gNameEdit[n - 1] == ' ')
-		gNameEdit[--n] = '\0';
+	if (gField == &gFieldName)
+		MpUiManualCommit();
+	else if (!gMp.config.firstNameSet)
+		MpNameFinish(1, 0);
 
-	if (gNameEdit[0] == '\0')
-		snprintf(gNameEdit, sizeof(gNameEdit), "%s", "Player");
+	if (first)
+		return 1;	/* MpNameFinish already opened mp.root */
 
-	snprintf(gMp.config.playerName, sizeof(gMp.config.playerName), "%s", gNameEdit);
-	gMp.config.firstNameSet = 1;
-	MpConfigSave();
 	jer_frontend_open(gMenuIdx[M_JMP_OPTIONS]);
 	return 1;
 }
@@ -1111,21 +1157,18 @@ static int gLobbyJoinState = -1;	/* join state the lobby was last built with */
 static char gLobbyLabel[MP_MAX_PLAYERS][40];
 static char gLobbyStatus[64];		/* "Connecting to <addr>..." / "(could not connect)" */
 
-static JER_FE_ITEM gNameItems[JER_FE_MAX_ITEMS];
+static JER_FE_ITEM gNameItems[4];
 static JER_FE_MENU gNameMenu = { "mp.name", gNameItems, 0, NULL, NULL };
 
 /* manual LAN address: the field, Connect, Back -- exactly the three ManualOnEnter
  * builds, so the count here is the count there */
 static JER_FE_ITEM gManualItems[4];
 static JER_FE_MENU gManualMenu = { "mp.manual", gManualItems, 0, NULL, NULL };
-static char gNameSlotLabel[10][24];
-static const char kAlpha[] = " ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.";
 
 static void JoinOnEnter(void* ud);
 static void LobbyOnEnter(void* ud);
 static void NameOnEnter(void* ud);
 static void ManualOnEnter(void* ud);
-static int  AdjNameChar(void* ud, int dir);
 
 static void JoinOnEnter(void* ud)
 {
@@ -1338,38 +1381,25 @@ static void LobbyOnEnter(void* ud)
 	gLobbyBuiltCount = gMp.playerCount;	/* rebuild only when this changes */
 }
 
+/* The name, Done, Back. Built on entry so the label picks up the current name.
+ * The field is TYPED (the same widget as the manual address): it takes the
+ * keyboard on entry, Enter or Done keeps it, Escape undoes. */
 static void NameOnEnter(void* ud)
 {
-	int i, k = 0;
+	int k = 0;
 	(void)ud;
 
-	if (!gNameInit)
-	{
-		int n = (int)strlen(gMp.config.playerName);
-		int j;
+	if (gField != &gFieldName)
+		snprintf(gNameEdit, sizeof(gNameEdit), "%s", gMp.config.playerName);
 
-		memset(gNameEdit, ' ', 10);
-		gNameEdit[10] = '\0';
-
-		for (j = 0; j < 10 && j < n; j++)
-			gNameEdit[j] = gMp.config.playerName[j];
-
-		gNameInit = 1;
-	}
-
-	for (i = 0; i < 10 && k < JER_FE_MAX_ITEMS - 2; i++)
-	{
-		snprintf(gNameSlotLabel[k], sizeof(gNameSlotLabel[k]), "%d: < %c >", i + 1, gNameEdit[i]);
-
-		gNameItems[k].label = gNameSlotLabel[k];
-		gNameItems[k].get_label = NULL;
-		gNameItems[k].userdata = (void*)(intptr_t)i;
-		gNameItems[k].on_activate = NULL;
-		gNameItems[k].on_adjust = AdjNameChar;
-		gNameItems[k].submenu = -1;
-		gNameItems[k].is_back = 0;
-		k++;
-	}
+	gNameItems[k].label = NULL;
+	gNameItems[k].get_label = LblPlayerName;
+	gNameItems[k].userdata = (void*)&gFieldName;
+	gNameItems[k].on_activate = ActPasswordField;
+	gNameItems[k].on_adjust = NULL;
+	gNameItems[k].submenu = -1;
+	gNameItems[k].is_back = 0;
+	k++;
 
 	gNameItems[k].label = "Done";
 	gNameItems[k].get_label = NULL;
@@ -1390,26 +1420,9 @@ static void NameOnEnter(void* ud)
 	k++;
 
 	gNameMenu.item_count = k;
-}
 
-static int AdjNameChar(void* ud, int dir)
-{
-	int idx = (int)(intptr_t)ud;
-	const char* p;
-	int n = (int)strlen(kAlpha);
-	int i;
-
-	if (idx < 0 || idx > 9)
-		return 1;
-
-	i = 0;
-	p = strchr(kAlpha, gNameEdit[idx]);
-	if (p != NULL)
-		i = (int)(p - kAlpha);
-
-	i = (i + dir + n) % n;
-	gNameEdit[idx] = kAlpha[i];
-	return 1;
+	if (gField != &gFieldName)
+		MpFieldBegin(&gFieldName);
 }
 
 /* wire the dynamic on_enter callbacks (the menus are non-const statics) */
@@ -2138,6 +2151,45 @@ void MpUiTick(void)
 	 * here is also the self-healing half of the grab. */
 	if (gField != NULL && !MpMenuIs(gField->menu))
 		MpUiManualCommit();
+
+	/* First visit to the multiplayer root: open the name prompt. Deferred and
+	 * retried like gModeMenuArmed, because opening from inside a screen switch
+	 * does not take. Skipped when a test lever is driving the menus, and when
+	 * MpConfigLoad already treated the install as named. */
+	if (!gMp.config.firstNameSet && gInFrontend && gMenusResolved && gMenuIdx[M_NAME] >= 0)
+	{
+		const char* testOnline = getenv("MP_TEST_ONLINE");
+		const char* testMenu = getenv("MP_TEST_OPENMENU");
+		const char* testAddr = getenv("MP_TEST_MANUALADDR");
+		int testDrive = (testOnline != NULL && testOnline[0] != '\0' && testOnline[0] != '0')
+			|| (testMenu != NULL && testMenu[0] != '\0')
+			|| (testAddr != NULL && testAddr[0] != '\0');
+
+		if (!testDrive)
+		{
+			if (MpMenuIs(M_NAME))
+			{
+				gNameSetupArmed = 0;
+				gNameSetupPrompt = 1;
+			}
+			else if (MpMenuIs(M_ROOT) && gNameSetupArmed == 0)
+				gNameSetupArmed = 8;
+
+			if (gNameSetupArmed > 0)
+			{
+				gNameSetupArmed--;
+				if (!MpMenuIs(M_NAME))
+				{
+					gNameSetupPrompt = 1;
+					MpMenuOpen(M_NAME);
+					if (gNameSetupArmed == 0 && !MpMenuIs(M_NAME) && gMpCtx != NULL)
+						gMpCtx->jer_log(gMpCtx,
+							"[mp] the first-run name prompt did not open (idx %d, on screen %d)\n",
+							gMenuIdx[M_NAME], jer_frontend_current_menu());
+				}
+			}
+		}
+	}
 
 	/* TEST LEVER (MP_TEST_MANUALADDR=<host>[:port]): the address field needs a
 	 * KEYBOARD, which the harness does not have, so this fills the field and
