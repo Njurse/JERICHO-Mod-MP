@@ -58,9 +58,12 @@ typedef struct MP_CNR_SIREN
 } MP_CNR_SIREN;
 
 static MP_CNR_SIREN gMpCnrSiren[MP_SIREN_MAX] = { { -1, -1, 0 }, { -1, -1, 0 } };
+static int gMpCnrSirenWasLive;
+static int gMpCnrSirenCountdownCleared;
 
 extern int gDoCopSpeech;	/* gamesnd.c: 0 on the gang missions */
 
+int MpPlayerSirenOn(int playerId);
 void MpHostCnrFlush(void);
 static void MpCnrRadioScorerTick(int marked);
 static void MpCnrRadioSay(int carSlot, int sample, int local);
@@ -206,6 +209,8 @@ void MpCnrRadioClear(void)
 	gMpRadioScorer = -1;
 	gMpRadioScoreInit = 0;
 	gMpRadioQueueSince = 0;
+	gMpCnrSirenWasLive = 0;
+	gMpCnrSirenCountdownCleared = 0;
 	MpCnrSirenTick(0, -1);
 }
 
@@ -260,17 +265,15 @@ static void MpCnrRadioSay(int carSlot, int sample, int local)
 	gMpRadioPlayFrame = gMp.frame;
 }
 
-/* COPS N ROBBERS SIRENS. A player's car never runs the engine's siren loop: the
- * local car's siren (StartPlayerCarSounds, channel player*3+2) is keyed by the horn
- * button (gamesnd.c ControlSound: SpuSetVoicePitch 0 while horn.on is 0), and a
- * remote player's car is CONTROL_TYPE_PLAYER, which DoDopplerSFX never sounds
- * (it picks PURSUER_AI / LEAD_AI / CUTSCENE). MpClearFelony also turns every AI
- * pursuer back into traffic at each countdown, so in a round nothing had a siren.
- * While a round is LIVE every machine knows the roles (the marked player is the
- * getaway, every other present player a cop), so each one sounds the cop cars'
- * sirens itself: the MP_SIREN_MAX nearest to our car with a siren sample
- * (CarHasSiren, the same value the engine plays), on locked voices, tracked to the
- * car the way DoDopplerSFX tracks an AI cop. Nothing on the wire. */
+/* COPS N ROBBERS SIRENS. A player controls their own siren/lightbar state via
+ * the horn toggle (handling.c:1289: pad & 8 flips player[0].horn.on between 0
+ * and 8), which the engine already plays on channel player*3+2 (gamesnd.c
+ * ControlSound) and draws via AddCopCarLight (main.c). That state syncs out on
+ * MP_CARSTATE_SIREN (mp_sync.c). At CnR GO (LIVE start), each cop player turns
+ * their own siren on once; after that they can toggle it off/on as usual, and
+ * remotes hear up to MP_SIREN_MAX nearest remote cars whose synced state is on.
+ * DoDopplerSFX only handles AI pursuers, so remote CONTROL_TYPE_PLAYER cars
+ * need this tracked-voice loop here. */
 static void MpCnrSirenStop(MP_CNR_SIREN* s)
 {
 	if (s->chan >= 0)
@@ -288,25 +291,38 @@ static void MpCnrSirenTick(int on, int marked)
 {
 	static int saidOn;
 	MP_PLAYER* me = MpLocalPlayer();
-	int want[MP_SIREN_MAX], wantSample[MP_SIREN_MAX], nWant = 0;
+	int want[MP_SIREN_MAX], wantId[MP_SIREN_MAX], wantSample[MP_SIREN_MAX], nWant = 0;
 	long long wantD[MP_SIREN_MAX];
-	int lx = 0, lz = 0, haveListener = 0, id, k, j;
+	int lx = 0, lz = 0, id, k, j;
 
-	if (on && me != NULL && me->carId >= 0 && me->carId < MAX_CARS)
+	(void)marked;
+
+	if (on)
 	{
-		lx = car_data[me->carId].hd.where.t[0];
-		lz = car_data[me->carId].hd.where.t[2];
-		haveListener = 1;
+		if (me != NULL && me->carId >= 0 && me->carId < MAX_CARS)
+		{
+			lx = car_data[me->carId].hd.where.t[0];
+			lz = car_data[me->carId].hd.where.t[2];
+		}
+		else
+		{
+			lx = player[0].cameraPos.vx;
+			lz = player[0].cameraPos.vz;
+		}
 	}
 
-	for (id = 0; on && haveListener && id < MP_MAX_PLAYERS; id++)
+	for (id = 0; on && id < MP_MAX_PLAYERS; id++)
 	{
 		MP_PLAYER* p;
 		CAR_DATA* cp;
 		int sample;
 		long long dx, dz, d;
 
-		if (id == marked || !MpMarkPresent(id))
+		/* our own car's siren plays on the engine's player*3+2 channel */
+		if (me != NULL && id == me->id)
+			continue;
+
+		if (!MpPlayerSirenOn(id))
 			continue;
 
 		p = MpGetPlayer(id);
@@ -317,10 +333,6 @@ static void MpCnrSirenTick(int on, int marked)
 		cp = &car_data[p->carId];
 
 		if (cp->controlType == CONTROL_TYPE_NONE)
-			continue;
-
-		/* our own car while the horn is held: the engine's own siren channel plays */
-		if (me != NULL && p->id == me->id && player[0].horn.on != 0)
 			continue;
 
 		sample = CarHasSiren(cp->ap.model);
@@ -342,11 +354,13 @@ static void MpCnrSirenTick(int on, int marked)
 		for (j = (nWant < MP_SIREN_MAX ? nWant : MP_SIREN_MAX - 1); j > k; j--)
 		{
 			want[j] = want[j - 1];
+			wantId[j] = wantId[j - 1];
 			wantSample[j] = wantSample[j - 1];
 			wantD[j] = wantD[j - 1];
 		}
 
 		want[k] = p->carId;
+		wantId[k] = id;
 		wantSample[k] = sample;
 		wantD[k] = d;
 
@@ -413,8 +427,8 @@ static void MpCnrSirenTick(int on, int marked)
 			s->sample = wantSample[j];
 
 			if (gMpCtx != NULL && (!saidOn || MpDebugOn()))
-				gMpCtx->jer_log(gMpCtx, "[mp] cops n robbers: siren on for car %d (slot %d, bank %d sample %d, voice %d)\n",
-					want[j], cp->ap.model, (wantSample[j] & 0xff00) >> 8, wantSample[j] & 0xff, ch);
+				gMpCtx->jer_log(gMpCtx, "[mp] cops n robbers: siren on for player %d car %d (slot %d, bank %d sample %d, voice %d)\n",
+					wantId[j], want[j], cp->ap.model, (wantSample[j] & 0xff00) >> 8, wantSample[j] & 0xff, ch);
 
 			saidOn = 1;
 		}
@@ -435,6 +449,44 @@ void MpCnrRadioTick(int on, int marked, int myId)
 	int inRange[MP_MAX_PLAYERS], nIn = 0, i;
 	const long long range2 = (long long)MP_RADIO_RANGE * MP_RADIO_RANGE;
 
+	if (MpModeTimerKind(gMp.gamemode) == MP_MODE_TIMER_GETAWAY &&
+	    MpMarkPhase() == MP_MARK_PHASE_COUNTDOWN)
+	{
+		if (!gMpCnrSirenCountdownCleared)
+		{
+			player[0].horn.on = 0;
+			gMpCnrSirenCountdownCleared = 1;
+		}
+	}
+	else
+		gMpCnrSirenCountdownCleared = 0;
+
+	/* CnR GO (transition into LIVE): cop players start with sirens on locally
+	 * so MP_CARSTATE_SIREN syncs out; the getaway is never auto-on. */
+	if (on && !gMpCnrSirenWasLive)
+	{
+		MP_PLAYER* me = MpLocalPlayer();
+
+		if (me != NULL && me->id != marked && MpMarkInRound(me->id) &&
+		    player[0].playerType == PLAYER_TYPE_CAR &&
+		    me->carId >= 0 && me->carId < MAX_CARS &&
+		    CarHasSiren(car_data[me->carId].ap.model) != 0)
+		{
+			player[0].horn.on = 8;	/* matches handling.c:1290 toggle bit */
+
+			if (gMpCtx != NULL)
+				gMpCtx->jer_log(gMpCtx,
+					"[mp] cops n robbers: auto-on siren for cop player %d (car %d, slot %d)\n",
+					me->id, me->carId, car_data[me->carId].ap.model);
+		}
+	}
+	else if (!on && gMpCnrSirenWasLive &&
+		 MpModeTimerKind(gMp.gamemode) == MP_MODE_TIMER_GETAWAY)
+	{
+		player[0].horn.on = 0;
+	}
+
+	gMpCnrSirenWasLive = on;
 	MpCnrSirenTick(on, marked);
 
 	if (!on)

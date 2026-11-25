@@ -1344,10 +1344,29 @@ void MpPlayClear(int id)
 		memset(&gMpPlay[id], 0, sizeof(gMpPlay[id]));
 }
 
+static unsigned char gMpPlayerSiren[MP_MAX_PLAYERS];
+
+int MpPlayerSirenOn(int playerId)
+{
+	MP_PLAYER* pl;
+
+	if (playerId < 0 || playerId >= MP_MAX_PLAYERS)
+		return 0;
+
+	pl = MpGetPlayer(playerId);
+
+	if (pl == NULL || !pl->active || pl->isLocal || pl->onFoot ||
+	    pl->carId < 0 || pl->carId >= MAX_CARS)
+		return 0;
+
+	return gMpPlayerSiren[playerId] ? 1 : 0;
+}
+
 void MpPlayResetAll(void)
 {
 	memset(gMpPlay, 0, sizeof(gMpPlay));
 	memset(gMpSelfPose, 0, sizeof(gMpSelfPose));
+	memset(gMpPlayerSiren, 0, sizeof(gMpPlayerSiren));
 }
 
 void MpRecordSelfPose(void)
@@ -1650,6 +1669,11 @@ void MpApplyRemoteCarPoses(void)
 		}
 
 		MpPlayWriteBody(cp, x, y, z, heading, orient, vel, angVel);
+
+		/* Apply owner's synced siren state so the remote car lights up every
+		 * sim frame on its interpolated pose. */
+		if (gMpPlayerSiren[pl->id] && CarHasSiren(cp->ap.model) != 0)
+			AddCopCarLight(cp);
 
 		/* Remember the pose the sender is actually looking at: a contact report
 		 * names this frame, and MpContactPush sends this position with it. */
@@ -2147,8 +2171,8 @@ void MpSendOwnCarState(void)
 		 * via MP_TRAFFIC_SIREN; player cars need the same so a remote copy draws
 		 * the light and plays the sound. The engine only auto-draws for PURSUER_AI
 		 * / roadblock / cutscene, so we must tell the peers explicitly.
-		 * TODO: replace dying<75 with the real player "siren is on" condition. */
-		if (CarHasSiren(cp->ap.model) && cp->ai.p.dying < 75)
+		 * player[0].horn.on is the player's own siren toggle (handling.c:1289). */
+		if (CarHasSiren(cp->ap.model) && player[0].horn.on != 0 && cp->ai.p.dying < 75)
 			e.flags |= MP_CARSTATE_SIREN;
 	}
 
@@ -2372,6 +2396,7 @@ void MpHandleCarState(int connIndex, const unsigned char* p, int len)
 			pl->carId = -1;
 			pl->car = -1;
 			pl->onFoot = 1;
+			gMpPlayerSiren[pl->id] = 0;
 
 			/* A joiner that arrived after the get-out has no local body for
 			 * the car they left; the NO_CAR row names it. A machine that was
@@ -2555,6 +2580,7 @@ void MpHandleCarState(int connIndex, const unsigned char* p, int len)
 		if (MpRemoteTargetsLocalCar(pl->carId, "carstate", pl->id))
 		{
 			pl->carId = -1;	/* that row's car is not ours to drive from the wire */
+			gMpPlayerSiren[pl->id] = 0;
 			MpPlayClear(pl->id);
 			continue;
 		}
@@ -2649,11 +2675,9 @@ void MpHandleCarState(int connIndex, const unsigned char* p, int len)
 			cp->controlType = CONTROL_TYPE_PLAYER;
 		}
 
-		/* Apply owner's siren state so the remote car lights up. The engine
-		 * only draws the bar for PURSUER_AI / roadblock / cutscene, so we
-		 * force the same call the traffic mirror uses. */
-		if (e.flags & MP_CARSTATE_SIREN)
-			AddCopCarLight(cp);
+		/* Record owner's siren/lightbar state; MpApplyRemoteCarPoses draws
+		 * AddCopCarLight once per sim frame and MpCnrSirenTick plays the sound. */
+		gMpPlayerSiren[pl->id] = (e.flags & MP_CARSTATE_SIREN) ? 1 : 0;
 
 		/* Owner-authoritative wheel appearance: a hubcap knocked off on their
 		 * machine is missing here too. Only write on a change, so the per-frame
