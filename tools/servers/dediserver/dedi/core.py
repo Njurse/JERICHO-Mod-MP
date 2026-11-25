@@ -61,6 +61,8 @@ DEFAULTS = {
     "cop_difficulty": 1,       # 0..2 (MP_COP_DIFF_MAX)
     "cop_immunity": False,     # cops exist but never come after anyone
     "invulnerable": False,     # cars take no damage
+    "intermission_s": 8,       # round modes: seconds between a round ending and the next
+                               # one's countdown (3..30; the in-game host's lobby row too)
     # Plugins (dedi/plugins.py; README "Plugins"). null = every plugin found, minus
     # plugins_disabled and any marked ENABLED_BY_DEFAULT = False; a list = exactly
     # those, in order. plugins_dir is relative to this server's folder.
@@ -464,7 +466,8 @@ class Dedicated:
         # A timer mode (Fox N Hounds / Car Bomb Tag, proto 23) does not: its referee
         # starts round 1 once two players are in (mark_loop), and until then the round
         # state is round 0, idle, everyone waiting -- the in-game host's rule too.
-        self.mark = markref.MarkReferee(self.round.gamemode, mode_minutes(cfg))
+        self.mark = markref.MarkReferee(self.round.gamemode, mode_minutes(cfg),
+                                        markref.clamp_intermission_s(cfg.get("intermission_s", 8)))
         if not self.mark.active:
             self.round.begin()
         self.round_sent = -1     # the revision last broadcast
@@ -600,7 +603,8 @@ class Dedicated:
         with self.lock:
             self.cfg["gamemode"] = gid
             self.round = RoundState(gid)
-            self.mark = markref.MarkReferee(gid, mode_minutes(self.cfg))
+            self.mark = markref.MarkReferee(gid, mode_minutes(self.cfg),
+                                            markref.clamp_intermission_s(self.cfg.get("intermission_s", 8)))
             if not self.mark.active:
                 self.round.begin()
             self.round_sent = -1
@@ -1703,11 +1707,12 @@ class Dedicated:
             ("say", "broadcast a line into every player's console: say <text>", self.cmd_say),
             ("kick", "drop a player, telling them: kick <id> [reason]  ('list' shows ids)", self.cmd_kick),
             ("beacon", "LAN beacon: beacon [on|off], or its state", self.cmd_beacon),
+            ("intermission", "seconds between rounds: intermission [3..30], or its value", self.cmd_intermission),
             ("master", "discovery-server registration state", self.cmd_master),
             ("stop", "close the server (unregisters from the master)", self.cmd_stop),
             ("help", "list these commands", self.cmd_help),
             ("plugins", "loaded and disabled plugins", self.cmd_plugins),
-        ] + self.plugins.console_entries({"status", "list", "say", "kick", "beacon",
+        ] + self.plugins.console_entries({"status", "list", "say", "kick", "beacon", "intermission",
                                           "master", "stop", "help", "plugins"})
 
     def cmd_plugins(self, _rest):
@@ -1858,6 +1863,23 @@ class Dedicated:
         return "beacon is %s (every %dms to UDP/%d)" % (
             "on" if self.beacon_on else "off", int(self.cfg["beacon_ms"]), m.DISCOVERY_PORT)
 
+    def cmd_intermission(self, rest):
+        arg = (rest or "").strip()
+
+        if arg:
+            try:
+                secs = int(arg)
+            except ValueError:
+                return "usage: intermission [%d..%d]" % (markref.INTERMISSION_S_MIN, markref.INTERMISSION_S_MAX)
+            secs = markref.clamp_intermission_s(secs)
+            with self.lock:
+                self.cfg["intermission_s"] = secs
+                self.mark.intermission_total_ms = secs * 1000
+            self.log.info("console: intermission %ds" % secs)
+            return "intermission %ds (from the next round's end)" % secs
+
+        return "intermission is %ds" % (self.mark.intermission_total_ms // 1000)
+
     def cmd_master(self, rest):
         if (rest or "").strip():
             return "usage: master"
@@ -1942,6 +1964,8 @@ def parse_args(argv):
                          "2 carbombtag, 3 copsnrobbers")
     ap.add_argument("--mode-time", type=int, dest="mode_time", metavar="MIN",
                     help="round time in minutes for modes 1-3, 1..5 (default 3)")
+    ap.add_argument("--intermission", type=int, dest="intermission_s", metavar="SEC",
+                    help="seconds between a round ending and the next (3..30, default 8)")
     ap.add_argument("--max-players", type=int)
     ap.add_argument("--beacon", dest="beacon", action="store_true", default=None)
     ap.add_argument("--no-beacon", dest="beacon", action="store_false")
@@ -2086,7 +2110,7 @@ def build_config(argv):
     cfg = load_config(path, DEFAULTS)
     apply_overrides(cfg, args, (
         ("port", "port"), ("name", "name"), ("city", "city"), ("arena", "arena"),
-        ("gamemode", "gamemode"), ("mode_time", "mode_time"),
+        ("gamemode", "gamemode"), ("mode_time", "mode_time"), ("intermission_s", "intermission_s"),
         ("max_players", "max_players"), ("beacon", "beacon"), ("beacon_ms", "beacon_ms"),
         ("idle_drop_s", "idle_drop_s"), ("cops", "cops"),
         ("cop_difficulty", "cop_difficulty"), ("cop_immunity", "cop_immunity"),

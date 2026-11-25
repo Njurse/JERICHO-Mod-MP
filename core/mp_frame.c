@@ -187,6 +187,15 @@ static void MpSessionRulesTick(void)
 	if (gMp.ruleInvuln)
 		gInvincibleCar = 1;
 
+	/* ...except outside Take a Ride, where the local switches are off (the pause
+	 * rows refuse them) and the host's rule is the whole answer: a flag left on
+	 * from a single-player run or an earlier session is cleared here. */
+	if (!MpModeAllowsCheats(gMp.gamemode))
+	{
+		gPlayerImmune = gMp.ruleImmune ? 1 : 0;
+		gInvincibleCar = gMp.ruleInvuln ? 1 : 0;
+	}
+
 	/* The cheat flag above covers the local driver. The host rule is every
 	 * car, on every machine — the same bit the welcome/start packet carried. */
 	gInvulnerableWorld = gMp.ruleInvuln ? 1 : 0;

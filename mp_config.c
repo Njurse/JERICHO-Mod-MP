@@ -434,6 +434,12 @@ void MpConfigLoad(void)
 	 * never opens the settings gets what the game would have done anyway. */
 	gMp.config.cops = jer_config_get_int("mp", "cops", 1) ? 1 : 0;
 
+	/* the round modes' host defaults (the Host Game menu's Rounds page) */
+	gMp.config.modeMinutes = MpMarkClampMinutes(jer_config_get_int("mp", "mode_minutes", MP_MARK_MINUTES_DEFAULT));
+	gMp.config.intermissionSec = jer_config_get_int("mp", "intermission_seconds", MP_MARK_INTERMISSION_MS / 1000);
+	if (gMp.config.intermissionSec < MP_MARK_INTERMISSION_S_MIN || gMp.config.intermissionSec > MP_MARK_INTERMISSION_S_MAX)
+		gMp.config.intermissionSec = MP_MARK_INTERMISSION_MS / 1000;
+
 	gMp.config.copDifficulty = jer_config_get_int("mp", "cop_difficulty", 1);
 	if (gMp.config.copDifficulty < 0 || gMp.config.copDifficulty > MP_COP_DIFF_MAX)
 		gMp.config.copDifficulty = 1;
@@ -519,6 +525,8 @@ void MpConfigSave(void)
 	jer_config_set_int("mp", "cop_difficulty", gMp.config.copDifficulty);
 	jer_config_set_int("mp", "invuln", gMp.config.invuln);
 	jer_config_set_int("mp", "immune", gMp.config.immune);
+	jer_config_set_int("mp", "mode_minutes", gMp.config.modeMinutes);
+	jer_config_set_int("mp", "intermission_seconds", gMp.config.intermissionSec);
 
 	jer_config_set_int("mp", "custom_color", gMp.config.colorOn);
 	jer_config_set_int("mp", "color_r", gMp.config.colorR);

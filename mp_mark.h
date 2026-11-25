@@ -45,7 +45,9 @@ extern "C" {
 #endif
 
 #define MP_MARK_TAG_COOLDOWN_MS	2000	/* after a transfer (and a go-live), no tag */
-#define MP_MARK_INTERMISSION_MS	6000	/* ENDED -> the next round (0.24.0 polish: was 10 s) */
+#define MP_MARK_INTERMISSION_MS	8000	/* ENDED -> the next round, default (0.14: 8 s; was 6 s) */
+#define MP_MARK_INTERMISSION_S_MIN	3	/* the host lobby row / dedi "intermission_s" range */
+#define MP_MARK_INTERMISSION_S_MAX	30
 #define MP_MARK_COUNTDOWN_MS	4000	/* COUNTDOWN -> LIVE: GET READY (the cluster
 					 * placement), then 3, 2, 1 -- a second each */
 #define MP_MARK_COUNTDOWN_SPAWN_MS	1000	/* the first slice: placement, no digit yet */
@@ -93,6 +95,8 @@ int  MpMarkClampMinutes(int minutes);	/* MP_MARK_MINUTES_MIN..MAX */
 /* A new session in `mode`: WAITING, nobody present, nothing ticking. A mode with
  * no timer (Take a Ride) is accepted and simply never does anything. */
 void MpMarkReset(int mode, int minutes);
+/* The host's intermission (ENDED -> next round), ms; kept across MpMarkReset. */
+void MpMarkSetIntermissionMs(int ms);
 
 /* Present-set = `present[id]` (MP_MAX_PLAYERS entries, nonzero = in the session).
  * An arrival gets a full, frozen clock (a hound / no bomb); if the marked player

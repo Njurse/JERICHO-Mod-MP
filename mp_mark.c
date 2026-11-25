@@ -293,12 +293,21 @@ static int MpMarkStart(unsigned rnd)
 	return MP_MARK_EV_BEGIN;
 }
 
+static int gMarkIntermissionTotalMs = MP_MARK_INTERMISSION_MS;
+
+void MpMarkSetIntermissionMs(int ms)
+{
+	if (ms < MP_MARK_INTERMISSION_S_MIN * 1000) ms = MP_MARK_INTERMISSION_S_MIN * 1000;
+	if (ms > MP_MARK_INTERMISSION_S_MAX * 1000) ms = MP_MARK_INTERMISSION_S_MAX * 1000;
+	gMarkIntermissionTotalMs = ms;
+}
+
 static void MpMarkEnd(int winner, int reason)
 {
 	gMark.phase = MP_MARK_PHASE_ENDED;
 	gMark.winner = winner;
 	gMark.endReason = reason;
-	gMark.intermissionMs = MP_MARK_INTERMISSION_MS;
+	gMark.intermissionMs = gMarkIntermissionTotalMs;
 	gMark.revision++;
 }
 

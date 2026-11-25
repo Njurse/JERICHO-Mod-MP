@@ -36,7 +36,17 @@ Dedicated holds its lock around every call.
 import mp_test as m
 
 TAG_COOLDOWN_MS = 2000       # mp_mark.h MP_MARK_TAG_COOLDOWN_MS
-INTERMISSION_MS = 6000       # mp_mark.h MP_MARK_INTERMISSION_MS (0.24.0 polish: was 10 s)
+INTERMISSION_MS = 8000       # mp_mark.h MP_MARK_INTERMISSION_MS (0.14: 8 s; was 6 s, 10 s before)
+INTERMISSION_S_MIN = 3        # the configurable range (dedi "intermission_s", the host lobby row)
+INTERMISSION_S_MAX = 30
+
+
+def clamp_intermission_s(v):
+    try:
+        v = int(v)
+    except (TypeError, ValueError):
+        return INTERMISSION_MS // 1000
+    return max(INTERMISSION_S_MIN, min(INTERMISSION_S_MAX, v))
 COUNTDOWN_MS = 4000          # default later-round total: SPAWN + 3 s
 COUNTDOWN_SPAWN_MS = 1000    # mp_mark.h MP_MARK_COUNTDOWN_SPAWN_MS
 LOBBY_MS = 5000              # default firstCountdownSec (5-4-3-2-1), in ms
@@ -74,7 +84,11 @@ def _ds(ms):
 
 
 class MarkReferee:
-    def __init__(self, gamemode=0, minutes=m.MARK_MINUTES_DEFAULT):
+    def __init__(self, gamemode=0, minutes=m.MARK_MINUTES_DEFAULT, intermission_s=None):
+        # ENDED -> the next round, in ms. Configurable (dedi "intermission_s");
+        # kept across reset() so a new mode keeps the server's setting.
+        self.intermission_total_ms = (clamp_intermission_s(intermission_s) * 1000
+                                      if intermission_s is not None else INTERMISSION_MS)
         self.reset(gamemode, minutes)
 
     def reset(self, gamemode, minutes):
@@ -221,7 +235,7 @@ class MarkReferee:
         self.phase = m.MARK_PHASE_ENDED
         self.winner = winner
         self.end_reason = reason
-        self.intermission_ms = INTERMISSION_MS
+        self.intermission_ms = self.intermission_total_ms
         self.revision += 1
 
     def _marked_gone(self, rnd, getaway_reason):

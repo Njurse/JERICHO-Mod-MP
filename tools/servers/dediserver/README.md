@@ -54,6 +54,8 @@ supervisor (or a test) can pipe commands in.
 --cop-difficulty N   0..2 (default 1)
 --cop-immunity       cops exist but never come after anyone
 --invulnerable       cars take no damage
+--intermission SEC   round modes: seconds between a round ending and the next (3..30,
+                     default 8; config "intermission_s", console `intermission N`)
 --log-level debug|info|warning|error
 --log-file FILE      also append logs to FILE
 --master URL         register with a master discovery service; http://host:8100, or a

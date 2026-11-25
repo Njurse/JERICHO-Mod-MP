@@ -238,6 +238,7 @@ void MpHostMarkBegin(void)
 	gMpMarkRng ^= (unsigned)MpNowMs() ^ (gMp.seed * 2654435761u) ^ 0x5EEDu;
 	gMpMarkMsAcc = 0;
 
+	MpMarkSetIntermissionMs(gMp.config.intermissionSec * 1000);	/* the host's lobby setting */
 	MpMarkReset(gMp.gamemode, MpSessionModeMinutes());
 	MpRoundHostSync();
 	MpMarkHostSync();
@@ -1041,6 +1042,8 @@ void MpMarkPresentTick(void)
 			/* the car of the role this player has this round (role-car modes) */
 			if (MpModeRoleSlotCount(gMp.gamemode) > 0)
 				MpRoleCarApply();
+			else
+				MpPendingCarApply("round countdown");	/* a car saved in the pause menu */
 
 			/* ...and the full repair AFTER that swap (a swap that waits for
 			 * an import is repaired when it lands, MpRoundRepairTick) */

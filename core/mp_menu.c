@@ -120,6 +120,35 @@ static int MpColorAdjustG(void* ud, int dir) { (void)ud; return MpColorAdjust(&g
 static int MpColorAdjustB(void* ud, int dir) { (void)ud; return MpColorAdjust(&gMp.config.colorB, dir); }
 
 /* ------------------------------------------------------------------ */
+/* Cheats are Take a Ride's: every other mode is a contest              */
+/* ------------------------------------------------------------------ */
+static int MpCheatsNow(void)
+{
+	return !gMp.running || MpModeAllowsCheats(gMp.gamemode);
+}
+
+/* The door every cheat row goes through: refused, and said, outside Take a Ride. */
+static int MpCheatAllowed(const char* what)
+{
+	char msg[80];
+
+	if (MpCheatsNow())
+		return 1;
+
+	snprintf(msg, sizeof(msg), "%s is off in %s", what, MpModeName(gMp.gamemode));
+	MpNotify(msg);
+	return 0;
+}
+
+static void MpOptLabelRepair(void* ud, char* out, int max);	/* the Vehicle Options row */
+
+/* " (Take a Ride only)" after a cheat row's label while it is off. */
+static const char* MpCheatSuffix(void)
+{
+	return MpCheatsNow() ? "" : " (Take a Ride only)";
+}
+
+/* ------------------------------------------------------------------ */
 /* Change car: the Multiplayer pause page's vehicle picker             */
 /* ------------------------------------------------------------------ */
 /* Two round-robin rows and an apply row, the same shape as mpColorMenu. A row is
@@ -348,6 +377,65 @@ static int MpCcAdjustCar(void* ud, int dir)
 	return JER_PAUSE_QUIT_NONE;
 }
 
+/* The apply row says what it does in this mode: a change now in Take a Ride, a
+ * saved choice everywhere else (MpChangeCar). */
+static void MpCcLabelApply(void* ud, char* out, int max)
+{
+	int role = MpCarPickerRole();
+
+	(void)ud;
+
+	if (MpCheatsNow())
+		snprintf(out, max, "Respawn as this car");
+	else if (role >= 0)
+		snprintf(out, max, "Set as %s (next round)", MpModeRoleSlotTitle(gMp.gamemode, role));
+	else
+		snprintf(out, max, "Use this car (next respawn / round)");
+}
+
+/* ROLE: in a mode with role cars (Cops n Robbers), which role the roster and the
+ * apply row are for, and the car saved for it. Left/right switches role. */
+static void MpCcLabelRole(void* ud, char* out, int max)
+{
+	int role = MpCarPickerRole(), city, model;
+
+	(void)ud;
+
+	if (!gMp.running || role < 0)
+	{
+		if (gMp.running && MpPendingCarGet(&city, &model))
+			snprintf(out, max, "Saved car: %s model %d", MpCarCityName(city), model);
+		else
+			snprintf(out, max, "Saved car: (none)");
+		return;
+	}
+
+	if (MpRolePickGet(role, &city, &model))
+		snprintf(out, max, "%s: < %s model %d >", MpModeRoleSlotTitle(gMp.gamemode, role),
+			MpCarCityName(city), model);
+	else
+		snprintf(out, max, "%s: < (not set) >", MpModeRoleSlotTitle(gMp.gamemode, role));
+}
+
+static int MpCcAdjustRole(void* ud, int dir)
+{
+	int n = MpModeRoleSlotCount(gMp.gamemode), role = MpCarPickerRole();
+
+	(void)ud;
+
+	if (!gMp.running || n <= 0 || role < 0)
+		return JER_PAUSE_QUIT_NONE;
+
+	if (dir == 0)
+		dir = 1;	/* Cross steps too */
+
+	MpCarPickerSetRole((role + dir + n) % n);
+	mpCcModelIdx = 0;
+	MpCcRebuild();		/* the new role's pool */
+
+	return JER_PAUSE_QUIT_NONE;
+}
+
 static int MpCcApply(void* ud, int dir)
 {
 	(void)ud;
@@ -508,10 +596,12 @@ static const JER_PAUSE_MENU_ITEM mpChangeCarItems[] =
 	{ NULL, MpCcLabelCity, MpCcAdjustCity, NULL, NULL, 1 },
 	{ NULL, MpCcLabelCar, MpCcAdjustCar, NULL, NULL, 1 },
 	{ NULL, MpCcLabelPalette, MpCcAdjustPalette, NULL, NULL, 1 },
-	{ "Respawn as this car", NULL, MpCcApply, NULL, NULL, 0 },
+	/* the role being picked for (Cops n Robbers), or the car saved for later */
+	{ NULL, MpCcLabelRole, MpCcAdjustRole, NULL, NULL, 1 },
+	{ NULL, MpCcLabelApply, MpCcApply, NULL, NULL, 0 },
 	/* Repair belongs with the car, not under Player options: it is a car action and
 	 * "Respawn as this car" next to it is the one that also MOVES you. */
-	{ "Repair car", NULL, MpOptRepair, NULL, NULL, 0 },
+	{ NULL, MpOptLabelRepair, MpOptRepair, NULL, NULL, 0 },
 	/* ...and so does clearing the wanted level: the pursuit follows the CAR, and
 	 * this is the row a player looks for while a cop is on their bumper. It used to
 	 * sit on the Multiplayer page, a submenu away from the car it is about. */
@@ -644,6 +734,7 @@ int MpOnPauseMenu(void* userdata, void* args)
 	 * plus gDrawPauseMenus, so the other pause-MODE screens (game over, mission
 	 * complete, pad error) and cutscenes cannot put it on screen. */
 	gMpPauseOpened = 1;
+	MpCarPickerSetRole(-1);	/* the role row opens on the role this player has now */
 
 	if (gMpCtx != NULL)
 		gMpCtx->jer_log(gMpCtx,
@@ -695,7 +786,8 @@ int MpOnGameQuit(void* userdata, void* args)
 	 * level on this machine alone, wiping its cars and its player out of the match.
 	 * A respawn that could not place us says so (MpRespawnOnRoad notifies) and leaves
 	 * us where we are. */
-	MpRespawnOnRoad();
+	if (MpCheatAllowed("Respawn"))
+		MpRespawnOnRoad();
 
 	pauseflag = 0;
 	UnPauseSound();
@@ -939,10 +1031,19 @@ static const JER_PAUSE_MENU mpWarpMenu =
 /* The Respawn row: back onto the nearest road, repaired and upright. The work is
  * mp_session.c's -- it needs InitCarPhysics, MapHeight and the spool call, which
  * all live with the respawn and the warp -- so this file owns only the door. */
+static void MpLabelRespawn(void* ud, char* out, int max)
+{
+	(void)ud;
+	snprintf(out, max, "Respawn%s", MpCheatSuffix());
+}
+
 static int MpRespawn(void* ud, int dir)
 {
 	(void)ud;
 	(void)dir;
+
+	if (!MpCheatAllowed("Respawn"))
+		return JER_PAUSE_QUIT_NONE;
 
 	MpRespawnOnRoad();
 
@@ -952,13 +1053,16 @@ static int MpRespawn(void* ud, int dir)
 static void MpOptLabelInvincible(void* ud, char* out, int max)
 {
 	(void)ud;
-	snprintf(out, max, "Invincibility: %s", gInvincibleCar ? "ON" : "off");
+	snprintf(out, max, "Invincibility: %s%s", gInvincibleCar ? "ON" : "off", MpCheatSuffix());
 }
 
 int MpOptToggleInvincible(void* ud, int dir)
 {
 	(void)ud;
 	(void)dir;
+
+	if (!MpCheatAllowed("Invincibility"))
+		return JER_PAUSE_QUIT_NONE;
 
 	gInvincibleCar ^= 1;
 
@@ -972,13 +1076,16 @@ int MpOptToggleInvincible(void* ud, int dir)
 static void MpOptLabelImmune(void* ud, char* out, int max)
 {
 	(void)ud;
-	snprintf(out, max, "Immunity: %s", gPlayerImmune ? "ON" : "off");
+	snprintf(out, max, "Immunity: %s%s", gPlayerImmune ? "ON" : "off", MpCheatSuffix());
 }
 
 int MpOptToggleImmune(void* ud, int dir)
 {
 	(void)ud;
 	(void)dir;
+
+	if (!MpCheatAllowed("Immunity"))
+		return JER_PAUSE_QUIT_NONE;
 
 	gPlayerImmune ^= 1;
 
@@ -996,13 +1103,16 @@ int MpOptToggleImmune(void* ud, int dir)
 static void MpOptLabelSuperTurbo(void* ud, char* out, int max)
 {
 	(void)ud;
-	snprintf(out, max, "Super Turbo: %s", gMp.config.superTurbo ? "On" : "Off");
+	snprintf(out, max, "Super Turbo: %s%s", gMp.config.superTurbo ? "On" : "Off", MpCheatSuffix());
 }
 
 static int MpOptToggleSuperTurbo(void* ud, int dir)
 {
 	(void)ud;
 	(void)dir;
+
+	if (!MpCheatAllowed("Super Turbo"))
+		return JER_PAUSE_QUIT_NONE;
 
 	/* 0/1 only, so Cross (dir 0) and left/right (±1) are the same flip.
 	 * JMP Options' AdjSuperTurbo writes this same field and saves it. */
@@ -1038,10 +1148,19 @@ static int MpOptToggleJoinLeaveSounds(void* ud, int dir)
 	return JER_PAUSE_QUIT_NONE;
 }
 
+static void MpOptLabelRepair(void* ud, char* out, int max)
+{
+	(void)ud;
+	snprintf(out, max, "Repair car%s", MpCheatSuffix());
+}
+
 int MpOptRepair(void* ud, int dir)
 {
 	(void)ud;
 	(void)dir;
+
+	if (!MpCheatAllowed("Repair car"))
+		return JER_PAUSE_QUIT_NONE;
 
 	MpSelfRepairCar();
 
@@ -1087,7 +1206,7 @@ static const JER_PAUSE_MENU_ITEM mpPauseItems[] =
 	 * movement row, the local switches, and the admin/debug rows last.
 	 * Super Turbo is the saved switch (mp.ini); the two above it are the live
 	 * cheat flags and are not written out. */
-	{ "Respawn", NULL, MpRespawn, NULL, NULL, 0 },
+	{ NULL, MpLabelRespawn, MpRespawn, NULL, NULL, 0 },
 	{ "Vehicle Options", NULL, NULL, NULL, &mpChangeCarMenu, 0 },
 	{ "Player Options", NULL, NULL, NULL, &mpPlayerMenu, 0 },
 	{ "Warp To Player", NULL, NULL, NULL, &mpWarpMenu, 0 },

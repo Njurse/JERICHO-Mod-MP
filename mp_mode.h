@@ -259,6 +259,10 @@ int         MpModePoolKeeps(int pool, int isPolice);
  * `roundRunning` is whether a round is live (a session that is running). */
 const char* MpModeCarChangeRefusal(int mode, int roundRunning);
 
+/* The player cheats (Respawn, Repair car, Invincibility, Immunity, Super Turbo,
+ * Respawn as this car) are Take a Ride's alone; every other mode is a contest. */
+int MpModeAllowsCheats(int mode);
+
 /* Narrow a picker's (slot, model) list in place; returns the new count. Mode 0
  * returns `count` untouched. */
 int MpModeFilterCarPool(int mode, int city, int* slots, int* models, int count);

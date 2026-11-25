@@ -75,6 +75,9 @@ typedef struct MP_CONFIG
 				 * same axis as `cops`: this leaves them on the map and
 				 * takes away their reason to bother you. */
 	int  invuln;			/* 1 = no car can be damaged (gInvincibleCar) */
+	/* HOST DEFAULTS for the round modes, saved like the rules above */
+	int  modeMinutes;		/* [mp] mode_minutes: a timer mode's clock, 1..5 */
+	int  intermissionSec;		/* [mp] intermission_seconds: ENDED -> next round, 3..30 (default 8) */
 	int  palette;			/* palette: our car's colour variant 0..5 (defaultPlayerPalette) */
 	int  chatHoldSec;		/* chat_hold_seconds: full-brightness time of a chat line */
 	int  car;			/* this machine's vehicle for the match, -1 = level default */
@@ -665,6 +668,12 @@ void MpConsoleChat(const char* name, int colorOn, int r, int g, int b, const cha
  * car). (city, model) is the pair the wire carries; the model must be one this
  * machine can hold. Returns 1 if the car on the road changed. */
 int MpChangeCar(int city, int model);
+/* Outside Take a Ride a pause pick is saved, not applied (mp_cars.c). */
+void MpCarPickerSetRole(int slot);	/* the role the pause picker chooses for; -1 = current */
+int  MpCarPickerRole(void);		/* that role's slot, or -1 in a mode without roles */
+int  MpRolePickGet(int slot, int* city, int* model);
+int  MpPendingCarGet(int* city, int* model);
+void MpPendingCarApply(const char* when);	/* at a respawn / a round's countdown */
 
 /* Auto-rejoin after a server city change (MP_KICK_FLAG_REJOIN): mp_session.c.
  * Tick runs every frame (frontend too); Cancel is Esc or any other join/host. */

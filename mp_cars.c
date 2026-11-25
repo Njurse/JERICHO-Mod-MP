@@ -124,6 +124,15 @@ static MP_ROLE_PICK gMpRolePick[MP_MODE_ROLE_SLOTS_MAX];
 
 static int gMpRolePickMode = -1;	/* the mode whose picks gMpRolePick holds */
 
+/* The pause picker's role target (Vehicle Options' "Role" row): which role's pool
+ * the roster offers and which role a pick is saved for. -1 = the role this player
+ * has right now. */
+static int gMpCcRoleSlot = -1;
+
+/* A car picked in the pause menu in a mode that is not Take a Ride (and has no
+ * role cars): saved, and put under the player at their next respawn or round. */
+static int gMpPendingSet, gMpPendingCity, gMpPendingModel, gMpPendingPalette;
+
 static struct
 {
 	int active;
@@ -160,6 +169,8 @@ void MpCarsReset(void)
 
 void MpFailsafeReset(void)
 {
+	gMpPendingSet = 0;
+	gMpCcRoleSlot = -1;
 	sMpReloadWait = 0;
 	sMpReloadTries = 0;
 	sMpWantSlot = -1;
@@ -1048,6 +1059,75 @@ static int MpCarListForCityAll(int city, int* slots, int* models, int max)
 	return n;
 }
 
+void MpCarPickerSetRole(int slot)
+{
+	gMpCcRoleSlot = slot;
+}
+
+int MpCarPickerRole(void)
+{
+	int n = MpModeRoleSlotCount(gMp.gamemode);
+	MP_PLAYER* me;
+
+	if (n <= 0)
+		return -1;
+
+	if (gMpCcRoleSlot >= 0 && gMpCcRoleSlot < n)
+		return gMpCcRoleSlot;
+
+	me = MpLocalPlayer();
+	return MpModeRoleSlotFor(gMp.gamemode, me != NULL && MpMarkHaveState() &&
+		MpMarkMode() == gMp.gamemode && MpMarkMarked() == me->id);
+}
+
+/* This player's saved pick for a role, for the pause menu's label. */
+int MpRolePickGet(int slot, int* city, int* model)
+{
+	if (slot < 0 || slot >= MP_MODE_ROLE_SLOTS_MAX || gMpRolePickMode != gMp.gamemode ||
+		!gMpRolePick[slot].set)
+		return 0;
+
+	if (city != NULL)
+		*city = gMpRolePick[slot].city;
+	if (model != NULL)
+		*model = gMpRolePick[slot].model;
+	return 1;
+}
+
+/* The car saved for the next respawn / round (non-Take a Ride modes), if any. */
+int MpPendingCarGet(int* city, int* model)
+{
+	if (!gMpPendingSet)
+		return 0;
+
+	if (city != NULL)
+		*city = gMpPendingCity;
+	if (model != NULL)
+		*model = gMpPendingModel;
+	return 1;
+}
+
+/* Put the saved car under the player: called at a respawn and at a round's
+ * countdown. Nothing saved, or on foot: nothing to do. */
+void MpPendingCarApply(const char* when)
+{
+	extern u_char defaultPlayerPalette;
+	MP_PLAYER* me = MpLocalPlayer();
+
+	if (!gMpPendingSet || !gMp.running || me == NULL || me->carId < 0 ||
+		player[0].playerType == PLAYER_TYPE_PEDESTRIAN)
+		return;
+
+	gMpPendingSet = 0;
+	defaultPlayerPalette = (u_char)gMpPendingPalette;
+
+	if (gMpCtx != NULL)
+		gMpCtx->jer_log(gMpCtx, "[mp] saved car: %s model %d at the %s\n",
+			MpCarCityName(gMpPendingCity), gMpPendingModel, when);
+
+	MpChangeCarRun(gMpPendingCity, gMpPendingModel, 0);
+}
+
 /* GAME-MODE DECISION POINT: the ONE list the pause picker and the test rigs read, so a
  * mode's car pool (C&R: police / not police) is applied once, here. Take a Ride's pool
  * is "everything", and the filter returns the list untouched. */
@@ -1067,7 +1147,11 @@ int MpCarListForCity(int city, int* slots, int* models, int max)
 	{
 		MP_PLAYER* me = MpLocalPlayer();
 
-		if (gMp.running && me != NULL && MpMarkHaveState() && MpMarkMode() == gMp.gamemode)
+		int role = MpCarPickerRole();
+
+		(void)me;
+
+		if (gMp.running && role >= 0)
 		{
 			int police[MP_CAR_LIST_MAX];
 			int i, m = (n < MP_CAR_LIST_MAX) ? n : MP_CAR_LIST_MAX;
@@ -1075,7 +1159,9 @@ int MpCarListForCity(int city, int* slots, int* models, int max)
 			for (i = 0; i < m; i++)
 				police[i] = JerCarIsPolice(city, models[i]);
 
-			n = MpModeFilterCarPoolRole(gMp.gamemode, MpMarkMarked() == me->id, slots, models, police, m);
+			/* the role the pause picker is choosing for (Vehicle Options' Role row),
+			 * which is the role this player has now until they switch it */
+			n = MpModeFilterPool(MpModeRoleSlotPool(gMp.gamemode, role), slots, models, police, m);
 		}
 	}
 
@@ -1293,17 +1379,39 @@ int MpChangeCar(int city, int model)
 		}
 	}
 
-	/* A mode with role cars: the pick is the car of the role this player has now
-	 * (MpCarListForCity already offered only that role's pool). Kept before the
-	 * change runs, so a change that waits for an import still counts. */
-	if (gMp.running && MpModeRoleSlotCount(gMp.gamemode) > 0 && city >= 0)
+	/* OUTSIDE TAKE A RIDE a pick is a CHOICE, not a change: it is saved and put
+	 * under the player at their next respawn or round, so a car swap cannot be used
+	 * mid-round (a fresh, undamaged car is a repair). A mode with role cars saves it
+	 * as the pick of the role the pause picker is choosing for (Cops n Robbers: the
+	 * patrol car or the getaway car), applied at the next round's countdown. */
+	if (gMp.running && !MpModeAllowsCheats(gMp.gamemode))
 	{
-		MP_PLAYER* me = MpLocalPlayer();
 		extern u_char defaultPlayerPalette;
-		int slot = MpModeRoleSlotFor(gMp.gamemode, me != NULL && MpMarkHaveState() &&
-			MpMarkMode() == gMp.gamemode && MpMarkMarked() == me->id);
+		char msg[96];
 
-		MpRolePickStore(gMp.gamemode, slot, city, model, (int)defaultPlayerPalette, "pause Change car");
+		if (MpModeRoleSlotCount(gMp.gamemode) > 0)
+		{
+			int slot = MpCarPickerRole();
+			int ok = (city >= 0) && MpRolePickStore(gMp.gamemode, slot, city, model,
+				(int)defaultPlayerPalette, "pause Vehicle Options");
+
+			snprintf(msg, sizeof(msg), ok ? "%s saved - you get it next round" : "That car cannot be your %s",
+				MpModeRoleSlotTitle(gMp.gamemode, slot));
+			MpNotify(msg);
+			return 0;
+		}
+
+		gMpPendingSet = 1;
+		gMpPendingCity = city;
+		gMpPendingModel = model;
+		gMpPendingPalette = (int)defaultPlayerPalette;
+
+		if (gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx, "[mp] saved car: %s model %d - for the next respawn or round\n",
+				MpCarCityName(city), model);
+
+		MpNotify("Car saved - you get it at your next respawn or round");
+		return 0;
 	}
 
 	return MpChangeCarRun(city, model, 0);
@@ -1651,6 +1759,22 @@ void MpRoleCarApply(void)
 		defaultPlayerPalette = (u_char)r->palette;	/* the paint picked with it (MpAdoptRemoteCar reads it) */
 		MpChangeCarRun(r->city, r->model, 0);
 		return;
+	}
+
+	/* No pick for this role (the join car select was skipped, or only one role was
+	 * picked): say where to set one, once per connection. */
+	{
+		static int sTold;
+
+		if (!sTold)
+		{
+			char msg[96];
+
+			sTold = 1;
+			snprintf(msg, sizeof(msg), "Set your %s in Pause > Multiplayer > Vehicle Options",
+				MpModeRoleSlotTitle(mode, roleSlot));
+			MpNotify(msg);
+		}
 	}
 
 	police = JerCarSlotIsPolice(slot);

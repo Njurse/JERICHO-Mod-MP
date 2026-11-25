@@ -70,6 +70,9 @@ enum
 	M_NAME,
 	M_MANUAL,
 	M_GAMEMODE,	/* "mp.gamemode": the host's first screen, a list of the modes */
+	M_HOST_ROUNDS,	/* Host Game > Round Settings (time, intermission) */
+	M_HOST_RULES,	/* Host Game > Session Rules (police, immunity, invulnerability) */
+	M_HOST_ACCESS,	/* Host Game > Access (password, mod matching) */
 	M_COUNT
 };
 
@@ -77,7 +80,8 @@ enum
  * (-1 = not registered). */
 static const char* const kMenuIds[M_COUNT] = {
 	"mp.root", "mp.lan", "mp.online", "mp.host", "mp.mode", "mp.join",
-	"mp.lobby", "mp.jmpoptions", "mp.name", "mp.manual", "mp.gamemode"
+	"mp.lobby", "mp.jmpoptions", "mp.name", "mp.manual", "mp.gamemode",
+	"mp.host.rounds", "mp.host.rules", "mp.host.access"
 };
 static int gMenuIdx[M_COUNT];
 static int gMenusResolved;	/* set once MpResolveMenus has run: an index is only
@@ -584,7 +588,7 @@ typedef struct MP_TEXT_FIELD
 } MP_TEXT_FIELD;
 
 static MP_TEXT_FIELD gFieldManual  = { gManualIp, sizeof(gManualIp), MP_MANUAL_MAX - 1, M_MANUAL, 0, 1, "manual address" };
-static MP_TEXT_FIELD gFieldHostPw  = { gMp.config.hostPassword, sizeof(gMp.config.hostPassword), MP_PASSWORD_MAX, M_HOST, 1, 0, "host password" };
+static MP_TEXT_FIELD gFieldHostPw  = { gMp.config.hostPassword, sizeof(gMp.config.hostPassword), MP_PASSWORD_MAX, M_HOST_ACCESS, 1, 0, "host password" };
 static MP_TEXT_FIELD gFieldJoinPw  = { gMp.config.joinPassword, sizeof(gMp.config.joinPassword), MP_PASSWORD_MAX, M_MANUAL, 1, 0, "join password" };
 static MP_TEXT_FIELD* gField;		/* the field that is typing, NULL when none */
 
@@ -836,35 +840,48 @@ static const JER_FE_MENU kLanMenu = { "mp.lan", kLanItems, 3, NULL, NULL };
 static void LblHostAddr(void* ud, char* o, int n) { char l[8]; (void)ud; MpHostStatusLines(o, (size_t)n, l, sizeof(l), 1); }
 static void LblHostList(void* ud, char* o, int n) { char a[8]; (void)ud; MpHostStatusLines(a, sizeof(a), o, (size_t)n, 1); }
 
-static const JER_FE_ITEM kHostItems[] =	/* the Time row is inserted after Game mode */
+/* INTERMISSION: the round modes' wait between a round ending and the next one's
+ * countdown, 3..30 s (default 8). The host's referee reads it at START; saved. */
+static void LblIntermission(void* ud, char* o, int n) { (void)ud; snprintf(o, n, "Intermission: < %d SEC >", gMp.config.intermissionSec); }
+
+static int AdjIntermission(void* ud, int dir)
+{
+	int s = gMp.config.intermissionSec + dir;
+
+	(void)ud;
+
+	if (s < MP_MARK_INTERMISSION_S_MIN) s = MP_MARK_INTERMISSION_S_MAX;
+	if (s > MP_MARK_INTERMISSION_S_MAX) s = MP_MARK_INTERMISSION_S_MIN;
+	gMp.config.intermissionSec = s;
+	MpConfigSave();
+	return 1;
+}
+
+/* THE HOST GAME MENU, split into pages like JERICHO Options: the mode on top,
+ * then one row per page, then Continue. Every value on the pages is the host's
+ * saved default for the next session (mp.ini). Submenu indices are wired in
+ * MpResolveMenus. */
+#define MP_HOST_ROW_ROUNDS	3	/* kHostItems[3]: hidden for a mode with no rounds */
+static JER_FE_ITEM kHostItems[] =
 {
 	{ NULL, LblHostAddr, NULL, NULL, NULL, -1, 0 },
 	{ NULL, LblHostList, NULL, NULL, NULL, -1, 0 },
-
-	/* SESSION RULES first: these are the host's gameplay settings for the match
-	 * about to be set up, and they apply to everyone who joins it. */
 	{ NULL, LblGameMode, NULL, NULL, AdjGameMode, -1, 0 },
-	{ NULL, LblCops,    NULL, NULL, AdjCops,    -1, 0 },
-	{ NULL, LblCopDiff, NULL, NULL, AdjCopDiff, -1, 0 },
-	{ NULL, LblImmune,  NULL, NULL, AdjImmune,  -1, 0 },
-	{ NULL, LblInvuln,  NULL, NULL, AdjInvuln,  -1, 0 },
-
-	/* who may join: Cross types a password (shown as *), left/right clears it */
-	{ NULL, LblHostPassword, (void*)&gFieldHostPw, ActPasswordField, AdjPasswordClear, -1, 0 },
+	{ "Round Settings", NULL, NULL, NULL, NULL, -1, 0 },
+	{ "Session Rules",  NULL, NULL, NULL, NULL, -1, 0 },
+	{ "Access",         NULL, NULL, NULL, NULL, -1, 0 },
 
 	/* on to the stock chain: city, map, time of day / weather, car (ActTakeARide) */
 	{ "Continue",    NULL, NULL, ActTakeARide, NULL, -1, 0 },
 	{ "Back",        NULL, NULL, NULL,         NULL, -1, 1 },
 };
 #define MP_HOST_ITEMS		((int)(sizeof(kHostItems) / sizeof(kHostItems[0])))
-#define MP_HOST_GAMEMODE_ROW	2	/* kHostItems[2] is Game mode */
 
-static const JER_FE_ITEM kHostTimeItem = { NULL, LblModeTime, NULL, NULL, AdjModeTime, -1, 0 };
-static JER_FE_ITEM gHostItems[MP_HOST_ITEMS + 1];
+static JER_FE_ITEM gHostItems[MP_HOST_ITEMS];
 static JER_FE_MENU gHostMenu = { "mp.host", gHostItems, 0, NULL, NULL };
 
-/* Rebuilt on every layout (a left/right on Game mode relayouts), so the Time row is
- * there exactly while the selected mode has a clock. Take a Ride: the stock 9 rows. */
+/* Rebuilt on every layout (a left/right on Game mode relayouts), so Round Settings
+ * is there exactly while the selected mode plays rounds. */
 static void HostOnEnter(void* ud)
 {
 	int i, k = 0;
@@ -873,14 +890,68 @@ static void HostOnEnter(void* ud)
 
 	for (i = 0; i < MP_HOST_ITEMS; i++)
 	{
-		gHostItems[k++] = kHostItems[i];
+		if (i == MP_HOST_ROW_ROUNDS && !MpModeHasPreGame(gMp.gamemode))
+			continue;
 
-		if (i == MP_HOST_GAMEMODE_ROW && MpModeUsesTimer(gMp.gamemode))
-			gHostItems[k++] = kHostTimeItem;
+		gHostItems[k++] = kHostItems[i];
 	}
 
 	gHostMenu.item_count = k;
 }
+
+/* Round Settings: the clock (a timer mode only) and the intermission. */
+static const JER_FE_ITEM kHostTimeItem = { NULL, LblModeTime, NULL, NULL, AdjModeTime, -1, 0 };
+static JER_FE_ITEM gHostRoundItems[3];
+static JER_FE_MENU gHostRoundMenu = { "mp.host.rounds", gHostRoundItems, 0, NULL, NULL, "ROUND SETTINGS" };
+
+static void HostRoundsOnEnter(void* ud)
+{
+	int k = 0;
+
+	(void)ud;
+
+	if (MpModeUsesTimer(gMp.gamemode))
+		gHostRoundItems[k++] = kHostTimeItem;
+
+	memset(&gHostRoundItems[k], 0, sizeof(gHostRoundItems[k]));
+	gHostRoundItems[k].get_label = LblIntermission;
+	gHostRoundItems[k].on_adjust = AdjIntermission;
+	gHostRoundItems[k].submenu = -1;
+	k++;
+
+	memset(&gHostRoundItems[k], 0, sizeof(gHostRoundItems[k]));
+	gHostRoundItems[k].label = "Back";
+	gHostRoundItems[k].submenu = -1;
+	gHostRoundItems[k].is_back = 1;
+	k++;
+
+	gHostRoundMenu.item_count = k;
+}
+
+/* Session Rules: applied on every machine for the whole match. */
+static const JER_FE_ITEM kHostRuleItems[] =
+{
+	{ NULL, LblCops,    NULL, NULL, AdjCops,    -1, 0 },
+	{ NULL, LblCopDiff, NULL, NULL, AdjCopDiff, -1, 0 },
+	{ NULL, LblImmune,  NULL, NULL, AdjImmune,  -1, 0 },
+	{ NULL, LblInvuln,  NULL, NULL, AdjInvuln,  -1, 0 },
+	{ "Back",           NULL, NULL, NULL, NULL, -1, 1 },
+};
+static const JER_FE_MENU kHostRuleMenu = { "mp.host.rules", kHostRuleItems,
+	(int)(sizeof(kHostRuleItems) / sizeof(kHostRuleItems[0])), NULL, NULL, "SESSION RULES" };
+
+/* Access: who may join -- Cross types a password (shown as *), left/right clears
+ * it -- and how strictly their mods must match (the same saved fields JMP Options
+ * shows). */
+static const JER_FE_ITEM kHostAccessItems[] =
+{
+	{ NULL, LblHostPassword, (void*)&gFieldHostPw, ActPasswordField, AdjPasswordClear, -1, 0 },
+	{ NULL, LblEnforce, NULL, NULL, AdjEnforce, -1, 0 },
+	{ NULL, LblStrict,  NULL, NULL, AdjStrict,  -1, 0 },
+	{ "Back",           NULL, NULL, NULL, NULL, -1, 1 },
+};
+static const JER_FE_MENU kHostAccessMenu = { "mp.host.access", kHostAccessItems,
+	(int)(sizeof(kHostAccessItems) / sizeof(kHostAccessItems[0])), NULL, NULL, "ACCESS" };
 
 /* GAME MODE LIST: the host's first screen after Host Game, a stock-style list of
  * every selectable mode with Take a Ride on top (then the table's order, mp_mode.c).
@@ -1015,6 +1086,10 @@ static void MpResolveMenus(void)
 	kLanItems[0].submenu = gMenuIdx[M_GAMEMODE];	/* Host Game: pick the mode first */
 	kLanItems[1].submenu = gMenuIdx[M_JOIN];
 	kJmpOptionsItems[0].submenu = gMenuIdx[M_NAME];
+	kHostItems[3].submenu = gMenuIdx[M_HOST_ROUNDS];
+	kHostItems[4].submenu = gMenuIdx[M_HOST_RULES];
+	kHostItems[5].submenu = gMenuIdx[M_HOST_ACCESS];
+	HostOnEnter(NULL);	/* gHostItems is a copy: refresh it with the wired rows */
 
 	gMenusResolved = 1;
 }
@@ -2602,6 +2677,11 @@ void MpUiInit(void)
 	gHostMenu.on_enter = HostOnEnter;
 	HostOnEnter(NULL);
 	jer_frontend_register_menu(&gHostMenu);
+	gHostRoundMenu.on_enter = HostRoundsOnEnter;
+	HostRoundsOnEnter(NULL);
+	jer_frontend_register_menu(&gHostRoundMenu);
+	jer_frontend_register_menu(&kHostRuleMenu);
+	jer_frontend_register_menu(&kHostAccessMenu);
 	jer_frontend_register_menu(&kHostSetMenu);
 	jer_frontend_register_menu(&gJoinMenu);
 	jer_frontend_register_menu(&gLobbyMenu);

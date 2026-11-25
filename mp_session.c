@@ -145,6 +145,8 @@ int MpSetSessionModeMinutes(int minutes)
 	if (MpIsHost() && !gMp.running && gMp.modeMinutes != minutes)
 	{
 		gMp.modeMinutes = minutes;
+		gMp.config.modeMinutes = minutes;	/* the host's default for the next session */
+		MpConfigSave();
 
 		if (gMpCtx != NULL)
 			gMpCtx->jer_log(gMpCtx, "[mp] lobby mode time: %d min\n", minutes);
@@ -246,7 +248,7 @@ void MpSessionReset(void)
 	gMp.gamemode = MP_GAMEMODE_TAKEADRIDE;
 	memset(gMpModeFallbackLogged, 0, sizeof(gMpModeFallbackLogged));
 	MpRoundReset();		/* no round, nobody in it: the next START begins round 1 */
-	gMp.modeMinutes = MP_MARK_MINUTES_DEFAULT;	/* per session, not saved */
+	gMp.modeMinutes = gMp.config.modeMinutes > 0 ? gMp.config.modeMinutes : MP_MARK_MINUTES_DEFAULT;	/* the host's saved default */
 	MpMarkPresentClear();	/* no clock, arrow or forced music outlives a session */
 	MpMarkReset(MP_GAMEMODE_TAKEADRIDE, MP_MARK_MINUTES_DEFAULT);
 	MpMarkPresentReset();	/* this module's own state */

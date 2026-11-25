@@ -842,6 +842,9 @@ int MpRespawnAfterDeath(void)
 			"[mp] death in a session: respawned at %d,%d (ground=%d) in slot %d - game over refused\n",
 			cp->hd.where.t[0], cp->hd.where.t[2], ground, slot);
 
+	/* a car saved in the pause menu (outside Take a Ride) takes effect now */
+	MpPendingCarApply("respawn");
+
 	return 1;
 }
 

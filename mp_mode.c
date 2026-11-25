@@ -362,6 +362,11 @@ int MpModeCarPoolWantsPolice(int mode, int isMarked)
 	}
 }
 
+int MpModeAllowsCheats(int mode)
+{
+	return mode == MP_GAMEMODE_TAKEADRIDE;
+}
+
 const char* MpModeCarChangeRefusal(int mode, int roundRunning)
 {
 	const MP_MODE_DESC* d = MpModeBehaviour(mode);

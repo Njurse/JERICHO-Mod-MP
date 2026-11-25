@@ -16,6 +16,7 @@
   "cop_difficulty": 1,
   "cop_immunity": false,
   "invulnerable": false,
+  "intermission_s": 8,
   "time_of_day": "day",
   "weather": "clear",
   "announce_joins": true,
