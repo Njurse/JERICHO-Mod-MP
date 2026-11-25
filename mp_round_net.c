@@ -43,6 +43,12 @@ void MpRoundHostSync(void)
 
 	MpRoundSyncPresent(present, gMp.gamemode);
 
+	/* ...and the session's mode. gRound.mode stayed 0 (Take a Ride, MpRoundReset)
+	 * until a timer mode's round 1 began, and a client follows the mode a snapshot
+	 * names (MpHandleRound): a joiner played the first countdown as Take a Ride (no
+	 * role car), and a late joiner's car select asked for no role cars. */
+	MpRoundSetMode(gMp.gamemode);
+
 	/* v24: a listen host is its own session's admin (MP_ROUND_ENTRY_F_ADMIN) */
 	{
 		MP_PLAYER* me = MpLocalPlayer();

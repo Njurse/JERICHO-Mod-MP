@@ -105,6 +105,16 @@ void MpRoundEnd(void)
 	gRound.revision++;
 }
 
+void MpRoundSetMode(int mode)
+{
+	if (gRound.mode == mode)
+		return;
+
+	gRound.mode = mode;
+	gRound.have = 1;
+	gRound.revision++;
+}
+
 int MpRoundAddScore(int playerId, int points)
 {
 	MP_ROUND_PLAYER* p;

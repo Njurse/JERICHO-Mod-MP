@@ -40,6 +40,12 @@ void MpRoundBegin(int mode);
 
 void MpRoundEnd(void);			/* phase ENDED; players and scores are kept */
 
+/* Host: the mode the round state names. Kept equal to the session's mode from
+ * the lobby on, so a snapshot sent before round 1 (the lobby, a timer mode's
+ * wait for two players, a late joiner's welcome) does not name Take a Ride: a
+ * client follows the mode a snapshot names (MpHandleRound). */
+void MpRoundSetMode(int mode);
+
 /* Add `points` to a present player's score (host only; a mode's referee says how
  * many). Returns 1 when the row exists. MpRoundBegin zeroes scores unless the
  * mode keeps them (MpModeKeepsScore: Cops n Robbers). */
