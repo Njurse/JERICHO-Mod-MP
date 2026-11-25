@@ -11,7 +11,9 @@
 #define MP_RADIO_DAMAGE_FRAMES	90	/* a damage line at most every 3 s */
 #define MP_RADIO_LINE_MAX_FRAMES	150
 #define MP_RADIO_MIN_SAMPLES	18	/* the phrase bank reaches sample 17 */
-#define MP_RADIO_RANGE		16000
+#define MP_RADIO_RANGE		MP_MARK_CNR_ESCAPE_DIST	/* every cop the getaway has not escaped (was 16000, inside the 18000 escape: cops 16000..18000 out were silent) */
+#define MP_RADIO_QUEUE_MAX_FRAMES	(MP_RADIO_LINE_MAX_FRAMES * 3)	/* the engine speech queue may hold the radio this long, no longer */
+#define MP_SIREN_MAX		2	/* the engine's own limit for cop sirens (DoDopplerSFX) */
 #define MP_RADIO_SCORER_FRAMES	90	/* the scorer says the damage line within 3 s */
 
 /* Cops n Robbers (MP_MODE_TIMER_GETAWAY) on THIS machine */
@@ -45,11 +47,24 @@ static int gMpRadioScoreInit;
 
 static unsigned gMpRadioPlayFrame;		/* when the playing line started */
 
+static unsigned gMpRadioQueueSince;		/* first frame the engine speech queue was seen busy, 0 = idle */
+
+/* Cops n Robbers sirens: the cop players' own loops, local on every machine */
+typedef struct MP_CNR_SIREN
+{
+	int chan;	/* our locked voice, -1 = none */
+	int car;	/* car_data slot it sounds for, -1 = none */
+	int sample;	/* packed CarHasSiren value it was started with */
+} MP_CNR_SIREN;
+
+static MP_CNR_SIREN gMpCnrSiren[MP_SIREN_MAX] = { { -1, -1, 0 }, { -1, -1, 0 } };
+
 extern int gDoCopSpeech;	/* gamesnd.c: 0 on the gang missions */
 
 void MpHostCnrFlush(void);
 static void MpCnrRadioScorerTick(int marked);
 static void MpCnrRadioSay(int carSlot, int sample, int local);
+static void MpCnrSirenTick(int on, int marked);
 
 /* Called from MpSessionReset: this module's state is per session, so
  * the next match starts from the same values the module loaded with. */
@@ -190,6 +205,8 @@ void MpCnrRadioClear(void)
 	gMpRadioLastSpeaker = -1;
 	gMpRadioScorer = -1;
 	gMpRadioScoreInit = 0;
+	gMpRadioQueueSince = 0;
+	MpCnrSirenTick(0, -1);
 }
 
 /* Who scored last: every frame the radio is on, even while a line plays. The
@@ -243,6 +260,170 @@ static void MpCnrRadioSay(int carSlot, int sample, int local)
 	gMpRadioPlayFrame = gMp.frame;
 }
 
+/* COPS N ROBBERS SIRENS. A player's car never runs the engine's siren loop: the
+ * local car's siren (StartPlayerCarSounds, channel player*3+2) is keyed by the horn
+ * button (gamesnd.c ControlSound: SpuSetVoicePitch 0 while horn.on is 0), and a
+ * remote player's car is CONTROL_TYPE_PLAYER, which DoDopplerSFX never sounds
+ * (it picks PURSUER_AI / LEAD_AI / CUTSCENE). MpClearFelony also turns every AI
+ * pursuer back into traffic at each countdown, so in a round nothing had a siren.
+ * While a round is LIVE every machine knows the roles (the marked player is the
+ * getaway, every other present player a cop), so each one sounds the cop cars'
+ * sirens itself: the MP_SIREN_MAX nearest to our car with a siren sample
+ * (CarHasSiren, the same value the engine plays), on locked voices, tracked to the
+ * car the way DoDopplerSFX tracks an AI cop. Nothing on the wire. */
+static void MpCnrSirenStop(MP_CNR_SIREN* s)
+{
+	if (s->chan >= 0)
+	{
+		StopChannel(s->chan);
+		jer_sound_unlock(s->chan);
+	}
+
+	s->chan = -1;
+	s->car = -1;
+	s->sample = 0;
+}
+
+static void MpCnrSirenTick(int on, int marked)
+{
+	static int saidOn;
+	MP_PLAYER* me = MpLocalPlayer();
+	int want[MP_SIREN_MAX], wantSample[MP_SIREN_MAX], nWant = 0;
+	long long wantD[MP_SIREN_MAX];
+	int lx = 0, lz = 0, haveListener = 0, id, k, j;
+
+	if (on && me != NULL && me->carId >= 0 && me->carId < MAX_CARS)
+	{
+		lx = car_data[me->carId].hd.where.t[0];
+		lz = car_data[me->carId].hd.where.t[2];
+		haveListener = 1;
+	}
+
+	for (id = 0; on && haveListener && id < MP_MAX_PLAYERS; id++)
+	{
+		MP_PLAYER* p;
+		CAR_DATA* cp;
+		int sample;
+		long long dx, dz, d;
+
+		if (id == marked || !MpMarkPresent(id))
+			continue;
+
+		p = MpGetPlayer(id);
+
+		if (p == NULL || p->carId < 0 || p->carId >= MAX_CARS)
+			continue;
+
+		cp = &car_data[p->carId];
+
+		if (cp->controlType == CONTROL_TYPE_NONE)
+			continue;
+
+		/* our own car while the horn is held: the engine's own siren channel plays */
+		if (me != NULL && p->id == me->id && player[0].horn.on != 0)
+			continue;
+
+		sample = CarHasSiren(cp->ap.model);
+
+		if (sample == 0 || (sample & 0xff00) == 0)
+			continue;	/* no siren sample (a civilian body, bank 0) */
+
+		dx = (long long)cp->hd.where.t[0] - lx;
+		dz = (long long)cp->hd.where.t[2] - lz;
+		d = dx * dx + dz * dz;
+
+		/* insert by distance, keep the nearest MP_SIREN_MAX */
+		for (k = 0; k < nWant && wantD[k] <= d; k++)
+			;
+
+		if (k >= MP_SIREN_MAX)
+			continue;
+
+		for (j = (nWant < MP_SIREN_MAX ? nWant : MP_SIREN_MAX - 1); j > k; j--)
+		{
+			want[j] = want[j - 1];
+			wantSample[j] = wantSample[j - 1];
+			wantD[j] = wantD[j - 1];
+		}
+
+		want[k] = p->carId;
+		wantSample[k] = sample;
+		wantD[k] = d;
+
+		if (nWant < MP_SIREN_MAX)
+			nWant++;
+	}
+
+	/* stop what is no longer wanted (or whose bank sample moved) */
+	for (k = 0; k < MP_SIREN_MAX; k++)
+	{
+		MP_CNR_SIREN* s = &gMpCnrSiren[k];
+		int keep = 0;
+
+		if (s->car < 0)
+			continue;
+
+		for (j = 0; j < nWant; j++)
+			if (want[j] == s->car && wantSample[j] == s->sample)
+				keep = 1;
+
+		if (!keep || !jer_sound_channel_busy(s->chan))
+			MpCnrSirenStop(s);
+	}
+
+	/* start the new ones, then move every live loop with its car */
+	for (j = 0; j < nWant; j++)
+	{
+		MP_CNR_SIREN* s = NULL;
+		CAR_DATA* cp = &car_data[want[j]];
+
+		for (k = 0; k < MP_SIREN_MAX; k++)
+			if (gMpCnrSiren[k].car == want[j])
+				s = &gMpCnrSiren[k];
+
+		if (s == NULL)
+		{
+			int ch, lockCh;
+
+			for (k = 0; k < MP_SIREN_MAX && s == NULL; k++)
+				if (gMpCnrSiren[k].car < 0)
+					s = &gMpCnrSiren[k];
+
+			if (s == NULL)
+				continue;
+
+			/* a LOCKED voice or nothing: an unlocked loop could be taken over by
+			 * the engine, and stopping it later would cut someone else's sound */
+			lockCh = -1;
+
+			if (jer_sound_ensure(&lockCh) < 0)
+				continue;
+
+			ch = Start3DTrackingSound(lockCh, (wantSample[j] & 0xff00) >> 8, wantSample[j] & 0xff,
+				(VECTOR*)cp->hd.where.t, (LONGVECTOR3*)cp->st.n.linearVelocity);
+
+			if (ch < 0)
+			{
+				jer_sound_unlock(lockCh);
+				continue;
+			}
+
+			s->chan = ch;
+			s->car = want[j];
+			s->sample = wantSample[j];
+
+			if (gMpCtx != NULL && (!saidOn || MpDebugOn()))
+				gMpCtx->jer_log(gMpCtx, "[mp] cops n robbers: siren on for car %d (slot %d, bank %d sample %d, voice %d)\n",
+					want[j], cp->ap.model, (wantSample[j] & 0xff00) >> 8, wantSample[j] & 0xff, ch);
+
+			saidOn = 1;
+		}
+
+		SetChannelPosition3(s->chan, (VECTOR*)cp->hd.where.t, (LONGVECTOR3*)cp->st.n.linearVelocity,
+			-3000, 4096 + (int)(s - gMpCnrSiren) * 4, 0);
+	}
+}
+
 void MpCnrRadioTick(int on, int marked, int myId)
 {
 	static unsigned rnd = 0x51u;
@@ -254,8 +435,11 @@ void MpCnrRadioTick(int on, int marked, int myId)
 	int inRange[MP_MAX_PLAYERS], nIn = 0, i;
 	const long long range2 = (long long)MP_RADIO_RANGE * MP_RADIO_RANGE;
 
+	MpCnrSirenTick(on, marked);
+
 	if (!on)
 	{
+		gMpRadioQueueSince = 0;
 		gMpRadioSaidGo = 0;
 		gMpRadioFollow = 0;
 		gMpRadioHeat = 0;
@@ -267,23 +451,16 @@ void MpCnrRadioTick(int on, int marked, int myId)
 
 	MpCnrRadioScorerTick(marked);
 
-	if (!gDoCopSpeech || GetCopPhraseSample(-1, MP_RADIO_MIN_SAMPLES - 1) < 0)
+	/* Only the gang missions turn cop speech off. The host city's lines are NOT
+	 * required any more: a cop whose own city's lines are resident can speak
+	 * without them (the per-speaker check below). */
+	if (!gDoCopSpeech)
 	{
 		if (!saidNoBank && gMpCtx != NULL)
 			gMpCtx->jer_log(gMpCtx, "[mp] cops n robbers: no police radio here (cop speech %d, %d voice sample(s))\n",
 				gDoCopSpeech, GetSoundBankSampleCount(SOUND_BANK_VOICES));
 		saidNoBank = 1;
 		return;
-	}
-
-	/* ...and say once that it is there: the playtest log is where "the MP map
-	 * loaded the cop voices" is proven (LoadLevelSFX loads them for every
-	 * take-a-ride mission, M50..M65 and the +440 arenas, gamesnd.c) */
-	if (!saidBank && gMpCtx != NULL)
-	{
-		saidBank = 1;
-		gMpCtx->jer_log(gMpCtx, "[mp] cops n robbers: police radio on (%d voice sample(s), mission %d, cop bank %d)\n",
-			GetSoundBankSampleCount(SOUND_BANK_VOICES), gCurrentMissionNumber, gCurrentMissionNumber % 4 + 1);
 	}
 
 	/* one line at a time: the last one (and its heading clip) first -- but never
@@ -309,9 +486,25 @@ void MpCnrRadioTick(int on, int marked, int myId)
 		return;
 	}
 
-	/* ...and never over the engine's own cop speech */
+	/* ...and never over the engine's own cop speech -- but only for so long. The
+	 * queue clears is_playing only when SpuGetKeyStatus says its voice stopped
+	 * (gamesnd.c ControlSpeech); a voice that never reports off kept the radio
+	 * quiet for the rest of the level. Past MP_RADIO_QUEUE_MAX_FRAMES of one
+	 * unbroken busy stretch (three of the longest lines) the radio goes on. */
 	if (gSpeechQueue.is_playing || gSpeechQueue.count > 0)
-		return;
+	{
+		if (gMpRadioQueueSince == 0)
+			gMpRadioQueueSince = gMp.frame ? gMp.frame : 1;
+
+		if (gMp.frame - gMpRadioQueueSince < (unsigned)MP_RADIO_QUEUE_MAX_FRAMES)
+			return;
+
+		if (gMp.frame - gMpRadioQueueSince == (unsigned)MP_RADIO_QUEUE_MAX_FRAMES && gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx, "[mp] cops n robbers: engine speech queue busy %d frame(s) (playing %d, %d queued) - radio no longer waits on it\n",
+				MP_RADIO_QUEUE_MAX_FRAMES, gSpeechQueue.is_playing, gSpeechQueue.count);
+	}
+	else
+		gMpRadioQueueSince = 0;
 
 	gp = MpGetPlayer(marked);
 
@@ -338,12 +531,29 @@ void MpCnrRadioTick(int on, int marked, int myId)
 		dx = (long long)car_data[p->carId].hd.where.t[0] - gc->hd.where.t[0];
 		dz = (long long)car_data[p->carId].hd.where.t[2] - gc->hd.where.t[2];
 
-		if (dx * dx + dz * dz <= range2)
-			inRange[nIn++] = id;
+		if (dx * dx + dz * dz > range2)
+			continue;
+
+		/* a cop speaks only when ITS lines (or, failing them, the host's) are
+		 * resident: GetCopPhraseSample, the same answer MpCnrRadioSay plays */
+		if (GetCopPhraseSample(car_data[p->carId].ap.model, MP_RADIO_MIN_SAMPLES - 1) < 0)
+			continue;
+
+		inRange[nIn++] = id;
 	}
 
 	if (nIn == 0)
-		return;	/* nobody near the chase: no line (the GO line waits for one) */
+		return;	/* nobody near the chase with a voice: no line (the GO line waits for one) */
+
+	/* ...and say once that it is there: the playtest log is where "the MP map
+	 * loaded the cop voices" is proven */
+	if (!saidBank && gMpCtx != NULL)
+	{
+		saidBank = 1;
+		gMpCtx->jer_log(gMpCtx, "[mp] cops n robbers: police radio on (%d voice sample(s), mission %d, cop bank %d, host lines %s)\n",
+			GetSoundBankSampleCount(SOUND_BANK_VOICES), gCurrentMissionNumber, gCurrentMissionNumber % 4 + 1,
+			GetCopPhraseSample(-1, MP_RADIO_MIN_SAMPLES - 1) >= 0 ? "resident" : "missing");
+	}
 
 	rnd = rnd * 1103515245u + 12345u;
 	heading = GetCarDirectionOfTravel(gc);
@@ -413,8 +623,8 @@ void MpCnrRadioTick(int on, int marked, int myId)
 	}
 
 	if (MpDebugOn() && gMpCtx != NULL)
-		gMpCtx->jer_log(gMpCtx, "[mp] cops n robbers: radio line %d from player %d (%d cop(s) within %d)\n",
-			phrase, speaker, nIn, MP_RADIO_RANGE);
+		gMpCtx->jer_log(gMpCtx, "[mp] cops n robbers: radio line %d from player %d slot %d -> voices sample %d (%d cop(s) within %d)\n",
+			phrase, speaker, car_data[best].ap.model, GetCopPhraseSample(car_data[best].ap.model, phrase), nIn, MP_RADIO_RANGE);
 
 	gMpRadioFollow = follow;
 	gMpRadioFollowCar = best;
