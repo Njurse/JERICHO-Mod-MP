@@ -645,7 +645,7 @@ yet played in game. These are later phases, and none of them is wired:
 ## Map votes and rotation (0.24.0)
 
 - **`!vote` on a game (listen) host.** The host runs the dedicated server's
-  grammar itself (`mp_session.c` `MpListenVote`): `!vote city <city> [mp [0|1]]`,
+  grammar itself (`mp_lobby.c` `MpListenVote`): `!vote <city> [mp [0|1]]`,
   `!vote mp [0|1]`, `!vote` (the tally), `!vote cancel` (the host only). One yes
   per player, passes at more than half of the players, 30 s, then a 60 s
   cooldown. Peers' `!vote` lines reach the host and are never relayed; every

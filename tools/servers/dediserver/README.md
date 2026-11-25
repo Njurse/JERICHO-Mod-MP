@@ -172,7 +172,7 @@ the other players; the reply comes back privately. `!help` lists what *you* can 
 | `!admin add\|remove <slot\|name\|uuid>`, `!admin list` | admin | manage the admins list; **saved to dediserver.json** |
 | `!motd [text\|save]` | admin | show or set the join greeting; `!motd save` writes it to the file |
 | `!say <text>` | admin | a line from the server to everyone |
-| `!vote city <city>`, `!vote city <city> mp [0\|1]`, `!vote mp [0\|1]`, `!vote` / `!vote cancel` | everyone / admin to cancel | vote for the full city or its multiplayer map (see below) |
+| `!vote <city>`, `!vote <city> mp [0\|1]`, `!vote mp [0\|1]`, `!vote` / `!vote cancel` | everyone / admin to cancel | vote for the full city or its multiplayer map (see below) |
 
 `cops`, `difficulty`, `time`, `weather`, `motd` and `admin` also work at the server
 console. Every admin command is logged with who ran it. Joins and leaves are
@@ -181,11 +181,11 @@ announced in chat (`"announce_joins": false` turns that off). Saving rewrites
 
 ### Voting for a city and its multiplayer map
 
-`!vote city <city>` starts a vote for the full single-player city map. Add `mp` to
+`!vote <city>` starts a vote for the full single-player city map. Add `mp` to
 target that city's multiplayer map; the optional `0` or `1` selects an explicit
-arena: `!vote city <city> mp`, `!vote city <city> mp 0`, or
-`!vote city <city> mp 1`. Use `!vote mp [0|1]` to change only the multiplayer
-map in the current city. The legacy `!vote <city>` form selects the full city map.
+arena: `!vote <city> mp`, `!vote <city> mp 0`, or `!vote <city> mp 1`. Use
+`!vote mp [0|1]` to change only the multiplayer map in the current city.
+`!vote city <city> ...` is still accepted (the `city` word is optional).
 One vote per player id. The vote passes when the configured threshold is met, or
 fails after its duration; admins can use `!vote cancel`.
 

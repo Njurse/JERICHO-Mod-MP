@@ -328,7 +328,7 @@ def main():
         check("announce: ...a later real leave is announced again",
               any("Ann left" in t for _, t in vs.sent), vs.sent)
 
-        # -- !vote city <city> [mp 0|1]: one of the city's two multiplayer maps
+        # -- !vote <city> [mp 0|1]: one of the city's two multiplayer maps
         ms = build(tmp, city=0, arena=0, vote_duration=30, vote_cooldown=60)
         mv = dict(ms.plugins.plugins)["vote"]
         mclock = [900.0]
@@ -352,11 +352,11 @@ def main():
         out = say(ms, ma, "!help vote")
         help_text = " ".join(t for _, t in out)
         check("vote: the help names both forms",
-              "!vote city <city> [mp [0|1]]" in help_text and "!vote mp [0|1]" in help_text, help_text)
+              "!vote <city> [mp [0|1]]" in help_text and "!vote mp [0|1]" in help_text, help_text)
         out = say(ms, ma, "!vote havana mp 1")
         check("vote: city + mp starts the vote",
               any("started a vote to switch to HAVANA mp 1" in t for _, t in out)
-              and any("type !vote city havana mp 1 to agree" in t for _, t in out), out)
+              and any("type !vote havana mp 1 to agree" in t for _, t in out), out)
         out = say(ms, ma, "!vote rio mp 1")
         check("vote: a different city waits", "vote for HAVANA mp 1 is running" in out[-1][1], out)
         out = say(ms, ma, "!vote havana mp 0")

@@ -1824,7 +1824,7 @@ static void MpListenVote(int pid, const char* args)
 			snprintf(line, sizeof(line), "vote in progress -- %s", tally);
 		}
 		else
-			snprintf(line, sizeof(line), "no vote; !vote city <city> [mp [0|1]] or !vote mp [0|1]");
+			snprintf(line, sizeof(line), "no vote; !vote <city> [mp [0|1]] or !vote mp [0|1]");
 		MpHostSay(line);
 		return;
 	}
@@ -1841,7 +1841,7 @@ static void MpListenVote(int pid, const char* args)
 
 	if (!MpLVoteParse(args, &to))
 	{
-		MpHostSay("usage: !vote city <city> [mp [0|1]] or !vote mp [0|1]");
+		MpHostSay("usage: !vote <city> [mp [0|1]] or !vote mp [0|1]");
 		return;
 	}
 

@@ -1,24 +1,23 @@
-"""Vote for a map: !vote city <city> [mp [0|1]].
+"""Vote for a map: !vote <city> [mp [0|1]].
 
-  !vote city <city>      the city's full single-player city map
-  !vote city <city> mp   the city's multiplayer map, keeping the current arena
-  !vote city <city> mp 0|1
-                         explicitly select multiplayer arena 0 or 1
+  !vote <city>           the city's full single-player city map
+  !vote <city> mp        the city's multiplayer map, keeping the current arena
+  !vote <city> mp 0|1    explicitly select multiplayer arena 0 or 1
   !vote mp [0|1]         vote for a multiplayer map in the current city
   !vote                  show the vote in progress
   !vote cancel           admins: stop the vote
 
-The legacy `!vote <city>` form still selects the full city map. On passage, the
-map mode, city and arena are saved and advertised; connected players reconnect
-because the game cannot change levels under a live session.
+`!vote city <city> ...` is still accepted (the `city` word is optional). On
+passage, the map mode, city and arena are saved and advertised; connected
+players reconnect because the game cannot change levels under a live session.
 """
 import time
 
-DESCRIPTION = "!vote city <city> [mp [0|1]] - vote for the city or its multiplayer map"
+DESCRIPTION = "!vote <city> [mp [0|1]] - vote for the city or its multiplayer map"
 COLOR = "#FFD24A"
 CITIES = ("chicago", "havana", "vegas", "rio")
 ALIASES = {"las vegas": 2, "lasvegas": 2, "las_vegas": 2}
-USAGE = "!vote city <city> [mp [0|1]]"
+USAGE = "!vote <city> [mp [0|1]]"
 START_HINT = USAGE + " (or !vote mp [0|1]) starts one"
 now = time.monotonic
 
@@ -34,7 +33,7 @@ def on_load(server):
     _cooldown_until = 0.0
     server.register_command(
         "vote", cmd_vote,
-        help="!vote city <city> [mp [0|1]]: city = single-player map, mp = multiplayer; "
+        help="!vote <city> [mp [0|1]]: a city name is the single-player map, mp = multiplayer; "
              "!vote mp [0|1] changes the current city's multiplayer map; admins: !vote cancel")
 
 
@@ -77,8 +76,9 @@ def _mp_value(words):
 def parse_target(text):
     """Return (city, mode, arena); None means keep the current value.
 
-    `city <city>` targets the full city; appending `mp` targets multiplayer.
+    `<city>` targets the full city; appending `mp` targets multiplayer.
     `mp [0|1]` targets multiplayer in the current city.
+    The optional `city` keyword (`!vote city <city>`) is still accepted.
     """
     words = str(text).strip().lower().split()
     if not words:
@@ -89,10 +89,10 @@ def parse_target(text):
 
     if words[0] == "city":
         if len(words) < 2:
-            raise ValueError("usage: !vote city <city> [mp [0|1]]")
+            raise ValueError("usage: !vote <city> [mp [0|1]]")
         name, rest = words[1], words[2:]
     else:
-        name, rest = words[0], words[1:]  # legacy !vote <city>
+        name, rest = words[0], words[1:]  # !vote <city> [mp ...]
 
     city = city_index(name)
     if city < 0:
@@ -117,8 +117,8 @@ def _tally():
 
 def _agree(city, mode, arena):
     if mode == "city":
-        return "!vote city %s" % CITIES[city]
-    return "!vote city %s mp %d" % (CITIES[city], arena)
+        return "!vote %s" % CITIES[city]
+    return "!vote %s mp %d" % (CITIES[city], arena)
 
 
 def cmd_vote(caller, args):
