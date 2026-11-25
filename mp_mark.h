@@ -90,11 +90,16 @@ extern "C" {
 #define MP_MARK_EV_LOBBY	0x10	/* retired: never set (was the separate 5-count phase) */
 
 int  MpMarkClampMinutes(int minutes);	/* MP_MARK_MINUTES_MIN..MAX */
+int  MpMarkClampSeconds(int seconds);	/* MP_MARK_SECONDS_MIN..MAX */
+/* A mode's default round time when the host never set one: Car Bomb Tag 60 s,
+ * Fox n Hounds 90 s, Cops n Robbers 120 s, anything else 180 s. */
+int  MpMarkDefaultSeconds(int mode);
 
 /* ---- the host ------------------------------------------------------------- */
 /* A new session in `mode`: WAITING, nobody present, nothing ticking. A mode with
  * no timer (Take a Ride) is accepted and simply never does anything. */
 void MpMarkReset(int mode, int minutes);
+void MpMarkResetSeconds(int mode, int seconds);	/* the same, with the time in seconds */
 /* The host's intermission (ENDED -> next round), ms; kept across MpMarkReset. */
 void MpMarkSetIntermissionMs(int ms);
 
@@ -166,7 +171,8 @@ int  MpMarkMode(void);
 int  MpMarkPhase(void);			/* MP_MARK_PHASE_* */
 int  MpMarkMarked(void);		/* player id, -1 = nobody */
 int  MpMarkWinner(void);		/* player id, -1 = nobody */
-int  MpMarkMinutes(void);
+int  MpMarkMinutes(void);		/* the round time rounded UP to minutes (older peers) */
+int  MpMarkSeconds(void);		/* the round time in seconds */
 unsigned MpMarkSeq(void);
 int  MpMarkPresent(int playerId);
 int  MpMarkPlayerReady(int playerId);	/* present and has picked a car */

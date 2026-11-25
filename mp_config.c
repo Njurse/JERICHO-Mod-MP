@@ -24,6 +24,24 @@
 #include <sys/stat.h>	/* mkdir */
 #endif
 
+/* [mp] round_seconds_<key>: a readable name per game mode, so mp.ini says which
+ * clock is which (round_seconds_bombtag = 60). An unknown id falls back to its number. */
+static const char* MpConfigModeKey(int gamemode)
+{
+	static char num[12];
+
+	switch (gamemode)
+	{
+	case MP_GAMEMODE_TAKEADRIDE:	return "takearide";
+	case MP_GAMEMODE_FOXHOUNDS:	return "foxhounds";
+	case MP_GAMEMODE_BOMBTAG:	return "bombtag";
+	case MP_GAMEMODE_COPSROBBERS:	return "copsrobbers";
+	default:
+		snprintf(num, sizeof(num), "%d", gamemode);
+		return num;
+	}
+}
+
 /* The per-install player id: 16 random bytes, generated once and kept as 32 hex
  * digits in [mp] player_id. A dedicated server recognises a player by it (its
  * admins list), so it comes from the OS generator, not rand(). It is a bearer
@@ -436,6 +454,21 @@ void MpConfigLoad(void)
 
 	/* the round modes' host defaults (the Host Game menu's Rounds page) */
 	gMp.config.modeMinutes = MpMarkClampMinutes(jer_config_get_int("mp", "mode_minutes", MP_MARK_MINUTES_DEFAULT));
+	/* mp 0.25: each round mode keeps its own time, in seconds. The old shared
+	 * mode_minutes is not carried over: every ini had it written as 3, which would
+	 * hide the new shorter defaults. */
+	{
+		int gm;
+
+		for (gm = 0; gm < MP_GAMEMODE_COUNT; gm++)
+		{
+			char key[48];
+
+			snprintf(key, sizeof(key), "round_seconds_%s", MpConfigModeKey(gm));
+			gMp.config.modeSeconds[gm] = MpMarkClampSeconds(
+				jer_config_get_int("mp", key, MpMarkDefaultSeconds(gm)));
+		}
+	}
 	gMp.config.intermissionSec = jer_config_get_int("mp", "intermission_seconds", MP_MARK_INTERMISSION_MS / 1000);
 	if (gMp.config.intermissionSec < MP_MARK_INTERMISSION_S_MIN || gMp.config.intermissionSec > MP_MARK_INTERMISSION_S_MAX)
 		gMp.config.intermissionSec = MP_MARK_INTERMISSION_MS / 1000;
@@ -446,6 +479,19 @@ void MpConfigLoad(void)
 
 	gMp.config.invuln = jer_config_get_int("mp", "invuln", 0) ? 1 : 0;
 	gMp.config.immune = jer_config_get_int("mp", "immune", 0) ? 1 : 0;
+
+	/* mp 0.25: Allow cheats, per mode. Take a Ride defaults on, the contests off. */
+	{
+		int gm;
+
+		for (gm = 0; gm < MP_GAMEMODE_COUNT; gm++)
+		{
+			char key[48];
+
+			snprintf(key, sizeof(key), "allow_cheats_%s", MpConfigModeKey(gm));
+			gMp.config.allowCheats[gm] = jer_config_get_int("mp", key, MpModeAllowsCheats(gm)) ? 1 : 0;
+		}
+	}
 
 	/* COLOUR. Off by default, and that default is deliberate: see MP_CONFIG. */
 	gMp.config.colorOn = jer_config_get_int("mp", "custom_color", 0);
@@ -531,7 +577,30 @@ void MpConfigSave(void)
 	jer_config_set_int("mp", "cop_difficulty", gMp.config.copDifficulty);
 	jer_config_set_int("mp", "invuln", gMp.config.invuln);
 	jer_config_set_int("mp", "immune", gMp.config.immune);
-	jer_config_set_int("mp", "mode_minutes", gMp.config.modeMinutes);
+	{
+		int gm;
+
+		for (gm = 0; gm < MP_GAMEMODE_COUNT; gm++)
+		{
+			char key[48];
+
+			snprintf(key, sizeof(key), "allow_cheats_%s", MpConfigModeKey(gm));
+			jer_config_set_int("mp", key, gMp.config.allowCheats[gm]);
+		}
+	}
+	{
+		int gm;
+
+		for (gm = 0; gm < MP_GAMEMODE_COUNT; gm++)
+		{
+			char key[48];
+
+			if (gm == MP_GAMEMODE_TAKEADRIDE)
+				continue;	/* no clock */
+			snprintf(key, sizeof(key), "round_seconds_%s", MpConfigModeKey(gm));
+			jer_config_set_int("mp", key, gMp.config.modeSeconds[gm]);
+		}
+	}
 	jer_config_set_int("mp", "intermission_seconds", gMp.config.intermissionSec);
 
 	jer_config_set_int("mp", "custom_color", gMp.config.colorOn);

@@ -684,7 +684,7 @@ static void CheckRoundV2(void)
 	CHECK(MpMarkEndReason() == MP_MARK_END_VOID);
 	len = MpMarkBuild(buf, (int)sizeof(buf));
 	memcpy(&h, buf, sizeof(h));
-	CHECK(h.endReason == MP_MARK_END_VOID && h.flags == 0 && h.spare == 0);
+	CHECK(h.endReason == MP_MARK_END_VOID && h.flags == 0 && h.timeSec == 180);
 	/* the client mirror */
 	CHECK(MpMarkApply(buf, len) == 1 && MpMarkEndReason() == MP_MARK_END_VOID && MpMarkBench(7) == MP_MARK_ENTRY_F_WAITING);
 

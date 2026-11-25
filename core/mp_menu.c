@@ -120,14 +120,14 @@ static int MpColorAdjustG(void* ud, int dir) { (void)ud; return MpColorAdjust(&g
 static int MpColorAdjustB(void* ud, int dir) { (void)ud; return MpColorAdjust(&gMp.config.colorB, dir); }
 
 /* ------------------------------------------------------------------ */
-/* Cheats are Take a Ride's: every other mode is a contest              */
+/* Cheats follow the host's Allow cheats rule (default: Take a Ride)    */
 /* ------------------------------------------------------------------ */
 static int MpCheatsNow(void)
 {
-	return !gMp.running || MpModeAllowsCheats(gMp.gamemode);
+	return MpCheatsAllowed();
 }
 
-/* The door every cheat row goes through: refused, and said, outside Take a Ride. */
+/* The door every cheat row goes through: refused, and said, unless cheats are allowed. */
 static int MpCheatAllowed(const char* what)
 {
 	char msg[80];
@@ -135,17 +135,17 @@ static int MpCheatAllowed(const char* what)
 	if (MpCheatsNow())
 		return 1;
 
-	snprintf(msg, sizeof(msg), "%s is off in %s", what, MpModeName(gMp.gamemode));
+	snprintf(msg, sizeof(msg), "%s is off - the host has not allowed cheats", what);
 	MpNotify(msg);
 	return 0;
 }
 
 static void MpOptLabelRepair(void* ud, char* out, int max);	/* the Vehicle Options row */
 
-/* " (Take a Ride only)" after a cheat row's label while it is off. */
+/* " (cheats off)" after a cheat row's label while it is off. */
 static const char* MpCheatSuffix(void)
 {
-	return MpCheatsNow() ? "" : " (Take a Ride only)";
+	return MpCheatsNow() ? "" : " (cheats off)";
 }
 
 /* ------------------------------------------------------------------ */

@@ -379,7 +379,7 @@ def main():
         w = m.WELCOME.unpack(ms._welcome(1, 1))
         check("vote: a joiner is told the multiplayer map and arena", w[6] == 1 and w[7] == 1, w)
         check("vote: the start frame carries shape, rules and arena",
-              ms.session_spare() & 1 == 1 and (ms.session_spare() >> 1) & 0x7F == ms.cfg["rules"] & 0x7F
+              ms.session_spare() & 1 == 1 and (ms.session_spare() >> 1) & 0x7F == ms.rules_now() & 0x7F
               and (ms.session_spare() >> 8) & 1 == 1, hex(ms.session_spare()))
 
         # -- !vote mp 0|1 alone changes only the map, in the same city

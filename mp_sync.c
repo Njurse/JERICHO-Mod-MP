@@ -458,6 +458,7 @@ static int MpContactPush(MP_PLAYER* me, MP_PLAYER* pl, int localHalf, const char
 
 	memset(&h, 0, sizeof(h));
 	h.targetId = (uint8_t)pl->id;
+	h.flags = (uint8_t)(localHalf ? MP_HIT_F_PROBE : 0);	/* the probe: a push, not a tag */
 	h.impulse[0] = (int)ix;
 	h.impulse[1] = (int)iy;
 	h.impulse[2] = (int)iz;
@@ -486,8 +487,12 @@ static int MpContactPush(MP_PLAYER* me, MP_PLAYER* pl, int localHalf, const char
 	pl->lastHitFrame = gMp.frame;
 
 	/* a timer mode: the host's own contact is a tag report, taken as seen; its
-	 * push (whole units/frame) is a Cops n Robbers hit's strength */
-	MpMarkHostReport(me->id, pl->id, 0, (int)push);
+	 * push (whole units/frame) is a Cops n Robbers hit's strength. ONLY the
+	 * engine's collision counts (mp 0.25): the probe (localHalf) is a centre
+	 * distance test that fired on near misses, which made tags and bomb passes
+	 * happen without the cars touching. It still pushes. */
+	if (!localHalf)
+		MpMarkHostReport(me->id, pl->id, 0, (int)push);
 
 	if (MpIsHost())
 	{
@@ -743,7 +748,9 @@ void MpHandleHit(int connIndex, const unsigned char* p, int len)
 		/* the push back out of the impulse (normal * push << 12): a hit's strength */
 		double ix = h.impulse[0], iy = h.impulse[1], iz = h.impulse[2];
 
-		MpMarkHostReport(from, (int)h.targetId, 1, (int)(sqrt(ix * ix + iy * iy + iz * iz) / MP_FIXEDH));
+		/* a probe-made report is a push only (MP_HIT_F_PROBE): no tag from it */
+		if (!(h.flags & MP_HIT_F_PROBE))
+			MpMarkHostReport(from, (int)h.targetId, 1, (int)(sqrt(ix * ix + iy * iy + iz * iz) / MP_FIXEDH));
 	}
 
 	if (me != NULL && h.targetId == me->id && me->carId >= 0 && me->carId < MAX_CARS)

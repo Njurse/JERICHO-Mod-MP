@@ -76,6 +76,18 @@ def clamp_minutes(minutes):
     return max(m.MARK_MINUTES_MIN, min(m.MARK_MINUTES_MAX, int(minutes)))
 
 
+def clamp_seconds(seconds):
+    """MpMarkClampSeconds: 30..600 (mp 0.25)."""
+    return max(m.MARK_SECONDS_MIN, min(m.MARK_SECONDS_MAX, int(seconds)))
+
+
+def default_seconds(gamemode):
+    """MpMarkDefaultSeconds: Car Bomb Tag 60, Fox n Hounds 90, Cops n Robbers 120,
+    anything else 180."""
+    return {m.GAMEMODE_BOMBTAG: 60, m.GAMEMODE_FOXHOUNDS: 90,
+            m.GAMEMODE_COPSROBBERS: 120}.get(int(gamemode), m.MARK_MINUTES_DEFAULT * 60)
+
+
 def _ds(ms):
     """Deciseconds, rounded UP (0:00 only when it really is), u16."""
     if ms <= 0:
@@ -84,14 +96,15 @@ def _ds(ms):
 
 
 class MarkReferee:
-    def __init__(self, gamemode=0, minutes=m.MARK_MINUTES_DEFAULT, intermission_s=None):
+    def __init__(self, gamemode=0, minutes=m.MARK_MINUTES_DEFAULT, intermission_s=None, seconds=None):
         # ENDED -> the next round, in ms. Configurable (dedi "intermission_s");
         # kept across reset() so a new mode keeps the server's setting.
         self.intermission_total_ms = (clamp_intermission_s(intermission_s) * 1000
                                       if intermission_s is not None else INTERMISSION_MS)
-        self.reset(gamemode, minutes)
+        self.reset(gamemode, minutes, seconds)
 
-    def reset(self, gamemode, minutes):
+    def reset(self, gamemode, minutes, seconds=None):
+        """`seconds` (mp 0.25) wins over `minutes` when given."""
         self.gamemode = int(gamemode)
         self.timer = m.mode_timer(self.gamemode)
         self.wait_min = m.mode_wait_min(self.gamemode)
@@ -100,7 +113,9 @@ class MarkReferee:
         self.round_sec = m.mode_round_countdown(self.gamemode)
         self.first_map = bool(m.mode_has_pre_game(self.gamemode))  # a reset is a map load
         self.phase = m.MARK_PHASE_WAITING
-        self.minutes = clamp_minutes(minutes)
+        self.seconds = (clamp_seconds(seconds) if seconds is not None
+                        else clamp_minutes(minutes) * 60)
+        self.minutes = (self.seconds + 59) // 60   # an older peer's display
         self.marked = -1
         self.winner = -1
         self.seq = 0
@@ -149,7 +164,7 @@ class MarkReferee:
         return -1
 
     def _full_ms(self):
-        return self.minutes * 60 * 1000
+        return self.seconds * 1000
 
     def _in(self, pid):
         return pid in self.present and not self.bench.get(pid, 0)
@@ -499,4 +514,4 @@ class MarkReferee:
                     for pid in sorted(self.present)]
         return m.build_mark(self.gamemode, self.phase, self.marked, self.winner, self.minutes,
                             self.seq, _ds(self.shared_ms), rows, _ds(self.countdown_ms),
-                            end, flags)
+                            end, flags, self.seconds)

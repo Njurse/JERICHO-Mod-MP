@@ -54,6 +54,9 @@ supervisor (or a test) can pipe commands in.
 --cop-difficulty N   0..2 (default 1)
 --cop-immunity       cops exist but never come after anyone
 --invulnerable       cars take no damage
+--allow-cheats / --no-cheats
+                     players may use the pause menu's cheats (immunity, invulnerability,
+                     respawn, super turbo, instant car change). Default: Take a Ride only
 --intermission SEC   round modes: seconds between a round ending and the next (3..30,
                      default 8; config "intermission_s", console `intermission N`)
 --log-level debug|info|warning|error
@@ -75,6 +78,11 @@ defaults as an in-game host). They are packed for the wire exactly like the game
 `MP_RULES_PACK`. An older config with only the packed `"rules"` int still works (the
 server logs a deprecation line); note `"rules": 0` means cops OFF, so replace it with
 the readable keys to get cops.
+
+`"allow_cheats"` (mp 0.25) decides whether players may use the pause menu's own
+cheats. `null` (the default) follows the current mode: on in Take a Ride, off in
+every contest, re-decided whenever a vote changes the mode. `true` or `false` forces
+it for every mode.
 
 CLI flags override the config file. The config file is optional — with none, the
 built-in defaults are used.
@@ -110,8 +118,12 @@ existing file). Updates and `git pull` therefore leave your settings alone.
                             // Optional: a file without it runs mode 0. Sent in the
                             // welcome, the start, the beacon and the master advert;
                             // see ../../../docs/GAMEMODES.md
-  // "mode_time": 3,        // OPTIONAL, not in the defaults: modes 1-3's time
-                            // in minutes, clamped 1..5; missing = 3. The server
+  // "mode_time_s": 90,     // OPTIONAL (mp 0.25): modes 1-3's time in SECONDS,
+                            // 30..600. Missing = "mode_time" below if set, else
+                            // the mode's own default: Car Bomb Tag 60, Fox n
+                            // Hounds 90, Cops n Robbers 120. --mode-time-s too.
+  // "mode_time": 3,        // OPTIONAL, older: the time in whole minutes,
+                            // clamped 1..5; mode_time_s wins over it. The server
                             // referees them itself (tags from the carstates it
                             // keeps) and sends JPMK; never written into your file
   "max_players": 16,        // 16 is the protocol cap (MP_MAX_PLAYERS); slot 0 is the server

@@ -229,6 +229,8 @@ no wanted level, and the session carries on.
 | `port` | `1318` | TCP session port. Discovery always uses a fixed UDP 1318 and advertises the session port in the beacon, so changing this does not hide your game |
 | `player_name` | OS username | your name on the network |
 | `first_name_set` | `0` | `1` once the first-run name prompt has been confirmed or dismissed. A saved `player_name` that is not the default also counts as done, so an older install is not prompted again |
+| `round_seconds_foxhounds` / `round_seconds_bombtag` / `round_seconds_copsrobbers` | mode default (90 / 60 / 120) | each timed mode's host default, in seconds, 30..600, stepped by 15 on the Host Game Round Settings row. Not carried over from the old shared `mode_minutes` |
+| `allow_cheats_takearide` / `allow_cheats_foxhounds` / `allow_cheats_bombtag` / `allow_cheats_copsrobbers` | on for Take a Ride, off otherwise | host Session Rules row **Allow cheats**: whether the pause menu's cheats are usable in that mode. An older peer without the wire bit keeps the mode default |
 | `host_name` | `<name>'s game` | the advertised server name |
 | `beacon_ms` | `1000` | discovery beacon interval |
 | `chat_hold_seconds` | `12` | seconds a chat line stays at full brightness before fading (2..120; was a fixed 20) |

@@ -1384,7 +1384,7 @@ int MpChangeCar(int city, int model)
 	 * mid-round (a fresh, undamaged car is a repair). A mode with role cars saves it
 	 * as the pick of the role the pause picker is choosing for (Cops n Robbers: the
 	 * patrol car or the getaway car), applied at the next round's countdown. */
-	if (gMp.running && !MpModeAllowsCheats(gMp.gamemode))
+	if (gMp.running && !MpCheatsAllowed())
 	{
 		extern u_char defaultPlayerPalette;
 		char msg[96];

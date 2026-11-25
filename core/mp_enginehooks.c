@@ -120,7 +120,7 @@ int MpOnCarEngine(void* userdata, void* args)
 		return JER_RESULT_CONTINUE;
 
 	/* a cheat: Take a Ride's alone in a session (the saved switch is kept) */
-	if (gMp.running && !MpModeAllowsCheats(gMp.gamemode))
+	if (!MpCheatsAllowed())
 		return JER_RESULT_CONTINUE;
 
 	scaled = (long long)a->thrust * MP_SUPER_TURBO_MUL;

@@ -20,7 +20,8 @@ static struct
 	int firstSec;		/* MpModeFirstCountdownSec */
 	int roundSec;		/* MpModeRoundCountdownSec */
 	int phase;		/* MP_MARK_PHASE_* */
-	int minutes;
+	int minutes;		/* timeSec rounded up, for an older peer's display */
+	int timeSec;		/* the round time, seconds (MP_MARK.timeSec) */
 	int marked;		/* -1 = nobody */
 	int winner;		/* -1 = nobody */
 	unsigned seq;
@@ -66,9 +67,29 @@ int MpMarkClampMinutes(int minutes)
 	return minutes;
 }
 
+int MpMarkClampSeconds(int seconds)
+{
+	if (seconds < MP_MARK_SECONDS_MIN)
+		return MP_MARK_SECONDS_MIN;
+	if (seconds > MP_MARK_SECONDS_MAX)
+		return MP_MARK_SECONDS_MAX;
+	return seconds;
+}
+
+int MpMarkDefaultSeconds(int mode)
+{
+	switch (mode)
+	{
+	case MP_GAMEMODE_BOMBTAG:	return 60;
+	case MP_GAMEMODE_FOXHOUNDS:	return 90;
+	case MP_GAMEMODE_COPSROBBERS:	return 120;
+	default:			return MP_MARK_MINUTES_DEFAULT * 60;
+	}
+}
+
 static int MpMarkFullMs(void)
 {
-	return gMark.minutes * 60 * 1000;
+	return gMark.timeSec * 1000;
 }
 
 static int MpMarkCount(void)
@@ -128,6 +149,11 @@ static void MpMarkUnbench(void)
 
 void MpMarkReset(int mode, int minutes)
 {
+	MpMarkResetSeconds(mode, MpMarkClampMinutes(minutes) * 60);
+}
+
+void MpMarkResetSeconds(int mode, int seconds)
+{
 	memset(&gMark, 0, sizeof(gMark));
 	gMark.mode = mode;
 	gMark.timer = MpModeTimerKind(mode);
@@ -137,7 +163,8 @@ void MpMarkReset(int mode, int minutes)
 	gMark.roundSec = MpModeRoundCountdownSec(mode);
 	gMark.firstMap = MpModeHasPreGame(mode);	/* a reset is a map load (the host's START) */
 	gMark.phase = MP_MARK_PHASE_WAITING;
-	gMark.minutes = MpMarkClampMinutes(minutes);
+	gMark.timeSec = MpMarkClampSeconds(seconds);
+	gMark.minutes = (gMark.timeSec + 59) / 60;
 	gMark.marked = -1;
 	gMark.winner = -1;
 	gMark.lastGetaway = -1;
@@ -744,6 +771,7 @@ int MpMarkBuild(unsigned char* out, int cap)
 	h.marked = (uint8_t)(MpMarkIdOk(gMark.marked) ? gMark.marked : MP_MARK_NONE);
 	h.winner = (uint8_t)(MpMarkIdOk(gMark.winner) ? gMark.winner : MP_MARK_NONE);
 	h.minutes = (uint8_t)gMark.minutes;
+	h.timeSec = (uint16_t)gMark.timeSec;
 	h.count = (uint8_t)n;
 	h.seq = (uint16_t)gMark.seq;
 	h.sharedDs = (uint16_t)MpMarkDs(gMark.sharedMs);
@@ -803,6 +831,7 @@ int MpMarkApply(const unsigned char* p, int len)
 	gMark.marked = h.marked == MP_MARK_NONE || !MpMarkIdOk(h.marked) ? -1 : h.marked;
 	gMark.winner = h.winner == MP_MARK_NONE || !MpMarkIdOk(h.winner) ? -1 : h.winner;
 	gMark.minutes = MpMarkClampMinutes(h.minutes);
+	gMark.timeSec = h.timeSec != 0 ? MpMarkClampSeconds(h.timeSec) : gMark.minutes * 60;
 	gMark.seq = h.seq;
 	gMark.sharedMs = (int)h.sharedDs * 100;
 	gMark.countdownMs = (int)h.countdownDs * 100;
@@ -873,6 +902,7 @@ int MpMarkPhase(void)		{ return gMark.phase; }
 int MpMarkMarked(void)		{ return gMark.marked; }
 int MpMarkWinner(void)		{ return gMark.winner; }
 int MpMarkMinutes(void)		{ return gMark.minutes; }
+int MpMarkSeconds(void)		{ return gMark.timeSec; }
 unsigned MpMarkSeq(void)	{ return gMark.seq; }
 
 int MpMarkPresent(int playerId)

@@ -239,13 +239,13 @@ void MpHostMarkBegin(void)
 	gMpMarkMsAcc = 0;
 
 	MpMarkSetIntermissionMs(gMp.config.intermissionSec * 1000);	/* the host's lobby setting */
-	MpMarkReset(gMp.gamemode, MpSessionModeMinutes());
+	MpMarkResetSeconds(gMp.gamemode, MpSessionModeSeconds());
 	MpRoundHostSync();
 	MpMarkHostSync();
 
 	if (gMpCtx != NULL)
-		gMpCtx->jer_log(gMpCtx, "[mp] mark: %s, %d min - waiting for two players%s\n",
-			MpModeName(gMp.gamemode), MpMarkMinutes(),
+		gMpCtx->jer_log(gMpCtx, "[mp] mark: %s, %d s - waiting for two players%s\n",
+			MpModeName(gMp.gamemode), MpMarkSeconds(),
 			MpModeWantsCountdown(gMp.gamemode) ? " with a car each, then a countdown" : "");
 
 	MpHostSendMark(-1);
@@ -1208,7 +1208,7 @@ void MpMarkPresentTick(void)
 		if (bombKind && live && markedCar != NULL)
 		{
 			int rem = MpMarkClockMs(-1, since);
-			int full = gMp.modeMinutes * 60 * 1000;
+			int full = MpMarkSeconds() * 1000;	/* the host's time, from the wire */
 
 			if (full < 15000)
 				full = 15000;

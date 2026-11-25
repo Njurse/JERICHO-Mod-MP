@@ -295,20 +295,25 @@ MARK_NONE = 0xFF                        # mp_proto.h MP_MARK_NONE
 MARK_MINUTES_MIN = 1                    # mp_proto.h MP_MARK_MINUTES_*
 MARK_MINUTES_MAX = 5
 MARK_MINUTES_DEFAULT = 3
+MARK_SECONDS_MIN = 30                   # mp_proto.h MP_MARK_SECONDS_* (mp 0.25: MP_MARK.timeSec)
+MARK_SECONDS_MAX = 600
+MARK_SECONDS_STEP = 15
 
 
 def build_mark(gamemode, phase, marked, winner, minutes, seq, shared_ds, rows, countdown_ds=0,
-               end_reason=0, flags=0):
+               end_reason=0, flags=0, time_sec=0):
     """MP_MARK + MP_MARK_ENTRY rows. `rows` is [(playerId, remainDs)] or
     [(playerId, remainDs, flags)] (MARK_ENTRY_F_*); marked / winner None or -1 =
-    MP_MARK_NONE; end_reason MARK_END_*, flags MARK_F_* (v24); written in
+    MP_MARK_NONE; end_reason MARK_END_*, flags MARK_F_* (v24); time_sec the round
+    time in seconds (mp 0.25, the old spare; 0 = use minutes); written in
     ascending player id."""
     rows = sorted(rows)[:MAX_PLAYERS]
     mk = MARK_NONE if marked is None or marked < 0 else marked & 0xFF
     wn = MARK_NONE if winner is None or winner < 0 else winner & 0xFF
     out = bytearray(MARK.pack(gamemode & 0xFF, phase & 0xFF, mk, wn, minutes & 0xFF, len(rows),
                               seq & 0xFFFF, min(int(shared_ds), 0xFFFF),
-                              min(int(countdown_ds), 0xFFFF), end_reason & 0xFF, flags & 0xFF, 0))
+                              min(int(countdown_ds), 0xFFFF), end_reason & 0xFF, flags & 0xFF,
+                              int(time_sec) & 0xFFFF))
     for row in rows:
         pid, ds = row[0], row[1]
         flags = row[2] if len(row) > 2 else 0
@@ -320,7 +325,7 @@ def parse_mark(payload):
     """dict of the snapshot, or None when short / count out of range (MpMarkApply)."""
     if len(payload) < MARK.size:
         return None
-    gm, phase, mk, wn, minutes, count, seq, shared, countdown, end_reason, mflags, _spare = MARK.unpack_from(payload, 0)
+    gm, phase, mk, wn, minutes, count, seq, shared, countdown, end_reason, mflags, time_sec = MARK.unpack_from(payload, 0)
     if count > MAX_PLAYERS or len(payload) < MARK.size + count * MARK_ENTRY.size:
         return None
     raw = [MARK_ENTRY.unpack_from(payload, MARK.size + i * MARK_ENTRY.size) for i in range(count)]
@@ -328,6 +333,7 @@ def parse_mark(payload):
             "winner": -1 if wn == MARK_NONE else wn, "minutes": minutes, "seq": seq,
             "shared_ds": shared, "countdown_ds": countdown,
             "end_reason": end_reason, "flags": mflags,
+            "time_sec": time_sec if time_sec else minutes * 60,
             "rows": [(pid, ds) for pid, _f, ds in raw],
             "ready": sorted(pid for pid, f, _ds in raw if f & MARK_ENTRY_F_READY),
             "waiting": sorted(pid for pid, f, _ds in raw if f & MARK_ENTRY_F_WAITING),

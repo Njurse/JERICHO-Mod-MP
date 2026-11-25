@@ -10,8 +10,8 @@
  *   mp.mode     Single Player | Multiplayer | Back          (the take-a-ride question)
  *   mp.join     <LAN servers...> / Manual IP / Back
  *   mp.lobby    <players...> / Start Match (host) or Leave / Back
- *   mp.jmpoptions  Change Name | Enforce Mods | Strict Version | Super Turbo | Port / Back
- *   mp.name     typed name field / Done / Back (also the first-run name prompt)
+ *   mp.jmpoptions  Name (typed) | Preferred Character | Enforce Mods | ... | Port / Back
+ *   mp.name     first-run name prompt (typed field / Done / Back)
  *
  * "JMP Options" used to be an "Options" row INSIDE the LAN page. It moved up one
  * level because it is session configuration, not a LAN action: hosting, joining
@@ -227,6 +227,20 @@ static void LblCopDiff(void* ud, char* o, int n) { (void)ud; snprintf(o, n, "Cop
 static void LblInvuln(void* ud, char* o, int n)  { (void)ud; snprintf(o, n, "Invulnerability: < %s >", gMp.config.invuln ? "On" : "Off"); }
 static void LblImmune(void* ud, char* o, int n)  { (void)ud; snprintf(o, n, "Immunity: < %s >", gMp.config.immune ? "On" : "Off"); }
 
+/* ALLOW CHEATS (mp 0.25): may players use the pause menu's own immunity,
+ * invulnerability, respawn, super turbo and instant car change. Saved PER MODE
+ * ([mp] allow_cheats_<mode>): on for Take a Ride, off for the contests until the
+ * host says otherwise. The row edits the mode the Game mode row shows. */
+static int CheatsModeIdx(void)
+{
+	return (gMp.gamemode >= 0 && gMp.gamemode < MP_GAMEMODE_COUNT) ? gMp.gamemode : 0;
+}
+static void LblCheats(void* ud, char* o, int n)
+{
+	(void)ud;
+	snprintf(o, n, "Allow cheats: < %s >", gMp.config.allowCheats[CheatsModeIdx()] ? "On" : "Off");
+}
+
 /* GAME MODE: the session's mode, cycled over the SELECTABLE registry entries only
  * (mp_mode.c). Today that is Take a Ride alone, so the row shows it and left/right
  * stays on it. Not saved to the config: the mode is a per-session choice, reset to
@@ -244,15 +258,18 @@ static int AdjGameMode(void* ud, int dir)
 }
 
 /* TIME: a timer mode's clock (Fox N Hounds: each player's; Car Bomb Tag: the shared
- * one), 1..5 minutes, default 3. Shown only while the selected mode has a clock, and
- * like the mode itself only taken before the match runs and never saved. */
+ * one), in seconds, stepped by MP_MARK_SECONDS_STEP. Shown only while the selected
+ * mode has a clock, and taken before the match runs; the host's choice is that
+ * mode's saved default ([mp] round_seconds_<mode>). */
 static void LblModeTime(void* ud, char* o, int n)
 {
 	(void)ud;
-	/* Cops n Robbers: the clock is how long the getaway has to last (1..5 min) */
-	snprintf(o, n, "%s: < %d MIN >",
+	/* Cops n Robbers: the clock is how long the getaway has to last */
+	int s = MpSessionModeSeconds();
+
+	snprintf(o, n, "%s: < %d:%02d >",
 		MpModeTimerKind(gMp.gamemode) == MP_MODE_TIMER_GETAWAY ? "Getaway time" : "Time",
-		MpSessionModeMinutes());
+		s / 60, s % 60);
 }
 
 static int AdjModeTime(void* ud, int dir)
@@ -265,17 +282,28 @@ static int AdjModeTime(void* ud, int dir)
 		return 1;
 
 	/* wraps, like the other cycle rows */
-	m = MpSessionModeMinutes() + (dir > 0 ? 1 : -1);
-	if (m < MP_MARK_MINUTES_MIN) m = MP_MARK_MINUTES_MAX;
-	if (m > MP_MARK_MINUTES_MAX) m = MP_MARK_MINUTES_MIN;
+	m = MpSessionModeSeconds() + (dir > 0 ? MP_MARK_SECONDS_STEP : -MP_MARK_SECONDS_STEP);
+	if (m < MP_MARK_SECONDS_MIN) m = MP_MARK_SECONDS_MAX;
+	if (m > MP_MARK_SECONDS_MAX) m = MP_MARK_SECONDS_MIN;
 
-	MpSetSessionModeMinutes(m);
+	MpSetSessionModeSeconds(m);
 	return 1;
 }
 
 static int AdjCops(void* ud, int dir)   { (void)ud; gMp.config.cops = (gMp.config.cops + dir + 2) & 1; MpConfigSave(); return 1; }
 static int AdjInvuln(void* ud, int dir) { (void)ud; gMp.config.invuln = (gMp.config.invuln + dir + 2) & 1; MpConfigSave(); return 1; }
 static int AdjImmune(void* ud, int dir) { (void)ud; gMp.config.immune = (gMp.config.immune + dir + 2) & 1; MpConfigSave(); return 1; }
+static int AdjCheats(void* ud, int dir)
+{
+	int* v = &gMp.config.allowCheats[CheatsModeIdx()];
+
+	(void)ud;
+	if (dir == 0)
+		return 1;
+	*v = !*v;
+	MpConfigSave();
+	return 1;
+}
 
 /* Wraps rather than stopping at the ends, so the row is a cycle and cannot be
  * walked off the end into a value the engine's tables do not have. */
@@ -588,12 +616,23 @@ typedef struct MP_TEXT_FIELD
 	int         secret;		/* draw as '*' (a password) */
 	int         address;	/* only what an address can hold */
 	const char* what;		/* for the log */
+	int         name;		/* a player name: printable ASCII and spaces, no leading space */
 } MP_TEXT_FIELD;
 
 static MP_TEXT_FIELD gFieldManual  = { gManualIp, sizeof(gManualIp), MP_MANUAL_MAX - 1, M_MANUAL, 0, 1, "manual address" };
 static MP_TEXT_FIELD gFieldHostPw  = { gMp.config.hostPassword, sizeof(gMp.config.hostPassword), MP_PASSWORD_MAX, M_HOST_ACCESS, 1, 0, "host password" };
 static MP_TEXT_FIELD gFieldJoinPw  = { gMp.config.joinPassword, sizeof(gMp.config.joinPassword), MP_PASSWORD_MAX, M_MANUAL, 1, 0, "join password" };
-static MP_TEXT_FIELD gFieldName    = { gNameEdit, sizeof(gNameEdit), MP_NAME_MAX - 1, M_NAME, 0, 0, "player name" };
+/* Typed on JMP Options and on the first-run mp.name prompt. menu is set in
+ * MpFieldBeginName so leaving either screen releases the keyboard. Max is
+ * MP_NAME_MAX-1 (31): the protocol limit, not the browser column width. */
+static MP_TEXT_FIELD gFieldName    = { gNameEdit, sizeof(gNameEdit), MP_NAME_MAX - 1, M_NAME, 0, 0, "player name", 1 };
+static void MpFieldBegin(MP_TEXT_FIELD* f);
+
+static void MpFieldBeginName(int menu)
+{
+	gFieldName.menu = menu;
+	MpFieldBegin(&gFieldName);
+}
 static MP_TEXT_FIELD* gField;		/* the field that is typing, NULL when none */
 
 /* Persist the name field and, on the first-run prompt, leave for mp.root.
@@ -617,6 +656,9 @@ static void MpNameFinish(int keepTyped, int leaveToRoot)
 	snprintf(gMp.config.playerName, sizeof(gMp.config.playerName), "%s", gNameEdit);
 	gMp.config.firstNameSet = 1;
 	MpConfigSave();
+
+	if (gMp.running)
+		MpNotify("Name saved - it shows from your next join");
 
 	if (leaveToRoot)
 	{
@@ -697,8 +739,8 @@ void MpUiManualCancel(void)
 /* One typed character (or NULL for backspace) from PsyX, while a field is typing.
  * An address takes what an address can hold (letters, digits, . - : _), so it
  * cannot fill with text no resolver would accept; a password takes any printable
- * ASCII but the space; a name takes printable ASCII including the space (up to
- * MP_NAME_MAX-1, the protocol's 31-character limit). */
+ * ASCII but the space; a name takes printable ASCII including a space, but not
+ * a leading one (up to MP_NAME_MAX-1, the protocol's 31-character limit). */
 void MpUiManualType(const char* text)
 {
 	MP_TEXT_FIELD* f = gField;
@@ -723,10 +765,16 @@ void MpUiManualType(const char* text)
 	if (c == '\0' || (int)len >= f->max || len + 1 >= f->cap)
 		return;
 
-	if (f->address
+	if (f->name)
+	{
+		/* a name: any printable ASCII, spaces too, but not a leading space */
+		if (c < 32 || c > 126 || (c == ' ' && len == 0))
+			return;
+	}
+	else if (f->address
 		? !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
 		    c == '.' || c == '-' || c == ':' || c == '_')
-		: (c < (f->secret ? 33 : 32) || c > 126))
+		: (c < 33 || c > 126))
 		return;
 
 	f->buf[len] = c;
@@ -981,6 +1029,7 @@ static const JER_FE_ITEM kHostRuleItems[] =
 	{ NULL, LblCopDiff, NULL, NULL, AdjCopDiff, -1, 0 },
 	{ NULL, LblImmune,  NULL, NULL, AdjImmune,  -1, 0 },
 	{ NULL, LblInvuln,  NULL, NULL, AdjInvuln,  -1, 0 },
+	{ NULL, LblCheats,  NULL, NULL, AdjCheats,  -1, 0 },
 	{ "Back",           NULL, NULL, NULL, NULL, -1, 1 },
 };
 static const JER_FE_MENU kHostRuleMenu = { "mp.host.rules", kHostRuleItems,
@@ -1097,8 +1146,21 @@ static int AdjPreferredCharacter(void* ud, int dir)
 	return 1;
 }
 
+static int ActNameField(void* ud)
+{
+	(void)ud;
+
+	if (gField == &gFieldName)
+		MpUiManualCommit();
+	else
+		MpFieldBeginName(M_JMP_OPTIONS);
+
+	return 1;
+}
+
 static JER_FE_ITEM kJmpOptionsItems[] ={
-	{ "Change Name",    NULL, NULL, NULL,       NULL,       -1, 0 },
+	/* Name: Cross types it (keyboard), Enter/Cross keeps it, Escape undoes */
+	{ NULL, LblPlayerName, NULL, ActNameField, NULL, -1, 0 },
 	{ NULL, LblPreferredCharacter, NULL, NULL, AdjPreferredCharacter, -1, 0 },
 	{ NULL, LblEnforce, NULL, NULL, AdjEnforce, -1,       0 },
 	{ NULL, LblStrict,  NULL, NULL, AdjStrict,  -1,       0 },
@@ -1131,7 +1193,7 @@ static void MpResolveMenus(void)
 	kRootItems[2].submenu = gMenuIdx[M_JMP_OPTIONS];
 	kLanItems[0].submenu = gMenuIdx[M_GAMEMODE];	/* Host Game: pick the mode first */
 	kLanItems[1].submenu = gMenuIdx[M_JOIN];
-	kJmpOptionsItems[0].submenu = gMenuIdx[M_NAME];
+	/* row 0 is the typed Name field (not a submenu). mp.name is the first-run prompt. */
 	kHostItems[3].submenu = gMenuIdx[M_HOST_ROUNDS];
 	kHostItems[4].submenu = gMenuIdx[M_HOST_RULES];
 	kHostItems[5].submenu = gMenuIdx[M_HOST_ACCESS];
@@ -1422,7 +1484,7 @@ static void NameOnEnter(void* ud)
 	gNameMenu.item_count = k;
 
 	if (gField != &gFieldName)
-		MpFieldBegin(&gFieldName);
+		MpFieldBeginName(M_NAME);
 }
 
 /* wire the dynamic on_enter callbacks (the menus are non-const statics) */

@@ -188,7 +188,7 @@ def check_foxhounds(tmp):
     try:
         check("F&H: no round 1 at boot (waits for two)", (server.round.number, server.round.phase)
               == (0, m.ROUND_PHASE_IDLE), (server.round.number, server.round.phase))
-        check("F&H: default 3 minutes", server.mark.minutes == 3)
+        check("F&H: default 90 seconds (mp 0.25)", server.mark.seconds == 90 and server.mark.minutes == 2)
 
         alice = connect(server, "Alice")
         seen = frames_until(alice, m.TAG["mark"])
@@ -197,13 +197,13 @@ def check_foxhounds(tmp):
               tags[:5] == [m.TAG["roster"], m.TAG["welcome"], m.TAG["start"], m.TAG["round"], m.TAG["mark"]], tags)
         check("every envelope says proto 24", seen and all(f[0] == m.PROTO == 24 for f in seen), [f[0] for f in seen])
         mk = m.parse_mark(seen[-1][2]) if seen else None
-        check("one player: waiting, nobody marked, a full 3:00", mk is not None and
-              mk["phase"] == m.MARK_PHASE_WAITING and mk["marked"] == -1 and mk["rows"] == [(1, 1800)]
-              and mk["gamemode"] == 1 and mk["minutes"] == 3, mk)
+        check("one player: waiting, nobody marked, a full 1:30", mk is not None and
+              mk["phase"] == m.MARK_PHASE_WAITING and mk["marked"] == -1 and mk["rows"] == [(1, 900)]
+              and mk["gamemode"] == 1 and mk["minutes"] == 2 and mk["time_sec"] == 90, mk)
         server._mark_step(5000)
         check("a new map: one player waits (the wait needs two)",
               server.mark.phase == m.MARK_PHASE_WAITING and
-              server.mark.remain_ms[1] == 180000 and server.round.number == 0,
+              server.mark.remain_ms[1] == 90000 and server.round.number == 0,
               (server.mark.phase, server.mark.countdown_ms))
         drain(alice, 0.2)
         server.mark_sent = -1
@@ -214,7 +214,7 @@ def check_foxhounds(tmp):
         check("...still waiting (one player)", server.mark.phase == m.MARK_PHASE_WAITING)
         server._mark_step(1000)
         check("one player does not start the clock", server.mark.phase == m.MARK_PHASE_WAITING and
-              server.mark.remain_ms[1] == 180000 and server.round.number == 0)
+              server.mark.remain_ms[1] == 90000 and server.round.number == 0)
 
         bob = connect(server, "Bob")
         frames_until(bob, m.TAG["mark"])
@@ -222,7 +222,7 @@ def check_foxhounds(tmp):
         server._mark_step(5000)
         check("two present, no car picked: nothing starts, no clock",
               server.mark.phase == m.MARK_PHASE_WAITING and server.round.number == 0 and
-              server.mark.remain_ms == {1: 180000, 2: 180000}, (server.mark.phase, server.mark.remain_ms))
+              server.mark.remain_ms == {1: 90000, 2: 90000}, (server.mark.phase, server.mark.remain_ms))
         pick(alice)
         check("Alice's JPCC lands", wait_ready(server, 1))
         server._mark_step(5000)
@@ -258,7 +258,7 @@ def check_foxhounds(tmp):
         with server.lock:
             server.joined_at[1] += 10.0
             server.joined_at[2] += 10.0
-        check("the countdown does not run the clocks", server.mark.remain_ms == {1: 180000, 2: 180000} and
+        check("the countdown does not run the clocks", server.mark.remain_ms == {1: 90000, 2: 90000} and
               server.mark.countdown_ms == 4000, (server.mark.remain_ms, server.mark.countdown_ms))
         changed = server._mark_step(4000)
         check("GO: the countdown starts round 1", changed and server.mark.phase == m.MARK_PHASE_LIVE and
@@ -316,7 +316,7 @@ def check_foxhounds(tmp):
         server._mark_step(1000)
         check("the old fox's clock is frozen", server.mark.remain_ms[hound] == fox_clock,
               (server.mark.remain_ms[hound], fox_clock))
-        check("the new fox's clock runs", server.mark.remain_ms[fox] == 180000 - 1000,
+        check("the new fox's clock runs", server.mark.remain_ms[fox] == 90000 - 1000,
               server.mark.remain_ms[fox])
 
         # the JPHI fallback, after the cooldown: accepted only near the kept cars

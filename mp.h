@@ -75,8 +75,14 @@ typedef struct MP_CONFIG
 				 * same axis as `cops`: this leaves them on the map and
 				 * takes away their reason to bother you. */
 	int  invuln;			/* 1 = no car can be damaged (gInvincibleCar) */
+	int  allowCheats[MP_GAMEMODE_COUNT];	/* mp 0.25, [mp] allow_cheats_<mode>: the pause
+					 * menu's cheats in a session of that mode (default:
+					 * on in Take a Ride, off elsewhere) */
 	/* HOST DEFAULTS for the round modes, saved like the rules above */
-	int  modeMinutes;		/* [mp] mode_minutes: a timer mode's clock, 1..5 */
+	int  modeMinutes;		/* retired (mp 0.25): read by nothing; see modeSeconds */
+	int  modeSeconds[MP_GAMEMODE_COUNT];	/* [mp] round_seconds_<mode>: each round mode's
+					 * clock in seconds, MP_MARK_SECONDS_MIN..MAX
+					 * (MpMarkDefaultSeconds when unset) */
 	int  intermissionSec;		/* [mp] intermission_seconds: ENDED -> next round, 3..30 (default 8) */
 	int  palette;			/* palette: our car's colour variant 0..5 (defaultPlayerPalette) */
 	int  chatHoldSec;		/* chat_hold_seconds: full-brightness time of a chat line */
@@ -228,6 +234,7 @@ typedef struct MP_STATE
 	int ruleDiff;
 	int ruleImmune;
 	int ruleInvuln;
+	int ruleCheats;			/* mp 0.25: MP_RULE_CHEATS in force (MpCheatsAllowed) */
 	int ruleSet;
 	int localPlaced;
 	int liveJoin;			/* client joined a match already in progress: no gather, place on a road */
@@ -716,7 +723,12 @@ int MpSetSessionGamemode(int gamemode);
  * minutes, clamped to MP_MARK_MINUTES_MIN..MAX. Like the mode: only before the match
  * runs, never saved. Returns the minutes now in force. */
 int MpSetSessionModeMinutes(int minutes);
-int MpSessionModeMinutes(void);		/* the minutes in force (default MP_MARK_MINUTES_DEFAULT) */
+int MpSessionModeMinutes(void);		/* the time in force, rounded up to minutes */
+
+/* mp 0.25: the same in SECONDS, per game mode. The host's choice is saved per mode
+ * ([mp] round_seconds_<mode>) and is the default the next time that mode is hosted. */
+int MpSetSessionModeSeconds(int seconds);
+int MpSessionModeSeconds(void);
 
 /* The city name for a row of SOMEONE ELSE'S server: the engine's name, or "-"
  * when the engine has no row for that city. Not MpCarCityName, which says "the
@@ -784,6 +796,9 @@ void MpSetMapShape(int mpLevel, int arena);	/* the session's map: 0 = the full c
 /* The host's session rules, MP_RULES_PACK'd, as they should be published right
  * now. mp_net.c's beacon is the third carrier of this byte (see mp_proto.h). */
 uint32_t MpRulesForPeer(void);
+/* mp 0.25: the pause menu's cheats are usable now (no session, or the host's
+ * Allow cheats rule; the mode default until the rules are known). */
+int MpCheatsAllowed(void);
 /* The rules as ADVERTISED (beacon + master): MpRulesForPeer plus the browser flags
  * (MP_ADV_*). Never used for what the session enforces. */
 uint32_t MpAdvertRules(void);

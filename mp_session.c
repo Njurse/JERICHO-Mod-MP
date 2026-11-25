@@ -133,25 +133,45 @@ int MpSetSessionGamemode(int gamemode)
 	return gMp.gamemode;
 }
 
+/* mp 0.25: the round time is SECONDS and belongs to the game mode: the host's
+ * saved choice for the mode now selected ([mp] round_seconds_<mode>), so switching
+ * the lobby's mode shows that mode's own time. */
+int MpSessionModeSeconds(void)
+{
+	int gm = gMp.gamemode;
+
+	if (gm < 0 || gm >= MP_GAMEMODE_COUNT)
+		return MpMarkDefaultSeconds(gm);
+	return MpMarkClampSeconds(gMp.config.modeSeconds[gm] > 0 ? gMp.config.modeSeconds[gm] : MpMarkDefaultSeconds(gm));
+}
+
+int MpSetSessionModeSeconds(int seconds)
+{
+	int gm = gMp.gamemode;
+
+	seconds = MpMarkClampSeconds(seconds);
+
+	if (MpIsHost() && !gMp.running && gm >= 0 && gm < MP_GAMEMODE_COUNT &&
+		gMp.config.modeSeconds[gm] != seconds)
+	{
+		gMp.config.modeSeconds[gm] = seconds;	/* the host's default for this mode */
+		MpConfigSave();
+
+		if (gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx, "[mp] lobby round time (%s): %d s\n", MpModeName(gm), seconds);
+	}
+
+	return MpSessionModeSeconds();
+}
+
 int MpSessionModeMinutes(void)
 {
-	return gMp.modeMinutes > 0 ? MpMarkClampMinutes(gMp.modeMinutes) : MP_MARK_MINUTES_DEFAULT;
+	return (MpSessionModeSeconds() + 59) / 60;
 }
 
 int MpSetSessionModeMinutes(int minutes)
 {
-	minutes = MpMarkClampMinutes(minutes);
-
-	if (MpIsHost() && !gMp.running && gMp.modeMinutes != minutes)
-	{
-		gMp.modeMinutes = minutes;
-		gMp.config.modeMinutes = minutes;	/* the host's default for the next session */
-		MpConfigSave();
-
-		if (gMpCtx != NULL)
-			gMpCtx->jer_log(gMpCtx, "[mp] lobby mode time: %d min\n", minutes);
-	}
-
+	MpSetSessionModeSeconds(MpMarkClampMinutes(minutes) * 60);
 	return MpSessionModeMinutes();
 }
 

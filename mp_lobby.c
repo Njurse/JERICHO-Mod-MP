@@ -944,8 +944,10 @@ void MpHandleRoster(const unsigned char* p, int len)
  * to drift. */
 static uint32_t MpRulesFromConfig(void)
 {
-	return MP_RULES_PACK(gMp.config.cops, gMp.config.invuln, gMp.config.copDifficulty,
-		gMp.config.immune);
+	int gm = (gMp.gamemode >= 0 && gMp.gamemode < MP_GAMEMODE_COUNT) ? gMp.gamemode : 0;
+
+	return MP_RULES_WITH_CHEATS(MP_RULES_PACK(gMp.config.cops, gMp.config.invuln,
+		gMp.config.copDifficulty, gMp.config.immune), gMp.config.allowCheats[gm]);
 }
 
 /* What the HOST should publish right now: the rules the running session was
@@ -959,9 +961,24 @@ static uint32_t MpRulesFromConfig(void)
 uint32_t MpRulesForPeer(void)
 {
 	if (gMp.ruleSet)
-		return MP_RULES_PACK(gMp.ruleCops, gMp.ruleInvuln, gMp.ruleDiff, gMp.ruleImmune);
+		return MP_RULES_WITH_CHEATS(MP_RULES_PACK(gMp.ruleCops, gMp.ruleInvuln, gMp.ruleDiff,
+			gMp.ruleImmune), gMp.ruleCheats);
 
 	return MpRulesFromConfig();
+}
+
+/* mp 0.25: may the pause menu's cheats be used right now? Always outside a
+ * session (single player is the player's own business); in one, the host's Allow
+ * cheats rule once it is known, the mode's default until then. */
+int MpCheatsAllowed(void)
+{
+	if (!gMp.running)
+		return 1;
+
+	if (gMp.ruleSet)
+		return gMp.ruleCheats;
+
+	return MpModeAllowsCheats(gMp.gamemode);
 }
 
 uint32_t MpAdvertRules(void)
@@ -982,6 +999,9 @@ static void MpRulesAdopt(uint32_t packed, const char* how)
 	int invuln = MP_RULES_INVULN(packed);
 	int diff = MP_RULES_DIFF(packed);
 	int immune = MP_RULES_IMMUNE(packed);
+	/* an older host never sends the cheats rule: the mode's own default stands */
+	int cheats = MP_RULES_CHEATS_SET(packed) ? MP_RULES_CHEATS(packed)
+		: MpModeAllowsCheats(gMp.gamemode);
 
 	if (diff > MP_COP_DIFF_MAX)
 		diff = MP_COP_DIFF_MAX;
@@ -990,12 +1010,14 @@ static void MpRulesAdopt(uint32_t packed, const char* how)
 	gMp.ruleInvuln = invuln;
 	gMp.ruleImmune = immune;
 	gMp.ruleDiff = diff;
+	gMp.ruleCheats = cheats;
 	gMp.ruleSet = 1;
 
 	if (gMpCtx != NULL)
 		gMpCtx->jer_log(gMpCtx,
-			"[mp] session rules from %s: cops=%s cop difficulty=%d immune=%s invulnerable=%s\n",
-			how, cops ? "on" : "off", diff, immune ? "on" : "off", invuln ? "on" : "off");
+			"[mp] session rules from %s: cops=%s cop difficulty=%d immune=%s invulnerable=%s cheats=%s\n",
+			how, cops ? "on" : "off", diff, immune ? "on" : "off", invuln ? "on" : "off",
+			cheats ? "allowed" : "off");
 }
 
 int MpStartMatch(void)

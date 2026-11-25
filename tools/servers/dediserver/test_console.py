@@ -83,7 +83,7 @@ def main():
     server.set_map_mode("mp")
     spare = server.session_spare()
     check("session spare: shape bit 0, rules in 1.., arena in bit 8",
-          spare & 1 == 1 and (spare >> 1) & 0x7F == server.cfg["rules"] & 0x7F
+          spare & 1 == 1 and (spare >> 1) & 0x7F == server.rules_now() & 0x7F
           and (spare >> 8) & 1 == 1, hex(spare))
     server.set_arena(3)
     check("proto 24: arena 3 rides bits 8-9", (server.session_spare() >> 8) & 3 == 3,

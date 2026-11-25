@@ -471,6 +471,12 @@ typedef struct MP_REJECT
 #define MP_RULE_DIFF_SHIFT	2	/* 2 bits: gCopDifficultyLevel, 0..3 */
 #define MP_RULE_DIFF_MASK	0x3
 #define MP_RULE_IMMUNE		0x10	/* 1 = cops can't come after you (gPlayerImmune) */
+/* mp 0.25: ALLOW CHEATS (the pause menu's immunity / invulnerability / respawn /
+ * super turbo / instant car swap). CHEATS_SET says the host sent the rule at all;
+ * without it (an older host) a peer falls back to the mode's own default, which
+ * is MpModeAllowsCheats (Take a Ride only). Both fit spare's 7 rule bits. */
+#define MP_RULE_CHEATS		0x20	/* 1 = cheats allowed this session */
+#define MP_RULE_CHEATS_SET	0x40	/* 1 = the CHEATS bit is meaningful */
 
 /* COPS and IMMUNITY are deliberately SEPARATE axes, not two names for one thing:
  * Cops = do police cars exist/spawn at all (CopsAllowed), while Immunity = they
@@ -496,6 +502,10 @@ typedef struct MP_REJECT
 #define MP_RULES_INVULN(b)	(((b) & MP_RULE_INVULN) ? 1 : 0)
 #define MP_RULES_DIFF(b)	(((b) >> MP_RULE_DIFF_SHIFT) & MP_RULE_DIFF_MASK)
 #define MP_RULES_IMMUNE(b)	(((b) & MP_RULE_IMMUNE) ? 1 : 0)
+#define MP_RULES_CHEATS_SET(b)	(((b) & MP_RULE_CHEATS_SET) ? 1 : 0)
+#define MP_RULES_CHEATS(b)	(((b) & MP_RULE_CHEATS) ? 1 : 0)
+#define MP_RULES_WITH_CHEATS(packed, cheats)	\
+	((uint32_t)(packed) | MP_RULE_CHEATS_SET | ((cheats) ? MP_RULE_CHEATS : 0))
 
 /* The launch config. It travels INSIDE MP_START ('JPST'), never as a standalone
  * message: the old standalone form ('JPSS') had no sender and no handler and has
@@ -808,6 +818,8 @@ typedef struct MP_KICK
  * owner of that slot applies the impulse: on the observer the mirror is rewritten
  * verbatim every frame, so a push there would be discarded. */
 #define MP_HIT_F_TRAFFIC	0x01	/* targetId is a car_data slot, not a player id */
+#define MP_HIT_F_PROBE		0x02	/* mp 0.25: made by the distance FALLBACK probe, not the
+					 * engine's collision: still a push, never a tag/pass/hit */
 
 /* Each player's link as the HOST measures it (MpPeerStats), so every machine can
  * show rx / tx / loss for everyone, not only for its own connection. Sent with
@@ -931,6 +943,11 @@ enum
 #define MP_MARK_MINUTES_MIN	1
 #define MP_MARK_MINUTES_MAX	5
 #define MP_MARK_MINUTES_DEFAULT	3
+/* mp 0.25: the round time in SECONDS (MP_MARK.timeSec), per game mode on the host.
+ * `minutes` above is still sent (rounded up) for an older peer. */
+#define MP_MARK_SECONDS_MIN	30
+#define MP_MARK_SECONDS_MAX	600
+#define MP_MARK_SECONDS_STEP	15	/* the host's Round Settings row */
 
 typedef struct MP_MARK_ENTRY
 {
@@ -953,7 +970,8 @@ typedef struct MP_MARK
 				 * pre-game count; else 0 (was reserved) */
 	uint8_t  endReason;	/* v24: MP_MARK_END_*, set in ENDED */
 	uint8_t  flags;		/* v24: MP_MARK_F_* */
-	uint16_t spare;		/* v24: 0 */
+	uint16_t timeSec;	/* mp 0.25: the round time in seconds (was a 0 spare in v24);
+				 * 0 = an older host: use `minutes` */
 } MP_MARK;			/* 16 bytes: header only, the rows follow */
 
 typedef struct MP_HIT

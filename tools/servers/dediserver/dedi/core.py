@@ -61,6 +61,9 @@ DEFAULTS = {
     "cop_difficulty": 1,       # 0..2 (MP_COP_DIFF_MAX)
     "cop_immunity": False,     # cops exist but never come after anyone
     "invulnerable": False,     # cars take no damage
+    "allow_cheats": None,      # the pause menu's cheats (immunity, invulnerability,
+                               # respawn, super turbo, instant car change): null = the
+                               # mode's default (on in Take a Ride only), true/false forces
     "intermission_s": 8,       # round modes: seconds between a round ending and the next
                                # one's countdown (3..30; the in-game host's lobby row too)
     # Plugins (dedi/plugins.py; README "Plugins"). null = every plugin found, minus
@@ -116,7 +119,14 @@ TAG_RADIUS = 900           # mp_session.c MP_HIT_RADIUS: car body scale, world u
 TAG_MIN_CLOSING = 4        # mp_session.c MP_HIT_MIN_CLOSING: whole units per frame
 TAG_ARM_S = 4.0            # mp_session.c MP_HIT_ARM_FRAMES (120) at 30 Hz: a spawn bump is no tag
 TAG_ROW_FRESH_S = 0.5      # the other car's row must be this recent to compare against
-TAG_REPORT_RADIUS = 1800   # a client's JPHI claim: twice the body scale, for the link lag
+TAG_REPORT_RADIUS = 1200   # a client's JPHI claim: a car length plus the link lag (mp 0.25; was 1800)
+# mp 0.25: Fox n Hounds / Car Bomb Tag tag only when the two car BODIES touch -- a
+# box per car (half length x half width, turned by its heading) plus a small margin
+# for the rows' age -- not when the centres are within TAG_RADIUS, which passed the
+# mark on near misses alongside.
+TAG_HALF_LEN = 560         # world units: about a Driver 2 car's colBox.vz
+TAG_HALF_WIDTH = 240       # ...and colBox.vx
+TAG_TOUCH_MARGIN = 80      # added to each box: two rows' worth of lag
 FIXEDH = 4096              # the velocity fix point (1 world unit/frame << 12)
 HIT_PUSH = 60              # mp_session.c MP_HIT_PUSH: per-cent of the closing speed
 HIT_MAX_PUSH = 20          # mp_session.c MP_HIT_MAX_PUSH: whole units/frame
@@ -131,15 +141,56 @@ def mode_minutes(cfg):
         return m.MARK_MINUTES_DEFAULT
 
 
+def mode_seconds(cfg, gamemode):
+    """mp 0.25: a round mode's time in seconds. cfg "mode_time_s" (30..600) wins;
+    else the old "mode_time" minutes; else the mode's own default (Car Bomb Tag 60,
+    Fox n Hounds 90, Cops n Robbers 120)."""
+    try:
+        v = cfg.get("mode_time_s")
+        if v is not None:
+            return markref.clamp_seconds(int(v))
+    except (TypeError, ValueError):
+        pass
+    if cfg.get("mode_time") is not None:
+        return mode_minutes(cfg) * 60
+    return markref.default_seconds(gamemode)
+
+
 def car_pose(row):
     """(x, y, z, vx, vy, vz) from a kept MP_CARSTATE_ENTRY, or None when on foot."""
     f = m.CARSTATE_ENTRY.unpack(row)
     if f[3] == 0xFF:                 # model MP_CARSTATE_NO_CAR: on foot, no car to tag
         return None
-    return f[9], f[10], f[11], f[16], f[17], f[18]
+    return f[9], f[10], f[11], f[16], f[17], f[18], f[12]   # ..., heading (hd.direction)
 
 
-def contact_between(a, b, radius=TAG_RADIUS, min_closing=TAG_MIN_CLOSING):
+def boxes_touch(a, b, half_len=TAG_HALF_LEN, half_width=TAG_HALF_WIDTH, margin=TAG_TOUCH_MARGIN):
+    """Do two car bodies touch? Each is a box on the ground (x, z) turned by its
+    heading (0..4095 = a full turn; forward is (sin, cos)), half_len x half_width,
+    each grown by `margin`. A separating-axis test over the four box axes."""
+    if a is None or b is None:
+        return False
+    dx, dz = b[0] - a[0], b[2] - a[2]
+    axes = []
+    boxes = []
+    for pose in (a, b):
+        ang = (pose[6] if len(pose) > 6 else 0) * (2.0 * math.pi / 4096.0)
+        fwd = (math.sin(ang), math.cos(ang))
+        side = (math.cos(ang), -math.sin(ang))
+        axes += [fwd, side]
+        boxes.append((fwd, side))
+    hl, hw = half_len + margin, half_width + margin
+    for n in axes:
+        dist = abs(dx * n[0] + dz * n[1])
+        reach = 0.0
+        for fwd, side in boxes:
+            reach += hl * abs(fwd[0] * n[0] + fwd[1] * n[1]) + hw * abs(side[0] * n[0] + side[1] * n[1])
+        if dist > reach:
+            return False
+    return True
+
+
+def contact_between(a, b, radius=TAG_RADIUS, min_closing=TAG_MIN_CLOSING, boxes=False):
     """The carstate tag test: cars within `radius` and closing at >= `min_closing`
     whole units/frame (mp_session.c MpContactNormal's units). `min_closing` None
     skips the closing test (a client's report already passed its own)."""
@@ -148,6 +199,8 @@ def contact_between(a, b, radius=TAG_RADIUS, min_closing=TAG_MIN_CLOSING):
     dx, dy, dz = b[0] - a[0], b[1] - a[1], b[2] - a[2]
     d = math.sqrt(dx * dx + dy * dy + dz * dz)
     if d == 0 or d > radius:
+        return False
+    if boxes and not boxes_touch(a, b):
         return False
     if min_closing is None:
         return True
@@ -467,7 +520,8 @@ class Dedicated:
         # starts round 1 once two players are in (mark_loop), and until then the round
         # state is round 0, idle, everyone waiting -- the in-game host's rule too.
         self.mark = markref.MarkReferee(self.round.gamemode, mode_minutes(cfg),
-                                        markref.clamp_intermission_s(cfg.get("intermission_s", 8)))
+                                        markref.clamp_intermission_s(cfg.get("intermission_s", 8)),
+                                        mode_seconds(cfg, self.round.gamemode))
         if not self.mark.active:
             self.round.begin()
         self.round_sent = -1     # the revision last broadcast
@@ -529,7 +583,7 @@ class Dedicated:
         """MP_SESSION.spare: bit 0 is map shape, bits 1.. are rules, bits 8-9 are the
         arena (0..3, proto 24)."""
         arena = self.arena if self.map_shape else 0
-        return ((self.map_shape & 1) | ((int(self.cfg["rules"]) & 0x7F) << 1)
+        return ((self.map_shape & 1) | ((self.rules_now() & 0x7F) << 1)
                 | ((arena & m.SESSION_ARENA_MASK) << m.SESSION_ARENA_SHIFT))
 
     # -- the plugin-facing surface (dedi/plugins.py ServerAPI calls these)
@@ -557,15 +611,25 @@ class Dedicated:
                     except OSError:
                         pass
 
+    def cheats_allowed(self):
+        """mp 0.25 Allow cheats for the CURRENT mode: the config's allow_cheats when
+        it is set, else the mode's own default (Take a Ride only)."""
+        return cheats_for(self.cfg, int(self.cfg["gamemode"]))
+
+    def rules_now(self):
+        """The packed rules this server publishes right now: the config's rules plus
+        the cheats bits for the current mode (mp_proto.h MP_RULES_WITH_CHEATS)."""
+        return with_cheats(int(self.cfg["rules"]), self.cheats_allowed())
+
     def set_rules(self, **rules):
         for k, v in rules.items():
-            if k not in RULE_KEYS:
+            if k not in RULE_KEYS and k != "allow_cheats":
                 raise KeyError("unknown rule %r" % k)
             self.cfg[k] = v
         resolve_rules(self.cfg, set(RULE_KEYS))
-        self.log.info("rules now: %s (from the next level load)" % rules_text(int(self.cfg["rules"])))
+        self.log.info("rules now: %s (from the next level load)" % rules_text(self.rules_now()))
         self.readvertise()
-        return rules_text(int(self.cfg["rules"]))
+        return rules_text(self.rules_now())
 
     def readvertise(self):
         self.readvertise_evt.set()
@@ -600,11 +664,13 @@ class Dedicated:
         gid = parse_gamemode(gamemode)
         if minutes is not None:
             self.cfg["mode_time"] = max(m.MARK_MINUTES_MIN, min(m.MARK_MINUTES_MAX, int(minutes)))
+            self.cfg.pop("mode_time_s", None)   # an explicit minutes choice wins
         with self.lock:
             self.cfg["gamemode"] = gid
             self.round = RoundState(gid)
             self.mark = markref.MarkReferee(gid, mode_minutes(self.cfg),
-                                            markref.clamp_intermission_s(self.cfg.get("intermission_s", 8)))
+                                            markref.clamp_intermission_s(self.cfg.get("intermission_s", 8)),
+                                            mode_seconds(self.cfg, gid))
             if not self.mark.active:
                 self.round.begin()
             self.round_sent = -1
@@ -612,7 +678,7 @@ class Dedicated:
             self.escape_ms = 0
         self.log.info("game mode now %d (%s)%s" % (
             gid, m.mode_name(gid),
-            (", %d min" % mode_minutes(self.cfg)) if self.mark.active else ""))
+            (", %d s" % self.mark.seconds) if self.mark.active else ""))
         self.readvertise()
         return gid
 
@@ -1015,7 +1081,8 @@ class Dedicated:
                         moved = -1
                         break
                     continue
-                if contact_between(mine, theirs) and self.mark.contact(pid, other):
+                # Fox n Hounds / Car Bomb Tag: the bodies must touch (mp 0.25)
+                if contact_between(mine, theirs, boxes=True) and self.mark.contact(pid, other):
                     moved = self.mark.marked
                     break
         if moved is None:
@@ -1033,8 +1100,8 @@ class Dedicated:
             return False
         f = m.HIT.unpack_from(payload, 0)
         target, flags, impulse = f[0], f[1], f[2:5]
-        if flags & m.HIT_F_TRAFFIC:
-            return False
+        if flags & (m.HIT_F_TRAFFIC | m.HIT_F_PROBE):
+            return False    # traffic, or the client's distance probe: a push, never a tag
         now = time.monotonic()
         with self.lock:
             if self.mark.phase != m.MARK_PHASE_LIVE:
@@ -1554,13 +1621,13 @@ class Dedicated:
                               self.arena if self.map_shape else 0,
                               int(self.cfg["gamemode"]), self.city,
                               time_of_day_index(self.cfg), weather_index(self.cfg),
-                              seed, 0xFF, int(self.cfg["rules"]) & 0xFF)
+                              seed, 0xFF, self.rules_now() & 0xFF)
 
     def advert_rules(self):
         """The rules as ADVERTISED to a browser (beacon + master): the packed rules
         plus the browser flags in the high byte -- always DEDICATED here, and the
         lock when this server wants a password. Never what the session enforces."""
-        r = int(self.cfg["rules"]) & 0xFF
+        r = self.rules_now() & 0xFF
         r |= m.ADV_DEDICATED
         if str(self.cfg.get("password") or ""):
             r |= m.ADV_PASSWORD
@@ -1740,14 +1807,14 @@ class Dedicated:
                                     {m.ROUND_PHASE_IDLE: "idle", m.ROUND_PHASE_LIVE: "live",
                                      m.ROUND_PHASE_ENDED: "ended"}.get(self.round.phase, "?")),
         ] + ([
-            "mark:      %s, %d min, %s, marked %s" % (
-                m.mode_name(self.mark.gamemode), self.mark.minutes,
+            "mark:      %s, %d s, %s, marked %s" % (
+                m.mode_name(self.mark.gamemode), self.mark.seconds,
                 {m.MARK_PHASE_WAITING: "waiting", m.MARK_PHASE_LIVE: "live",
                  m.MARK_PHASE_ENDED: "ended",
                  m.MARK_PHASE_COUNTDOWN: "countdown"}.get(self.mark.phase, "?"),
                 self.mark.marked if self.mark.marked >= 0 else "nobody")
         ] if self.mark.active else []) + [
-            "rules:     %s" % rules_text(int(self.cfg["rules"])),
+            "rules:     %s" % rules_text(self.rules_now()),
             "time:      %s, %s" % (TIMES_OF_DAY[time_of_day_index(self.cfg)],
                                    WEATHERS[weather_index(self.cfg)]),
             "players:   %d/%d" % (self.player_count(), self.max_players),
@@ -1963,7 +2030,10 @@ def parse_args(argv):
                     help="game mode by id or name: 0 takearide, 1 foxnhounds, "
                          "2 carbombtag, 3 copsnrobbers")
     ap.add_argument("--mode-time", type=int, dest="mode_time", metavar="MIN",
-                    help="round time in minutes for modes 1-3, 1..5 (default 3)")
+                    help="round time in minutes for modes 1-3, 1..5 (default: the mode's own)")
+    ap.add_argument("--mode-time-s", type=int, dest="mode_time_s", metavar="SEC",
+                    help="round time in seconds for modes 1-3, 30..600 (default: Car Bomb "
+                         "Tag 60, Fox n Hounds 90, Cops n Robbers 120)")
     ap.add_argument("--intermission", type=int, dest="intermission_s", metavar="SEC",
                     help="seconds between a round ending and the next (3..30, default 8)")
     ap.add_argument("--max-players", type=int)
@@ -1980,6 +2050,9 @@ def parse_args(argv):
                     help="cops exist but never come after anyone")
     ap.add_argument("--invulnerable", action="store_true", default=None,
                     help="cars take no damage")
+    ap.add_argument("--allow-cheats", dest="allow_cheats", action="store_true", default=None,
+                    help="players may use the pause menu's cheats (default: Take a Ride only)")
+    ap.add_argument("--no-cheats", dest="allow_cheats", action="store_false")
     ap.add_argument("--time-of-day", choices=TIMES_OF_DAY, help="session time of day (default day)")
     ap.add_argument("--weather", choices=WEATHERS, help="session weather (default clear)")
     ap.add_argument("--log-level", choices=sorted(LEVELS))
@@ -2057,10 +2130,31 @@ def pack_rules(cops, invuln, diff, immune):
             | ((int(diff) & 0x3) << 2) | (0x10 if immune else 0))
 
 
+RULE_CHEATS = 0x20       # mp_proto.h MP_RULE_CHEATS (mp 0.25)
+RULE_CHEATS_SET = 0x40   # MP_RULE_CHEATS_SET: the CHEATS bit is meaningful
+
+
+def cheats_for(cfg, gamemode):
+    """allow_cheats from the config (true/false), or the mode's default when it is
+    null / absent: Take a Ride (0) on, every contest off (mp_mode.c MpModeAllowsCheats)."""
+    v = cfg.get("allow_cheats")
+    if v is None:
+        return int(gamemode) == 0
+    return bool(v)
+
+
+def with_cheats(packed, allowed):
+    """mp_proto.h MP_RULES_WITH_CHEATS."""
+    return (int(packed) & ~(RULE_CHEATS | RULE_CHEATS_SET)) | RULE_CHEATS_SET | (RULE_CHEATS if allowed else 0)
+
+
 def rules_text(packed):
-    return "cops %s, difficulty %d, immunity %s, invulnerable %s" % (
+    text = "cops %s, difficulty %d, immunity %s, invulnerable %s" % (
         "on" if packed & 0x1 else "off", (packed >> 2) & 0x3,
         "on" if packed & 0x10 else "off", "on" if packed & 0x2 else "off")
+    if packed & RULE_CHEATS_SET:
+        text += ", cheats %s" % ("allowed" if packed & RULE_CHEATS else "off")
+    return text
 
 
 def resolve_rules(cfg, file_keys):
@@ -2110,11 +2204,12 @@ def build_config(argv):
     cfg = load_config(path, DEFAULTS)
     apply_overrides(cfg, args, (
         ("port", "port"), ("name", "name"), ("city", "city"), ("arena", "arena"),
-        ("gamemode", "gamemode"), ("mode_time", "mode_time"), ("intermission_s", "intermission_s"),
+        ("gamemode", "gamemode"), ("mode_time", "mode_time"), ("mode_time_s", "mode_time_s"),
+        ("intermission_s", "intermission_s"),
         ("max_players", "max_players"), ("beacon", "beacon"), ("beacon_ms", "beacon_ms"),
         ("idle_drop_s", "idle_drop_s"), ("cops", "cops"),
         ("cop_difficulty", "cop_difficulty"), ("cop_immunity", "cop_immunity"),
-        ("invulnerable", "invulnerable"),
+        ("invulnerable", "invulnerable"), ("allow_cheats", "allow_cheats"),
         ("time_of_day", "time_of_day"), ("weather", "weather"),
         ("log_level", "log_level"), ("log_file", "log_file"),
         ("master", "master"), ("master_name", "master_name"),
