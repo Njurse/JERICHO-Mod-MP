@@ -497,6 +497,46 @@ class MarkReferee:
             return self._marked_gone(rnd, m.MARK_END_BUST)
         return 0
 
+    def force_end(self):
+        """MpMarkForceEnd: end a LIVE or COUNTDOWN round now (void)."""
+        if not self.active or self.phase not in (m.MARK_PHASE_LIVE, m.MARK_PHASE_COUNTDOWN):
+            return 0
+        if self.timer != m.MODE_TIMER_GETAWAY:
+            self.marked = -1
+        self.countdown_ms = 0
+        self.countdown_total_ms = 0
+        self.countdown_first = False
+        self._end(-1, m.MARK_END_VOID)
+        return EV_END
+
+    def force_restart(self, rnd=0):
+        """MpMarkForceRestart: restart the round now (COUNTDOWN if startable, else WAITING)."""
+        if not self.active:
+            return 0
+        self.first_map = False
+        self.countdown_ms = 0
+        self.countdown_total_ms = 0
+        self.countdown_first = False
+        self.intermission_ms = 0
+        self.heat = 0
+        self.winner = -1
+        self.end_reason = m.MARK_END_NONE
+        self.dmg_live = False
+        self.dmg_last = 0
+        self.dmg_acc = 0
+        self.last_cop = -1
+        self.last_cop_ms = 0
+        self.drive_acc = 0
+        self.hit_until = {}
+        if self._startable():
+            return self._start(rnd)
+        self.phase = m.MARK_PHASE_WAITING
+        self.marked = -1
+        self.seq = (self.seq + 1) & 0xFFFF
+        self._fresh_clocks()
+        self.revision += 1
+        return 0
+
     def in_round(self, pid):
         return self._in(pid)
 

@@ -231,6 +231,8 @@ void MpHostCarRowRound(int from, const MP_CARSTATE_ENTRY* e);
 void MpHostCnrFlush(void);
 void MpHostMarkBegin(void);
 void MpHostMarkTick(void);
+int  MpHostMarkForceEnd(void);
+int  MpHostMarkForceRestart(void);
 void MpHostRoundBegin(void);
 void MpHostRoundTick(int periodic);
 void MpHostSendMark(int connIndex);

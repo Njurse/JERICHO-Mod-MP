@@ -362,13 +362,14 @@ def main():
 
     rc = 0
     with tempfile.TemporaryDirectory() as tmp:
-        for test in ("test_mp_mode", "test_mp_round", "test_mp_mark"):
+        for test in ("test_mp_mode", "test_mp_round", "test_mp_mark", "test_mp_cmd"):
             exe = os.path.join(tmp, test + (".exe" if os.name == "nt" else ""))
             cmd = cxx + ["-std=gnu++14", "-I", MP, "-x", "c++",
                          os.path.join(HERE, test + ".cpp"),
                          os.path.join(MP, "mp_mode.c"),
                          os.path.join(MP, "mp_round.c"),
-                         os.path.join(MP, "mp_mark.c"), "-o", exe]
+                         os.path.join(MP, "mp_mark.c"),
+                         os.path.join(MP, "mp_cmd.c"), "-o", exe]
             print("build:", " ".join(cmd), flush=True)
             if subprocess.call(cmd) != 0:
                 print("build FAILED", flush=True)

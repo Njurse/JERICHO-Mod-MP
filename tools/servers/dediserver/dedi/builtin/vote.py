@@ -19,6 +19,7 @@ CITIES = ("chicago", "havana", "vegas", "rio")
 ALIASES = {"las vegas": 2, "lasvegas": 2, "las_vegas": 2}
 USAGE = "!vote <city> [mp [0|1]]"
 START_HINT = USAGE + " (or !vote mp [0|1]) starts one"
+DEFAULT_COOLDOWN_S = 15
 now = time.monotonic
 
 _server = None
@@ -32,9 +33,15 @@ def on_load(server):
     _vote = None
     _cooldown_until = 0.0
     server.register_command(
-        "vote", cmd_vote,
+        "vote", cmd_vote, console=True,
         help="!vote <city> [mp [0|1]]: a city name is the single-player map, mp = multiplayer; "
              "!vote mp [0|1] changes the current city's multiplayer map; admins: !vote cancel")
+    server.register_command(
+        "endvote", cmd_endvote, admin=True, console=True,
+        help="!endvote - cancel the active map vote")
+    server.register_command(
+        "map", cmd_map, admin=True, console=True,
+        help="!map <city> [mp [0|1]] | !map mp [0|1] [save] - switch map immediately")
 
 
 def city_index(text):
@@ -129,17 +136,7 @@ def cmd_vote(caller, args):
     t = now()
 
     if arg.lower() == "cancel":
-        if not caller.admin:
-            return "only an admin can cancel a vote"
-        if _vote is None:
-            return "no vote in progress"
-        _server.broadcast("Vote for %s cancelled by an admin"
-                          % _where(_vote["city"], _vote["mode"], _vote["arena"]), COLOR)
-        who = _server.describe(caller) if getattr(caller, "conn", None) is not None else "the console"
-        _server.log.info("vote cancelled by %s" % who)
-        _vote = None
-        _cooldown_until = t + _cfg_float("vote_cooldown", 60)
-        return None
+        return _cancel_vote(caller)
 
     if not arg:
         return ("vote in progress -- %s, %ds left" % (_tally(), max(0, int(_vote["until"] - t)))
@@ -190,31 +187,88 @@ def _check():
     if len(_vote["yes"]) >= _needed():
         city, mode, arena = _vote["city"], _vote["mode"], _vote["arena"]
         _vote = None
-        _cooldown_until = now() + _cfg_float("vote_cooldown", 60)
+        _cooldown_until = now() + _cfg_float("vote_cooldown", DEFAULT_COOLDOWN_S)
         _pass(city, mode, arena)
     elif now() >= _vote["until"]:
         _server.broadcast("Vote for %s failed -- %s"
                           % (_where(_vote["city"], _vote["mode"], _vote["arena"]), _tally()), COLOR)
         _vote = None
-        _cooldown_until = now() + _cfg_float("vote_cooldown", 60)
+        _cooldown_until = now() + _cfg_float("vote_cooldown", DEFAULT_COOLDOWN_S)
 
 
-def _pass(city, mode, arena):
+def _cancel_vote(caller):
+    global _vote, _cooldown_until
+    if not caller.admin:
+        return "only an admin can cancel a vote"
+    if _vote is None:
+        return "no vote in progress"
+    _server.broadcast("Vote for %s cancelled by an admin"
+                      % _where(_vote["city"], _vote["mode"], _vote["arena"]), COLOR)
+    who = _server.describe(caller) if getattr(caller, "conn", None) is not None else "the console"
+    _server.log.info("vote cancelled by %s" % who)
+    _vote = None
+    _cooldown_until = now() + _cfg_float("vote_cooldown", DEFAULT_COOLDOWN_S)
+    return "vote cancelled" if getattr(caller, "conn", None) is None else None
+
+
+def cmd_endvote(caller, _args):
+    return _cancel_vote(caller)
+
+
+def _switch(city, mode, arena, by, announce, save=True):
     where = _where(city, mode, arena)
-    _server.broadcast("Vote passed: switching to %s -- reconnecting everyone" % where, COLOR)
-    _server.log.info("vote passed: city -> %d, mode -> %s, arena -> %d (%s)"
-                     % (city, mode, arena, where))
+    _server.broadcast(announce % where, COLOR)
+    _server.log.info("%s: city -> %d, mode -> %s, arena -> %d (%s)"
+                     % (by, city, mode, arena, where))
     _server.set_city(city)
     _server.set_map_mode(mode)
     if mode == "mp":
         _server.set_arena(arena)
-    try:
-        _server.save_config("city", "map_mode", "arena")
-    except OSError as e:
-        _server.log.warning("could not save the map: %s" % e)
+    if save:
+        try:
+            _server.save_config("city", "map_mode", "arena")
+        except OSError as e:
+            _server.log.warning("could not save the map: %s" % e)
     for p in _server.players():
-        _server.kick(p, "server switched to %s - rejoin" % where, by="vote",
+        _server.kick(p, "server switched to %s - rejoin" % where, by=by,
                      announce=False, rejoin=True)
+    return where
+
+
+def _pass(city, mode, arena):
+    _switch(city, mode, arena, by="vote",
+            announce="Vote passed: switching to %s -- reconnecting everyone", save=True)
+
+
+def cmd_map(caller, args):
+    global _vote
+    words = [w for w in (args or "").split() if w]
+    cur_city = int(_server.config_get("city", 0))
+    cur_arena = int(_server.config_get("arena", 0))
+    cur_mode = str(_server.config_get("map_mode", "mp"))
+    if not words:
+        return ("current map: %s -- usage: !map <city> [mp [0|1]] | !map mp [0|1] [save]"
+                % _where(cur_city, cur_mode, cur_arena))
+    save = words[-1].lower() == "save"
+    if save:
+        words = words[:-1]
+    if not words:
+        return "usage: !map <city> [mp [0|1]] | !map mp [0|1] [save]"
+    try:
+        city, mode, arena = parse_target(" ".join(words))
+    except ValueError as e:
+        return str(e)
+    city = cur_city if city is None else city
+    arena = (cur_arena if arena is None else arena) if mode == "mp" else cur_arena
+    if (city, mode, arena) == (cur_city, cur_mode, cur_arena):
+        return "the server is already on %s" % _where(city, mode, arena)
+    _vote = None
+    is_console = getattr(caller, "conn", None) is None
+    who = "console" if is_console else ("admin %s" % caller.name)
+    where = _switch(city, mode, arena, by=who,
+                    announce="Map changed to %%s by %s -- reconnecting everyone" % who,
+                    save=save)
+    return "switched to %s%s" % (where, " (saved)" if save else "")
 
 
 def on_tick():

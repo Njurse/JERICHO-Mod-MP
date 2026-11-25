@@ -43,6 +43,10 @@ def on_load(server):
                             help="!mode [id|name] [minutes] [save] - show / switch the game mode")
     server.register_command("modetime", cmd_modetime, admin=True, console=True,
                             help="!modetime <1..5> - round time for modes 1-3")
+    server.register_command("endround", cmd_endround, admin=True, console=True,
+                            help="!endround - end the active timed round now")
+    server.register_command("restart", cmd_restart, admin=True, console=True,
+                            help="!restart - restart the current round now")
     server.log.info("game mode: %s" % _describe())
 
 
@@ -81,5 +85,33 @@ def cmd_modetime(caller, args):
         return "usage: !modetime <%d..%d>" % (m.MARK_MINUTES_MIN, m.MARK_MINUTES_MAX)
     _server.set_gamemode(int(_server.config_get("gamemode", 0) or 0), n)
     msg = "round time now %d min - restarting the match" % int(_server.config_get("mode_time"))
+    _server.broadcast(msg, COLOR)
+    return msg
+
+
+def _actor(caller):
+    return "the console" if getattr(caller, "conn", None) is None else ("admin %s" % caller.name)
+
+
+def cmd_endround(caller, _args):
+    import mp_test as m
+    gid = int(_server.config_get("gamemode", 0) or 0)
+    if m.mode_timer(gid) == m.MODE_TIMER_NONE:
+        return "current mode has no round timer"
+    if not _server.end_round():
+        return "no active round to end"
+    who = _actor(caller)
+    _server.log.info("round ended by %s" % who)
+    msg = "Round ended by %s" % who
+    _server.broadcast(msg, COLOR)
+    return msg
+
+
+def cmd_restart(caller, _args):
+    if not _server.restart_round():
+        return "cannot restart round right now"
+    who = _actor(caller)
+    _server.log.info("round restarted by %s" % who)
+    msg = "Round restarted by %s" % who
     _server.broadcast(msg, COLOR)
     return msg

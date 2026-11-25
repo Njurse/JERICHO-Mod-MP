@@ -172,9 +172,12 @@ the other players; the reply comes back privately. `!help` lists what *you* can 
 | `!admin add\|remove <slot\|name\|uuid>`, `!admin list` | admin | manage the admins list; **saved to dediserver.json** |
 | `!motd [text\|save]` | admin | show or set the join greeting; `!motd save` writes it to the file |
 | `!say <text>` | admin | a line from the server to everyone |
-| `!vote <city>`, `!vote <city> mp [0\|1]`, `!vote mp [0\|1]`, `!vote` / `!vote cancel` | everyone / admin to cancel | vote for the full city or its multiplayer map (see below) |
+| `!map <city> [mp [0\|1]] [save]`, `!map mp [0\|1] [save]` | admin | switch map immediately (cancels any active vote; `save` writes `dediserver.json`) |
+| `!mode [id\|name] [minutes] [save]`, `!modetime <1..5>` | everyone (view) / admin (change) | show or switch game mode (`takearide`, `fox`, `bomb`, `cnr`) and round time |
+| `!endround`, `!restart` | admin | end the active timed round now, or restart the current round |
+| `!vote <city>`, `!vote <city> mp [0\|1]`, `!vote mp [0\|1]`, `!vote` / `!vote cancel` / `!endvote` | everyone / admin to cancel | vote for the full city or its multiplayer map (see below) |
 
-`cops`, `difficulty`, `time`, `weather`, `motd` and `admin` also work at the server
+`map`, `mode`, `modetime`, `endvote`, `endround`, `restart`, `vote`, `cops`, `difficulty`, `time`, `weather`, `motd` and `admin` also work at the server
 console. Every admin command is logged with who ran it. Joins and leaves are
 announced in chat (`"announce_joins": false` turns that off). Saving rewrites
 `dediserver.json` atomically and keeps your other keys, but not comments or layout.
@@ -202,7 +205,7 @@ that the full city remains active and doesn't auto-end on the target game build
 before deploying it publicly.
 
 Keys: `"vote"` (`false` turns `!vote` off), `"vote_duration"` (seconds, 30),
-`"vote_threshold"` (fraction that must be exceeded, 0.5), `"vote_cooldown"` (60).
+`"vote_threshold"` (fraction that must be exceeded, 0.5), `"vote_cooldown"` (15).
 
 ### Map rotation
 

@@ -221,6 +221,14 @@ class ServerAPI:
         they rejoin. Returns the new arena."""
         return self._s.set_arena(arena)
 
+    def end_round(self):
+        """End the current timed round now (admin override). True if ended."""
+        return self._s.end_round()
+
+    def restart_round(self):
+        """Restart the current round now (admin override). True on restart."""
+        return self._s.restart_round()
+
     def save_config(self, *keys):
         """Write these config keys back to dediserver.json (atomic, other keys kept)."""
         return self._s.save_config_keys(list(keys))

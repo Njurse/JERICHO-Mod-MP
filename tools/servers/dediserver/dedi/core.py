@@ -709,6 +709,43 @@ class Dedicated:
         self.readvertise()
         return arena
 
+    def end_round(self):
+        """End the active timed round now (void, intermission follows). True if ended."""
+        with self.lock:
+            if not self.mark.active:
+                return False
+            ev = self.mark.force_end()
+            if not (ev & markref.EV_END):
+                return False
+            self.escape_ms = 0
+            self.round.end()
+        self.broadcast_mark_if_due(force=True)
+        self.broadcast_round_if_changed(force=True)
+        return True
+
+    def restart_round(self):
+        """Restart the current round now (COUNTDOWN if startable, else WAITING)."""
+        with self.lock:
+            ids = [info["id"] for info in self.clients.values()]
+            self.round.sync(ids)
+            if not self.mark.active:
+                self.round.begin()
+                active = False
+            else:
+                active = True
+                ready = [info["id"] for info in self.clients.values()
+                         if info.get("car") is not None or self.cars.get(info["id"]) is not None]
+                self.mark.sync(ids, self.mark_rng.randrange(1 << 15))
+                self.mark.set_ready(ready)
+                self.escape_ms = 0
+                ev = self.mark.force_restart(self.mark_rng.randrange(1 << 15))
+                if ev & markref.EV_BEGIN:
+                    self.round.begin()
+        if active:
+            self.broadcast_mark_if_due(force=True)
+        self.broadcast_round_if_changed(force=True)
+        return True
+
     def save_config_keys(self, keys):
         """Write these cfg keys back into the config file, keeping every other key
         as the operator wrote it. Atomic (temp file + replace). Returns the path."""

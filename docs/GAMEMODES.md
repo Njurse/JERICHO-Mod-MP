@@ -644,12 +644,18 @@ yet played in game. These are later phases, and none of them is wired:
 
 ## Map votes and rotation (0.24.0)
 
-- **`!vote` on a game (listen) host.** The host runs the dedicated server's
-  grammar itself (`mp_lobby.c` `MpListenVote`): `!vote <city> [mp [0|1]]`,
-  `!vote mp [0|1]`, `!vote` (the tally), `!vote cancel` (the host only). One yes
-  per player, passes at more than half of the players, 30 s, then a 60 s
-  cooldown. Peers' `!vote` lines reach the host and are never relayed; every
-  other chat command is still dropped unseen.
+- **Listen-host vote and admin commands.** A listen host parses `!` and `/`
+  commands in `mp_cmd.c` / `mp_lobby.c` (`MpListenCommand`):
+  - Open to everyone: `!vote <city> [mp [0|1]]`, `!vote mp [0|1]`, `!vote`
+    (tally), `!mode` (show current mode), `!help [cmd]`. `!vote city <city> ...`
+    is still accepted. Votes are one yes per player, pass at more than half, run
+    30 s, and enforce a 15 s cooldown after ending, passing, or expiring
+    (`MP_LVOTE_COOLDOWN_MS`).
+  - Host-only (`MpCmdAuthorize`, rejected with a private server reply if a peer
+    runs them): `!map <city> [mp [0|1]]` / `!map mp [0|1]` (immediate switch via
+    `MpListenSwitch`), `!mode <0-3|ride|fox|bomb|cnr> [minutes]` (relaunch into
+    the new mode), `!endvote` / `!vote cancel`, `!endround`, `!restart`, and
+    `!kick <slot|name> [reason]`. Commands are never relayed to other players.
 - **`rounds_per_map`.** Dedicated server: `dediserver.json` `"rounds_per_map"`
   and `"rotation"` (`dedi/builtin/rotation.py`, README). Game host:
   `JERICHO/CONFIG/mp.ini` `[mp] rounds_per_map`. Default `0` = off, set in code;

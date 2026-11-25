@@ -499,6 +499,92 @@ def main():
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
+    def console_line(srv, line):
+        """One operator console line through the same table the console uses
+        (server.console_commands); returns what the console would print."""
+        name, _, rest = line.partition(" ")
+        for row in srv.console_commands():
+            if row[0] == name:
+                return row[-1](rest.strip()) or ""
+        raise KeyError(name)
+
+    # -- admin map / endvote / endround / restart + 15 s default vote cooldown
+    tmp = tempfile.mkdtemp()
+    try:
+        asrv = build(tmp, city=0, arena=0, gamemode=1, vote_duration=30)  # no vote_cooldown -> default 15 s
+        av = dict(asrv.plugins.plugins)["vote"]
+        aclock = [100.0]
+        av.now = lambda: aclock[0]
+        p1 = join(asrv, 1, "Ann", "11111111-1111-4111-8111-111111111111")
+        p2 = join(asrv, 2, "Ben", "22222222-2222-4222-8222-222222222222")
+        adm = join(asrv, 3, "Boss", ADMIN_NORM)
+
+        # non-admin rejected
+        out = say(asrv, p1, "/map havana mp 1")
+        check("admin map: non-admin rejected", "!map is for admins" in out[-1][1], out)
+        out = say(asrv, p1, "/endvote")
+        check("admin endvote: non-admin rejected", "!endvote is for admins" in out[-1][1], out)
+        out = say(asrv, p1, "/endround")
+        check("admin endround: non-admin rejected", "!endround is for admins" in out[-1][1], out)
+        out = say(asrv, p1, "/restart")
+        check("admin restart: non-admin rejected", "!restart is for admins" in out[-1][1], out)
+
+        # 15s default cooldown after vote expires
+        say(asrv, p1, "/vote havana")
+        aclock[0] += 31
+        asrv.plugins.call("on_tick")
+        out = say(asrv, p2, "/vote rio")
+        check("vote: default cooldown blocks at 0 s", "next vote in 15s" in out[-1][1], out)
+        aclock[0] += 14
+        out = say(asrv, p2, "/vote rio")
+        check("vote: default cooldown still blocks at 14 s", "next vote in 1s" in out[-1][1], out)
+        aclock[0] += 1.1
+        out = say(asrv, p2, "/vote rio")
+        check("vote: default cooldown clears at 15 s",
+              any("started a vote to switch to RIO" in t for _, t in out), out)
+
+        # !endvote (and console)
+        out = say(asrv, adm, "/endvote")
+        check("admin endvote: cancels active vote", any("cancelled" in t for _, t in out), out)
+        check("admin endvote: console gets status", "no vote" in console_line(asrv, "endvote"))
+
+        # !map (force map immediately, cancelling any active vote, and console)
+        say(asrv, p1, "/vote havana")
+        out = say(asrv, adm, "/map vegas mp 1")
+        check("admin map: switches immediately without vote",
+              asrv.city == 2 and asrv.map_shape == 1 and asrv.arena == 1
+              and any("Map changed to VEGAS mp 1 by admin Boss" in t for _, t in out), (asrv.city, asrv.arena, out))
+        res = console_line(asrv, "map chicago mp 0")
+        check("console map: switches immediately",
+              "switched to CHICAGO mp 0" in res and asrv.city == 0 and asrv.arena == 0, (res, asrv.city, asrv.arena))
+
+        # !endround and !restart (on active timed mode)
+        with asrv.lock:
+            asrv.clients[p1]["car"] = 1
+            asrv.clients[p2]["car"] = 2
+            asrv.clients[adm]["car"] = 3
+        asrv._mark_step(0)   # WAITING -> COUNTDOWN
+        asrv._mark_step(5000) # COUNTDOWN -> LIVE
+        check("round setup: live before !endround", asrv.mark.phase == m.MARK_PHASE_LIVE, asrv.mark.phase)
+        out = say(asrv, adm, "/endround")
+        check("admin endround: ends live round",
+              asrv.mark.phase == m.MARK_PHASE_ENDED and any("Round ended by admin Boss" in t for _, t in out),
+              (asrv.mark.phase, out))
+        out = say(asrv, adm, "/restart")
+        check("admin restart: restarts into countdown",
+              asrv.mark.phase == m.MARK_PHASE_COUNTDOWN and any("Round restarted by admin Boss" in t for _, t in out),
+              (asrv.mark.phase, out))
+        res = console_line(asrv, "endround")
+        check("console endround: ends countdown round",
+              "Round ended by the console" in res and asrv.mark.phase == m.MARK_PHASE_ENDED,
+              (res, asrv.mark.phase))
+        res = console_line(asrv, "restart")
+        check("console restart: restarts into countdown",
+              "Round restarted by the console" in res and asrv.mark.phase == m.MARK_PHASE_COUNTDOWN,
+              (res, asrv.mark.phase))
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
     print("%d failure(s)" % fails)
     return 1 if fails else 0
 

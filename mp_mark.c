@@ -739,6 +739,54 @@ int MpMarkOut(int playerId, unsigned rnd)
 	return 0;	/* fewer than two left: the next tick ends it void */
 }
 
+int MpMarkForceEnd(void)
+{
+	if (gMark.timer == MP_MODE_TIMER_NONE ||
+		(gMark.phase != MP_MARK_PHASE_LIVE && gMark.phase != MP_MARK_PHASE_COUNTDOWN))
+		return 0;
+
+	if (gMark.timer != MP_MODE_TIMER_GETAWAY)
+		gMark.marked = -1;
+
+	gMark.countdownMs = 0;
+	gMark.countdownTotalMs = 0;
+	gMark.countdownFirst = 0;
+	MpMarkEnd(-1, MP_MARK_END_VOID);
+	return MP_MARK_EV_END;
+}
+
+int MpMarkForceRestart(unsigned rnd)
+{
+	if (gMark.timer == MP_MODE_TIMER_NONE)
+		return 0;
+
+	gMark.firstMap = 0;
+	gMark.countdownMs = 0;
+	gMark.countdownTotalMs = 0;
+	gMark.countdownFirst = 0;
+	gMark.intermissionMs = 0;
+	gMark.heat = 0;
+	gMark.winner = -1;
+	gMark.endReason = MP_MARK_END_NONE;
+	gMark.dmgLive = 0;
+	gMark.dmgLast = 0;
+	gMark.dmgAcc = 0;
+	gMark.lastCop = -1;
+	gMark.lastCopMs = 0;
+	gMark.driveAcc = 0;
+	memset(gMark.hitUntil, 0, sizeof(gMark.hitUntil));
+
+	if (MpMarkStartable())
+		return MpMarkStart(rnd);
+
+	gMark.phase = MP_MARK_PHASE_WAITING;
+	gMark.marked = -1;
+	gMark.seq = (gMark.seq + 1) & 0xFFFF;
+	MpMarkFreshClocks();
+	gMark.revision++;
+	return 0;
+}
+
 int MpMarkHeat(void)
 {
 	return gMark.timer == MP_MODE_TIMER_GETAWAY ? gMark.heat : 0;

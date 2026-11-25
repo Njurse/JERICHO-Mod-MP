@@ -149,6 +149,11 @@ int  MpMarkDamageLive(void);		/* host: this round's meter follows reported damag
  * the player is not in the round. `rnd` picks a new marked player. */
 int  MpMarkOut(int playerId, unsigned rnd);
 
+/* Admin / host overrides (host only): end a live/countdown round now (void,
+ * intermission follows) or restart the round immediately. */
+int  MpMarkForceEnd(void);
+int  MpMarkForceRestart(unsigned rnd);
+
 /* Cops n Robbers, host: `ms` more alive at `speed` whole units/frame. Returns the
  * whole points the GETAWAY earned (MP_MARK_CNR_DRIVE_BASE a second, plus up to
  * MP_MARK_CNR_DRIVE_BONUS a second scaled by speed); the remainder carries. */

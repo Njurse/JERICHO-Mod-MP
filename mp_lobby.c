@@ -9,12 +9,13 @@
  * Shared session state and helpers are declared in mp_session_int.h.
  */
 #include "mp_session_int.h"
+#include "mp_cmd.h"
 
 /* ------------------------------------------------------------------ */
 /* LISTEN-HOST VOTE AND MAP ROTATION (0.24.0)                          */
 /* ------------------------------------------------------------------ */
 /* A game host runs the dedicated server's !vote (dedi/builtin/vote.py: the same
- * grammar, one yes per player, passes at more than half, 30 s, 60 s cooldown)
+ * grammar, one yes per player, passes at more than half, 30 s, 15 s cooldown)
  * and its map rotation (dedi/builtin/rotation.py). Settings: JERICHO/CONFIG/mp.ini
  * [mp] rounds_per_map (default 0 = off) -- read here with its default in code and
  * never written, so mp.ini is not changed by this feature.
@@ -31,7 +32,7 @@
  * every city's multiplayer maps, areas within a city first, then the next city:
  * the dedicated server's default_rotation(). */
 #define MP_LVOTE_MS		30000
-#define MP_LVOTE_COOLDOWN_MS	60000
+#define MP_LVOTE_COOLDOWN_MS	15000
 #define MP_ROTATE_DELAY_MS	4000	/* after the round's end: let the result show */
 #define MP_ROT_CITIES		4
 #define MP_ROT_ARENAS		2
@@ -65,7 +66,9 @@ static struct
 	unsigned long atMs;	/* a delayed switch (rotation) */
 	int lastRound, rounds;	/* round counting for the rotation */
 	int levelCity, levelShape, levelArena;
-} gMpRelaunch = { 0, { 0, 1, 0, -1 }, 0, -1, 0, -1, -1, -1 };
+	int mode;		/* -1 = keep gMp.gamemode; >= 0 = switch mode on relaunch */
+	int modeSeconds;	/* -1 = keep mode time; > 0 = override round seconds on relaunch */
+} gMpRelaunch = { 0, { 0, 1, 0, -1 }, 0, -1, 0, -1, -1, -1, -1, -1 };
 
 static const char* const gMpRotCity[MP_ROT_CITIES] = { "CHICAGO", "HAVANA", "VEGAS", "RIO" };
 
@@ -128,6 +131,8 @@ static int MpLVoteNeeded(void);
 static void MpLVoteTally(char* out, int max);
 static void MpListenVote(int pid, const char* args);
 static void MpKickPlayerFlags(int playerId, int flags);
+static void MpKickPlayerReason(int playerId, const char* reason);
+
 static void MpListenSwitch(const MP_ROT_STOP* to, const char* why);
 static int MpChatIsCommand(const char* t);
 static void MpRejoinQuietArm(void);
@@ -1831,8 +1836,13 @@ static void MpListenVote(int pid, const char* args)
 
 	if (strcmp(args, "cancel") == 0)
 	{
-		if (pid != gMp.localPlayerId || !gMpLVote.active)
-			return;		/* the host is the admin of its own game */
+		if (pid != gMp.localPlayerId)
+			return;		/* handled by MpListenCommand auth */
+		if (!gMpLVote.active)
+		{
+			MpHostSay("no vote in progress");
+			return;
+		}
 		gMpLVote.active = 0;
 		gMpLVote.cooldownUntilMs = now + MP_LVOTE_COOLDOWN_MS;
 		MpHostSay("Vote cancelled by the host");
@@ -2033,6 +2043,21 @@ int MpRelaunchTick(int inFrontend)
 	gMpLaunched = 0;
 	gMp.running = 0;
 
+	if (gMpRelaunch.mode >= 0)
+	{
+		int nextMode = gMpRelaunch.mode;
+
+		gMpRelaunch.mode = -1;
+		MpSetSessionGamemode(nextMode);
+	}
+	if (gMpRelaunch.modeSeconds > 0)
+	{
+		int nextSec = gMpRelaunch.modeSeconds;
+
+		gMpRelaunch.modeSeconds = -1;
+		MpSetSessionModeSeconds(nextSec);
+	}
+
 	if (gMpCtx != NULL)
 		gMpCtx->jer_log(gMpCtx, "[mp] listen host: relaunching on city %d shape %d arena %d\n",
 			GameLevel, gMpRelaunch.to.shape, gMpRelaunch.to.arena);
@@ -2050,10 +2075,367 @@ int MpRelaunchTick(int inFrontend)
  * commands plugin uses ('!' or '/' then a non-space, non-'!'/'/' character). Only a
  * dedicated server runs commands; a game host has none, so it must never relay such a
  * line -- it may carry a password meant for a server. */
-static int MpChatIsCommand(const char* t)
+static void MpHostReply(int pid, int connIndex, const char* text)
 {
-	return t != NULL && (t[0] == '!' || t[0] == '/') && t[1] != '\0'
-		&& t[1] != ' ' && t[1] != '!' && t[1] != '/';
+	static const unsigned char ink[3] = { 0xFF, 0xE0, 0x8A };
+	MP_CHAT c;
+
+	if (text == NULL || text[0] == '\0')
+		return;
+
+	if (pid == gMp.localPlayerId)
+	{
+		MpConsoleChat(NULL, 0, 0, 0, 0, text, ink);
+		return;
+	}
+
+	if (connIndex < 0)
+		connIndex = MpConnFindByPlayer(pid);
+	if (connIndex < 0)
+		return;
+
+	memset(&c, 0, sizeof(c));
+	c.playerId = 0xFF;
+	c.reserved[0] = ink[0];
+	c.reserved[1] = ink[1];
+	c.reserved[2] = ink[2];
+	snprintf(c.text, sizeof(c.text), "%s", text);
+	MpSendConn(connIndex, MP_TAG_CHAT, MP_FLAG_RELIABLE, &c, sizeof(c));
+}
+
+static int MpCmdAsciiLower(int c)
+{
+	return (c >= 'A' && c <= 'Z') ? (c + ('a' - 'A')) : c;
+}
+
+static int MpCmdStrIEq(const char* a, const char* b)
+{
+	while (*a && *b)
+	{
+		if (MpCmdAsciiLower((unsigned char)*a) != MpCmdAsciiLower((unsigned char)*b))
+			return 0;
+		a++;
+		b++;
+	}
+	return *a == '\0' && *b == '\0';
+}
+
+static int MpCmdStrIPrefix(const char* s, const char* prefix)
+{
+	while (*prefix)
+	{
+		if (*s == '\0' || MpCmdAsciiLower((unsigned char)*s) != MpCmdAsciiLower((unsigned char)*prefix))
+			return 0;
+		s++;
+		prefix++;
+	}
+	return 1;
+}
+
+static MP_PLAYER* MpFindPlayerByToken(const char* tok)
+{
+	char* end = NULL;
+	long slot;
+	int i;
+	MP_PLAYER* match = NULL;
+	int matches = 0;
+
+	if (tok == NULL || tok[0] == '\0')
+		return NULL;
+
+	if (tok[0] >= '0' && tok[0] <= '9')
+	{
+		slot = strtol(tok, &end, 10);
+		if (end != tok && *end == '\0' && slot >= 0 && slot < MP_MAX_PLAYERS)
+		{
+			MP_PLAYER* p = MpGetPlayer((int)slot);
+			if (p != NULL)
+				return p;
+		}
+	}
+
+	for (i = 0; i < MP_MAX_PLAYERS; i++)
+	{
+		MP_PLAYER* p = &gMp.players[i];
+		if (p->active && MpCmdStrIEq(p->name, tok))
+			return p;
+	}
+
+	for (i = 0; i < MP_MAX_PLAYERS; i++)
+	{
+		MP_PLAYER* p = &gMp.players[i];
+		if (p->active && MpCmdStrIPrefix(p->name, tok))
+		{
+			match = p;
+			matches++;
+		}
+	}
+
+	return (matches == 1) ? match : NULL;
+}
+
+static void MpListenKick(int pid, int connIndex, const char* args)
+{
+	char buf[128];
+	char* words[8];
+	int nw = 0, n, i;
+	MP_PLAYER* target = NULL;
+	char reason[64];
+	char kickMsg[MP_KICK_TEXT_LEN];
+	char line[128];
+
+	reason[0] = '\0';
+	snprintf(buf, sizeof(buf), "%s", args != NULL ? args : "");
+	{
+		char* p = buf;
+		while (*p != '\0' && nw < 8)
+		{
+			while (*p == ' ' || *p == '\t')
+				p++;
+			if (*p == '\0')
+				break;
+			words[nw++] = p;
+			while (*p != '\0' && *p != ' ' && *p != '\t')
+				p++;
+			if (*p != '\0')
+				*p++ = '\0';
+		}
+	}
+
+	for (n = nw; n > 0; n--)
+	{
+		char cand[128];
+
+		cand[0] = '\0';
+		for (i = 0; i < n; i++)
+		{
+			if (i > 0 && strlen(cand) + 1 < sizeof(cand))
+				strcat(cand, " ");
+			if (strlen(cand) + strlen(words[i]) < sizeof(cand))
+				strcat(cand, words[i]);
+		}
+		target = MpFindPlayerByToken(cand);
+		if (target != NULL)
+		{
+			for (i = n; i < nw; i++)
+			{
+				if (i > n && strlen(reason) + 1 < sizeof(reason))
+					strcat(reason, " ");
+				if (strlen(reason) + strlen(words[i]) < sizeof(reason))
+					strcat(reason, words[i]);
+			}
+			break;
+		}
+	}
+
+	if (target == NULL)
+	{
+		MpHostReply(pid, connIndex, "kick who? (!kick <slot|name> [reason])");
+		return;
+	}
+	if (target->id == gMp.localPlayerId)
+	{
+		MpHostReply(pid, connIndex, "cannot kick the host");
+		return;
+	}
+
+	if (reason[0] != '\0')
+	{
+		snprintf(kickMsg, sizeof(kickMsg), "Kicked by the host: %s", reason);
+		snprintf(line, sizeof(line), "%s was kicked by the host: %s", target->name, reason);
+	}
+	else
+	{
+		snprintf(kickMsg, sizeof(kickMsg), "You were kicked by the host");
+		snprintf(line, sizeof(line), "%s was kicked by the host", target->name);
+	}
+
+	MpHostSay(line);
+	MpKickPlayerReason(target->id, kickMsg);
+}
+
+static void MpListenHelp(int pid, int connIndex, const char* args, int isHost)
+{
+	char word[24];
+	size_t n = 0;
+	const char* p = args;
+
+	while (*p != '\0' && *p != ' ' && *p != '\t' && n + 1 < sizeof(word))
+		word[n++] = (char)MpCmdAsciiLower((unsigned char)*p++);
+	word[n] = '\0';
+
+	if (word[0] == '\0')
+	{
+		if (isHost)
+		{
+			MpHostReply(pid, connIndex,
+				"Host commands: !map !mode !endvote !endround !restart !kick !vote !help");
+		}
+		else
+		{
+			MpHostReply(pid, connIndex,
+				"Commands: !vote <city|mp>, !mode, !help [cmd]");
+		}
+		return;
+	}
+
+	if (strcmp(word, "map") == 0 || strcmp(word, "changemap") == 0)
+		MpHostReply(pid, connIndex, "!map <city> [mp [0|1]] | !map mp [0|1] -- force map switch (host)");
+	else if (strcmp(word, "mode") == 0 || strcmp(word, "gamemode") == 0)
+		MpHostReply(pid, connIndex, "!mode [0-3|ride|fox|bomb|cnr] [minutes] -- show or switch mode (host)");
+	else if (strcmp(word, "endvote") == 0 || strcmp(word, "cancelvote") == 0)
+		MpHostReply(pid, connIndex, "!endvote -- cancel the active map vote (host)");
+	else if (strcmp(word, "endround") == 0 || strcmp(word, "skipround") == 0 || strcmp(word, "skip") == 0)
+		MpHostReply(pid, connIndex, "!endround -- end the current timed round now (host)");
+	else if (strcmp(word, "restart") == 0 || strcmp(word, "restartround") == 0)
+		MpHostReply(pid, connIndex, "!restart -- restart the current round now (host)");
+	else if (strcmp(word, "kick") == 0)
+		MpHostReply(pid, connIndex, "!kick <slot|name> [reason] -- remove a player (host)");
+	else if (strcmp(word, "vote") == 0)
+		MpHostReply(pid, connIndex, "!vote <city> [mp [0|1]] | !vote mp [0|1] | !vote cancel");
+	else
+		MpHostReply(pid, connIndex, "unknown command (try !help)");
+}
+
+static void MpListenCommand(int pid, int connIndex, const char* text)
+{
+	MP_CMD_PARSED cmd;
+	char line[128];
+	int isHost = (pid >= 0 && pid == gMp.localPlayerId);
+
+	if (!MpCmdParse(text, &cmd))
+		return;
+
+	if (!MpCmdAuthorize(pid, gMp.localPlayerId, cmd.adminOnly))
+	{
+		if (gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx, "[mp] denied !%s from player %d (host only)\n",
+				cmd.name, pid);
+		snprintf(line, sizeof(line), "!%s is for the host only", cmd.name);
+		MpHostReply(pid, connIndex, line);
+		return;
+	}
+
+	switch (cmd.kind)
+	{
+	case MP_CMD_HELP:
+		MpListenHelp(pid, connIndex, cmd.args, isHost);
+		break;
+
+	case MP_CMD_VOTE:
+		MpListenVote(pid, cmd.args);
+		break;
+
+	case MP_CMD_ENDVOTE:
+		MpListenVote(pid, "cancel");
+		break;
+
+	case MP_CMD_MAP:
+	{
+		MP_ROT_STOP to;
+
+		if (cmd.args[0] == '\0')
+		{
+			MP_ROT_STOP cur = { GameLevel, gBootMpLevel ? 1 : 0, gBootMpArena, -1 };
+			char where[24];
+
+			MpRotWhere(&cur, where, sizeof(where));
+			snprintf(line, sizeof(line), "map: %s -- !map <city> [mp [0|1]] | !map mp [0|1]", where);
+			MpHostReply(pid, connIndex, line);
+			break;
+		}
+		if (!MpLVoteParse(cmd.args, &to))
+		{
+			MpHostReply(pid, connIndex, "usage: !map <city> [mp [0|1]] | !map mp [0|1]");
+			break;
+		}
+		if (to.city == GameLevel && to.shape == (gBootMpLevel ? 1 : 0) &&
+			(!to.shape || to.arena == gBootMpArena))
+		{
+			MpHostReply(pid, connIndex, "the game is already on that map");
+			break;
+		}
+		gMpLVote.active = 0;
+		gMpRelaunch.mode = -1;
+		gMpRelaunch.modeSeconds = -1;
+		MpListenSwitch(&to, "host command");
+		break;
+	}
+
+	case MP_CMD_MODE:
+	{
+		int mode = -1, sec = -1;
+
+		if (cmd.args[0] == '\0')
+		{
+			if (MpModeUsesTimer(gMp.gamemode))
+				snprintf(line, sizeof(line), "mode: %d (%s), %ds rounds",
+					gMp.gamemode, MpModeName(gMp.gamemode), MpSessionModeSeconds());
+			else
+				snprintf(line, sizeof(line), "mode: %d (%s)",
+					gMp.gamemode, MpModeName(gMp.gamemode));
+			MpHostReply(pid, connIndex, line);
+			break;
+		}
+		if (!MpCmdParseMode(cmd.args, &mode, &sec))
+		{
+			MpHostReply(pid, connIndex, "usage: !mode <0-3|ride|fox|bomb|cnr> [minutes]");
+			break;
+		}
+		{
+			MP_ROT_STOP cur = { GameLevel, gBootMpLevel ? 1 : 0, gBootMpArena, -1 };
+
+			gMpLVote.active = 0;
+			gMpRelaunch.mode = mode;
+			gMpRelaunch.modeSeconds = sec;
+			snprintf(line, sizeof(line), "mode %s", MpModeName(mode));
+			MpListenSwitch(&cur, line);
+		}
+		break;
+	}
+
+	case MP_CMD_ENDROUND:
+		if (!gMp.running)
+		{
+			MpHostReply(pid, connIndex, "match is not running yet");
+			break;
+		}
+		if (!MpModeUsesTimer(gMp.gamemode))
+		{
+			MpHostReply(pid, connIndex, "current mode has no round timer");
+			break;
+		}
+		if (MpHostMarkForceEnd())
+			MpHostSay("Round ended by the host");
+		else
+			MpHostReply(pid, connIndex, "no active round to end");
+		break;
+
+	case MP_CMD_RESTART:
+		if (!gMp.running)
+		{
+			MpHostReply(pid, connIndex, "match is not running yet");
+			break;
+		}
+		if (MpHostMarkForceRestart())
+			MpHostSay("Round restarted by the host");
+		else
+			MpHostReply(pid, connIndex, "cannot restart round right now");
+		break;
+
+	case MP_CMD_KICK:
+		MpListenKick(pid, connIndex, cmd.args);
+		break;
+
+	case MP_CMD_NONE:
+	default:
+		if (gMpCtx != NULL && !isHost)
+			gMpCtx->jer_log(gMpCtx, "[mp] dropped chat command '!%s' from player %d (not relayed)\n",
+				cmd.name, pid);
+		snprintf(line, sizeof(line), "unknown command '!%s' (try !help)", cmd.name);
+		MpHostReply(pid, connIndex, line);
+		break;
+	}
 }
 
 void MpSendChat(const char* text)
@@ -2067,15 +2449,9 @@ void MpSendChat(const char* text)
 	c.playerId = (uint8_t)(gMp.localPlayerId < 0 ? 0 : gMp.localPlayerId);
 	snprintf(c.text, sizeof(c.text), "%s", text);
 
-	if (MpIsHost() && MpChatIsCommand(c.text))
+	if (MpIsHost() && MpCmdIsCommand(c.text))
 	{
-		/* the one command a game host runs itself: !vote (0.24.0) */
-		if (strncmp(c.text + 1, "vote", 4) == 0 && (c.text[5] == '\0' || c.text[5] == ' '))
-		{
-			MpListenVote(gMp.localPlayerId, c.text + 5);
-			return;
-		}
-		MpConsoleLine("chat commands only work on a dedicated server; not sent");
+		MpListenCommand(gMp.localPlayerId, -1, c.text);
 		return;
 	}
 
@@ -2120,18 +2496,11 @@ void MpHandleChat(int connIndex, const unsigned char* p, int len)
 		memset(c.reserved, 0, sizeof(c.reserved));	/* a peer cannot mark itself [Admin] */
 	}
 
-	/* A peer's "!login ..." reached a game host, which runs no commands: drop it
-	 * unseen. Printing or relaying it would show a password to every player. */
-	if (MpIsHost() && MpChatIsCommand(c.text))
+	/* Commands on a game host are handled here and never relayed to peers. */
+	if (MpIsHost() && MpCmdIsCommand(c.text))
 	{
-		/* !vote is run here (never relayed: the host announces the tally) */
-		if (from >= 0 && strncmp(c.text + 1, "vote", 4) == 0 && (c.text[5] == '\0' || c.text[5] == ' '))
-		{
-			MpListenVote(from, c.text + 5);
-			return;
-		}
-		if (gMpCtx != NULL)
-			gMpCtx->jer_log(gMpCtx, "[mp] dropped a chat command from player %d (not relayed)\n", (int)c.playerId);
+		if (from >= 0)
+			MpListenCommand(from, connIndex, c.text);
 		return;
 	}
 
@@ -2208,10 +2577,14 @@ void MpHandleLeave(int connIndex, const unsigned char* p, int len)
 /* The host removing a player. The only kick path: send the message AND keep
  * the teardown in one place by letting the kicked client drive it. Only the
  * host may kick, and only a non-zero player id (the host is id 0). */
-void MpKickPlayer(int playerId)
+static void MpKickPlayerReason(int playerId, const char* reason)
 {
-	MP_KICK k;
-	int conn;
+	struct
+	{
+		MP_KICK k;
+		char text[MP_KICK_TEXT_LEN];
+	} pkt;
+	int conn, pktLen;
 
 	if (!MpIsHost())
 		return;
@@ -2224,13 +2597,22 @@ void MpKickPlayer(int playerId)
 	if (conn < 0)
 		return;
 
-	memset(&k, 0, sizeof(k));
-	k.playerId = (uint8_t)playerId;
+	memset(&pkt, 0, sizeof(pkt));
+	pkt.k.playerId = (uint8_t)playerId;
+	pktLen = (int)sizeof(MP_KICK);
+
+	if (reason != NULL && reason[0] != '\0')
+	{
+		snprintf(pkt.text, sizeof(pkt.text), "%s", reason);
+		pktLen = (int)sizeof(pkt);
+	}
 
 	if (gMpCtx != NULL)
-		gMpCtx->jer_log(gMpCtx, "[mp] kicking player %d (conn %d)\n", playerId, conn);
+		gMpCtx->jer_log(gMpCtx, "[mp] kicking player %d (conn %d)%s%s\n",
+			playerId, conn, (reason != NULL && reason[0] != '\0') ? ": " : "",
+			(reason != NULL && reason[0] != '\0') ? reason : "");
 
-	MpSendConn(conn, MP_TAG_KICK, MP_FLAG_RELIABLE, &k, sizeof(k));
+	MpSendConn(conn, MP_TAG_KICK, MP_FLAG_RELIABLE, &pkt, pktLen);
 
 	/* The removal on THIS side is the kicked client's own LEAVE (MpLeaveSession
 	 * replies with one), exactly as for any other leaver, which is what keeps the
@@ -2238,6 +2620,11 @@ void MpKickPlayer(int playerId)
 	 * by the ordinary 30 s liveness check. (Half-closing here instead was tried and
 	 * reverted: the FIN raced the KICK, so the client saw a bare connection loss
 	 * and never printed "kicked by the host".) */
+}
+
+void MpKickPlayer(int playerId)
+{
+	MpKickPlayerReason(playerId, NULL);
 }
 
 int MpRejoinActive(void)

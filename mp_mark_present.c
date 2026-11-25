@@ -309,6 +309,60 @@ void MpHostMarkTick(void)
 		MpHostSendMark(-1);
 }
 
+int MpHostMarkForceEnd(void)
+{
+	int wasLive, ev;
+
+	if (!MpIsHost() || !MpModeUsesTimer(gMp.gamemode))
+		return 0;
+
+	wasLive = (MpMarkPhase() == MP_MARK_PHASE_LIVE);
+	ev = MpMarkForceEnd();
+	if (!(ev & MP_MARK_EV_END))
+		return 0;
+
+	if (wasLive)
+		MpHostCnrFlush();
+	gMpCnrPending = 0;
+	gMpCnrEscapeMs = 0;
+	MpRoundEnd();
+	MpHostSendMark(-1);
+	MpHostSendRound(-1);
+	return 1;
+}
+
+int MpHostMarkForceRestart(void)
+{
+	int ev;
+
+	if (!MpIsHost())
+		return 0;
+
+	if (!MpModeUsesTimer(gMp.gamemode))
+	{
+		MpRoundHostSync();
+		MpRoundBegin(gMp.gamemode);
+		MpHostSendRound(-1);
+		return 1;
+	}
+
+	MpMarkHostSync();
+	gMpCnrPending = 0;
+	gMpCnrEscapeMs = 0;
+	gMpClusterState = 0;
+	ev = MpMarkForceRestart(MpMarkRand());
+
+	if (ev & MP_MARK_EV_BEGIN)
+	{
+		MpRoundHostSync();
+		MpRoundBegin(gMp.gamemode);
+		MpHostSendRound(-1);
+	}
+
+	MpHostSendMark(-1);
+	return 1;
+}
+
 /* Host: a contact between players `a` and `b`. Our own (`a` is us) comes from the
  * engine or the probe and is taken as seen; a client's report (MP_HIT) is checked
  * against where the host sees both cars, with room for the two links' lag. A
