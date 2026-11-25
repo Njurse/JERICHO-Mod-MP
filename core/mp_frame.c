@@ -667,7 +667,7 @@ int MpOnFrame(void* userdata, void* args)
 	 * hosting until a player arrives or the user quits. */
 	/* A CLIENT that is `running` but never reached the level (it backed out of the
 	 * car select) counts as "no match" too. */
-	if (gMp.role != MP_ROLE_NONE && !gMp.autoSession &&
+	if (gMp.role != MP_ROLE_NONE && !gMp.autoSession && MpTestFrontendJoin() == NULL &&
 	    (!gMp.running || (gMp.role == MP_ROLE_CLIENT && !gMp.gameStarted)) &&
 	    gInFrontend && pCurrScreen == PsxScreens)
 	{
