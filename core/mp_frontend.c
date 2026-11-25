@@ -439,6 +439,16 @@ void MpAutostartFromEnv(void)
 		gMpCtx->jer_log(gMpCtx, "[mp] autostart host on port %d\n", gMp.config.port);
 		MpBeginHost();
 
+		/* Test lever: MP_TEST_GAMEMODE=<id> hosts that mode (the Game mode list,
+		 * headless). Inert unless set. */
+		{
+			const char* gm = getenv("MP_TEST_GAMEMODE");
+
+			if (gm != NULL && gm[0] != '\0')
+				gMpCtx->jer_log(gMpCtx, "[mp] test: MP_TEST_GAMEMODE -> hosting mode %d\n",
+					MpSetSessionGamemode(atoi(gm)));
+		}
+
 		if (getenv("MP_AUTOJOIN_START") != NULL)
 		{
 			const char* t = getenv("MP_AUTOJOIN_START");
