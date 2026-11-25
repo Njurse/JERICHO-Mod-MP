@@ -57,6 +57,14 @@ typedef struct MP_ROLE_PICK
  * and it never changes what the player's carstate says they drive. */
 static int sMpWantSlot = -1;
 
+/* Lean retry for a car that stays missing: while the stand-in is up, ask for the wanted
+ * car again every MP_RELOAD_RETRY_FRAMES (~4 s at 25 fps), at most MP_RELOAD_RETRY_MAX
+ * times per outage, so a car that failed to load once gets another go. */
+#define MP_RELOAD_RETRY_FRAMES	100
+#define MP_RELOAD_RETRY_MAX	5
+static int sMpReloadWait;
+static int sMpReloadTries;
+
 static int sMpStandInCar[MAX_CARS];	/* per car object: drawn as a grey stand-in */
 
 static int sMpReadySlot[MAX_CARS];	/* readiness stand-in: wanted slot + 1, 0 = none */
@@ -152,6 +160,8 @@ void MpCarsReset(void)
 
 void MpFailsafeReset(void)
 {
+	sMpReloadWait = 0;
+	sMpReloadTries = 0;
 	sMpWantSlot = -1;
 	sMpWantCity = -2;
 	sMpWantModel = -1;
@@ -651,6 +661,9 @@ void MpCarFailsafeTick(void)
 
 	if (want >= 0 && want < MAX_CAR_RESIDENT_MODELS && JerCarSlotUsable(want))
 	{
+		sMpReloadWait = 0;
+		sMpReloadTries = 0;
+
 		if (sMpStandIn)
 		{
 			sMpStandIn = 0;
@@ -687,6 +700,18 @@ void MpCarFailsafeTick(void)
 			gMpCtx->jer_log(gMpCtx,
 				"[mp] car reload: %s model %d is not loaded yet (slot %d) - standing in with the host city's car 1, solid grey (resident slot %d) until it does\n",
 				MpCarCityName(sMpWantCity), sMpWantModel, want, hostSlot);
+	}
+
+	/* still not loaded: after a short delay, ask for it again (bounded) */
+	if (++sMpReloadWait >= MP_RELOAD_RETRY_FRAMES && sMpReloadTries < MP_RELOAD_RETRY_MAX)
+	{
+		sMpReloadWait = 0;
+		sMpReloadTries++;
+		MpCarQueryLoad(sMpWantCity, sMpWantModel);
+
+		if (gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx, "[mp] car reload: retrying %s model %d (attempt %d of %d)\n",
+				MpCarCityName(sMpWantCity), sMpWantModel, sMpReloadTries, MP_RELOAD_RETRY_MAX);
 	}
 
 	MpCarStandIn(me->carId);
