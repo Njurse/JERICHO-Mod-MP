@@ -126,7 +126,24 @@ def main():
         check("an advertised dedicated server carries ADV_DEDICATED", bool(r & m.ADV_DEDICATED), hex(r))
         check("no password -> no lock flag", not (r & m.ADV_PASSWORD), hex(r))
         check("the session's own rules (low byte) are untouched",
-              (r & 0xFF) == (int(srv.cfg["rules"]) & 0xFF), hex(r))
+              (r & 0xFF) == (srv.rules_now() & 0xFF), hex(r))
+        # mp 0.25 Allow cheats: always sent (CHEATS_SET), defaulting per mode
+        from dedi import core as dcore
+        saved_gm, saved_ac = srv.cfg["gamemode"], srv.cfg.get("allow_cheats")
+        srv.cfg["allow_cheats"] = None
+        srv.cfg["gamemode"] = 0
+        check("Take a Ride allows cheats by default",
+              srv.rules_now() & 0x60 == 0x60, hex(srv.rules_now()))
+        srv.cfg["gamemode"] = 2
+        check("a contest sends cheats off by default",
+              srv.rules_now() & 0x60 == 0x40, hex(srv.rules_now()))
+        srv.cfg["allow_cheats"] = True
+        check("allow_cheats true forces them on in a contest",
+              srv.rules_now() & 0x60 == 0x60, hex(srv.rules_now()))
+        check("cheats ride the session spare's rule bits",
+              (srv.session_spare() >> 1) & 0x60 == 0x60, hex(srv.session_spare()))
+        check("rules_text names the cheats rule", "cheats allowed" in dcore.rules_text(srv.rules_now()))
+        srv.cfg["gamemode"], srv.cfg["allow_cheats"] = saved_gm, saved_ac
         srv.cfg["password"] = "hunter2"
         check("a password sets the lock flag", bool(srv.advert_rules() & m.ADV_PASSWORD))
         check("flags never reach the 8-bit rules the session enforces", int(srv.cfg["rules"]) < 0x100,
