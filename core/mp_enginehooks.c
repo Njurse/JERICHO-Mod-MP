@@ -66,12 +66,12 @@ int MpOnCarDrawColor(void* userdata, void* args)
 }
 
 /* CAR_DATA.thrust is a short. ProcessCarPad (handling.c) copies this hook's
- * thrust back with `(short)jerArgs.thrust`. A stock accel thrust is about
- * 4915 (powerRatio 4096 × 4915, FIXEDH), so ×10 does not fit: 49150 wraps to
- * a negative short and the car reverses. Clamp to the short range. That is
- * the whole of ×10 the field can hold — about 6.7× on that stock car, and
- * exactly ×10 when the unscaled thrust is within ±3276. */
-#define MP_SUPER_TURBO_MUL	10
+ * thrust back with (short)jerArgs.thrust. A stock accel thrust is about
+ * 4915 (powerRatio 4096 x 4915, FIXEDH), so a high multiplier does not fit:
+ * 4915x10 = 49150 wraps to a negative short and the car reverses. Clamp to
+ * the short range. At 10x that is the whole of the field -- about 6.7x on
+ * that stock car, and exactly Nx when the unscaled thrust is within
+ * +/-32767/N. */
 #define MP_THRUST_SHORT_MAX	32767
 #define MP_THRUST_SHORT_MIN	(-32768)
 
@@ -102,34 +102,94 @@ static int MpCarIsLocalSeat(const CAR_DATA* cp)
 	return 0;
 }
 
+static int MpSuperTurboOnFor(const CAR_DATA* cp)
+{
+	return cp != NULL && MpSuperTurboMul() > 1 && MpCheatsAllowed() && MpCarIsLocalSeat(cp);
+}
+
 /* JER_EVENT_CAR_ENGINE: end of ProcessCarPad, after engine force is computed
- * and before it is stored. Super Turbo is a local toggle — JMP Options and the
- * pause Multiplayer page both write gMp.config.superTurbo — not the host's
- * Invulnerability rule, which is packed into the session and applied on every
- * machine. Only the local seat is scaled, so a remote car's pad path — and
- * therefore its net sync — is left alone. Peers still see the faster car,
- * because they adopt this machine's owner-authoritative state. */
+ * and before it is stored. Super Turbo is a local factor -- JMP Options and
+ * the pause Multiplayer page both write gMp.config.superTurbo -- not the
+ * host's Invulnerability rule, which is packed into the session and applied
+ * on every machine. Only the local seat is scaled, so a remote car's pad
+ * path -- and therefore its net sync -- is left alone. Peers still see the
+ * faster car, because they adopt this machine's owner-authoritative state. */
 int MpOnCarEngine(void* userdata, void* args)
 {
 	JER_ARGS_CAR_ENGINE* a = (JER_ARGS_CAR_ENGINE*)args;
+	int mul;
 	long long scaled;
 
 	(void)userdata;
 
-	if (a == NULL || !gMp.config.superTurbo || !MpCarIsLocalSeat((const CAR_DATA*)a->car))
+	if (a == NULL || !MpSuperTurboOnFor((const CAR_DATA*)a->car))
 		return JER_RESULT_CONTINUE;
 
-	/* a cheat: Take a Ride's alone in a session (the saved switch is kept) */
-	if (!MpCheatsAllowed())
-		return JER_RESULT_CONTINUE;
-
-	scaled = (long long)a->thrust * MP_SUPER_TURBO_MUL;
+	mul = MpSuperTurboMul();
+	scaled = (long long)a->thrust * mul;
 	if (scaled > MP_THRUST_SHORT_MAX)
 		scaled = MP_THRUST_SHORT_MAX;
 	else if (scaled < MP_THRUST_SHORT_MIN)
 		scaled = MP_THRUST_SHORT_MIN;
 	a->thrust = (int)scaled;
 
+	return JER_RESULT_CONTINUE;
+}
+
+/* JER_EVENT_GET_PHYSICS_PARAMS: extra downward gravity while Super Turbo is
+ * multiplying thrust, so a launch does not loft the front wheels. Gravity is
+ * already negative (stock GRAVITY_FORCE, -7456). Leave angularDamping alone
+ * -- that term also damps yaw, which would blunt steering. */
+int MpOnPhysicsParams(void* userdata, void* args)
+{
+	JER_ARGS_PHYSICS_PARAMS* a = (JER_ARGS_PHYSICS_PARAMS*)args;
+	int mul;
+	long long g, stock;
+
+	(void)userdata;
+
+	if (a == NULL || !MpSuperTurboOnFor((const CAR_DATA*)a->car))
+		return JER_RESULT_CONTINUE;
+
+	mul = MpSuperTurboMul();
+	stock = a->gravity;
+	/* (mul-1)/12 of stock: 10x is 1.75x gravity, capped at 2x so landings
+	 * do not tunnel. */
+	g = stock + stock * (mul - 1) / 12;
+	if (stock < 0 && g < stock * 2)
+		g = stock * 2;
+	else if (stock > 0 && g > stock * 2)
+		g = stock * 2;
+	a->gravity = (int)g;
+	return JER_RESULT_CONTINUE;
+}
+
+/* JER_EVENT_CAR_TORQUE: pitch/roll damper only (axes 0 and 2). Yaw is
+ * aacc[1] and is left alone so steering stays responsive. Same pattern as
+ * the engine's lift damper (avel/8) and crumple's pitch/roll term (avel/12).
+ * Stronger with a higher factor. */
+int MpOnCarTorque(void* userdata, void* args)
+{
+	JER_ARGS_CAR_TORQUE* a = (JER_ARGS_CAR_TORQUE*)args;
+	CAR_DATA* cp;
+	int mul, i;
+
+	(void)userdata;
+
+	if (a == NULL)
+		return JER_RESULT_CONTINUE;
+
+	cp = (CAR_DATA*)a->car;
+	if (!MpSuperTurboOnFor(cp))
+		return JER_RESULT_CONTINUE;
+
+	mul = MpSuperTurboMul();
+	for (i = 0; i < 3; i++)
+	{
+		if (i == 1)
+			continue;
+		cp->hd.aacc[i] -= cp->st.n.angularVelocity[i] * (mul - 1) / 24;
+	}
 	return JER_RESULT_CONTINUE;
 }
 

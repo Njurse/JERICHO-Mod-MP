@@ -259,9 +259,11 @@ JER_MODULE_ENTRY(jer_module_mp_entry)(JERICHO_CONTEXT* ctx)
 	ctx->jer_register_hook(ctx, JER_EVENT_CAR_DRAW_COLOR, MpOnCarDrawColor, NULL, 0);
 	ctx->jer_register_hook(ctx, JER_CARQ_ROLES, MpOnCarqRoles, NULL, 0);	/* role cars: the join car select asks */
 	ctx->jer_register_hook(ctx, JER_CARQ_ROLEPICK, MpOnCarqRolePick, NULL, 0);
-	/* Local Super Turbo. Runs for every car ProcessCarPad steps; the handler
-	 * itself ignores anything that is not this machine's seat. */
+	/* Local Super Turbo. Each handler runs for every car; they ignore
+	 * anything that is not this machine's seat. */
 	ctx->jer_register_hook(ctx, JER_EVENT_CAR_ENGINE, MpOnCarEngine, NULL, 0);
+	ctx->jer_register_hook(ctx, JER_EVENT_GET_PHYSICS_PARAMS, MpOnPhysicsParams, NULL, 0);
+	ctx->jer_register_hook(ctx, JER_EVENT_CAR_TORQUE, MpOnCarTorque, NULL, 0);
 	ctx->jer_register_hook(ctx, JER_EVENT_MP_FRONTEND, MpOnMpFrontend, NULL, 0);
 	ctx->jer_register_hook(ctx, JER_EVENT_FRONTEND, MpOnFrontendConfirm, NULL, 0);
 	ctx->jer_register_hook(ctx, JER_EVENT_CMDLINE, MpOnCmdLine, NULL, 0);

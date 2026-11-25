@@ -443,7 +443,17 @@ void MpConfigLoad(void)
 		gMp.config.modCheck = MP_MODCHECK_OFF;
 
 	gMp.config.strictVersion = jer_config_get_int("mp", "strict_version", 0);
-	gMp.config.superTurbo = jer_config_get_int("mp", "super_turbo", 0) ? 1 : 0;
+	{
+		int turbo = jer_config_get_int("mp", "super_turbo", 0);
+
+		if (turbo < 0)
+			turbo = 0;
+		else if (turbo == 1)
+			turbo = MP_SUPER_TURBO_MAX;	/* legacy "on" was a fixed x10 */
+		else if (turbo > MP_SUPER_TURBO_MAX)
+			turbo = MP_SUPER_TURBO_MAX;
+		gMp.config.superTurbo = turbo;
+	}
 	/* on unless the player turned it off: a config without the key gets the sounds */
 	gMp.config.joinLeaveSounds = jer_config_get_int("mp", "join_leave_sounds", 1) ? 1 : 0;
 
@@ -612,6 +622,51 @@ void MpConfigSave(void)
 	jer_config_set_int("mp", "first_name_set", gMp.config.firstNameSet ? 1 : 0);
 	jer_config_set_str("mp", "host_name", gMp.config.hostName);
 	jer_config_set_str("mp", "master_url", gMp.config.masterUrl);
+}
+
+int MpSuperTurboMul(void)
+{
+	int f = gMp.config.superTurbo;
+
+	if (f <= 0)
+		return 0;
+	if (f == 1)
+		return MP_SUPER_TURBO_MAX;	/* legacy "on" */
+	if (f > MP_SUPER_TURBO_MAX)
+		return MP_SUPER_TURBO_MAX;
+	return f;
+}
+
+int MpStepSuperTurbo(int dir)
+{
+	int f = MpSuperTurboMul();
+
+	if (dir == 0)
+	{
+		/* Cross: step up, wrap 10x back to Off */
+		if (f <= 0)
+			f = 2;
+		else if (f >= MP_SUPER_TURBO_MAX)
+			f = 0;
+		else
+			f++;
+	}
+	else
+	{
+		if (f <= 0)
+			f = (dir > 0) ? 2 : 0;
+		else
+			f += dir;
+		if (f == 1)
+			f = (dir < 0) ? 0 : 2;
+		if (f < 0)
+			f = 0;
+		if (f > MP_SUPER_TURBO_MAX)
+			f = MP_SUPER_TURBO_MAX;
+	}
+	gMp.config.superTurbo = f;
+	MpConfigSave();
+	return 1;
 }
 
 /* A short digest of the enabled-module manifest (id + version), used in

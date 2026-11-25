@@ -165,7 +165,16 @@ static unsigned long gJoinScanStart;	/* when the browse began (0 = not browsing)
 /* ------------------------------------------------------------------ */
 static void LblEnforce(void* ud, char* o, int n) { (void)ud; snprintf(o, n, "Enforce Mods: < %s >", kModCheckNames[gMp.config.modCheck % 3]); }
 static void LblStrict(void* ud, char* o, int n)  { (void)ud; snprintf(o, n, "Strict Version: < %s >", gMp.config.strictVersion ? "On" : "Off"); }
-static void LblSuperTurbo(void* ud, char* o, int n) { (void)ud; snprintf(o, n, "Super Turbo: < %s >", gMp.config.superTurbo ? "On" : "Off"); }
+static void LblSuperTurbo(void* ud, char* o, int n)
+{
+	int mul = MpSuperTurboMul();
+
+	(void)ud;
+	if (mul <= 0)
+		snprintf(o, n, "Super Turbo: < Off >");
+	else
+		snprintf(o, n, "Super Turbo: < %dx >", mul);
+}
 static void LblJoinLeaveSounds(void* ud, char* o, int n) { (void)ud; snprintf(o, n, "Join/leave sounds: < %s >", gMp.config.joinLeaveSounds ? "On" : "Off"); }
 static void LblPort(void* ud, char* o, int n)    { (void)ud; snprintf(o, n, "Port: %d", gMp.config.port); }
 static void LblManualGo(void* ud, char* o, int n) { (void)ud; snprintf(o, n, "Connect to %s", gManualIp); }
@@ -186,10 +195,15 @@ static int AdjEnforce(void* ud, int dir) { (void)ud; gMp.config.modCheck = (gMp.
  * different commit. */
 static int AdjStrict(void* ud, int dir) { (void)ud; gMp.config.strictVersion = (gMp.config.strictVersion + dir + 2) & 1; MpConfigSave(); return 1; }
 
-/* Local giggle, not a host rule. Left/right flips it and writes mp.ini, the
- * same way Strict Version does. The pause Multiplayer page
- * (MpOptToggleSuperTurbo) writes this same field. The ×10 itself is MpOnCarEngine. */
-static int AdjSuperTurbo(void* ud, int dir) { (void)ud; gMp.config.superTurbo = (gMp.config.superTurbo + dir + 2) & 1; MpConfigSave(); return 1; }
+/* Local giggle, not a host rule. Left/right steps the factor and writes
+ * mp.ini. The pause Multiplayer page (MpOptToggleSuperTurbo) writes this
+ * same field. The thrust scale and the anti-wheelie forces are in
+ * MpOnCarEngine / MpOnPhysicsParams / MpOnCarTorque. */
+static int AdjSuperTurbo(void* ud, int dir)
+{
+	(void)ud;
+	return MpStepSuperTurbo(dir);
+}
 
 /* Local, like Super Turbo: the menu sample when a player joins or leaves
  * (MpJoinLeaveNote). The pause Multiplayer page writes the same field. */

@@ -7,7 +7,7 @@
  *   - MP_CONFIG : the per-instance settings persisted in
  *                 JERICHO/CONFIG/mp.ini (port, player name, host name,
  *                 beacon interval, the host's lobby mod-check mode, and the
- *                 local Super Turbo toggle).
+ *                 local Super Turbo factor).
  *   - MP_PLAYER : one tracked network participant (self or a peer), with
  *                 the CAR_DATA slot it drives -- this is how we tell our
  *                 players apart from genuine AI/NPC traffic.
@@ -53,7 +53,9 @@ typedef struct MP_CONFIG
 	/* JMP Options and the pause Multiplayer page, this machine only. Not a
 	 * session rule: it does not ride MP_RULES_* / MP_WELCOME and it is not
 	 * applied to anyone else's car.
-	 * 1 = multiply the local player's engine thrust by 10 (JER_EVENT_CAR_ENGINE). */
+	 * 0 = off, 2..MP_SUPER_TURBO_MAX = thrust multiplier for the local
+	 * player's engine (JER_EVENT_CAR_ENGINE). Legacy 1 ("on") is treated as
+	 * MP_SUPER_TURBO_MAX. */
 	int  superTurbo;
 
 	/* JMP Options and the pause Multiplayer page, this machine only (0.23.3).
@@ -272,6 +274,9 @@ extern JERICHO_CONTEXT* gMpCtx;
 /* ------------------------------------------------------------------ */
 void MpConfigLoad(void);
 void MpConfigSave(void);
+#define MP_SUPER_TURBO_MAX	10
+int MpSuperTurboMul(void);		/* 0 = off, else the thrust multiplier */
+int MpStepSuperTurbo(int dir);	/* left/right steps and clamps; dir 0 (Cross) steps up and wraps */
 /* A non-empty default name for a first run (empty string == not set). */
 const char* MpDefaultPlayerName(void);
 
@@ -846,6 +851,8 @@ int MpOnPauseMenu(void* userdata, void* args);
 int MpOnGameQuit(void* userdata, void* args);
 int MpOnCarDrawColor(void* userdata, void* args);
 int MpOnCarEngine(void* userdata, void* args);
+int MpOnPhysicsParams(void* userdata, void* args);	/* Super Turbo downforce */
+int MpOnCarTorque(void* userdata, void* args);		/* Super Turbo pitch damper */
 int MpOnPedDraw(void* userdata, void* args);
 int MpOnNetInput(void* userdata, void* args);
 int MpOnPedInput(void* userdata, void* args);

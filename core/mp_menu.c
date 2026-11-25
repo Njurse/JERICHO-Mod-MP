@@ -1098,30 +1098,38 @@ int MpOptToggleImmune(void* ud, int dir)
 
 /* Same field the JMP Options row writes (AdjSuperTurbo in mp_ui.c). Local
  * only: MpConfigSave persists super_turbo, and nothing here packs it into
- * MP_RULES / WELCOME. Cross toggles, like Invincibility and Immunity on this
- * page; left/right flips it too, like Strict Version. */
+ * MP_RULES / WELCOME. Left/right steps the factor and clamps; Cross (dir 0)
+ * steps up and wraps, like other pause cyclers. */
 static void MpOptLabelSuperTurbo(void* ud, char* out, int max)
 {
+	int mul = MpSuperTurboMul();
+
 	(void)ud;
-	snprintf(out, max, "Super Turbo: %s%s", gMp.config.superTurbo ? "On" : "Off", MpCheatSuffix());
+	if (mul <= 0)
+		snprintf(out, max, "Super Turbo: Off%s", MpCheatSuffix());
+	else
+		snprintf(out, max, "Super Turbo: %dx%s", mul, MpCheatSuffix());
 }
 
 static int MpOptToggleSuperTurbo(void* ud, int dir)
 {
+	int mul;
+
 	(void)ud;
-	(void)dir;
 
 	if (!MpCheatAllowed("Super Turbo"))
 		return JER_PAUSE_QUIT_NONE;
 
-	/* 0/1 only, so Cross (dir 0) and left/right (±1) are the same flip.
-	 * JMP Options' AdjSuperTurbo writes this same field and saves it. */
-	gMp.config.superTurbo = gMp.config.superTurbo ? 0 : 1;
-	MpConfigSave();
+	MpStepSuperTurbo(dir);
+	mul = MpSuperTurboMul();
 
 	if (gMpCtx != NULL)
-		gMpCtx->jer_log(gMpCtx, "[mp] player option: super turbo %s\n",
-			gMp.config.superTurbo ? "On" : "Off");
+	{
+		if (mul <= 0)
+			gMpCtx->jer_log(gMpCtx, "[mp] player option: super turbo Off\n");
+		else
+			gMpCtx->jer_log(gMpCtx, "[mp] player option: super turbo %dx\n", mul);
+	}
 
 	return JER_PAUSE_QUIT_NONE;
 }
