@@ -292,7 +292,8 @@ enum
 	MP_REJECT_VERSION,	/* protocol / SDK / game build mismatch */
 	MP_REJECT_MODS,		/* mod manifest mismatch while enforcement is on */
 	MP_REJECT_INPROGRESS,	/* the host has already launched the level */
-	MP_REJECT_CUSTOM
+	MP_REJECT_CUSTOM,
+	MP_REJECT_PASSWORD	/* the host has a password and the hello's was missing / wrong */
 };
 
 /* Lobby mod-match strictness (host setting) */
@@ -404,6 +405,16 @@ typedef struct MP_MOD_INFO
  * UNDER 42 bytes -- 20 + 5 + 16 = 41. Do not raise MP_HELLO_VER_MAX. */
 #define MP_HELLO_VER_TAG	"JPVR"
 #define MP_HELLO_VER_MAX	16
+/* ...then optionally the PASSWORD block: MP_HELLO_PW_TAG + u8 length + that many
+ * bytes (printable ASCII, at most MP_PASSWORD_MAX). Sent ONLY when the player has
+ * typed a join password, so a client without one sends exactly what it always did
+ * (an old dediserver reads every whole 42-byte tail row as a mod; JPID + JPVR +
+ * JPPW can pass 42, so the block must stay opt-in). A host with a password set
+ * refuses a hello whose block is missing or different with MP_REJECT_PASSWORD;
+ * a host without one ignores the block. Like JPID it is plain text on the wire:
+ * it keeps strangers out, it is not encryption. */
+#define MP_HELLO_PW_TAG		"JPPW"
+#define MP_PASSWORD_MAX		15
 typedef struct MP_HELLO
 {
 	uint16_t protoVersion;
@@ -471,6 +482,16 @@ typedef struct MP_REJECT
 	           ((invuln) ? MP_RULE_INVULN : 0) |\
 	           (((diff) & MP_RULE_DIFF_MASK) << MP_RULE_DIFF_SHIFT) |\
 	           ((immune) ? MP_RULE_IMMUNE : 0))
+/* The HIGH byte of the 16-bit rules field the beacon and the master listing carry is
+ * not rules at all: it is what a BROWSER wants to know about a server before it
+ * joins. Nothing else reads it (every MP_RULES_* reader masks the low byte, the
+ * welcome and session bytes are 8 bits wide), and a peer that predates it just
+ * sees bits it never looks at -- so no protocol bump. Set only on the advertised
+ * copy, never in the rules a session enforces. */
+#define MP_ADV_PASSWORD		0x100	/* the host wants a password to join */
+#define MP_ADV_DEDICATED	0x200	/* a dedicated server, not a listen host */
+#define MP_ADV_PASSWORD_OF(b)	(((b) & MP_ADV_PASSWORD) ? 1 : 0)
+#define MP_ADV_DEDICATED_OF(b)	(((b) & MP_ADV_DEDICATED) ? 1 : 0)
 #define MP_RULES_COPS(b)	(((b) & MP_RULE_COPS) ? 1 : 0)
 #define MP_RULES_INVULN(b)	(((b) & MP_RULE_INVULN) ? 1 : 0)
 #define MP_RULES_DIFF(b)	(((b) >> MP_RULE_DIFF_SHIFT) & MP_RULE_DIFF_MASK)

@@ -484,6 +484,11 @@ void MpConfigLoad(void)
 	/* The discovery server a stock JERICHO talks to. It is what makes the Online
 	 * browser show anything, and what a hosted game lists itself on. Set it EMPTY
 	 * to run LAN-only: no listing, no advertisement, the beacon still works. */
+	s = jer_config_get_str("mp", "host_password", "");
+	snprintf(gMp.config.hostPassword, sizeof(gMp.config.hostPassword), "%s", (s != NULL) ? s : "");
+	s = jer_config_get_str("mp", "join_password", "");
+	snprintf(gMp.config.joinPassword, sizeof(gMp.config.joinPassword), "%s", (s != NULL) ? s : "");
+
 	s = jer_config_get_str("mp", "master_url", MP_DEFAULT_MASTER_URL);
 	snprintf(gMp.config.masterUrl, sizeof(gMp.config.masterUrl), "%s", (s != NULL) ? s : "");
 }
@@ -507,6 +512,8 @@ void MpConfigSave(void)
 	jer_config_set_int("mp", "car_is_slot", gMp.config.carIsSlot);
 	jer_config_set_int("mp", "strict_version", gMp.config.strictVersion);
 	jer_config_set_int("mp", "super_turbo", gMp.config.superTurbo);
+	jer_config_set_str("mp", "host_password", gMp.config.hostPassword);
+	jer_config_set_str("mp", "join_password", gMp.config.joinPassword);
 	jer_config_set_int("mp", "join_leave_sounds", gMp.config.joinLeaveSounds);
 	jer_config_set_int("mp", "cops", gMp.config.cops);
 	jer_config_set_int("mp", "cop_difficulty", gMp.config.copDifficulty);

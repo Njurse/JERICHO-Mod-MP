@@ -2330,7 +2330,7 @@ static void MpBeaconSend(void)
 	b.modHash = MpModHash();
 	/* The third carrier of the packed rules byte (mp_proto.h): the browser reads
 	 * it to NAME a server's mode before anyone joins it. */
-	b.rules = (uint16_t)MpRulesForPeer();
+	b.rules = (uint16_t)MpAdvertRules();
 
 	/* the beacon goes to the FIXED discovery port; b.port carries the session
 	 * port so the browser knows where to connect. Sent once per broadcast

@@ -42,9 +42,10 @@ supervisor (or a test) can pipe commands in.
 --city N             GameLevel the clients should load (0..3)
 --arena N            which of that city's two multiplayer maps (0 or 1; the game's
                      -mp 0 / -mp 1). Default 0
---gamemode N         the session's game mode id (default 0 = TAKE A RIDE; 1 = FOX N
-                     HOUNDS, 2 = CAR BOMB TAG; see "gamemode" below)
---mode-time N        Fox N Hounds / Car Bomb Tag time in minutes, 1..5 (default 3)
+--gamemode MODE      the game mode, by id or name (default 0): 0 takearide,
+                     1 foxnhounds, 2 carbombtag, 3 copsnrobbers (also ride / fox /
+                     bomb / cnr). An unknown mode is refused and 0 is used.
+--mode-time N        round time for modes 1-3 in minutes, 1..5 (default 3)
 --max-players N      slots 1..N-1 are given to clients (0 belongs to the server)
 --beacon / --no-beacon
 --beacon-ms N        beacon cadence (default 1000)
@@ -97,12 +98,17 @@ existing file). Updates and `git pull` therefore leave your settings alone.
   "arena": 0,               // which of the city's two multiplayer maps (0/1;
                             // the game's -mp 0 / -mp 1). The server hosts the
                             // multiplayer map, never the full single-player city
-  "gamemode": 0,            // the game mode id, MP_GAMEMODE_* (mp_proto.h). 0 =
-                            // TAKE A RIDE, 1 = FOX N HOUNDS, 2 = CAR BOMB TAG.
+  "password": "",           // players must enter this to join ("" = open). In the
+                            // game: Join Game > Manual Connect > Password. The same
+                            // as a listen host's Host settings > Password. Plain
+                            // text on the wire: it keeps strangers out, nothing more.
+  "gamemode": 0,            // the game mode, MP_GAMEMODE_* (mp_proto.h), id or name. 0 =
+                            // TAKE A RIDE, 1 = FOX N HOUNDS, 2 = CAR BOMB TAG,
+                            // 3 = COPS N ROBBERS.
                             // Optional: a file without it runs mode 0. Sent in the
                             // welcome, the start, the beacon and the master advert;
                             // see ../../../docs/GAMEMODES.md
-  // "mode_time": 3,        // OPTIONAL, not in the defaults: modes 1 and 2's time
+  // "mode_time": 3,        // OPTIONAL, not in the defaults: modes 1-3's time
                             // in minutes, clamped 1..5; missing = 3. The server
                             // referees them itself (tags from the carstates it
                             // keeps) and sends JPMK; never written into your file
@@ -132,6 +138,8 @@ existing file). Updates and `git pull` therefore leave your settings alone.
   "master_timeout_s": 5.0
 }
 ```
+
+**In the server browser.** The server advertises itself as DEDI (a listen host shows as LSTN), with an amber `*` when a `"password"` is set. Both flags ride the high byte of the beacon/master `rules` field (`MP_ADV_DEDICATED`, `MP_ADV_PASSWORD`), so older clients just ignore them.
 
 ## Chat commands and admins
 
@@ -237,9 +245,31 @@ not delete yours (keep your own names; `example_hello.py` is overwritten).
 "plugins_dir": "plugins"
 ```
 
-Built-ins that are off by default: `modes` (the game-mode skeleton: logs the
-session's `gamemode` and adds a read-only `!mode`; it changes nothing yet -- see
-`docs/GAMEMODES.md`). Name it in `"plugins"` to load it.
+`modes` (on by default) names the session's mode and switches it like a listen
+host's lobby. `!mode` shows it to anyone; an admin or the console runs
+`!mode <id|name> [minutes] [save]` or `!modetime <1..5>`. A switch restarts the
+round state and the referee at round 0 of the new mode and has every player
+rejoin (as a map rotation does), since a dedicated server is always mid-match and
+a listen host also only changes mode in its lobby. `save` writes `gamemode` and
+`mode_time` back into the config file. Plugins can call
+`server.set_gamemode(mode, minutes=None, rejoin=True)`.
+
+### Example configs, one per game mode
+
+`configs/` holds a ready-to-run file for each mode. Copy one and edit the name,
+admins and password:
+
+| file | mode | notes |
+| --- | --- | --- |
+| `configs/takearide.json` | 0 Take a Ride | free roam, 16 players, AI police on |
+| `configs/foxnhounds.json` | 1 Fox n Hounds | 3 min, 8 players, AI police off, 3 rounds a map |
+| `configs/carbombtag.json` | 2 Car Bomb Tag | 2 min fuse, 8 players, AI police off, 3 rounds a map |
+| `configs/copsnrobbers.json` | 3 Cops n Robbers | 4 min getaway, 8 players, player cops only (set `"cops": true` for AI backup), 3 rounds a map |
+
+    python dediserver.py --config configs/copsnrobbers.json
+
+Each file's `_comment` key explains the mode; the server ignores keys it does not
+know. Modes 1-3 need two players with cars before round 1 starts.
 
 `"plugins": ["commands", "admin", "mine"]` loads exactly those, in that order. A
 plugin that fails to import or raises is logged and disabled; the server keeps

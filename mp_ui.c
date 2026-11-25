@@ -165,12 +165,11 @@ static void LblManualGo(void* ud, char* o, int n) { (void)ud; snprintf(o, n, "Co
 
 /* The field itself. It says it is taking keystrokes and shows a caret, so "why does
  * nothing happen when I press keys" answers itself. */
+static void MpFieldLabelFwd(int which, char* o, int n);
 static void LblManualField(void* ud, char* o, int n)
 {
 	(void)ud;
-
-	snprintf(o, n, "%s %s%s", gManualEdit ? "" : "Address:",
-		gManualIp, gManualEdit ? "_" : "");
+	MpFieldLabelFwd(0, o, n);
 }
 
 static int AdjEnforce(void* ud, int dir) { (void)ud; gMp.config.modCheck = (gMp.config.modCheck + dir + 3) % 3; MpConfigSave(); return 1; }
@@ -567,62 +566,176 @@ static int ActManualConnect(void* ud)
 /* ------------------------------------------------------------------ */
 /* The typed address field                                             */
 /* ------------------------------------------------------------------ */
+/* ONE typed field at a time owns the keyboard: the manual address, or a password
+ * (the host's, on mp.host; the one sent when joining, on mp.manual). The external
+ * names stay MpUiManual* -- mp_chat.c routes keys here by them -- but they now act
+ * on whichever field is open. */
+typedef struct MP_TEXT_FIELD
+{
+	char*       buf;
+	size_t      cap;		/* buffer size, terminator included */
+	int         max;		/* most characters it takes */
+	int         menu;		/* M_*: the field closes itself when this menu is left */
+	int         secret;		/* draw as '*' (a password) */
+	int         address;	/* only what an address can hold */
+	const char* what;		/* for the log */
+} MP_TEXT_FIELD;
+
+static MP_TEXT_FIELD gFieldManual  = { gManualIp, sizeof(gManualIp), MP_MANUAL_MAX - 1, M_MANUAL, 0, 1, "manual address" };
+static MP_TEXT_FIELD gFieldHostPw  = { gMp.config.hostPassword, sizeof(gMp.config.hostPassword), MP_PASSWORD_MAX, M_HOST, 1, 0, "host password" };
+static MP_TEXT_FIELD gFieldJoinPw  = { gMp.config.joinPassword, sizeof(gMp.config.joinPassword), MP_PASSWORD_MAX, M_MANUAL, 1, 0, "join password" };
+static MP_TEXT_FIELD* gField;		/* the field that is typing, NULL when none */
+
 int MpUiManualEditing(void)
 {
-	return gManualEdit;
+	return gField != NULL;
+}
+
+static void MpFieldBegin(MP_TEXT_FIELD* f)
+{
+	if (gField != NULL && gField != f)
+		MpUiManualCommit();
+
+	snprintf(gManualUndo, sizeof(gManualUndo), "%s", f->buf);
+	gField = f;
+	gManualEdit = (f == &gFieldManual);
+
+	if (gMpCtx != NULL)
+		gMpCtx->jer_log(gMpCtx, "[mp] %s: typing (Enter keeps it, Escape undoes)\n", f->what);
 }
 
 void MpUiManualBegin(void)
 {
-	snprintf(gManualUndo, sizeof(gManualUndo), "%s", gManualIp);
-	gManualEdit = 1;
-
-	if (gMpCtx != NULL)
-		gMpCtx->jer_log(gMpCtx, "[mp] manual address: typing (Enter keeps it, Escape undoes)\n");
+	MpFieldBegin(&gFieldManual);
 }
 
 void MpUiManualCommit(void)
 {
+	MP_TEXT_FIELD* f = gField;
+
+	gField = NULL;
 	gManualEdit = 0;
 
+	if (f == NULL)
+		return;
+
+	if (f->secret)
+		MpConfigSave();		/* passwords persist ([mp] host_password / join_password) */
+
 	if (gMpCtx != NULL)
-		gMpCtx->jer_log(gMpCtx, "[mp] manual address: '%s'\n", gManualIp);
+		gMpCtx->jer_log(gMpCtx, "[mp] %s: %s\n", f->what,
+			f->secret ? (f->buf[0] ? "set" : "cleared") : f->buf);
 }
 
 void MpUiManualCancel(void)
 {
-	snprintf(gManualIp, sizeof(gManualIp), "%s", gManualUndo);
+	MP_TEXT_FIELD* f = gField;
+
+	gField = NULL;
 	gManualEdit = 0;
 
+	if (f == NULL)
+		return;
+
+	snprintf(f->buf, f->cap, "%s", gManualUndo);
+
 	if (gMpCtx != NULL)
-		gMpCtx->jer_log(gMpCtx, "[mp] manual address: reverted to '%s'\n", gManualIp);
+		gMpCtx->jer_log(gMpCtx, "[mp] %s: undone\n", f->what);
 }
 
-/* One typed character (or NULL for backspace) from PsyX, while the field is editing.
- * The accepted set is what an address can hold: letters and digits for a name, dots
- * and hyphens for a host name, a colon for the port. Anything else is dropped rather
- * than shown, so the field cannot fill with text no resolver would accept. */
+/* One typed character (or NULL for backspace) from PsyX, while a field is typing.
+ * An address takes what an address can hold (letters, digits, . - : _), so it
+ * cannot fill with text no resolver would accept; a password takes any printable
+ * ASCII but the space. */
 void MpUiManualType(const char* text)
 {
-	size_t len = strlen(gManualIp);
+	MP_TEXT_FIELD* f = gField;
+	size_t len;
+	char c;
+
+	if (f == NULL)
+		return;
+
+	len = strlen(f->buf);
 
 	if (text == NULL)
 	{
 		if (len > 0)
-			gManualIp[len - 1] = '\0';
+			f->buf[len - 1] = '\0';
 
 		return;
 	}
 
-	if (text[0] == '\0' || len + 1 >= MP_MANUAL_MAX)
+	c = text[0];
+
+	if (c == '\0' || (int)len >= f->max || len + 1 >= f->cap)
 		return;
 
-	if (!((text[0] >= 'a' && text[0] <= 'z') || (text[0] >= 'A' && text[0] <= 'Z') ||
-	      (text[0] >= '0' && text[0] <= '9') ||
-	      text[0] == '.' || text[0] == '-' || text[0] == ':' || text[0] == '_'))
+	if (f->address
+		? !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
+		    c == '.' || c == '-' || c == ':' || c == '_')
+		: (c < 33 || c > 126))
 		return;
 
-	snprintf(gManualIp + len, sizeof(gManualIp) - len, "%s", text);
+	f->buf[len] = c;
+	f->buf[len + 1] = '\0';
+}
+
+/* A field's row: "Name: value", the value masked for a password, and while typing
+ * "> value_" so it is obvious the keys go there. */
+static void MpFieldLabel(const MP_TEXT_FIELD* f, const char* name, const char* empty, char* o, int n)
+{
+	char shown[sizeof(gManualIp)];
+	size_t i, len = strlen(f->buf);
+
+	if (len >= sizeof(shown))
+		len = sizeof(shown) - 1;
+
+	for (i = 0; i < len; i++)
+		shown[i] = f->secret ? '*' : f->buf[i];
+	shown[len] = '\0';
+
+	if (gField == f)
+		snprintf(o, n, "%s: %s_", name, shown);
+	else
+		snprintf(o, n, "%s: %s", name, len ? shown : empty);
+}
+
+static void MpFieldLabelFwd(int which, char* o, int n)
+{
+	(void)which;
+	MpFieldLabel(&gFieldManual, "Address", "", o, n);
+}
+
+static void LblHostPassword(void* ud, char* o, int n) { (void)ud; MpFieldLabel(&gFieldHostPw, "Password", "< none >", o, n); }
+static void LblJoinPassword(void* ud, char* o, int n) { (void)ud; MpFieldLabel(&gFieldJoinPw, "Password", "< none >", o, n); }
+
+/* Cross on a password row: type, or stop typing. Triangle/Square on it clears it. */
+static int ActPasswordField(void* ud)
+{
+	MP_TEXT_FIELD* f = (MP_TEXT_FIELD*)ud;
+
+	if (gField == f)
+		MpUiManualCommit();
+	else
+		MpFieldBegin(f);
+
+	return 1;
+}
+
+static int AdjPasswordClear(void* ud, int dir)
+{
+	MP_TEXT_FIELD* f = (MP_TEXT_FIELD*)ud;
+
+	(void)dir;
+	if (gField == f)
+		return 1;	/* left/right while typing: the text is the keyboard's */
+	if (f->buf[0] != '\0')
+	{
+		f->buf[0] = '\0';
+		MpConfigSave();
+	}
+	return 1;
 }
 
 /* Cross on the field: start typing, or stop. Committing on the SECOND press as well
@@ -733,6 +846,9 @@ static const JER_FE_ITEM kHostItems[] =	/* the Time row is inserted after Game m
 	{ NULL, LblCopDiff, NULL, NULL, AdjCopDiff, -1, 0 },
 	{ NULL, LblImmune,  NULL, NULL, AdjImmune,  -1, 0 },
 	{ NULL, LblInvuln,  NULL, NULL, AdjInvuln,  -1, 0 },
+
+	/* who may join: Cross types a password (shown as *), left/right clears it */
+	{ NULL, LblHostPassword, (void*)&gFieldHostPw, ActPasswordField, AdjPasswordClear, -1, 0 },
 
 	/* on to the stock chain: city, map, time of day / weather, car (ActTakeARide) */
 	{ "Continue",    NULL, NULL, ActTakeARide, NULL, -1, 0 },
@@ -923,7 +1039,7 @@ static JER_FE_MENU gNameMenu = { "mp.name", gNameItems, 0, NULL, NULL };
 
 /* manual LAN address: the field, Connect, Back -- exactly the three ManualOnEnter
  * builds, so the count here is the count there */
-static JER_FE_ITEM gManualItems[3];
+static JER_FE_ITEM gManualItems[4];
 static JER_FE_MENU gManualMenu = { "mp.manual", gManualItems, 0, NULL, NULL };
 static char gNameSlotLabel[10][24];
 static const char kAlpha[] = " ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.";
@@ -1241,6 +1357,15 @@ static void ManualOnEnter(void* ud)
 	k++;
 
 	gManualItems[k].label = NULL;
+	gManualItems[k].get_label = LblJoinPassword;
+	gManualItems[k].userdata = (void*)&gFieldJoinPw;
+	gManualItems[k].on_activate = ActPasswordField;
+	gManualItems[k].on_adjust = AdjPasswordClear;
+	gManualItems[k].submenu = -1;
+	gManualItems[k].is_back = 0;
+	k++;
+
+	gManualItems[k].label = NULL;
 	gManualItems[k].get_label = LblManualGo;
 	gManualItems[k].userdata = NULL;
 	gManualItems[k].on_activate = ActManualConnect;
@@ -1282,12 +1407,15 @@ static void ManualOnEnter(void* ud)
  * headings are a header, not another row. */
 #define TABLE_SCALE		100	/* the console's size, in the frontend's face */
 #define TABLE_COL_NAME		0
-#define TABLE_COL_PLAYERS	196
-#define TABLE_COL_MODE		268
-#define TABLE_COL_CITY		434
-#define TABLE_COL_PING		528
-#define TABLE_NAME_CHARS	15	/* what the NAME column holds before it is cut */
-#define TABLE_ROW_W		560	/* the menu's row width; the columns above fit it */
+#define TABLE_COL_PLAYERS	261
+#define TABLE_COL_MODE		333
+#define TABLE_COL_CITY		473
+#define TABLE_COL_PING		567
+#define TABLE_NAME_CHARS	20	/* what the NAME column holds before it is cut: the 4-letter
+				 * server kind (DEDI / LSTN), a lock slot, then the name */
+#define TABLE_TAG_CHARS		5	/* "DEDI" + the lock slot */
+#define TABLE_CHAR_W		13	/* one character of the column, in the column's own units */
+#define TABLE_ROW_W		600	/* the menu's row width; the columns above fit it */
 #define TABLE_ROW_TOP		210	/* where the ROSTER starts. The stock 190 sits barely 24
 					 * units under the screen title, which left nowhere for
 					 * a heading line: it landed ON the title */
@@ -1552,6 +1680,7 @@ typedef struct TABLE_ROW
 	int  gamemode;
 	int  city;
 	int  pingMs;
+	int  live;			/* a LAN row only: the host has started */
 } TABLE_ROW;
 
 static int TableRowSource(int online, int index, TABLE_ROW* out)
@@ -1563,7 +1692,8 @@ static int TableRowSource(int online, int index, TABLE_ROW* out)
 		if (s == NULL)
 			return 0;
 
-		snprintf(out->name, sizeof(out->name), "%.*s", TABLE_NAME_CHARS, s->name);
+		snprintf(out->name, sizeof(out->name), "%.*s", TABLE_NAME_CHARS - TABLE_TAG_CHARS, s->name);
+		out->live = 0;
 		out->players = s->players;
 		out->maxPlayers = s->maxPlayers;
 		out->rules = s->rules;
@@ -1581,10 +1711,10 @@ static int TableRowSource(int online, int index, TABLE_ROW* out)
 
 		/* A LAN row says whether the host has STARTED, which a joiner wants to
 		 * know and an online row has no equivalent of (that list is live by
-		 * definition). It rides the NAME cell, clipped to make room, so the five
-		 * columns stay five. */
-		snprintf(out->name, sizeof(out->name), "%.*s%s", TABLE_NAME_CHARS - 5,
-			s->hostName, s->inProgress ? " LIVE" : "");
+		 * definition). It takes the PING cell, which a beacon has no measurement
+		 * for anyway, so the NAME cell is free for the server kind. */
+		snprintf(out->name, sizeof(out->name), "%.*s", TABLE_NAME_CHARS - TABLE_TAG_CHARS, s->hostName);
+		out->live = s->inProgress ? 1 : 0;
 		out->players = s->players;
 		out->maxPlayers = s->maxPlayers;
 		out->rules = s->rules;
@@ -1686,7 +1816,7 @@ static void TableDraw(int online)
 	{
 		int hy = headY;
 
-		jer_text_draw_at(JER_TEXT_FE, TABLE_SCALE, x + TABLE_COL_NAME,    hy, "SERVER NAME", 255, 190, 90);
+		jer_text_draw_at(JER_TEXT_FE, TABLE_SCALE, x + TABLE_COL_NAME,    hy, "TYPE NAME", 255, 190, 90);
 		jer_text_draw_at(JER_TEXT_FE, TABLE_SCALE, x + TABLE_COL_PLAYERS, hy, "PLAYERS",     255, 190, 90);
 		jer_text_draw_at(JER_TEXT_FE, TABLE_SCALE, x + TABLE_COL_MODE,    hy, "GAMEMODE",    255, 190, 90);
 		jer_text_draw_at(JER_TEXT_FE, TABLE_SCALE, x + TABLE_COL_CITY,    hy, "CITY",        255, 190, 90);
@@ -1697,26 +1827,43 @@ static void TableDraw(int online)
 	{
 		TABLE_ROW r;
 		char cell[24];
+		int  ded, cr, cg, cb, tr, tg, tb;
 
 		if (!TableRowSource(online, i, &r) || !jer_frontend_row_rect(i, &x, &y, &w, &h))
 			continue;
 
-		jer_text_draw_at(JER_TEXT_FE, TABLE_SCALE, x + TABLE_COL_NAME, y, r.name, 235, 235, 235);
+		/* The row's TINT says what kind of server it is before the tag is read:
+		 * cool blue for a dedicated server (always on, someone else's machine),
+		 * warm sand for a listen host (a player's game). The tag itself is the
+		 * brighter shade of the same hue, so colour is never the only signal. */
+		ded = MP_ADV_DEDICATED_OF(r.rules);
+		cr = ded ? 190 : 245;  cg = ded ? 225 : 228;  cb = ded ? 255 : 190;
+		tr = ded ? 110 : 255;  tg = ded ? 190 : 190;  tb = ded ? 255 : 90;
+
+		jer_text_draw_at(JER_TEXT_FE, TABLE_SCALE, x + TABLE_COL_NAME, y, ded ? "DEDI" : "LSTN", tr, tg, tb);
+
+		/* the lock slot: amber, so a password game stands out in either tint */
+		if (MP_ADV_PASSWORD_OF(r.rules))
+			jer_text_draw_at(JER_TEXT_FE, TABLE_SCALE, x + TABLE_COL_NAME + 4 * TABLE_CHAR_W, y, "*", 255, 190, 90);
+
+		jer_text_draw_at(JER_TEXT_FE, TABLE_SCALE, x + TABLE_COL_NAME + TABLE_TAG_CHARS * TABLE_CHAR_W, y, r.name, cr, cg, cb);
 
 		snprintf(cell, sizeof(cell), "%d/%d", r.players, r.maxPlayers);
-		jer_text_draw_at(JER_TEXT_FE, TABLE_SCALE, x + TABLE_COL_PLAYERS, y, cell, 235, 235, 235);
+		jer_text_draw_at(JER_TEXT_FE, TABLE_SCALE, x + TABLE_COL_PLAYERS, y, cell, cr, cg, cb);
 
-		jer_text_draw_at(JER_TEXT_FE, TABLE_SCALE, x + TABLE_COL_MODE, y, MpModeName(r.gamemode), 235, 235, 235);
-		jer_text_draw_at(JER_TEXT_FE, TABLE_SCALE, x + TABLE_COL_CITY, y, MpCityLabel(r.city), 235, 235, 235);
+		jer_text_draw_at(JER_TEXT_FE, TABLE_SCALE, x + TABLE_COL_MODE, y, MpModeName(r.gamemode), cr, cg, cb);
+		jer_text_draw_at(JER_TEXT_FE, TABLE_SCALE, x + TABLE_COL_CITY, y, MpCityLabel(r.city), cr, cg, cb);
 
-		if (r.pingMs > 0)
+		if (r.live)
+			snprintf(cell, sizeof(cell), "LIVE");	/* a started LAN game */
+		else if (r.pingMs > 0)
 			snprintf(cell, sizeof(cell), "%d", r.pingMs);
 		else if (r.pingMs == MP_ONLINE_PING_FAILED)
 			snprintf(cell, sizeof(cell), "x");	/* listed, but nothing answers */
 		else
 			snprintf(cell, sizeof(cell), "-");	/* not measured yet */
 
-		jer_text_draw_at(JER_TEXT_FE, TABLE_SCALE, x + TABLE_COL_PING, y, cell, 235, 235, 235);
+		jer_text_draw_at(JER_TEXT_FE, TABLE_SCALE, x + TABLE_COL_PING, y, cell, cr, cg, cb);
 	}
 }
 
@@ -1911,7 +2058,7 @@ void MpUiTick(void)
 	 * other way -- Back/Triangle, or the engine popping the menu -- the flag would
 	 * stay set and the keys would keep feeding a field nobody can see. Committing
 	 * here is also the self-healing half of the grab. */
-	if (gManualEdit && !MpMenuIs(M_MANUAL))
+	if (gField != NULL && !MpMenuIs(gField->menu))
 		MpUiManualCommit();
 
 	/* TEST LEVER (MP_TEST_MANUALADDR=<host>[:port]): the address field needs a

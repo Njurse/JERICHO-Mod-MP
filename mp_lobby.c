@@ -964,6 +964,16 @@ uint32_t MpRulesForPeer(void)
 	return MpRulesFromConfig();
 }
 
+uint32_t MpAdvertRules(void)
+{
+	uint32_t r = MpRulesForPeer();
+
+	if (gMp.config.hostPassword[0] != '\0')
+		r |= MP_ADV_PASSWORD;
+
+	return r;		/* a listen host is never MP_ADV_DEDICATED */
+}
+
 /* Adopt a packed rule byte and remember it as in force. `how` names the carrier,
  * because "the rules are not what I set" is otherwise unattributable. */
 static void MpRulesAdopt(uint32_t packed, const char* how)
@@ -1069,7 +1079,7 @@ int MpStartMatch(void)
 	 * told the address can reach. It costs a POST and a small heartbeat, never
 	 * blocks, and a master that is down changes nothing here. */
 	MpMasterAdvertiseStart(gMp.config.hostName, gMp.config.port,
-		gMp.city, gMp.gamemode, (int)MpRulesForPeer());
+		gMp.city, gMp.gamemode, (int)MpAdvertRules());
 	gMp.seed = 0x5eed1318u;		/* shared run seed */
 
 	memset(&st, 0, sizeof(st));
@@ -1127,7 +1137,7 @@ int MpStartMatch(void)
 void MpSendHello(void)
 {
 	unsigned char buf[sizeof(MP_HELLO) + MP_MAX_MODS * sizeof(MP_MOD_INFO) + 4 + MP_PLAYER_ID_LEN
-			  + 5 + MP_HELLO_VER_MAX];
+			  + 5 + MP_HELLO_VER_MAX + 5 + MP_PASSWORD_MAX];
 	MP_HELLO h;
 	int n, len;
 
@@ -1182,6 +1192,19 @@ void MpSendHello(void)
 		buf[len + 4] = (unsigned char)vl;
 		memcpy(buf + len + 5, ver, (size_t)vl);
 		len += 5 + vl;
+	}
+
+	/* the password block (mp_proto.h, MP_HELLO_PW_TAG): only when one was typed */
+	if (gMp.config.joinPassword[0] != '\0')
+	{
+		int pl = (int)strlen(gMp.config.joinPassword);
+
+		if (pl > MP_PASSWORD_MAX)
+			pl = MP_PASSWORD_MAX;
+		memcpy(buf + len, MP_HELLO_PW_TAG, 4);
+		buf[len + 4] = (unsigned char)pl;
+		memcpy(buf + len + 5, gMp.config.joinPassword, (size_t)pl);
+		len += 5 + pl;
 	}
 
 	MpSendToHost(MP_TAG_HELLO, MP_FLAG_RELIABLE, buf, len);
@@ -1386,6 +1409,37 @@ void MpHandleCar(int connIndex, const unsigned char* p, int len)
 	MpHostSendRoster();
 }
 
+/* The JPPW password a hello carries after its manifest, JPID and JPVR blocks (each
+ * optional, in that order). 1 and `out` filled when there is one, else 0. */
+static int MpHelloPassword(const unsigned char* p, int len, int modCount, char* out, size_t outLen)
+{
+	int at = (int)(sizeof(MP_HELLO) + (size_t)modCount * sizeof(MP_MOD_INFO));
+	int n;
+
+	out[0] = '\0';
+
+	if (len >= at + 4 + MP_PLAYER_ID_LEN && memcmp(p + at, MP_HELLO_ID_TAG, 4) == 0)
+		at += 4 + MP_PLAYER_ID_LEN;
+
+	if (len >= at + 5 && memcmp(p + at, MP_HELLO_VER_TAG, 4) == 0)
+		at += 5 + p[at + 4];
+
+	if (len < at + 5 || memcmp(p + at, MP_HELLO_PW_TAG, 4) != 0)
+		return 0;
+
+	n = p[at + 4];
+	if (n > MP_PASSWORD_MAX)
+		n = MP_PASSWORD_MAX;
+	if (n > (int)outLen - 1)
+		n = (int)outLen - 1;
+	if (len < at + 5 + n)
+		return 0;
+
+	memcpy(out, p + at + 5, (size_t)n);
+	out[n] = '\0';
+	return 1;
+}
+
 void MpHandleHello(int connIndex, const unsigned char* p, int len)
 {
 	MP_HELLO h;
@@ -1418,6 +1472,27 @@ void MpHandleHello(int connIndex, const unsigned char* p, int len)
 	{
 		MpConnClose(connIndex);
 		return;
+	}
+
+	/* A password-protected host (JMP host settings, [mp] host_password) admits only
+	 * a hello that carries the same one. Checked before anything else is spent on
+	 * the joiner; the reason tells their game to ask for it. */
+	if (gMp.config.hostPassword[0] != '\0')
+	{
+		char got[MP_PASSWORD_MAX + 1];
+		int has = MpHelloPassword(p, len, n, got, sizeof(got));
+
+		if (!has || strncmp(got, gMp.config.hostPassword, MP_PASSWORD_MAX) != 0)
+		{
+			if (gMpCtx)
+				gMpCtx->jer_log(gMpCtx, "[mp] reject: %s from '%s'\n",
+					has ? "wrong password" : "no password", h.playerName);
+
+			MpSendReject(connIndex, MP_REJECT_PASSWORD,
+				has ? "wrong password" : "this server needs a password");
+			MpConnShutdownGraceful(connIndex);
+			return;
+		}
 	}
 
 	/* Protocol and SDK version are always required -- they decide whether the
@@ -2759,6 +2834,12 @@ void MpHandleReject(const unsigned char* p, int len)
 	MpClientDisconnect();
 	gMp.role = MP_ROLE_NONE;
 	MpJoinStateSet(MP_JOIN_FAILED);	/* the UI shows the refusal, not "Connecting..." */
+
+	/* ...and SAY why: a refused join used to drop back to the menu without a word. */
+	if (r.reason == MP_REJECT_PASSWORD)
+		jer_error("%s - enter it under Join Game > Manual Connect > Password", r.text);
+	else
+		jer_error("Join refused: %s", r.text[0] ? r.text : "the server said no");
 }
 
 /* The addon net bridge: deliver an inbound MP_CHANNEL to modules (and, on the

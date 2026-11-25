@@ -54,6 +54,10 @@ CITY_WIRE_CODE_LAST = 0xFE
 # Session rules, packed into ONE byte (mp_proto.h MP_RULES_PACK). The beacon now
 # carries this so a browser can NAME a server's mode without joining it.
 MP_RULE_COPS = 0x1            # 1 = police cars spawn
+# The HIGH byte of the beacon / master `rules` field is what a browser wants to know
+# (mp_proto.h MP_ADV_*): a password is needed, and the server is a dedicated one.
+ADV_PASSWORD = 0x100
+ADV_DEDICATED = 0x200
 
 
 GAMEMODE_NAMES = {0: "Take a Ride", 1: "Fox n Hounds", 2: "Car Bomb Tag", 3: "Cops n Robbers"}      # MP_GAMEMODE_* (mp_proto.h)
@@ -330,7 +334,8 @@ def parse_mark(payload):
             "out": sorted(pid for pid, f, _ds in raw if f & MARK_ENTRY_F_OUT)}
 
 
-REJECT_NAMES = {0: "NONE", 1: "FULL", 2: "VERSION", 3: "MODS", 4: "INPROGRESS", 5: "CUSTOM"}
+REJECT_NAMES = {0: "NONE", 1: "FULL", 2: "VERSION", 3: "MODS", 4: "INPROGRESS", 5: "CUSTOM",
+                6: "PASSWORD"}
 REJECT_IDS = {v.lower(): k for k, v in REJECT_NAMES.items() if k != 0}
 
 
@@ -367,9 +372,12 @@ HELLO_ID_TAG = b"JPID"                   # mp_proto.h MP_HELLO_ID_TAG
 PLAYER_ID_LEN = 16                      # mp_proto.h MP_PLAYER_ID_LEN
 HELLO_VER_TAG = b"JPVR"                  # mp_proto.h MP_HELLO_VER_TAG
 HELLO_VER_MAX = 16                      # mp_proto.h MP_HELLO_VER_MAX (JPID+JPVR < one 42-byte row)
+HELLO_PW_TAG = b"JPPW"                   # mp_proto.h MP_HELLO_PW_TAG (opt-in: only with a password)
+PASSWORD_MAX = 15                       # mp_proto.h MP_PASSWORD_MAX
+REJECT_PASSWORD = 6                     # mp_proto.h MP_REJECT_PASSWORD
 
 
-def build_hello(name, mods=(), build=0, player_id=None, version=None):
+def build_hello(name, mods=(), build=0, player_id=None, version=None, password=None):
     """MP_HELLO + its manifest, then (optionally) the JPID player-id block and
     the JPVR build block (the game sends both; JPVR only after JPID)."""
     body = HELLO.pack(PROTO, SDK, build, 0, name.encode()[:31], len(mods), 0, 0, 0)
@@ -382,7 +390,27 @@ def build_hello(name, mods=(), build=0, player_id=None, version=None):
     if version is not None:
         v = version.encode("ascii", "replace")[:HELLO_VER_MAX]
         body += HELLO_VER_TAG + bytes([len(v)]) + v
+    if password:
+        pw = password.encode("ascii", "replace")[:PASSWORD_MAX]
+        body += HELLO_PW_TAG + bytes([len(pw)]) + pw
     return body
+
+
+def parse_hello_password(payload):
+    """The JPPW password after the manifest, JPID and JPVR blocks (each optional),
+    or None when the client sent none. The game's MpHelloPassword, mp_lobby.c."""
+    if len(payload) < HELLO.size:
+        return None
+    modc = HELLO.unpack_from(payload, 0)[5]
+    at = HELLO.size + modc * MODI.size
+    if payload[at:at + 4] == HELLO_ID_TAG and len(payload) >= at + 4 + PLAYER_ID_LEN:
+        at += 4 + PLAYER_ID_LEN
+    if payload[at:at + 4] == HELLO_VER_TAG and len(payload) >= at + 5:
+        at += 5 + min(payload[at + 4], len(payload) - at - 5)
+    if len(payload) < at + 5 or payload[at:at + 4] != HELLO_PW_TAG:
+        return None
+    n = min(payload[at + 4], PASSWORD_MAX)
+    return payload[at + 5:at + 5 + n].decode("ascii", "replace")
 
 
 def parse_hello_version(payload):

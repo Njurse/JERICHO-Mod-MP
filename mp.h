@@ -47,6 +47,8 @@ typedef struct MP_CONFIG
 	int  idleDropMs;		/* silence that drops a peer; 0 = never drop */
 	int  modCheck;			/* host lobby setting: MP_MODCHECK_* */
 	int  strictVersion;		/* host lobby setting: also require the same build */
+	char hostPassword[MP_PASSWORD_MAX + 1];	/* host lobby setting: "" = open ([mp] host_password) */
+	char joinPassword[MP_PASSWORD_MAX + 1];	/* sent when joining, "" = none ([mp] join_password) */
 
 	/* JMP Options and the pause Multiplayer page, this machine only. Not a
 	 * session rule: it does not ride MP_RULES_* / MP_WELCOME and it is not
@@ -773,6 +775,9 @@ void MpSetMapShape(int mpLevel, int arena);	/* the session's map: 0 = the full c
 /* The host's session rules, MP_RULES_PACK'd, as they should be published right
  * now. mp_net.c's beacon is the third carrier of this byte (see mp_proto.h). */
 uint32_t MpRulesForPeer(void);
+/* The rules as ADVERTISED (beacon + master): MpRulesForPeer plus the browser flags
+ * (MP_ADV_*). Never used for what the session enforces. */
+uint32_t MpAdvertRules(void);
 void MpUiOpenModeMenu(void);		/* open the Single Player / Multiplayer menu */
 void MpUiArmModeMenu(void);		/* ask for it on the NEXT frame - call this from a hook */
 void MpUiOpenCarSelect(void);		/* open the stock car select (joining player picks a car) */

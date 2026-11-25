@@ -8,6 +8,7 @@ import json
 import math
 import os
 import random
+import re
 import socket
 import struct
 import sys
@@ -73,6 +74,8 @@ DEFAULTS = {
     "plugins_dir": "plugins",
     # admin plugin: player ids (from !whoami) that are admins on join, and an
     # optional shared password for !login ("" = no password logins).
+    "password": "",           # players must send it to join ("" = open). Plain text on
+                               # the wire, like the listen host's [mp] host_password.
     "admins": [],
     "admin_password": "",
     "log_level": "info",
@@ -580,6 +583,34 @@ class Dedicated:
                       % (self.cfg["time_of_day"], self.cfg["weather"]))
         self.readvertise()
         return "%s, %s" % (self.cfg["time_of_day"], self.cfg["weather"])
+
+    def set_gamemode(self, gamemode, minutes=None):
+        """Switch the session's game mode (and, optionally, its round time).
+
+        The in-game host does this from its lobby (MpSetSessionGamemode: a
+        selectable mode only). This server is always mid-match, so the change
+        resets the round state and the referee to round 0 of the new mode, exactly
+        as a fresh level load does on a host; the CALLER then has every client
+        rejoin (as a map rotation does) so each one reloads into it. Clients take
+        the mode from the round state (mp_round_net.c), so a joiner never plays
+        the old one. Raises ValueError for an unknown id or name."""
+        gid = parse_gamemode(gamemode)
+        if minutes is not None:
+            self.cfg["mode_time"] = max(m.MARK_MINUTES_MIN, min(m.MARK_MINUTES_MAX, int(minutes)))
+        with self.lock:
+            self.cfg["gamemode"] = gid
+            self.round = RoundState(gid)
+            self.mark = markref.MarkReferee(gid, mode_minutes(self.cfg))
+            if not self.mark.active:
+                self.round.begin()
+            self.round_sent = -1
+            self.mark_sent = -1
+            self.escape_ms = 0
+        self.log.info("game mode now %d (%s)%s" % (
+            gid, m.mode_name(gid),
+            (", %d min" % mode_minutes(self.cfg)) if self.mark.active else ""))
+        self.readvertise()
+        return gid
 
     def set_city(self, city):
         city = int(city)
@@ -1230,6 +1261,17 @@ class Dedicated:
             self.log.info("%s declares mods: %s"
                           % (who, ", ".join("%s %s" % (x[0], x[1]) for x in mods if x[2])))
 
+        # A server password (the listen host's [mp] host_password): a hello with no
+        # JPPW block, or a different one, is refused before it takes a slot.
+        want_pw = str(self.cfg.get("password", "") or "")
+        if want_pw:
+            got_pw = m.parse_hello_password(payload)
+            if got_pw != want_pw[:m.PASSWORD_MAX]:
+                self.log.warning("refused %s: %s" % (who, "no password" if got_pw is None else "wrong password"))
+                self._reject(conn, m.REJECT_PASSWORD,
+                             "this server needs a password" if got_pw is None else "wrong password")
+                return
+
         refused_full = False
 
         with self.lock:
@@ -1510,6 +1552,16 @@ class Dedicated:
                               time_of_day_index(self.cfg), weather_index(self.cfg),
                               seed, 0xFF, int(self.cfg["rules"]) & 0xFF)
 
+    def advert_rules(self):
+        """The rules as ADVERTISED to a browser (beacon + master): the packed rules
+        plus the browser flags in the high byte -- always DEDICATED here, and the
+        lock when this server wants a password. Never what the session enforces."""
+        r = int(self.cfg["rules"]) & 0xFF
+        r |= m.ADV_DEDICATED
+        if str(self.cfg.get("password") or ""):
+            r |= m.ADV_PASSWORD
+        return r
+
     # -- UDP beacon (LAN discovery)
     def beacon_loop(self):
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -1525,7 +1577,7 @@ class Dedicated:
                                 self.player_count(), self.max_players,
                                 int(self.cfg["gamemode"]), 0, self.city,
                                 1 if self.cfg["live"] else 0, 0,
-                                int(self.cfg["rules"]))
+                                self.advert_rules())
             try:
                 # to the DISCOVERY port, never to our own session port: the session port
                 # travels INSIDE the beacon, and a browser listens on the fixed one
@@ -1568,7 +1620,7 @@ class Dedicated:
                         "gamemode": int(self.cfg["gamemode"]),
                         # the same packed byte the beacon carries, so a browser
                         # can name the mode from either source
-                        "rules": int(self.cfg["rules"]),
+                        "rules": self.advert_rules(),
                         "players": self.player_count(), "maxPlayers": self.max_players,
                         "inProgress": 1 if self.cfg["live"] else 0,
                         # whether this server checks a client's mod manifest, so a
@@ -1885,9 +1937,11 @@ def parse_args(argv):
     ap.add_argument("--arena", type=int,
                     help="which multiplayer map clients load (0..3; the game's -mp N; "
                          "Driver 2 ships 0 and 1 per city)")
-    ap.add_argument("--gamemode", type=int)
+    ap.add_argument("--gamemode", metavar="MODE",
+                    help="game mode by id or name: 0 takearide, 1 foxnhounds, "
+                         "2 carbombtag, 3 copsnrobbers")
     ap.add_argument("--mode-time", type=int, dest="mode_time", metavar="MIN",
-                    help="Fox N Hounds / Car Bomb Tag time in minutes, 1..5 (default 3)")
+                    help="round time in minutes for modes 1-3, 1..5 (default 3)")
     ap.add_argument("--max-players", type=int)
     ap.add_argument("--beacon", dest="beacon", action="store_true", default=None)
     ap.add_argument("--no-beacon", dest="beacon", action="store_false")
@@ -1939,6 +1993,38 @@ def time_of_day_index(cfg):
 
 def weather_index(cfg):
     return _named_index(cfg.get("weather", "clear"), WEATHERS, 0)
+
+
+def parse_gamemode(value):
+    """A mode id from a number or a name ("foxnhounds", "Cops n Robbers", "cnr" ...).
+    Only the modes this build knows (mp_test.GAMEMODE_NAMES, mirrored from
+    mp_mode.c's selectable rows). ValueError otherwise."""
+    if isinstance(value, bool):
+        raise ValueError("game mode is a number or a name")
+    try:
+        gid = int(value)
+    except (TypeError, ValueError):
+        key = re.sub(r"[^a-z]", "", str(value).lower()).replace("and", "n")
+        gid = GAMEMODE_ALIASES.get(key)
+        if gid is None:
+            for k, name in m.GAMEMODE_NAMES.items():
+                if re.sub(r"[^a-z]", "", name.lower()).replace("and", "n") == key:
+                    gid = k
+        if gid is None:
+            raise ValueError("unknown game mode %r; one of %s" % (value, gamemode_list()))
+    if gid not in m.GAMEMODE_NAMES:
+        raise ValueError("game mode %d is not known; one of %s" % (gid, gamemode_list()))
+    return gid
+
+
+GAMEMODE_ALIASES = {"ride": 0, "free": 0, "freeroam": 0, "tar": 0,
+                    "fox": 1, "foxhounds": 1, "fnh": 1, "hounds": 1,
+                    "bomb": 2, "bombtag": 2, "cbt": 2, "tag": 2,
+                    "cops": 3, "copsrobbers": 3, "cnr": 3, "robbers": 3}
+
+
+def gamemode_list():
+    return ", ".join("%d %s" % (k, v) for k, v in sorted(m.GAMEMODE_NAMES.items()))
 
 
 def pack_rules(cops, invuln, diff, immune):
@@ -2018,6 +2104,11 @@ def build_config(argv):
     if any(getattr(args, k, None) is not None for k in RULE_KEYS):
         file_keys |= {"cops"}      # a rules flag on the command line wins over a legacy int
     cfg["_rules_legacy"] = resolve_rules(cfg, file_keys)
+    try:
+        cfg["gamemode"] = parse_gamemode(cfg.get("gamemode", 0) or 0)
+    except ValueError as e:
+        print("[dedi] %s; using 0 (%s)" % (e, m.mode_name(0)), file=sys.stderr)
+        cfg["gamemode"] = 0
     return cfg, path
 
 

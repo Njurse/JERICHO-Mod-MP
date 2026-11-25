@@ -17,6 +17,7 @@ COPY tools/servers/dediserver/plugins             /mp/tools/servers/dediserver/p
 # the template only: the compose mounts the operator's dediserver.json, and without
 # one the server creates it from this on first start
 COPY tools/servers/dediserver/dediserver.example.json /mp/tools/servers/dediserver/dediserver.example.json
+COPY tools/servers/dediserver/configs           /mp/tools/servers/dediserver/configs
 
 WORKDIR /mp/tools/servers/dediserver
 

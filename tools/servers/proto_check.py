@@ -88,6 +88,8 @@ CONSTANTS = {
     "MP_ARENA_MAX": "ARENA_MAX",
     "MP_SESSION_ARENA_SHIFT": "SESSION_ARENA_SHIFT",
     "MP_SESSION_ARENA_MASK": "SESSION_ARENA_MASK",
+    "MP_ADV_PASSWORD": "ADV_PASSWORD",
+    "MP_ADV_DEDICATED": "ADV_DEDICATED",
 }
 
 # C enum member -> the Python constant that must carry the same value. Enum members

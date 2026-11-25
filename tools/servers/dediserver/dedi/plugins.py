@@ -187,6 +187,23 @@ class ServerAPI:
         next level load. Raises ValueError for an unknown name."""
         return self._s.set_session(time_of_day=time_of_day, weather=weather)
 
+    def set_gamemode(self, gamemode, minutes=None, rejoin=True, by="admin"):
+        """Switch the game mode (id or name) and, optionally, its round time.
+        Round state and referee restart at round 0 of the new mode; with rejoin
+        (the default) every player reconnects into it, as a map rotation does.
+        Raises ValueError for an unknown mode. Returns the new id."""
+        gid = self._s.set_gamemode(gamemode, minutes)
+        if rejoin:
+            import mp_test as m
+            for p in self.players():
+                self.kick(p, "game mode: %s - rejoin" % m.mode_name(gid), by=by,
+                          announce=False, rejoin=True)
+        return gid
+
+    def save_config_keys(self, keys):
+        """Write these config keys back into the server's config file (atomic)."""
+        return self._s.save_config_keys(keys)
+
     def set_city(self, city):
         """Make `city` (0..3) the session city: new joiners load it (the welcome and
         start carry it) and the discovery listing is refreshed. Players already in
