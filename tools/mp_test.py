@@ -166,6 +166,7 @@ PED_MODEL_CIVILIAN = 3
 # (playerId, on, r, g, b, pedModel, 2 spare). (MP_CHANNEL is CHANNEL, below.)
 HIT = struct.Struct("<BB2xiiiI3i")
 HIT_F_TRAFFIC = 0x01
+HIT_F_PROBE = 0x02              # mp_proto.h MP_HIT_F_PROBE (push only, never a tag)
 # MP_STATS (count + 3 reserved) + 12-byte MP_STATS_ENTRY rows: playerId, lossPct
 # (0xFF = unknown), pingMs, rxBps, txBps -- each player's link to the hub.
 STATS = struct.Struct("<B3x")
