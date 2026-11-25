@@ -21,6 +21,7 @@ import time
 DESCRIPTION = "rounds_per_map / rotation - cycle maps after N rounds"
 COLOR = "#FFD24A"
 CITIES = ("chicago", "havana", "vegas", "rio")
+from dedi.mapnames import where as map_where
 SWITCH_DELAY = 4.0          # seconds after the round's end: let the result show
 now = time.monotonic
 
@@ -85,9 +86,7 @@ def next_stop(stops, city, mode, arena):
 
 
 def _where(s):
-    if s["map_mode"] == "city":
-        return "%s city" % CITIES[s["city"]].upper()
-    return "%s mp %d" % (CITIES[s["city"]].upper(), s["arena"])
+    return map_where(s["city"], s["map_mode"], s["arena"])
 
 
 def _current():

@@ -797,6 +797,7 @@ void MpCameraPose(int* x, int* y, int* z, int* yaw);	/* camera position + yaw */
 int  MpGetGameLevel(void);		/* the frontend's current city (GameLevel) */
 void MpSetSubGame(int n);		/* the multiplayer sub-level (gSubGameNumber) */
 void MpSetMapShape(int mpLevel, int arena);	/* the session's map: 0 = the full city, 1 = the multiplayer map */
+const char* MpArenaTitle(int city, int arena);	/* Driver 2 area name, or NULL when none */
 
 /* The host's session rules, MP_RULES_PACK'd, as they should be published right
  * now. mp_net.c's beacon is the third carrier of this byte (see mp_proto.h). */

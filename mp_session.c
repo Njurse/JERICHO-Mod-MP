@@ -544,6 +544,26 @@ void MpSetMapShape(int mpLevel, int arena)
 	gBootMpArena = arena & MP_SESSION_ARENA_MASK;
 }
 
+/* The name the frontend already printed for this city's multiplayer map.
+ * Arenas 0 and 1 are the stock per-city list (FEscreens.inc screens 35-38,
+ * the buttons Host Game still shows). Vegas 2 and 3 are the cut Ghost Town
+ * / North Vegas regions only the 2-player Checkpoint races reached
+ * (FEmain.c gameAreas[56-62] + EN_MISSION.LTXT; make_vegas_arenas.py).
+ * NULL means no name -- the caller should print "mp N". */
+const char* MpArenaTitle(int city, int arena)
+{
+	static const char* const names[4][4] = {
+		{ "River North", "Cabrini Green", NULL, NULL },
+		{ "Plaza de Revolucion", "Old Havana", NULL, NULL },
+		{ "Downtown", "The Lakes", "Ghost Town", "North Vegas" },
+		{ "Centro", "Flamengo", NULL, NULL },
+	};
+
+	if (city < 0 || city >= 4 || arena < 0 || arena >= 4)
+		return NULL;
+	return names[city][arena];
+}
+
 /* JOIN / LEAVE SOUNDS (0.23.3). The frontend's own menu samples, which mp asks
  * the core to keep resident in game (jer_sound_request_menu_bank, mp.c):
  * JER_MENU_SFX_ACCEPT (the frontend's Cross, FEmain.c FESound(2)) when a player

@@ -1693,7 +1693,14 @@ static void MpRotWhere(const MP_ROT_STOP* s, char* out, int max)
 	int c = (s->city >= 0 && s->city < MP_ROT_CITIES) ? s->city : 0;
 
 	if (s->shape)
-		snprintf(out, max, "%s MP %d", gMpRotCity[c], s->arena);
+	{
+		const char* name = MpArenaTitle(c, s->arena);
+
+		if (name != NULL)
+			snprintf(out, max, "%s %s", gMpRotCity[c], name);
+		else
+			snprintf(out, max, "%s mp %d", gMpRotCity[c], s->arena);
+	}
 	else
 		snprintf(out, max, "%s CITY", gMpRotCity[c]);
 }

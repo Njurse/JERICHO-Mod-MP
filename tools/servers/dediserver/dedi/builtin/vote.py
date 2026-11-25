@@ -16,6 +16,7 @@ import time
 DESCRIPTION = "!vote <city> [mp [0|1]] - vote for the city or its multiplayer map"
 COLOR = "#FFD24A"
 CITIES = ("chicago", "havana", "vegas", "rio")
+from dedi.mapnames import where as map_where
 ALIASES = {"las vegas": 2, "lasvegas": 2, "las_vegas": 2}
 USAGE = "!vote <city> [mp [0|1]]"
 START_HINT = USAGE + " (or !vote mp [0|1]) starts one"
@@ -67,7 +68,7 @@ def _cfg_float(key, default):
 def _where(city, mode, arena):
     if mode == "city":
         return "%s city (single-player)" % CITIES[city].upper()
-    return "%s mp %d" % (CITIES[city].upper(), arena)
+    return map_where(city, "mp", arena)
 
 
 def _mp_value(words):

@@ -347,7 +347,7 @@ def main():
         out = say(ms, ma, "!vote city")
         check("vote: !vote city needs a city", "usage" in out[-1][1], out)
         out = say(ms, ma, "!vote city chicago mp")
-        check("vote: bare mp means the current map", "already on CHICAGO mp 0" in out[-1][1], out)
+        check("vote: bare mp means the current map", "already on CHICAGO River North" in out[-1][1], out)
         out = say(ms, ma, "!vote city havana 1")
         check("vote: mp must be named", "unknown option" in out[-1][1], out)
         out = say(ms, ma, "!help vote")
@@ -356,20 +356,20 @@ def main():
               "!vote <city> [mp [0|1]]" in help_text and "!vote mp [0|1]" in help_text, help_text)
         out = say(ms, ma, "!vote havana mp 1")
         check("vote: city + mp starts the vote",
-              any("started a vote to switch to HAVANA mp 1" in t for _, t in out)
+              any("started a vote to switch to HAVANA Old Havana" in t for _, t in out)
               and any("type !vote havana mp 1 to agree" in t for _, t in out), out)
         out = say(ms, ma, "!vote rio mp 1")
-        check("vote: a different city waits", "vote for HAVANA mp 1 is running" in out[-1][1], out)
+        check("vote: a different city waits", "vote for HAVANA Old Havana is running" in out[-1][1], out)
         out = say(ms, ma, "!vote havana mp 0")
-        check("vote: a different mp waits", "vote for HAVANA mp 1 is running" in out[-1][1], out)
+        check("vote: a different mp waits", "vote for HAVANA Old Havana is running" in out[-1][1], out)
         out = say(ms, mb, "!vote mp 1")
         check("vote: an mp-only line for another city waits",
-              "vote for HAVANA mp 1 is running" in out[-1][1], out)
+              "vote for HAVANA Old Havana is running" in out[-1][1], out)
         out = say(ms, ma, "!vote havana mp 1")
         check("vote: the same player cannot vote twice", "already voted" in out[-1][1], out)
         out = say(ms, mb, "!vote city havana mp 1")
         check("vote: a majority passes the map too",
-              any("Vote passed: switching to HAVANA mp 1" in t for _, t in out), out)
+              any("Vote passed: switching to HAVANA Old Havana" in t for _, t in out), out)
         check("vote: the city and arena are now the session map",
               ms.city == 1 and ms.arena == 1, (ms.city, ms.arena))
         with open(ms.config_path) as f:
@@ -387,10 +387,10 @@ def main():
         mclock[0] += 61
         out = say(ms, ma, "!vote mp 0")
         check("vote: an mp-only vote names the current city",
-              any("started a vote to switch to HAVANA mp 0" in t for _, t in out), out)
+              any("started a vote to switch to HAVANA Plaza de Revolucion" in t for _, t in out), out)
         out = say(ms, mb, "!vote mp 0")
         check("vote: an mp-only vote passes on a majority",
-              any("Vote passed: switching to HAVANA mp 0" in t for _, t in out), out)
+              any("Vote passed: switching to HAVANA Plaza de Revolucion" in t for _, t in out), out)
         check("vote: only the arena changed", ms.city == 1 and ms.arena == 0, (ms.city, ms.arena))
         with open(ms.config_path) as f:
             saved = json.load(f)
@@ -400,7 +400,7 @@ def main():
         mclock[0] += 61
         out = say(ms, ma, "!vote city havana mp 0")
         check("vote: the current map is refused",
-              "already on HAVANA mp 0" in out[-1][1], out)
+              "already on HAVANA Plaza de Revolucion" in out[-1][1], out)
 
         # -- explicit list
         server2 = build(tmp, plugins=["commands", "off"])
@@ -553,10 +553,10 @@ def main():
         out = say(asrv, adm, "/map vegas mp 1")
         check("admin map: switches immediately without vote",
               asrv.city == 2 and asrv.map_shape == 1 and asrv.arena == 1
-              and any("Map changed to VEGAS mp 1 by admin Boss" in t for _, t in out), (asrv.city, asrv.arena, out))
+              and any("Map changed to VEGAS The Lakes by admin Boss" in t for _, t in out), (asrv.city, asrv.arena, out))
         res = console_line(asrv, "map chicago mp 0")
         check("console map: switches immediately",
-              "switched to CHICAGO mp 0" in res and asrv.city == 0 and asrv.arena == 0, (res, asrv.city, asrv.arena))
+              "switched to CHICAGO River North" in res and asrv.city == 0 and asrv.arena == 0, (res, asrv.city, asrv.arena))
 
         # !endround and !restart (on active timed mode)
         with asrv.lock:
