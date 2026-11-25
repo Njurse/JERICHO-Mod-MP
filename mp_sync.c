@@ -1469,6 +1469,25 @@ static int MpLerpAngle(int a, int b, int num, int den)
 	return (a + d * num / den) & 4095;
 }
 
+/* hd.speed from the horizontal velocity, exactly as StepOneCar derives it
+ * (wheelforces.c: |vx| and |vz| in FIXEDH units, the larger plus half the
+ * smaller). StepOneCar recomputes it on the next step anyway; setting it with
+ * the pose means the sound code never sees a stale 0 for a moving remote car
+ * (DoDopplerSFX picks idle below 17). hd.revs is left to ControlCarRevs, which
+ * slews it toward GetEngineRevs from the wheel speed of the same velocity. */
+static void MpSetSpeedFromVelocity(CAR_DATA* cp)
+{
+	int a = FIXEDH(cp->st.n.linearVelocity[0]);
+	int b = FIXEDH(cp->st.n.linearVelocity[2]);
+
+	if (a < 0)
+		a = -a;
+	if (b < 0)
+		b = -b;
+
+	cp->hd.speed = (a < b) ? b + a / 2 : a + b / 2;
+}
+
 /* Write a remote car's rigid body. The same fields the old adopt wrote: the
  * engine re-derives hd.direction from the quaternion, so the orientation and
  * both velocities have to travel with the position. */
@@ -1497,6 +1516,7 @@ static void MpPlayWriteBody(CAR_DATA* cp, int x, int y, int z, int heading,
 	memcpy(&cp->hd.where, &m, sizeof(m));
 
 	cp->hd.direction = heading;
+	MpSetSpeedFromVelocity(cp);
 }
 
 /* Once per sim frame, before the world steps: place every remote car at the
@@ -3001,6 +3021,7 @@ static void MpApplyTrafficPose(CAR_DATA* cp, const MP_TRAFFIC_ENTRY* e)
 	cp->hd.where.t[1] = e->y;
 	cp->hd.where.t[2] = e->z;
 	cp->hd.direction = e->heading;
+	MpSetSpeedFromVelocity(cp);
 }
 
 /* Damage parity. The owner is the authority, so the mirror copies its zone damage

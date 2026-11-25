@@ -687,6 +687,17 @@ void MpCarFailsafeTick(void)
 			cp->ap.palette = (u_char)CarSlotClampPalette(want, (int)defaultPlayerPalette);
 			CreateDentableCar(cp);
 
+			/* Rebind our engine and idle channels to the restored model, as
+			 * MpAdoptCar does: they were started for the car before the stand-in
+			 * and would keep playing that block (or none). */
+			if (me->carId == player[0].playerCarId && player[0].playerType == PLAYER_TYPE_CAR)
+			{
+				if (CarHasSiren(want) == 0)
+					StopChannel(2);
+
+				StartPlayerCarSounds(0, want, (VECTOR*)cp->hd.where.t);
+			}
+
 			if (gMpCtx != NULL)
 				gMpCtx->jer_log(gMpCtx,
 					"[mp] car reload: %s model %d is loaded - leaving the host city's car 1 stand-in\n",
