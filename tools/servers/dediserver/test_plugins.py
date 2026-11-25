@@ -183,7 +183,8 @@ def main():
         out = say(server, boss, "!weather snow")
         check("!weather refuses an unknown name", "usage" in out[0][1] and server.cfg["weather"] == "rain", out)
         w = m.WELCOME.unpack(server._welcome(3, 1))
-        check("welcome carries time/weather/rules", w[10] == 3 and w[11] == 1 and w[14] == server.cfg["rules"], w)
+        # WELCOME.rules is rules_now() (MP_RULES_WITH_CHEATS), not the base pack in cfg['rules']
+        check("welcome carries time/weather/rules", w[10] == 3 and w[11] == 1 and w[14] == (server.rules_now() & 0xFF), w)
 
         # -- !admin add/remove/list, persisted
         import json
