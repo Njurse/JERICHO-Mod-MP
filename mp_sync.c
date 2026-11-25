@@ -1925,6 +1925,11 @@ void MpSendOwnCarState(void)
 	h.frame = gMp.frame;
 	h.count = 1;
 
+	/* a client says which mode it plays (gamemode + 1; 0 = not said): the host
+	 * re-sends the mode to one that disagrees, then kicks it (MpHostModeCheckTick) */
+	if (!MpIsHost())
+		h.reserved[0] = (uint8_t)(gMp.gamemode + 1);
+
 	memset(&e, 0, sizeof(e));
 	e.playerId = (uint8_t)me->id;
 	e.flags = MP_CARSTATE_HAS_BODY;
@@ -2269,6 +2274,9 @@ void MpHandleCarState(int connIndex, const unsigned char* p, int len)
 
 	if (len < (int)(sizeof(MP_CARSTATE) + (size_t)n * sizeof(MP_CARSTATE_ENTRY)))
 		return;
+
+	if (MpIsHost() && connIndex >= 0 && h.reserved[0] != 0)
+		MpHostNoteClientMode(MpConnPlayerId(connIndex), (int)h.reserved[0] - 1);
 
 	for (i = 0; i < n; i++)
 	{

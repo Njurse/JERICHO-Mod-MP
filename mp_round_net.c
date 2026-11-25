@@ -23,6 +23,19 @@ static int gMpRoundModeLogged;		/* client: "snapshot names another mode" said on
 void MpRoundHostSync(void);
 void MpHostSendRound(int connIndex);
 
+/* A CLIENT ON ANOTHER MODE. A client names the mode it plays in its own carstate
+ * (MP_CARSTATE.reserved[0] = gamemode + 1, MpSendOwnCarState; 0 = an older build
+ * that does not say). One that disagrees with the host is sent the round state
+ * again -- it names the mode and MpHandleRound adopts it -- every
+ * MP_MODE_RESEND_MS, and kicked if it still disagrees after
+ * MP_MODE_MISMATCH_KICK_MS. */
+#define MP_MODE_RESEND_MS		500
+#define MP_MODE_MISMATCH_KICK_MS	5000
+
+static int gMpClientMode[MP_MAX_PLAYERS];		/* the reported mode + 1, 0 = none yet */
+static unsigned long gMpModeBadSince[MP_MAX_PLAYERS];	/* 0 = agrees with the host */
+static unsigned long gMpModeResendAt[MP_MAX_PLAYERS];
+
 /* Called from MpSessionReset: this module's state is per session, so
  * the next match starts from the same values the module loaded with. */
 void MpRoundNetReset(void)
@@ -31,6 +44,9 @@ void MpRoundNetReset(void)
 	gMpRoundNoSnapshotLogged = 0;
 	gMpRoundRefusedLogged = 0;
 	gMpRoundSentRev = 0;
+	memset(gMpClientMode, 0, sizeof(gMpClientMode));
+	memset(gMpModeBadSince, 0, sizeof(gMpModeBadSince));
+	memset(gMpModeResendAt, 0, sizeof(gMpModeResendAt));
 }
 
 void MpRoundHostSync(void)
@@ -83,6 +99,69 @@ void MpHostSendRound(int connIndex)
 	gMpRoundSentRev = MpRoundRevision();
 }
 
+/* Host: a client's carstate said it plays `mode` (MpHandleCarState). */
+void MpHostNoteClientMode(int playerId, int mode)
+{
+	if (playerId > 0 && playerId < MP_MAX_PLAYERS)
+		gMpClientMode[playerId] = mode + 1;
+}
+
+/* Host, once a frame in a match: re-send the mode to a client on another one,
+ * and kick it when that has not worked for MP_MODE_MISMATCH_KICK_MS. */
+static void MpHostModeCheckTick(void)
+{
+	unsigned long now = MpNowMs();
+	int id;
+
+	for (id = 1; id < MP_MAX_PLAYERS; id++)
+	{
+		MP_PLAYER* pl = MpGetPlayer(id);
+		int conn;
+
+		if (pl == NULL)
+			gMpClientMode[id] = 0;
+
+		if (pl == NULL || pl->isLocal || gMpClientMode[id] == 0 || gMpClientMode[id] - 1 == gMp.gamemode)
+		{
+			gMpModeBadSince[id] = 0;
+			continue;
+		}
+
+		conn = MpConnFindByPlayer(id);
+
+		if (conn < 0)
+			continue;
+
+		if (gMpModeBadSince[id] == 0)
+		{
+			gMpModeBadSince[id] = now ? now : 1;
+			gMpModeResendAt[id] = now;
+
+			if (gMpCtx != NULL)
+				gMpCtx->jer_log(gMpCtx, "[mp] mode check: player %d plays mode %d, the session is mode %d (%s) - re-sending it every %d ms\n",
+					id, gMpClientMode[id] - 1, gMp.gamemode, MpModeName(gMp.gamemode), MP_MODE_RESEND_MS);
+		}
+
+		if ((long)(now - gMpModeBadSince[id]) >= MP_MODE_MISMATCH_KICK_MS)
+		{
+			if (gMpCtx != NULL)
+				gMpCtx->jer_log(gMpCtx, "[mp] mode check: player %d still plays mode %d after %d ms - kicking\n",
+					id, gMpClientMode[id] - 1, MP_MODE_MISMATCH_KICK_MS);
+
+			gMpClientMode[id] = 0;
+			gMpModeBadSince[id] = 0;
+			MpKickPlayer(id);
+			continue;
+		}
+
+		if ((long)(now - gMpModeResendAt[id]) >= 0)
+		{
+			MpHostSendRound(conn);
+			gMpModeResendAt[id] = now + MP_MODE_RESEND_MS;
+		}
+	}
+}
+
 /* Host, once a frame in a match: broadcast when the state changed (a join, a leave),
  * and unconditionally when `periodic`, so a lost snapshot is repaired. */
 void MpHostRoundTick(int periodic)
@@ -91,6 +170,7 @@ void MpHostRoundTick(int periodic)
 		return;
 
 	MpRoundHostSync();
+	MpHostModeCheckTick();
 
 	if (periodic || MpRoundRevision() != gMpRoundSentRev)
 		MpHostSendRound(-1);

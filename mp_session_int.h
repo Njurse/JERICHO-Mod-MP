@@ -205,6 +205,7 @@ void MpFailsafeReset(void);
 void MpFollowLocalCar(void);
 void MpHandleCar(int connIndex, const unsigned char* p, int len);
 void MpHandleCarState(int connIndex, const unsigned char* p, int len);
+void MpHostNoteClientMode(int playerId, int mode);	/* mp_round_net.c: a client's carstate names its mode */
 void MpHandleChannel(int connIndex, const unsigned char* p, int len);
 void MpHandleChat(int connIndex, const unsigned char* p, int len);
 void MpHandleColor(int connIndex, const unsigned char* p, int len);
