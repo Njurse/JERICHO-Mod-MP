@@ -193,6 +193,10 @@ int  MpMarkCountdownMs(int sinceMs);
 int  MpMarkCountdownTotalMs(void);	/* the length of the current count, 0 if none */
 int  MpMarkCountdownIsFirst(void);	/* 1 = the fresh-map N..1, not GET READY + N..1 */
 
+/* ENDED: ms until the next countdown; 0 otherwise. sinceMs is run on like
+ * MpMarkCountdownMs (a client, from the last snapshot's countdownDs). */
+int  MpMarkIntermissionMs(int sinceMs);
+
 /* The clock to SHOW, in ms: `playerId`'s own (MP_MODE_TIMER_PERSONAL) or the shared
  * one (playerId < 0). `sinceMs` is how long ago the state was applied: a client
  * runs the ticking clock on between snapshots (the host passes 0). Never below 0. */

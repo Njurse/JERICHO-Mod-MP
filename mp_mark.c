@@ -823,7 +823,8 @@ int MpMarkBuild(unsigned char* out, int cap)
 	h.count = (uint8_t)n;
 	h.seq = (uint16_t)gMark.seq;
 	h.sharedDs = (uint16_t)MpMarkDs(gMark.sharedMs);
-	h.countdownDs = (uint16_t)MpMarkDs(gMark.countdownMs);
+	h.countdownDs = (uint16_t)MpMarkDs(gMark.phase == MP_MARK_PHASE_ENDED
+		? gMark.intermissionMs : gMark.countdownMs);
 	h.endReason = (uint8_t)(gMark.phase == MP_MARK_PHASE_ENDED ? gMark.endReason : MP_MARK_END_NONE);
 	h.flags = (uint8_t)(gMark.timer == MP_MODE_TIMER_GETAWAY && gMark.dmgLive ? MP_MARK_F_DAMAGE : 0);
 	memcpy(out, &h, sizeof(h));
@@ -883,6 +884,8 @@ int MpMarkApply(const unsigned char* p, int len)
 	gMark.seq = h.seq;
 	gMark.sharedMs = (int)h.sharedDs * 100;
 	gMark.countdownMs = (int)h.countdownDs * 100;
+	/* ENDED reuses countdownDs for the intermission left (mp_proto.h). */
+	gMark.intermissionMs = (h.phase == MP_MARK_PHASE_ENDED) ? (int)h.countdownDs * 100 : 0;
 	gMark.endReason = h.endReason;
 	gMark.dmgLive = (h.flags & MP_MARK_F_DAMAGE) ? 1 : 0;
 
@@ -1014,6 +1017,17 @@ int MpMarkCountdownTotalMs(void)
 int MpMarkCountdownIsFirst(void)
 {
 	return gMark.phase == MP_MARK_PHASE_COUNTDOWN && gMark.countdownFirst;
+}
+
+int MpMarkIntermissionMs(int sinceMs)
+{
+	int ms;
+
+	if (gMark.phase != MP_MARK_PHASE_ENDED)
+		return 0;
+
+	ms = gMark.intermissionMs - (sinceMs > 0 ? sinceMs : 0);
+	return ms < 0 ? 0 : ms;
 }
 
 int MpMarkClockMs(int playerId, int sinceMs)

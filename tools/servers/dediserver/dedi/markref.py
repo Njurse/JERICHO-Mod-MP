@@ -552,6 +552,7 @@ class MarkReferee:
         else:
             rows = [(pid, _ds(self.remain_ms.get(pid, 0)), self._flags(pid))
                     for pid in sorted(self.present)]
+        countdown = self.intermission_ms if self.phase == m.MARK_PHASE_ENDED else self.countdown_ms
         return m.build_mark(self.gamemode, self.phase, self.marked, self.winner, self.minutes,
-                            self.seq, _ds(self.shared_ms), rows, _ds(self.countdown_ms),
+                            self.seq, _ds(self.shared_ms), rows, _ds(countdown),
                             end, flags, self.seconds)

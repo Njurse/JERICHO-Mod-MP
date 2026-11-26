@@ -975,7 +975,8 @@ typedef struct MP_MARK
 	uint16_t seq;		/* +1 on every change of marked player (and every go-live) */
 	uint16_t sharedDs;	/* Car Bomb Tag: the bomb's clock; Fox N Hounds: 0 */
 	uint16_t countdownDs;	/* COUNTDOWN: time to GO; LOBBY: time left in the
-				 * pre-game count; else 0 (was reserved) */
+				 * pre-game count; ENDED: time left in the
+				 * intermission (proto 24, same field; 0 otherwise) */
 	uint8_t  endReason;	/* v24: MP_MARK_END_*, set in ENDED */
 	uint8_t  flags;		/* v24: MP_MARK_F_* */
 	uint16_t timeSec;	/* mp 0.25: the round time in seconds (was a 0 spare in v24);

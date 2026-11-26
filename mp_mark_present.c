@@ -92,6 +92,8 @@ static int gMpMarkMusicOn;
 
 static int gMpMarkShownCount = -1;	/* the countdown notice last shown: 4 = GET READY, 3..1 */
 
+static int gMpIntermissionShown = -1;	/* ENDED: last 'Next round in N' shown, or -1 */
+
 static int gMpMarkTickFrame = -1;	/* last bomb-tick frame, or -1 */
 
 static int gMpHudR = 128, gMpHudG = 128, gMpHudB = 64;	/* eased panel colour */
@@ -495,6 +497,7 @@ void MpMarkPresentClear(void)
 	gMpMarkShownSeq = -1;
 	gMpMarkShownPhase = -1;
 	gMpMarkShownCount = -1;
+	gMpIntermissionShown = -1;
 	gMpClusterState = 0;
 	gMpClusterTries = 0;
 	gMpChaseFromSet = 0;
@@ -742,6 +745,28 @@ static void MpMarkNotices(int me, int since)
 		if (line[0] != '\0')
 			jer_notify(line, go ? 4 : 3, 3);	/* 4: over the last digit still showing */
 	}
+
+	/* ENDED: a centred mission-style notice (jer_notify -> SetPlayerMessage /
+	 * DrawMessage, the same path as GET READY and the end line). N is the
+	 * intermission left in seconds, run on from the last snapshot
+	 * (countdownDs in ENDED). Priority 3 so the end line (4, 5 s) is not
+	 * replaced; once that drops, this is retried until it shows. */
+	if (phase == MP_MARK_PHASE_ENDED)
+	{
+		int left = MpMarkIntermissionMs(since);
+		int n = (left + 999) / 1000;
+		char wait[JER_NOTIFY_TEXT_MAX];
+
+		if (n > 0 && (gMpIntermissionShown < 0 || n <= gMpIntermissionShown) &&
+			n != gMpIntermissionShown)
+		{
+			snprintf(wait, sizeof(wait), "Next round in %d", n);
+			if (jer_notify(wait, 3, 2))
+				gMpIntermissionShown = n;
+		}
+	}
+	else
+		gMpIntermissionShown = -1;
 
 	gMpMarkShownSeq = seq;
 	gMpMarkShownPhase = phase;

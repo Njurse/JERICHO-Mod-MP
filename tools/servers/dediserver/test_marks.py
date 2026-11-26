@@ -10,9 +10,11 @@ over real sockets: the server referees from the carstates it keeps.
     the two marked, JPMK sent; a joiner without a car aborts a countdown; the
     intermission leads into the same wait -> countdown -> GO;
   * a carstate contact with the marked car moves the mark (the position path), the
-    same bump cannot bounce it straight back, far apart or slow is no tag, and a
-    spawn bump (inside the arm) is no tag;
+    same bump cannot bounce it straight back, far apart or slow is no tag, a near
+    miss (centres close, bodies not touching) is no tag, and a spawn bump (inside
+    the arm) is no tag;
   * a client's JPHI is the fallback claim, accepted only when the kept cars agree;
+    a JPHI with HIT_F_PROBE (the distance fallback) never tags;
   * a client cannot write the mark state: its JPMK is answered, never forwarded;
   * Fox N Hounds: the fox reaching 0:00 wins; Car Bomb Tag: the holder at 0:00 loses;
   * "mode_time" is optional: missing -> 3, clamped 1..5, junk -> 3, and the config
@@ -294,6 +296,23 @@ def check_foxhounds(tmp):
         settle(server, [alice, bob])
         check("touching but barely moving is no tag", server.mark.marked == fox)
 
+        # centres 850 apart on x: inside TAG_RADIUS (900) but outside the body boxes
+        # (half width + margin = 320, reach 640). Closing is real, so a centre-only
+        # test would have passed the mark.
+        m.send_frame(socks[fox], m.TAG["carstate"], carstate(fox, 1000, 1000))
+        m.send_frame(socks[hound], m.TAG["carstate"], carstate(hound, 1850, 1000, vx=-20 * 4096))
+        settle(server, [alice, bob])
+        check("near miss (centres close, bodies not touching) is no tag", server.mark.marked == fox)
+
+        # the distance probe is a push only, even when the kept cars are touching
+        with server.lock:
+            server.cars[fox] = carstate(fox, 1000, 1000)[m.CARSTATE.size:]
+            server.cars[hound] = carstate(hound, 1500, 1000, vx=-20 * 4096)[m.CARSTATE.size:]
+        probe = m.HIT.pack(fox, m.HIT_F_PROBE, 0, 0, 0, 0, 0, 0, 0)
+        m.send_frame(socks[hound], m.TAG["hit"], probe)
+        settle(server, [alice, bob])
+        check("a JPHI distance probe is a push, never a tag", server.mark.marked == fox)
+
         fox_clock = server.mark.remain_ms[fox]
         m.send_frame(socks[fox], m.TAG["carstate"], carstate(fox, 1000, 1000))
         m.send_frame(socks[hound], m.TAG["carstate"], carstate(hound, 1500, 1000, vx=-20 * 4096))
@@ -360,6 +379,8 @@ def check_foxhounds(tmp):
         mk = last_mark(socks[hound])
         check("...and everyone hears the winner", mk is not None and mk["winner"] == fox and
               mk["phase"] == m.MARK_PHASE_ENDED, mk)
+        check("ENDED JPMK carries the intermission as countdown_ds",
+              mk is not None and 70 <= mk["countdown_ds"] <= 80, mk)
         for s in (alice, bob):
             m.send_frame(s, m.TAG["leave"], b"")
             s.close()
@@ -399,6 +420,16 @@ def check_bombtag(tmp):
         settle(server, [a, b])
         check("a contact passes the bomb", server.mark.marked == other)
         check("...the clock did not reset", server.mark.shared_ms == 58000)
+        holder, other = other, holder
+        server._mark_step(2500)
+        with server.lock:
+            server.cars[holder] = carstate(holder, 0, 0)[m.CARSTATE.size:]
+            server.cars[other] = carstate(other, 600, 0, vx=-10 * 4096)[m.CARSTATE.size:]
+        probe = m.HIT.pack(holder, m.HIT_F_PROBE, 0, 0, 0, 0, 0, 0, 0)
+        m.send_frame(socks[other], m.TAG["hit"], probe)
+        settle(server, [a, b])
+        check("bomb: a JPHI distance probe does not pass it", server.mark.marked == holder)
+        other, holder = holder, other  # keep names as 'current holder / other' for the rest
         c = connect(server, "Cat")
         frames_until(c, m.TAG["mark"])
         check("a late joiner has no bomb", server.mark.marked == other and 3 in server.mark.present)
@@ -413,6 +444,11 @@ def check_bombtag(tmp):
         check("the holder at 0:00 loses: ended, still marked, no winner",
               server.mark.phase == m.MARK_PHASE_ENDED and server.mark.marked == other and
               server.mark.winner == -1 and server.round.phase == m.ROUND_PHASE_ENDED)
+        server.broadcast_mark_if_due(force=True)
+        mk = last_mark(c)
+        check("bomb: ENDED JPMK carries the intermission as countdown_ds",
+              mk is not None and mk["phase"] == m.MARK_PHASE_ENDED and
+              70 <= mk["countdown_ds"] <= 80, mk)
         server._mark_step(10000)
         check("after the intermission: Cat has no car, so waiting (no round 2 yet)",
               server.round.number == 1 and server.mark.phase == m.MARK_PHASE_WAITING and
