@@ -1164,7 +1164,7 @@ int MpStartMatch(void)
 void MpSendHello(void)
 {
 	unsigned char buf[sizeof(MP_HELLO) + MP_MAX_MODS * sizeof(MP_MOD_INFO) + 4 + MP_PLAYER_ID_LEN
-			  + 5 + MP_HELLO_VER_MAX + 5 + MP_PASSWORD_MAX];
+			  + 5 + MP_HELLO_VER_MAX + 5 + MP_PASSWORD_MAX + 5];
 	MP_HELLO h;
 	int n, len;
 
@@ -1233,6 +1233,11 @@ void MpSendHello(void)
 		memcpy(buf + len + 5, gMp.config.joinPassword, (size_t)pl);
 		len += 5 + pl;
 	}
+
+	/* the arenas block (mp_proto.h, MP_HELLO_ARENA_TAG): always, last */
+	memcpy(buf + len, MP_HELLO_ARENA_TAG, 4);
+	buf[len + 4] = (unsigned char)MpArenaLocalBits();
+	len += 5;
 
 	MpSendToHost(MP_TAG_HELLO, MP_FLAG_RELIABLE, buf, len);
 
@@ -1621,7 +1626,16 @@ void MpHandleHello(int connIndex, const unsigned char* p, int len)
 							if (joinVer[k] < 32 || joinVer[k] > 126)
 								joinVer[k] = '?';
 					}
+					at += 5 + p[at + 4];
 				}
+
+				/* ...the optional password block, then the arenas block */
+				if (len >= at + 5 && memcmp(p + at, MP_HELLO_PW_TAG, 4) == 0)
+					at += 5 + p[at + 4];
+
+				pl->arenaBits = 0;
+				if (len >= at + 5 && memcmp(p + at, MP_HELLO_ARENA_TAG, 4) == 0)
+					pl->arenaBits = p[at + 4];
 			}
 
 			if (gMpCtx)
@@ -1657,8 +1671,8 @@ void MpHandleHello(int connIndex, const unsigned char* p, int len)
 }
 
 /* The default order: every city's multiplayer maps in turn (Vegas MP 2 and 3
- * only when this machine has them: MpArenaEveryoneHas, local-install until
- * JPAR is approved). Built on each call so a missing bake drops them. */
+ * only when this machine and every player has them: MpArenaEveryoneHas).
+ * Built on each call so a missing bake, or a peer without the files, drops them. */
 static int MpRotStops(MP_ROT_STOP* out, int max)
 {
 	int c, a, n = 0;
@@ -1883,13 +1897,13 @@ static void MpListenVote(int pid, const char* args)
 		return;
 	}
 
-	/* MP 2/3 exist in Vegas only, and only when the files are installed here
-	 * (peer install checks wait on the held JPAR hello block). */
+	/* MP 2/3 exist in Vegas only, and only when everyone has the files
+	 * (this machine's install, and every peer's JPAR hello bits). */
 	if (to.shape && (to.arena >= MpArenaCount(to.city) || !MpArenaEveryoneHas(to.city, to.arena)))
 	{
 		MpHostSay(to.arena >= MpArenaCount(to.city)
 			? "that city has only MP 0 and MP 1"
-			: "that map is not installed (BAKE_D1_CARS builds Vegas MP 2/3)");
+			: "not everyone has that map installed (BAKE_D1_CARS builds Vegas MP 2/3)");
 		return;
 	}
 
@@ -2391,7 +2405,7 @@ static void MpListenCommand(int pid, int connIndex, const char* text)
 		{
 			MpHostReply(pid, connIndex, to.arena >= MpArenaCount(to.city)
 				? "that city has only MP 0 and MP 1"
-				: "that map is not installed (BAKE_D1_CARS builds Vegas MP 2/3)");
+				: "not everyone has that map installed (BAKE_D1_CARS builds Vegas MP 2/3)");
 			break;
 		}
 		if (to.city == GameLevel && to.shape == (gBootMpLevel ? 1 : 0) &&

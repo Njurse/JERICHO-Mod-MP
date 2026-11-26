@@ -480,8 +480,8 @@ python JERICHO/MODS/mp/tools/servers/dediserver/test_marks.py
 Vegas has two extra multiplayer maps (MP 2 and MP 3, the cut Ghost Town / North
 Vegas regions). They are not in the retail mission list: each player's own
 `BAKE_D1_CARS` builds them from their `DRIVER2/MISSIONS/MISSIONS.BLK`
-(`tools/make_vegas_arenas.py`). The listen host only offers a map this machine
-has the files for (and falls back to MP 0 at launch if a peer is missing them).
-A hello field that would let the dedicated server skip 2/3 when any player
-lacks the files is held and not on the wire yet, so the dedi will not rotate
-or vote to Vegas MP 2/3 until that is approved.
+(`tools/make_vegas_arenas.py`). The game reports whether it has them when it
+joins (the hello's optional `JPAR` block; older clients omit it and are treated
+as not having them). The server only rotates or votes to Vegas MP 2/3 while
+every player has reported the files. The server itself needs no game data for
+this.

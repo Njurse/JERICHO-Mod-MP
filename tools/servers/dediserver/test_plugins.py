@@ -131,6 +131,14 @@ def main():
         check("no JPVR -> None", m.parse_hello_version(hello) is None)
         check("JPID+JPVR stay under one manifest row (old servers)",
               len(m.build_hello("x", player_id=bytes(16), version="9" * 40)) - m.HELLO.size < m.MODI.size)
+        no_jpar = m.build_hello("Old", mods=[("mp", "1")], player_id=bytes(16), version="0.14.0")
+        with_jpar = m.build_hello("New", mods=[("mp", "1")], player_id=bytes(16), version="0.14.1",
+                                  password="secret", arenas=m.HELLO_ARENA_VEGAS23)
+        check("no JPAR block -> arena bits 0", m.parse_hello_arenas(no_jpar) == 0, m.parse_hello_arenas(no_jpar))
+        check("JPAR after JPID/JPVR/JPPW -> Vegas 2/3 bit",
+              m.parse_hello_arenas(with_jpar) == m.HELLO_ARENA_VEGAS23, m.parse_hello_arenas(with_jpar))
+        check("JPAR is not read as a mod row", len(d.parse_manifest(with_jpar)) == 1)
+        check("password still parses when JPAR follows", m.parse_hello_password(with_jpar) == "secret")
         check("mods digest ignores order and disabled rows",
               m.mods_digest([("a", "1", 1), ("b", "2", 1), ("c", "3", 0)])
               == m.mods_digest([("b", "2", 1), ("a", "1", 1)]))

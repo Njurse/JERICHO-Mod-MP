@@ -380,11 +380,13 @@ PLAYER_ID_LEN = 16                      # mp_proto.h MP_PLAYER_ID_LEN
 HELLO_VER_TAG = b"JPVR"                  # mp_proto.h MP_HELLO_VER_TAG
 HELLO_VER_MAX = 16                      # mp_proto.h MP_HELLO_VER_MAX (JPID+JPVR < one 42-byte row)
 HELLO_PW_TAG = b"JPPW"                   # mp_proto.h MP_HELLO_PW_TAG (opt-in: only with a password)
+HELLO_ARENA_TAG = b"JPAR"                # mp_proto.h MP_HELLO_ARENA_TAG (last)
+HELLO_ARENA_VEGAS23 = 0x01              # MP_HELLO_ARENA_VEGAS23: Vegas MP 2/3 installed
 PASSWORD_MAX = 15                       # mp_proto.h MP_PASSWORD_MAX
 REJECT_PASSWORD = 6                     # mp_proto.h MP_REJECT_PASSWORD
 
 
-def build_hello(name, mods=(), build=0, player_id=None, version=None, password=None):
+def build_hello(name, mods=(), build=0, player_id=None, version=None, password=None, arenas=None):
     """MP_HELLO + its manifest, then (optionally) the JPID player-id block and
     the JPVR build block (the game sends both; JPVR only after JPID)."""
     body = HELLO.pack(PROTO, SDK, build, 0, name.encode()[:31], len(mods), 0, 0, 0)
@@ -400,7 +402,27 @@ def build_hello(name, mods=(), build=0, player_id=None, version=None, password=N
     if password:
         pw = password.encode("ascii", "replace")[:PASSWORD_MAX]
         body += HELLO_PW_TAG + bytes([len(pw)]) + pw
+    if arenas is not None:
+        body += HELLO_ARENA_TAG + bytes([int(arenas) & 0xFF])
     return body
+
+
+def parse_hello_arenas(payload):
+    """The JPAR extra-arena bits (MP_HELLO_ARENA_*) after the manifest and the
+    optional JPID / JPVR / JPPW blocks; 0 for a client that sent none (older)."""
+    if len(payload) < HELLO.size:
+        return 0
+    modc = HELLO.unpack_from(payload, 0)[5]
+    at = HELLO.size + modc * MODI.size
+    if payload[at:at + 4] == HELLO_ID_TAG and len(payload) >= at + 4 + PLAYER_ID_LEN:
+        at += 4 + PLAYER_ID_LEN
+    if payload[at:at + 4] == HELLO_VER_TAG and len(payload) >= at + 5:
+        at += 5 + payload[at + 4]
+    if payload[at:at + 4] == HELLO_PW_TAG and len(payload) >= at + 5:
+        at += 5 + payload[at + 4]
+    if payload[at:at + 4] == HELLO_ARENA_TAG and len(payload) >= at + 5:
+        return payload[at + 4]
+    return 0
 
 
 def arena_count(city):

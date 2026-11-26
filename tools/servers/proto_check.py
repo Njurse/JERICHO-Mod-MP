@@ -92,6 +92,7 @@ CONSTANTS = {
     "MP_ADV_DEDICATED": "ADV_DEDICATED",
     "MP_HIT_F_TRAFFIC": "HIT_F_TRAFFIC",
     "MP_HIT_F_PROBE": "HIT_F_PROBE",
+    "MP_HELLO_ARENA_VEGAS23": "HELLO_ARENA_VEGAS23",
 }
 
 # C enum member -> the Python constant that must carry the same value. Enum members

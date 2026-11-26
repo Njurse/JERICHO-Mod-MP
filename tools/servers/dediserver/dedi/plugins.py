@@ -215,8 +215,8 @@ class ServerAPI:
         return self._s.set_map_mode(mode)
 
     def arena_ok(self, city, arena):
-        """True when every player can load this multiplayer map: MP 0/1 always.
-        Vegas MP 2/3 wait on a held hello field, so they are not offered yet."""
+        """True when every player can load this multiplayer map: MP 0/1 always,
+        Vegas MP 2/3 only when everyone reported the files in their hello (JPAR)."""
         return self._s.arena_ok(city, arena)
 
     def set_arena(self, arena):

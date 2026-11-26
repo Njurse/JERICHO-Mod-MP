@@ -133,6 +133,8 @@ typedef struct MP_PLAYER
 					 * owner-authoritative, like the palette. Applied after a rebuild. */
 	int  isLocal;			/* 1 = this machine's own player */
 	int  hasPlayerId;		/* the HELLO carried a JPID block (host side) */
+	int  arenaBits;			/* MP_HELLO_ARENA_* the HELLO reported (host side;
+					 * 0 = an older client, or none installed) */
 	unsigned char playerId[MP_PLAYER_ID_LEN];	/* that block's id */
 	int  connected;			/* peer link still alive */
 	int  isHost;			/* the host's own row (first in the list) */
@@ -805,7 +807,8 @@ void MpSetSubGame(int n);		/* the multiplayer sub-level (gSubGameNumber) */
 void MpSetMapShape(int mpLevel, int arena);	/* the session's map: 0 = the full city, 1 = the multiplayer map */
 int  MpArenaCount(int city);			/* how many arenas the city can have (2, Vegas 4) */
 int  MpArenaInstalled(int city, int arena);	/* this machine has the files (arena 0/1: always) */
-int  MpArenaEveryoneHas(int city, int arena);	/* local install until JPAR hello bits are approved */
+int  MpArenaLocalBits(void);			/* MP_HELLO_ARENA_* for our HELLO */
+int  MpArenaEveryoneHas(int city, int arena);	/* this machine and every player's hello bits */
 const char* MpArenaTitle(int city, int arena);	/* Driver 2 area name, or NULL when none */
 
 /* The host's session rules, MP_RULES_PACK'd, as they should be published right

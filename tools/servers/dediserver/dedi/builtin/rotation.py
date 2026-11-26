@@ -9,9 +9,9 @@ NOT save dediserver.json, so a restart begins where the operator configured):
                           object {"city": 1, "map_mode": "mp", "arena": 0,
                           "area": -1}. Default: every city's multiplayer
                           maps, city by city (Vegas has MP 0..3, the rest
-                          MP 0/1). A Vegas MP 2/3 stop is skipped until every
-                          player can load it (server.arena_ok; peer bits wait
-                          on a held hello field).
+                          MP 0/1). A Vegas MP 2/3 stop is skipped while any
+                          player lacks the map files (server.arena_ok, from
+                          the hello's JPAR bits).
 
 `area` is reserved: a stop inside one map (an arena region of a big city
 map) for the arena work. Today a stop is a level: city + map mode + arena, and

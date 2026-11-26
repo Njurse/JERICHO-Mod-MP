@@ -19,6 +19,7 @@ import socket
 import sys
 import tempfile
 import threading
+import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))
@@ -76,13 +77,13 @@ def server_for(tmp, **extra):
     return d.Dedicated(cfg, d.Log("error"))
 
 
-def connect(server, name, proto=None):
+def connect(server, name, proto=None, arenas=None):
     ours, theirs = socket.socketpair()
     ours.settimeout(5.0)
     t = threading.Thread(target=server.serve, args=(theirs, ("127.0.0.1", 40000 + len(name))),
                          daemon=True)
     t.start()
-    hello = m.build_hello(name, [("mp", m.MP_VER)])
+    hello = m.build_hello(name, [("mp", m.MP_VER)], arenas=arenas)
     if proto is not None:
         hello = m.HELLO.pack(proto, m.SDK, 0, 0, name.encode()[:m.NAME_MAX], 1, 0, 0, 0) + hello[m.HELLO.size:]
     m.send_frame(ours, m.TAG["hello"], hello)
@@ -193,6 +194,41 @@ def main():
         rd0 = m.parse_round(bare.round_bytes())
         check("a config without 'gamemode' referees mode 0", rd0 == (0, m.ROUND_PHASE_LIVE, 1, []), rd0)
         bare.stop.set()
+
+        # -- JPAR: optional trailing hello bits; an older client that omits the
+        # block is bits 0, and Vegas MP 2/3 is only offered when every player
+        # reported the files.
+        jpar = server_for(tmp)
+        try:
+            check("empty roster: Vegas MP 2 is allowed (no peer lacks the files)",
+                  jpar.arena_ok(2, 2) is True)
+            old, _to = connect(jpar, "NoBits")  # no JPAR block
+            frames_until(old, m.TAG["round"])
+            stored = [i.get("arenas", -1) for i in jpar.clients.values()]
+            check("a hello without JPAR stores arena bits 0", stored == [0], stored)
+            check("Vegas MP 2 is refused while a player sent no JPAR",
+                  jpar.arena_ok(2, 2) is False)
+            m.send_frame(old, m.TAG["leave"], b"")
+            old.close()
+            # wait until the leave is recorded so the next hello is a clean roster
+            deadline = time.monotonic() + 2.0
+            while time.monotonic() < deadline and jpar.clients:
+                time.sleep(0.05)
+            new, _tn = connect(jpar, "HasBits", arenas=m.HELLO_ARENA_VEGAS23)
+            frames_until(new, m.TAG["round"])
+            stored = [i.get("arenas", -1) for i in jpar.clients.values()]
+            check("a hello with JPAR stores the Vegas 2/3 bit",
+                  stored == [m.HELLO_ARENA_VEGAS23], stored)
+            check("Vegas MP 2 is allowed when every player reported the files",
+                  jpar.arena_ok(2, 2) is True)
+            old2, _t2 = connect(jpar, "OldTwo")  # no JPAR
+            frames_until(old2, m.TAG["round"])
+            check("Vegas MP 2 is refused if any player omitted JPAR",
+                  jpar.arena_ok(2, 2) is False)
+            new.close()
+            old2.close()
+        finally:
+            jpar.stop.set()
     finally:
         server.stop.set()
 

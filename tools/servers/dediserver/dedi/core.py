@@ -701,15 +701,18 @@ class Dedicated:
         return mode
 
     def arena_ok(self, city, arena):
-        """May the server send everyone to this multiplayer map? MP 0/1 always.
-        Vegas MP 2/3 need every peer to have reported the files; that report
-        is a held hello field (JPAR), so 2/3 are not offered yet."""
+        """May the server send everyone to this multiplayer map? MP 0/1 always;
+        Vegas MP 2/3 only when every player reported the files in their hello
+        (JPAR). The server has no game data of its own to check. An older
+        client that sent no JPAR block is treated as bits 0."""
         city, arena = int(city), int(arena)
         if not 0 <= arena < m.arena_count(city):
             return False
         if arena < 2:
             return True
-        return False
+        with self.lock:
+            infos = list(self.clients.values())
+        return all(int(i.get("arenas", 0)) & m.HELLO_ARENA_VEGAS23 for i in infos)
 
     def set_arena(self, arena):
         arena = int(arena)
@@ -1404,6 +1407,7 @@ class Dedicated:
                 self.clients[conn] = {"id": pid, "name": name, "addr": who,
                                       "player_id": m.parse_player_id(payload),
                                       "version": m.parse_hello_version(payload),
+                                      "arenas": m.parse_hello_arenas(payload),
                                       "mods_digest": m.mods_digest(mods),
                                       "palette": _b}       # HELLO reserved[1]: their car palette
 

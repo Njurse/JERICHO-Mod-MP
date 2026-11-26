@@ -414,6 +414,14 @@ typedef struct MP_MOD_INFO
  * a host without one ignores the block. Like JPID it is plain text on the wire:
  * it keeps strangers out, it is not encryption. */
 #define MP_HELLO_PW_TAG		"JPPW"
+/* ...then the optional ARENAS block: MP_HELLO_ARENA_TAG + u8 bits, the extra
+ * multiplayer maps this machine has the mission files for. A host or dedi only
+ * sends everyone to such a map when every player has it; a client without the
+ * block (older) has none of them. Last in the hello, so the readers before it
+ * are untouched. Proto is not bumped: like JPID/JPVR/JPPW this is opt-in
+ * trailing data, and older peers that omit it are treated as bits 0. */
+#define MP_HELLO_ARENA_TAG	"JPAR"
+#define MP_HELLO_ARENA_VEGAS23	0x01	/* Vegas MP 2 and 3 (M942/943, M1382/1383) */
 #define MP_PASSWORD_MAX		15
 typedef struct MP_HELLO
 {

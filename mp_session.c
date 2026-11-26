@@ -612,12 +612,31 @@ int MpArenaInstalled(int city, int arena)
 	return have;
 }
 
+int MpArenaLocalBits(void)
+{
+	return MpArenaInstalled(MP_ARENA_CITY_VEGAS, 2) ? MP_HELLO_ARENA_VEGAS23 : 0;
+}
+
 int MpArenaEveryoneHas(int city, int arena)
 {
-	/* Peer bits need the JPAR hello block (held: new optional wire field).
-	 * Until that is approved, only this machine's files are checked; a peer
-	 * without them falls back to MP 0 at launch. */
-	return MpArenaInstalled(city, arena);
+	int i;
+
+	if (!MpArenaInstalled(city, arena))
+		return 0;
+
+	if (arena < 2)
+		return 1;
+
+	for (i = 0; i < MP_MAX_PLAYERS; i++)
+	{
+		const MP_PLAYER* pl = &gMp.players[i];
+
+		if (!pl->active || pl->isLocal)
+			continue;
+		if (!(pl->arenaBits & MP_HELLO_ARENA_VEGAS23))
+			return 0;
+	}
+	return 1;
 }
 
 /* The name the frontend already printed for this city's multiplayer map.
