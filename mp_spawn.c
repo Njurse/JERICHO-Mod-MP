@@ -1428,22 +1428,44 @@ int MpFindRoadSpotWide(int carId, int* outX, int* outZ, int* outDir)
 
 			rnd = rnd * 1103515245u + 12345u;
 
-			r = (int)((rnd >> 8) % (unsigned int)(regions_across * regions_down));
+			/* A MULTIPLAYER MAP (an arena) is its own four regions and nothing else:
+			 * the level does not spool (doSpooling 0), and the multiplayer level's
+			 * other data-bearing regions are the OTHER arenas. Picking across the
+			 * whole map put the Cops n Robbers getaway in a different arena -- out
+			 * of bounds, its streaming evicting the arena, off the minimap. So pick
+			 * among the arena's own resident regions, and never stream. */
+			if (gMultiplayerLevels)
+			{
+				r = multiplayerregions[(rnd >> 8) & 3];
 
-			if (r == startRegion || !jer_map_region_has_data(r))
-				continue;
+				if (r < 0 || !jer_map_region_resident(r))
+					continue;
 
-			rx = r % regions_across;
-			rz = r / regions_across;
+				rx = r % regions_across;
+				rz = r / regions_across;
+				cx = rx * regionWorld - units_across_halved + regionWorld / 2;
+				cz = rz * regionWorld - units_down_halved + regionWorld / 2;
+				(void)startRegion;
+			}
+			else
+			{
+				r = (int)((rnd >> 8) % (unsigned int)(regions_across * regions_down));
 
-			cx = rx * regionWorld - units_across_halved + regionWorld / 2;
-			cz = rz * regionWorld - units_down_halved + regionWorld / 2;
+				if (r == startRegion || !jer_map_region_has_data(r))
+					continue;
 
-			/* The ONLY spool this placement makes. A region with nothing to load
-			 * is re-picked rather than landed in. The point is a stream target,
-			 * not a landing spot, so it skips MpWarpSpotOk's cell test. */
-			if (!MpStreamRegionAt(cx, cz))
-				continue;
+				rx = r % regions_across;
+				rz = r / regions_across;
+
+				cx = rx * regionWorld - units_across_halved + regionWorld / 2;
+				cz = rz * regionWorld - units_down_halved + regionWorld / 2;
+
+				/* The ONLY spool this placement makes. A region with nothing to load
+				 * is re-picked rather than landed in. The point is a stream target,
+				 * not a landing spot, so it skips MpWarpSpotOk's cell test. */
+				if (!MpStreamRegionAt(cx, cz))
+					continue;
+			}
 
 			gMpWideRegion = r;
 			gMpWideTries = 0;
@@ -1496,6 +1518,10 @@ int MpFindRoadSpotWide(int carId, int* outX, int* outZ, int* outDir)
 				continue;
 
 			if (!MpJoinSpotClearOfPlayers(x, z, -1, carId))
+				continue;
+
+			/* an arena: the spot must be in the arena's own (resident) regions */
+			if (gMultiplayerLevels && !jer_map_region_resident(jer_map_region_of(x, z)))
 				continue;
 
 			if (!MpWarpStreamTo(x, z))	/* confirm the final spot's area */

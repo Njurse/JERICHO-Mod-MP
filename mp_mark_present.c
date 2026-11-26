@@ -46,7 +46,12 @@
 #define MP_CLUSTER_STEP		(MP_JOIN_CLEAR + 2800)	/* 4800 (was 3200, the join spawn's retry step):
 							 * Fox N Hounds / Car Bomb Tag rounds start 1.5x
 							 * further apart. Only MP_MODE_SPAWN_CLUSTER uses it. */
-#define MP_CLUSTER_TRIES_PER_FRAME	4
+#define MP_CLUSTER_TRIES_PER_FRAME	12	/* was 4: the cluster should be placed in the GET READY
+					 * second, not trickle into the digits */
+#define MP_CHASE_FRESH_FRAMES	12	/* a cop lines up once the getaway's state is this many frames
+					 * newer than our countdown start (was: wait for it to move 2000,
+					 * else 2 s -- measured: try 61, 60 frames into the count) */
+#define MP_CHASE_REPLACE_MAX	2	/* re-line-ups when the getaway lands after we did */
 #define MP_FOX_FADE_FRAMES	12	/* a colour fade, ~0.4 s at 30 fps */
 #define MP_FOX_OWN_Y		18	/* the own timer: under the title, over nothing */
 #define MP_FOX_SIDE_INSET	6	/* the side column's right edge: in from the SCREEN's
@@ -59,8 +64,9 @@
 #define MP_JOIN_WIDE_TRIES	8	/* centers probed inside the chosen region */
 #define MP_MARK_ARROW_SLOT	0	/* jer_arrow slot for the marked car */
 #define MP_MARK_PANEL_SLOT	5	/* jer_hud_panel slot for the clock */
-#define MP_MARK_RELAY_RADIUS	1800	/* host view of a reported contact: twice MP_HIT_RADIUS
-					 * (900, the contact code below), for two links' lag */
+#define MP_MARK_RELAY_RADIUS	1200	/* host view of a reported contact, centre to centre:
+					 * a car length plus room for two links' lag (mp 0.25;
+					 * was 1800, which passed the mark on near misses) */
 
 static unsigned gMpMarkRng;		/* host: the referee's random picks */
 
@@ -130,6 +136,11 @@ static int gMpClusterState;		/* 0 = not in a countdown, 1 = placing, 2 = done / 
 static unsigned gMpClusterFrom;		/* the frame this machine saw the countdown start */
 
 static int gMpClusterTries;
+
+/* where the getaway was when this machine's cop lined up behind it: if the
+ * getaway lands somewhere else after that (its placement took longer than its
+ * state took to get here), the cop lines up again, still before GO */
+static int gMpChaseLineX, gMpChaseLineZ, gMpChaseLineSet, gMpChaseReplaces;
 
 static unsigned MpMarkRand(void);
 static void MpMarkHostSync(void);
@@ -826,8 +837,12 @@ static void MpMarkGlowFor(int marked, int myId, int bomb)
 	MP_PLAYER* mp = (marked >= 0) ? MpGetPlayer(marked) : NULL;
 	int on, r, g, b;
 
+	/* drawable is a question about the car's MODEL slot, not its car_data index: it
+	 * used to be asked of the car's index, so the marked player's glow came and went
+	 * with whichever resident model happened to share that number */
 	if (mp == NULL || mp->carId < 0 || mp->carId >= MAX_CARS ||
-	    !JerCarSlotDrawable(mp->carId))
+	    car_data[mp->carId].controlType == CONTROL_TYPE_NONE ||
+	    !JerCarSlotDrawable(car_data[mp->carId].ap.model))
 	{
 		jer_carglow_clear();
 		return;
@@ -1091,6 +1106,8 @@ void MpMarkPresentTick(void)
 			gMpClusterState = 1;
 			gMpClusterFrom = gMp.frame;
 			gMpClusterTries = 0;
+			gMpChaseLineSet = 0;
+			gMpChaseReplaces = 0;
 			MpMarkRoundReset();
 
 			/* the car of the role this player has this round (role-car modes) */
@@ -1117,6 +1134,37 @@ void MpMarkPresentTick(void)
 					gMpChaseFromX = car_data[gp->carId].hd.where.t[0];
 					gMpChaseFromZ = car_data[gp->carId].hd.where.t[2];
 					gMpChaseFromSet = 1;
+				}
+			}
+		}
+
+		/* a cop already lined up, and the getaway has since landed far from where
+		 * it was then: line up again behind where it is now */
+		if (chase && gMpClusterState == 2 && gMpChaseLineSet && marked != myId &&
+			gMpChaseReplaces < MP_CHASE_REPLACE_MAX)
+		{
+			MP_PLAYER* gp = MpGetPlayer(marked);
+
+			if (gp != NULL && gp->carId >= 0 && gp->carId < MAX_CARS &&
+				car_data[gp->carId].controlType != CONTROL_TYPE_NONE)
+			{
+				long long dx = (long long)car_data[gp->carId].hd.where.t[0] - gMpChaseLineX;
+				long long dz = (long long)car_data[gp->carId].hd.where.t[2] - gMpChaseLineZ;
+
+				if (dx * dx + dz * dz > (long long)(2 * MP_CHASE_MOVED) * (2 * MP_CHASE_MOVED))
+				{
+					gMpChaseReplaces++;
+					gMpChaseLineSet = 0;
+					gMpChaseFromX = gMpChaseLineX;	/* "has it moved?" is answered: yes */
+					gMpChaseFromZ = gMpChaseLineZ;
+					gMpChaseFromSet = 1;
+					gMpClusterState = 1;
+					gMpClusterFrom = gMp.frame;
+					gMpClusterTries = 0;
+
+					if (gMpCtx != NULL)
+						gMpCtx->jer_log(gMpCtx, "[mp] chase start: the getaway landed after we lined up - lining up again (%d)\n",
+							gMpChaseReplaces);
 				}
 			}
 		}
@@ -1706,6 +1754,27 @@ static void MpMarkClusterTick(void)
 			return;
 		}
 
+		/* NO ROAD NEAR WHERE THE ANCHOR ENDED THE LAST ROUND -- off the edge of an
+		 * arena (Ghost Town), in a field, in the water. The level's own start is a
+		 * road by construction: start the cluster there instead of "where it is",
+		 * which is how the whole lobby used to begin a round out of bounds. */
+		if (PlayerStartInfo[0] != NULL)
+		{
+			int sx = PlayerStartInfo[0]->position.vx;
+			int sz = PlayerStartInfo[0]->position.vz;
+
+			if (gMpClusterTries == 1)
+				MpWarpStreamTo(sx, sz);
+
+			if (MpFindRoadSpotNear(sx, 0, sz, -1, &x, &z, &dir, &ring) &&
+				MpClusterPlace(me, cp, x, z, dir >= 0 ? dir : PlayerStartInfo[0]->rotation, me->id,
+					"anchor, no road near its car - the level start"))
+			{
+				gMpClusterState = 2;
+				return;
+			}
+		}
+
 		if (gMp.frame - gMpClusterFrom >= (unsigned)MP_CLUSTER_GIVEUP_FRAMES)
 		{
 			if (gMpCtx != NULL)
@@ -1901,9 +1970,14 @@ static void MpMarkChaseTick(void)
 		mx = (long long)gx - gMpChaseFromX;
 		mz = (long long)gz - gMpChaseFromZ;
 
+		/* the getaway has not landed yet (on this machine): wait for it to move, or
+		 * for a state of its that is clearly from after the count began (it places
+		 * on its first countdown frame; a landing nearby moves it less than 2000) */
 		if (mx * mx + mz * mz < (long long)MP_CHASE_MOVED * MP_CHASE_MOVED &&
-			gMp.frame - gMpClusterFrom < (unsigned)MP_CHASE_WAIT_FRAMES)
-			return;		/* the getaway has not landed yet (on this machine) */
+			gMp.frame - gMpClusterFrom < (unsigned)MP_CHASE_WAIT_FRAMES &&
+			!(gp->lastStateFrame != 0 &&
+			  (long)(gp->lastStateFrame - gMpClusterFrom) >= MP_CHASE_FRESH_FRAMES))
+			return;
 
 		for (id = 0; id < me->id && id < MP_MAX_PLAYERS; id++)
 			if (id != marked && MpMarkPresent(id))
@@ -1959,6 +2033,9 @@ static void MpMarkChaseTick(void)
 			{
 				if (MpClusterPlace(me, cp, x, z, h, marked, "cop, behind the getaway"))
 				{
+					gMpChaseLineX = gx;
+					gMpChaseLineZ = gz;
+					gMpChaseLineSet = 1;
 					if (gMpCtx != NULL)
 						gMpCtx->jer_log(gMpCtx, "[mp] chase start: player %d is %d units behind the getaway (rank %d, wanted %d)\n",
 							me->id, walked, rank, want);
@@ -1984,6 +2061,9 @@ static void MpMarkChaseTick(void)
 				MpClusterPlace(me, cp, x, z, MpChaseHeading(x, z, gc->hd.direction & 0xfff), marked,
 					"cop, near the road behind the getaway"))
 			{
+				gMpChaseLineX = gx;
+				gMpChaseLineZ = gz;
+				gMpChaseLineSet = 1;
 				gMpClusterState = 2;
 				return;
 			}
