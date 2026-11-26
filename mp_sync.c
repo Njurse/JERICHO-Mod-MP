@@ -2631,6 +2631,8 @@ void MpHandleCarState(int connIndex, const unsigned char* p, int len)
 			}
 		}
 
+		MpRemoteCarCheck(pl);
+
 		/* OWNER-AUTHORITATIVE: this car belongs to another machine, so its owner is
 		 * the truth. Adopt the WHOLE body every snapshot -- no easing, no tolerance.
 		 * A contact is a separate message (MP_HIT: the owner of the MOVING car

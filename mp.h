@@ -680,6 +680,12 @@ void MpConsoleChat(const char* name, int colorOn, int r, int g, int b, const cha
  * car). (city, model) is the pair the wire carries; the model must be one this
  * machine can hold. Returns 1 if the car on the road changed. */
 int MpChangeCar(int city, int model);
+int MpCarSwapNowOk(void);	/* mid-round swap is ok on the bench / between rounds */
+/* jer_session.h: the session query (sandbox asks). mp_cars.c. */
+int MpOnSessState(void* userdata, void* args);
+int MpOnSessSpawnSlot(void* userdata, void* args);
+void MpCarMemoryTick(void);
+void MpCarMemoryLevelStart(void);	/* MpOnGameStart: re-arm the restore */
 /* Outside Take a Ride a pause pick is saved, not applied (mp_cars.c). */
 void MpCarPickerSetRole(int slot);	/* the role the pause picker chooses for; -1 = current */
 int  MpCarPickerRole(void);		/* that role's slot, or -1 in a mode without roles */
@@ -797,6 +803,9 @@ void MpCameraPose(int* x, int* y, int* z, int* yaw);	/* camera position + yaw */
 int  MpGetGameLevel(void);		/* the frontend's current city (GameLevel) */
 void MpSetSubGame(int n);		/* the multiplayer sub-level (gSubGameNumber) */
 void MpSetMapShape(int mpLevel, int arena);	/* the session's map: 0 = the full city, 1 = the multiplayer map */
+int  MpArenaCount(int city);			/* how many arenas the city can have (2, Vegas 4) */
+int  MpArenaInstalled(int city, int arena);	/* this machine has the files (arena 0/1: always) */
+int  MpArenaEveryoneHas(int city, int arena);	/* local install until JPAR hello bits are approved */
 const char* MpArenaTitle(int city, int arena);	/* Driver 2 area name, or NULL when none */
 
 /* The host's session rules, MP_RULES_PACK'd, as they should be published right

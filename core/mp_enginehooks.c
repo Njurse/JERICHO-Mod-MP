@@ -429,6 +429,8 @@ int MpOnGameStart(void* userdata, void* args)
 	 * when GameLevel is unchanged. Forget it before anything decides to skip. */
 	MpPedArchiveReset();
 
+	MpCarMemoryLevelStart();	/* every level start may need the picked car back */
+
 	/* A level is up: our car (and every peer's copy) is real from this moment.
 	 * MpSendOwnCarState refuses to send anything before this, because the
 	 * frontend/loading world's car_data is zeroed or a demo car at the origin.

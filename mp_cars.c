@@ -160,6 +160,96 @@ void MpCarQueryChosen(int city, int model, int changed);
 const char* MpChangeCarRefusal(int city, int model);
 static int MpChangeCarRun(int city, int model, int isRetry);
 
+/* CAR MEMORY (mp 0.25). The car this player last PICKED in a session (the pause
+ * picker: a swap or a saved pick, never a mode's role car). A map change reloads
+ * the level and every per-session record with it, which is how a pick used to be
+ * lost; this one is deliberately NOT cleared by MpFailsafeReset. It is also
+ * written to mp.ini (car / car_city, car_is_slot 0), so it is the next session's
+ * default too, and MpCarMemoryTick puts it back under the player once a new level
+ * is up. */
+static int sMpMemSet, sMpMemCity, sMpMemModel, sMpMemPalette;
+static int sMpMemApplied;	/* this level already had it restored (or did not need it) */
+static int sMpMemFrames;	/* frames since the level came up */
+
+static void MpCarMemoryNote(int city, int model, int palette)
+{
+	if (model < 0)
+		return;
+
+	sMpMemSet = 1;
+	sMpMemCity = city;
+	sMpMemModel = model;
+	sMpMemPalette = palette;
+	sMpMemApplied = 1;	/* it is the car being driven (or saved) right now */
+
+	if (gMp.config.car != model || gMp.config.carCity != (city < 0 ? -1 : city) || gMp.config.carIsSlot)
+	{
+		gMp.config.car = model;
+		gMp.config.carCity = (city < 0 || city >= CITY_COUNT) ? -1 : city;
+		gMp.config.carIsSlot = 0;
+		MpConfigSave();
+	}
+
+	if (gMpCtx != NULL)
+		gMpCtx->jer_log(gMpCtx, "[mp] car memory: %s model %d (kept across map changes, saved as the default)\n",
+			MpCarCityName(city), model);
+}
+
+void MpCarMemoryLevelStart(void)
+{
+	sMpMemApplied = 0;
+	sMpMemFrames = 0;
+}
+
+/* Once a frame in a session: a fresh level puts the remembered car back. */
+void MpCarMemoryTick(void)
+{
+	extern u_char defaultPlayerPalette;
+	MP_PLAYER* me;
+
+	if (!gMp.running || !gMp.gameStarted)
+		return;
+
+	if (!sMpMemSet || sMpMemApplied)
+		return;
+
+	/* let the level settle: spawn, the gather and the first roster all land first */
+	if (++sMpMemFrames < 60)
+		return;
+
+	me = MpLocalPlayer();
+	if (me == NULL || me->carId < 0 || me->carId >= MAX_CARS ||
+		player[0].playerType != PLAYER_TYPE_CAR)
+		return;
+
+	sMpMemApplied = 1;
+
+	/* a role mode gives the car itself at the countdown (Cops n Robbers) */
+	if (MpModeRoleSlotCount(gMp.gamemode) > 0)
+		return;
+
+	if (me->car == sMpMemModel && !me->carIsSlot &&
+		(me->carCity == sMpMemCity || (me->carCity < 0 && sMpMemCity == gMp.city)))
+		return;	/* the launch already gave it */
+
+	if (gMpCtx != NULL)
+		gMpCtx->jer_log(gMpCtx, "[mp] car memory: new level - restoring %s model %d\n",
+			MpCarCityName(sMpMemCity), sMpMemModel);
+
+	/* mid-round with cheats off, it waits for the next respawn or round like any pick */
+	if (!MpCheatsAllowed() && !MpCarSwapNowOk() && MpMarkPhase() != MP_MARK_PHASE_COUNTDOWN)
+	{
+		gMpPendingSet = 1;
+		gMpPendingCity = sMpMemCity;
+		gMpPendingModel = sMpMemModel;
+		gMpPendingPalette = sMpMemPalette;
+		return;
+	}
+
+	defaultPlayerPalette = (u_char)sMpMemPalette;
+	MpChangeCarRun(sMpMemCity, sMpMemModel, 0);
+}
+
 /* Called from MpSessionReset: this module's state is per session, so
  * the next match starts from the same values the module loaded with. */
 void MpCarsReset(void)
@@ -971,6 +1061,86 @@ int MpAdoptRemoteCar(MP_PLAYER* p, int city, int model)
 	return MpAdoptCar(p->carId, city, model, p);
 }
 
+/* A REMOTE PLAYER'S CAR THAT LOOKS WRONG: the "black material" car.
+ *
+ * MpAdoptRemoteCar only acts when the model NUMBER differs, and says "already that
+ * car" otherwise. A car with the right model whose textures never came good --
+ * its import pages or palette rows not live (JerCarSlotDrawable false), or its
+ * cosmetics pointer left on another slot -- draws black and was never looked at
+ * again. This is the check for it: once a second per player, and only on a car
+ * that IS the owner's model.
+ *
+ *   wrong   ask for the load again (bounded; the failsafe does the same for OUR car)
+ *   fixed   when it turns drawable, rebuild the car once (cosmetics, collision box,
+ *           the damage dump) and put the owner's wheels back, so it draws
+ *           correctly from then on, with no need to re-adopt or respawn.
+ * Called from the state poll after the model comparison. */
+#define MP_REMOTE_CHECK_FRAMES	30
+#define MP_REMOTE_CHECK_TRIES	6
+
+static unsigned sMpRemoteCheckFrame[MP_MAX_PLAYERS];
+static int sMpRemoteBad[MP_MAX_PLAYERS];
+static int sMpRemoteTries[MP_MAX_PLAYERS];
+
+void MpRemoteCarCheck(MP_PLAYER* pl)
+{
+	CAR_DATA* cp;
+	int slot, id;
+
+	if (pl == NULL || pl->isLocal || pl->id < 0 || pl->id >= MP_MAX_PLAYERS ||
+		pl->carId < 0 || pl->carId >= MAX_CARS)
+		return;
+
+	id = pl->id;
+
+	if (gMp.frame - sMpRemoteCheckFrame[id] < MP_REMOTE_CHECK_FRAMES)
+		return;
+
+	sMpRemoteCheckFrame[id] = gMp.frame;
+
+	cp = &car_data[pl->carId];
+	slot = cp->ap.model;
+
+	if (cp->controlType == CONTROL_TYPE_NONE || MpCarIsStandIn(pl->carId) ||
+		slot < 0 || slot >= MAX_CAR_RESIDENT_MODELS)
+		return;		/* no body / the stand-in path owns it */
+
+	if (!JerCarSlotDrawable(slot) || cp->ap.carCos != &car_cosmetics[slot])
+	{
+		if (!sMpRemoteBad[id] && gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx,
+				"[mp] remote car: player %d's car (slot %d, model %d) is not drawable here yet - asking for its load again\n",
+				id, slot, residentCarModels[slot]);
+
+		sMpRemoteBad[id] = 1;
+
+		if (sMpRemoteTries[id] < MP_REMOTE_CHECK_TRIES)
+		{
+			sMpRemoteTries[id]++;
+			MpCarQueryLoad(GetCarModelSourceCity(slot), residentCarModels[slot]);
+		}
+
+		return;
+	}
+
+	if (!sMpRemoteBad[id])
+		return;
+
+	sMpRemoteBad[id] = 0;
+	sMpRemoteTries[id] = 0;
+
+	cp->ap.carCos = &car_cosmetics[slot];
+	cp->lowDetail = -1;
+	cp->ap.palette = (u_char)CarSlotClampPalette(slot, pl->palette);
+	CreateDentableCar(cp);
+	CarApplyHubcapState(pl->carId, pl->hubcaps & 0x0f);
+
+	if (gMpCtx != NULL)
+		gMpCtx->jer_log(gMpCtx,
+			"[mp] remote car: player %d's car (slot %d) is drawable now - rebuilt it\n", id, slot);
+}
+
+
 /* Which cities this session can offer. Fills `out` with 0..3 city indices and
  * returns how many were written; 0 means nobody answered, and the caller should
  * offer the session's own city alone. */
@@ -1247,6 +1417,93 @@ static int MpRolePickStore(int mode, int slot, int city, int model, int palette,
 	return 1;
 }
 
+/* jer_session.h JER_SESSQ_STATE: is a session running, and what may a world-
+ * changing mod (sandbox) do in it? */
+#define MP_SANDBOX_SPAWN_LIMIT	1	/* spawned cars per player (Jaret: default 1) */
+
+int MpOnSessState(void* userdata, void* args)
+{
+	JER_SESSQ_STATE_ARGS* a = (JER_SESSQ_STATE_ARGS*)args;
+
+	(void)userdata;
+
+	if (a == NULL || !gMp.running)
+		return JER_RESULT_CONTINUE;
+
+	a->active = 1;
+	a->takeARide = (gMp.gamemode == MP_GAMEMODE_TAKEADRIDE);
+	a->cheatsAllowed = MpCheatsAllowed();
+	a->isAdmin = MpIsHost() || MpRoundPlayerIsAdmin(gMp.localPlayerId);
+	a->spawnLimit = MP_SANDBOX_SPAWN_LIMIT;
+	a->ownFirst = a->ownLast = -1;
+	MpTrafficBand(&a->ownFirst, &a->ownLast);
+	return JER_RESULT_CONTINUE;
+}
+
+/* JER_SESSQ_SPAWN_SLOT: a free slot in THIS machine's traffic band. mp publishes
+ * every civilian / police car in that band to the other machines (MpSendTrafficState),
+ * so a car spawned there is seen by everyone, and no peer's mirror or player car
+ * can be written over it. The player slots and the managed slots are mp's own. */
+int MpOnSessSpawnSlot(void* userdata, void* args)
+{
+	JER_SESSQ_SPAWN_SLOT_ARGS* a = (JER_SESSQ_SPAWN_SLOT_ARGS*)args;
+	int first, last, i;
+
+	(void)userdata;
+
+	if (a == NULL || !gMp.running || !MpTrafficBand(&first, &last))
+		return JER_RESULT_CONTINUE;
+
+	if (a->reuse >= first && a->reuse <= last && a->reuse != player[0].playerCarId &&
+		car_data[a->reuse].controlType == CONTROL_TYPE_NONE)
+	{
+		a->slot = a->reuse;
+		a->synced = 1;
+		return JER_RESULT_CONTINUE;
+	}
+
+	for (i = first; i <= last; i++)
+	{
+		if (car_data[i].controlType == CONTROL_TYPE_NONE)
+		{
+			a->slot = i;
+			a->synced = 1;
+			return JER_RESULT_CONTINUE;
+		}
+	}
+
+	/* the band is full of traffic: take its farthest civilian's place */
+	{
+		long long best = -1;
+		int bi = -1;
+
+		for (i = first; i <= last; i++)
+		{
+			CAR_DATA* cp = &car_data[i];
+			long long dx, dz, d;
+
+			if (cp->controlType != CONTROL_TYPE_CIV_AI || player[0].playerCarId < 0)
+				continue;
+			dx = cp->hd.where.t[0] - car_data[player[0].playerCarId].hd.where.t[0];
+			dz = cp->hd.where.t[2] - car_data[player[0].playerCarId].hd.where.t[2];
+			d = dx * dx + dz * dz;
+			if (d > best)
+			{
+				best = d;
+				bi = i;
+			}
+		}
+
+		if (bi >= 0)
+		{
+			PingOutCar(&car_data[bi]);
+			a->slot = bi;
+			a->synced = 1;
+		}
+	}
+	return JER_RESULT_CONTINUE;
+}
+
 /* JER_CARQ_ROLES: the join car select asks how many cars to ask for. */
 int MpOnCarqRoles(void* userdata, void* args)
 {
@@ -1371,6 +1628,38 @@ int MpCarChangeWaiting(void)
 	return gMpCarChangeWait.active;
 }
 
+int MpCarSwapNowOk(void)
+{
+	MP_PLAYER* me;
+	int phase, bench, state;
+
+	if (!gMp.running || MpCheatsAllowed())
+		return 1;
+
+	if (MpModeRoleSlotCount(gMp.gamemode) > 0 || !MpModeUsesTimer(gMp.gamemode))
+		return 0;
+
+	if (!MpMarkHaveState() || MpMarkMode() != gMp.gamemode)
+		return 0;
+
+	phase = MpMarkPhase();
+	if (phase == MP_MARK_PHASE_WAITING || phase == MP_MARK_PHASE_ENDED)
+		return 1;
+
+	if (phase != MP_MARK_PHASE_LIVE)
+		return 0;	/* the countdown: everyone is being lined up */
+
+	me = MpLocalPlayer();
+	if (me == NULL)
+		return 0;
+
+	bench = MpMarkBench(me->id);
+	state = MpRoundPlayerState(me->id);
+
+	return bench != 0 || state == MP_ROUND_PLAYER_WAITING || state == MP_ROUND_PLAYER_SPECTATING;
+}
+
+
 int MpChangeCar(int city, int model)
 {
 	/* GAME-MODE DECISION POINT: a mode may lock the car while a round runs. Take a
@@ -1395,7 +1684,7 @@ int MpChangeCar(int city, int model)
 	 * mid-round (a fresh, undamaged car is a repair). A mode with role cars saves it
 	 * as the pick of the role the pause picker is choosing for (Cops n Robbers: the
 	 * patrol car or the getaway car), applied at the next round's countdown. */
-	if (gMp.running && !MpCheatsAllowed())
+	if (gMp.running && !MpCheatsAllowed() && !MpCarSwapNowOk())
 	{
 		extern u_char defaultPlayerPalette;
 		char msg[96];
@@ -1416,6 +1705,7 @@ int MpChangeCar(int city, int model)
 		gMpPendingCity = city;
 		gMpPendingModel = model;
 		gMpPendingPalette = (int)defaultPlayerPalette;
+		MpCarMemoryNote(city, model, (int)defaultPlayerPalette);
 
 		if (gMpCtx != NULL)
 			gMpCtx->jer_log(gMpCtx, "[mp] saved car: %s model %d - for the next respawn or round\n",
@@ -1425,7 +1715,26 @@ int MpChangeCar(int city, int model)
 		return 0;
 	}
 
-	return MpChangeCarRun(city, model, 0);
+	/* a swap now replaces any pick saved earlier, or the next round would undo it */
+	if (gMp.running && !MpCheatsAllowed() && gMpPendingSet)
+	{
+		gMpPendingSet = 0;
+
+		if (gMpCtx != NULL)
+			gMpCtx->jer_log(gMpCtx, "[mp] change car: between rounds - swapping now, saved pick dropped\n");
+	}
+
+	{
+		extern u_char defaultPlayerPalette;
+		int r = MpChangeCarRun(city, model, 0);
+
+		/* remembered when the car is on the road or on its way (a load in progress) */
+		if (gMp.running && (r || gMpCarChangeWait.active ||
+			strcmp(MpChangeCarRefusal(city, model), "you are already driving it") == 0))
+			MpCarMemoryNote(city, model, (int)defaultPlayerPalette);
+
+		return r;
+	}
 }
 
 /* Forget a wait that is no longer relevant (level reset, leaving the session). */

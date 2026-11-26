@@ -32,6 +32,7 @@
 #include "jer_pause_menu.h"	/* JER_PAUSE_QUIT_*: the pause menu's codes (mirror MENU_QUIT_*) */
 #include "mp.h"
 #include "jer_carquery.h"	/* the mp <-> carhacks live-car query contract */
+#include "jer_session.h"	/* the session query sandbox asks (mp answers) */
 #include "jer_crumple.h"	/* the mp <-> crumple per-car crush multiplier contract */
 
 #include "driver2.h"
@@ -148,6 +149,7 @@ const char* MpChangeCarRefusal(int city, int model);
 const char* MpModeName(int gamemode);
 const char* MpTestCarSelect(void);
 int MpAdoptRemoteCar(MP_PLAYER* p, int city, int model);
+void MpRemoteCarCheck(MP_PLAYER* p);	/* a right-model car that draws black: ask again, rebuild when it can */
 int MpAssignedCarCity(void);
 int MpAssignedCarModel(int playerId);
 int MpCarChangeWaiting(void);

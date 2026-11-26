@@ -27,6 +27,7 @@
 #include "jer_carexplode.h"	/* request bank 54 at entry; wreck is driven from the session */
 #include "jer_carglow.h"	/* JER_EVENT_DRAW_WORLD: the fox / bomb-car glow */
 #include "jer_carquery.h"	/* JER_CARQ_ROLES / _ROLEPICK: mp answers the join car select */
+#include "jer_session.h"	/* JER_SESSQ_*: mp answers the session query (sandbox) */
 #include "jer_sound.h"		/* jer_sound_request_menu_bank: the join/leave sounds */
 
 #include "driver2.h"
@@ -259,6 +260,8 @@ JER_MODULE_ENTRY(jer_module_mp_entry)(JERICHO_CONTEXT* ctx)
 	ctx->jer_register_hook(ctx, JER_EVENT_CAR_DRAW_COLOR, MpOnCarDrawColor, NULL, 0);
 	ctx->jer_register_hook(ctx, JER_CARQ_ROLES, MpOnCarqRoles, NULL, 0);	/* role cars: the join car select asks */
 	ctx->jer_register_hook(ctx, JER_CARQ_ROLEPICK, MpOnCarqRolePick, NULL, 0);
+	ctx->jer_register_hook(ctx, JER_SESSQ_STATE, MpOnSessState, NULL, 0);	/* jer_session.h: sandbox asks */
+	ctx->jer_register_hook(ctx, JER_SESSQ_SPAWN_SLOT, MpOnSessSpawnSlot, NULL, 0);
 	/* Local Super Turbo. Each handler runs for every car; they ignore
 	 * anything that is not this machine's seat. */
 	ctx->jer_register_hook(ctx, JER_EVENT_CAR_ENGINE, MpOnCarEngine, NULL, 0);

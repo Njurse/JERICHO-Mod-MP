@@ -269,6 +269,7 @@ int MpOnFrame(void* userdata, void* args)
 	 * wait (a spare slot busy for a frame or two): retry it here, once a frame, in the
 	 * sim, which is where a level's resident slots mean anything. */
 	MpCarChangeWaitTick();
+	MpCarMemoryTick();	/* a map change gives the picked car back */
 
 	MpNetPoll(0);
 
