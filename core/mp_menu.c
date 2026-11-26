@@ -387,6 +387,8 @@ static void MpCcLabelApply(void* ud, char* out, int max)
 
 	if (MpCheatsNow())
 		snprintf(out, max, "Respawn as this car");
+	else if (role < 0 && MpCarSwapNowOk())
+		snprintf(out, max, "Swap now");
 	else if (role >= 0)
 		snprintf(out, max, "Set as %s (next round)", MpModeRoleSlotTitle(gMp.gamemode, role));
 	else
@@ -1204,27 +1206,57 @@ static int MpMenuReloadCars(void* ud, int dir)
 	return 0;
 }
 
-static const JER_PAUSE_MENU_ITEM mpPauseItems[] =
+/* The page sits on the MAIN pause menu (jer_pause_menu_promote,
+ * MpMenuRegister), and the car is the first thing on it. The switches are
+ * grouped one level down -- Cheats (the live flags and Super Turbo factor,
+ * each "(cheats off)" while the host has not allowed them), Settings (this
+ * machine's own preferences) and Admin, which only an admin sees. */
+static const JER_PAUSE_MENU_ITEM mpCheatItems[] =
 {
-	/* label, get_label, on_activate, userdata, submenu, adjust */
-
-	/* Respawn first, then the two things that shape a player: their car and
-	 * their character. Player Color and Preferred Character live one level down
-	 * in Player Options, together with the colour they depend on. Then the
-	 * movement row, the local switches, and the admin/debug rows last.
-	 * Super Turbo is the saved switch (mp.ini); the two above it are the live
-	 * cheat flags and are not written out. */
-	{ NULL, MpLabelRespawn, MpRespawn, NULL, NULL, 0 },
-	{ "Vehicle Options", NULL, NULL, NULL, &mpChangeCarMenu, 0 },
-	{ "Player Options", NULL, NULL, NULL, &mpPlayerMenu, 0 },
-	{ "Warp To Player", NULL, NULL, NULL, &mpWarpMenu, 0 },
 	{ NULL, MpOptLabelInvincible, MpOptToggleInvincible, NULL, NULL, 0 },
 	{ NULL, MpOptLabelImmune, MpOptToggleImmune, NULL, NULL, 0 },
 	{ NULL, MpOptLabelSuperTurbo, MpOptToggleSuperTurbo, NULL, NULL, 1 },
+};
+static const JER_PAUSE_MENU mpCheatMenu =
+{ "Cheats", mpCheatItems, MP_MENU_ITEMS(mpCheatItems), "mp.cheats" };
+
+static const JER_PAUSE_MENU_ITEM mpSettingItems[] =
+{
 	{ NULL, MpOptLabelJoinLeaveSounds, MpOptToggleJoinLeaveSounds, NULL, NULL, 1 },
+};
+static const JER_PAUSE_MENU mpSettingMenu =
+{ "Settings", mpSettingItems, MP_MENU_ITEMS(mpSettingItems), "mp.settings" };
+
+static const JER_PAUSE_MENU_ITEM mpAdminItems[] =
+{
 	{ "Kick player", NULL, NULL, NULL, &mpKickMenu, 0 },
 	{ "Reload all cars", NULL, MpMenuReloadCars, NULL, NULL, 0 },
 	{ "Write diagnostics now", NULL, MpMenuWriteDiag, NULL, NULL, 0 },
+};
+static const JER_PAUSE_MENU mpAdminMenu =
+{ "Admin", mpAdminItems, MP_MENU_ITEMS(mpAdminItems), "mp.admin" };
+
+/* An admin: anyone outside a session (their own game), the listen host, or a
+ * player the dedicated server says is one. Anyone else gets no row at all -- an
+ * empty label hides it (jer_pause_menu.h), read each time the pause opens. */
+static void MpLabelAdmin(void* ud, char* out, int max)
+{
+	int admin = !gMp.running || MpIsHost() || MpRoundPlayerIsAdmin(gMp.localPlayerId);
+
+	(void)ud;
+	snprintf(out, max, "%s", admin ? "Admin" : "");
+}
+
+static const JER_PAUSE_MENU_ITEM mpPauseItems[] =
+{
+	/* label, get_label, on_activate, userdata, submenu, adjust */
+	{ "Vehicle Options", NULL, NULL, NULL, &mpChangeCarMenu, 0 },
+	{ NULL, MpLabelRespawn, MpRespawn, NULL, NULL, 0 },
+	{ "Player Options", NULL, NULL, NULL, &mpPlayerMenu, 0 },
+	{ "Warp To Player", NULL, NULL, NULL, &mpWarpMenu, 0 },
+	{ "Cheats", NULL, NULL, NULL, &mpCheatMenu, 0 },
+	{ "Settings", NULL, NULL, NULL, &mpSettingMenu, 0 },
+	{ NULL, MpLabelAdmin, NULL, NULL, &mpAdminMenu, 0 },
 };
 
 static const JER_PAUSE_MENU mpPauseMenu =
@@ -1282,7 +1314,7 @@ static const JER_PAUSE_MENU_ITEM kDeepItems0[] =
 };
 static const JER_PAUSE_MENU kDeepMenu0 = { "Deep 0", kDeepItems0, MP_MENU_ITEMS(kDeepItems0) };
 
-/* Our own page in the pause screen ("Modules" -> "Multiplayer"). NOTE: the
+/* Our own page in the pause screen (Pause -> "Multiplayer"). NOTE: the
  * declared item_count must equal the array length -- the engine builds the
  * submenu eagerly, so a count that is too large reads past the end. (The
  * MP_MENU_ITEMS macro derives it from the array, so the two cannot drift.)
@@ -1290,6 +1322,7 @@ static const JER_PAUSE_MENU kDeepMenu0 = { "Deep 0", kDeepItems0, MP_MENU_ITEMS(
 void MpMenuRegister(void)
 {
 	jer_pause_menu_register(&mpPauseMenu);
+	jer_pause_menu_promote("mp.page");	/* on the main pause menu, above JERICHO Addons */
 
 	if (getenv("MP_DEEP_MENU") != NULL)
 		jer_pause_menu_register(&kDeepMenu0);
