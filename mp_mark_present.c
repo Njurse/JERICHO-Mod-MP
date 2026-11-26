@@ -5,6 +5,7 @@
  * Shared session state and helpers are declared in mp_session_int.h.
  */
 #include "mp_session_int.h"
+#include "overlay.h"	/* DamageBar: the stock top-right target-damage bar */
 
 /* ---- THE MARKED PLAYER (MP_TAG_MARK, mp_mark.c): Fox N Hounds, Car Bomb Tag ----
  *
@@ -121,7 +122,7 @@ static struct
 	int ms[MP_MAX_PLAYERS];		/* -1 = not in the round */
 	int shared;			/* the round clock (bomb, CnR) */
 	char titleText[48];
-	char sub[24];			/* one line under the clock: the CnR damage meter */
+	char sub[24];			/* one line under the clock (unused for CnR damage) */
 } gMpFoxHud;
 
 static int gMpFoxFade[MP_MAX_PLAYERS];	/* 0 = grey (frozen) .. MP_FOX_FADE_FRAMES = cyan */
@@ -506,6 +507,8 @@ void MpMarkPresentClear(void)
 	gMpFoxLine1[0] = '\0';
 	gMpFoxLine2[0] = '\0';
 	gMpFoxHud.on = 0;
+	if (DamageBar.active)
+		DamageBar.active = 0;
 	memset(gMpFoxFade, 0, sizeof(gMpFoxFade));
 	gMpRoundRepairPending = 0;
 	gMpHudR = 128;
@@ -1089,6 +1092,31 @@ static void MpSpectateTick(int phase, int myId)
 }
 
 /* Every machine, once a frame in a match. */
+
+/* Cops n Robbers: drive the stock top-right Damage bar (overlay.c:135-139,
+ * xpos gOverlayXOppPos, ypos 24, drawn by DisplayOverlays at overlay.c:852)
+ * with the getaway's bust meter (MpMarkHeat, 0..MP_MARK_CNR_BUST_POINTS).
+ * EnablePercentageBar zeros position, so it is only called when the bar is
+ * first shown or its max changes. */
+static void MpCnrSuspectBarTick(int phase)
+{
+	int on = (MpModeTimerKind(gMp.gamemode) == MP_MODE_TIMER_GETAWAY &&
+		(phase == MP_MARK_PHASE_LIVE || phase == MP_MARK_PHASE_COUNTDOWN ||
+		 phase == MP_MARK_PHASE_ENDED));
+
+	if (!on)
+	{
+		if (DamageBar.active)
+			DamageBar.active = 0;
+		return;
+	}
+
+	if (!DamageBar.active || DamageBar.max != (u_short)MP_MARK_CNR_BUST_POINTS)
+		EnablePercentageBar(&DamageBar, MP_MARK_CNR_BUST_POINTS);
+
+	DamageBar.position = (u_short)MpMarkHeat();
+}
+
 void MpMarkPresentTick(void)
 {
 	MP_PLAYER* me = MpLocalPlayer();
@@ -1225,11 +1253,12 @@ void MpMarkPresentTick(void)
 	}
 	else if (MpModeTimerKind(gMp.gamemode) == MP_MODE_TIMER_GETAWAY)
 	{
-		/* one clock; the cops' damage meter beside it */
+		/* one clock. The suspect's damage is the top-right Damage bar
+		 * (overlay.c DamageBar at gOverlayXOppPos, ypos 24). It used to be
+		 * printed here as well ("DMG 40%") and under the clock ("DAMAGE 40%"). */
 		ms = MpMarkClockMs(-1, since);
-		snprintf(text, sizeof(text), "%s %d:%02d DMG %d%%", marked == myId ? "GETAWAY" : "COP",
-			(ms + 999) / 1000 / 60, (ms + 999) / 1000 % 60,
-			MpMarkHeat() * 100 / MP_MARK_CNR_BUST_POINTS);
+		snprintf(text, sizeof(text), "%s %d:%02d", marked == myId ? "GETAWAY" : "COP",
+			(ms + 999) / 1000 / 60, (ms + 999) / 1000 % 60);
 	}
 	else if (MpModeTimerKind(gMp.gamemode) == MP_MODE_TIMER_SHARED)
 	{
@@ -1245,6 +1274,7 @@ void MpMarkPresentTick(void)
 	}
 
 	MpCnrDamageTick(phase, marked, myId);
+	MpCnrSuspectBarTick(phase);
 	MpSpectateTick(phase, myId);
 	MpFoxHudBuild(phase, marked, myId, since);
 
@@ -1469,9 +1499,7 @@ static void MpFoxHudBuild(int phase, int marked, int myId, int since)
 		gMpFoxHud.marked = marked;
 		memset(gMpFoxHud.ms, 0xff, sizeof(gMpFoxHud.ms));	/* no side column */
 
-		if (kind == MP_MODE_TIMER_GETAWAY)
-			snprintf(gMpFoxHud.sub, sizeof(gMpFoxHud.sub), "DAMAGE %d%%",
-				MpMarkHeat() * 100 / MP_MARK_CNR_BUST_POINTS);
+		/* no "DAMAGE n%" line under the clock: the top-right Damage bar shows it */
 
 		gMpFoxHud.title = marked >= 0 && (live || phase == MP_MARK_PHASE_COUNTDOWN);
 

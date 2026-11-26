@@ -1627,15 +1627,17 @@ static void ManualOnEnter(void* ud)
  * headings are a header, not another row. */
 #define TABLE_SCALE		100	/* the console's size, in the frontend's face */
 #define TABLE_COL_NAME		0
-#define TABLE_COL_PLAYERS	261
-#define TABLE_COL_MODE		333
-#define TABLE_COL_CITY		473
-#define TABLE_COL_PING		567
-#define TABLE_NAME_CHARS	20	/* what the NAME column holds before it is cut: the 4-letter
-				 * server kind (DEDI / LSTN), a lock slot, then the name */
+#define TABLE_COL_PLAYERS	293	/* was 261: the name column used to hold 15 characters
+				 * after the DEDI/LSTN tag, which printed
+				 * "JERICHO Official" as "JERICHO Officia" */
+#define TABLE_COL_MODE		365
+#define TABLE_COL_CITY		505
+#define TABLE_COL_PING		599
 #define TABLE_TAG_CHARS		5	/* "DEDI" + the lock slot */
-#define TABLE_CHAR_W		13	/* one character of the column, in the column's own units */
-#define TABLE_ROW_W		600	/* the menu's row width; the columns above fit it */
+#define TABLE_CHAR_W		13	/* one character of the tag slot, in the column's own units */
+#define TABLE_NAME_X		(TABLE_COL_NAME + TABLE_TAG_CHARS * TABLE_CHAR_W)
+#define TABLE_NAME_MAX_PX	(TABLE_COL_PLAYERS - TABLE_NAME_X - 4)
+#define TABLE_ROW_W		640	/* the menu's row width; the columns above fit it */
 #define TABLE_ROW_TOP		210	/* where the ROSTER starts. The stock 190 sits barely 24
 					 * units under the screen title, which left nowhere for
 					 * a heading line: it landed ON the title */
@@ -1913,7 +1915,7 @@ static int TableRowSource(int online, int index, TABLE_ROW* out)
 		if (s == NULL)
 			return 0;
 
-		snprintf(out->name, sizeof(out->name), "%.*s", TABLE_NAME_CHARS - TABLE_TAG_CHARS, s->name);
+		snprintf(out->name, sizeof(out->name), "%s", s->name);
 		out->live = 0;
 		out->players = s->players;
 		out->maxPlayers = s->maxPlayers;
@@ -1934,7 +1936,7 @@ static int TableRowSource(int online, int index, TABLE_ROW* out)
 		 * know and an online row has no equivalent of (that list is live by
 		 * definition). It takes the PING cell, which a beacon has no measurement
 		 * for anyway, so the NAME cell is free for the server kind. */
-		snprintf(out->name, sizeof(out->name), "%.*s", TABLE_NAME_CHARS - TABLE_TAG_CHARS, s->hostName);
+		snprintf(out->name, sizeof(out->name), "%s", s->hostName);
 		out->live = s->inProgress ? 1 : 0;
 		out->players = s->players;
 		out->maxPlayers = s->maxPlayers;
@@ -1944,6 +1946,40 @@ static int TableRowSource(int online, int index, TABLE_ROW* out)
 		out->pingMs = 0;			/* no measurement for a beacon row */
 		return 1;
 	}
+}
+
+
+/* Fit a server name into the NAME column. The old cut was a fixed
+ * TABLE_NAME_CHARS - TABLE_TAG_CHARS (15) characters; a 16-character
+ * name such as "JERICHO Official" became "JERICHO Officia". Names that
+ * still cannot fit the (now wider) column are ellipsised to the pixel
+ * width of the frontend face, so they do not run into PLAYERS. */
+static void TableFitName(char* dst, int dstsz, const char* src, int max_px)
+{
+	char full[MP_NAME_MAX + 8];
+	int n;
+
+	if (src == NULL)
+		src = "";
+
+	snprintf(full, sizeof(full), "%s", src);
+	if (jer_text_width(JER_TEXT_FE, TABLE_SCALE, full) <= max_px)
+	{
+		snprintf(dst, dstsz, "%s", full);
+		return;
+	}
+
+	n = (int)strlen(full);
+	while (n > 0)
+	{
+		n--;
+		snprintf(dst, dstsz, "%.*s...", n, full);
+		if (jer_text_width(JER_TEXT_FE, TABLE_SCALE, dst) <= max_px)
+			return;
+	}
+
+	if (dstsz > 0)
+		dst[0] = '\0';
 }
 
 /* The table. Called from the frontend draw hook (after the engine has drawn the
@@ -2067,7 +2103,12 @@ static void TableDraw(int online)
 		if (MP_ADV_PASSWORD_OF(r.rules))
 			jer_text_draw_at(JER_TEXT_FE, TABLE_SCALE, x + TABLE_COL_NAME + 4 * TABLE_CHAR_W, y, "*", 255, 190, 90);
 
-		jer_text_draw_at(JER_TEXT_FE, TABLE_SCALE, x + TABLE_COL_NAME + TABLE_TAG_CHARS * TABLE_CHAR_W, y, r.name, cr, cg, cb);
+		{
+			char shown[MP_NAME_MAX + 8];
+
+			TableFitName(shown, (int)sizeof(shown), r.name, TABLE_NAME_MAX_PX);
+			jer_text_draw_at(JER_TEXT_FE, TABLE_SCALE, x + TABLE_NAME_X, y, shown, cr, cg, cb);
+		}
 
 		snprintf(cell, sizeof(cell), "%d/%d", r.players, r.maxPlayers);
 		jer_text_draw_at(JER_TEXT_FE, TABLE_SCALE, x + TABLE_COL_PLAYERS, y, cell, cr, cg, cb);
