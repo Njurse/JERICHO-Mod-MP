@@ -343,7 +343,7 @@ def main():
               and mv.parse_target("havana") == (1, "city", None),
               [mv.parse_target(x) for x in ("mp 1", "city rio mp 0", "havana mp 1", "havana")])
         out = say(ms, ma, "!vote mp 2")
-        check("vote: mp is 0 or 1", "mp is 0 or 1" in out[-1][1], out)
+        check("vote: mp 2 is Vegas only", "only mp 0 and mp 1" in out[-1][1], out)
         out = say(ms, ma, "!vote city")
         check("vote: !vote city needs a city", "usage" in out[-1][1], out)
         out = say(ms, ma, "!vote city chicago mp")
@@ -353,7 +353,7 @@ def main():
         out = say(ms, ma, "!help vote")
         help_text = " ".join(t for _, t in out)
         check("vote: the help names both forms",
-              "!vote <city> [mp [0|1]]" in help_text and "!vote mp [0|1]" in help_text, help_text)
+              "!vote <city> [mp [0-3]]" in help_text and "!vote mp [0-3]" in help_text, help_text)
         out = say(ms, ma, "!vote havana mp 1")
         check("vote: city + mp starts the vote",
               any("started a vote to switch to HAVANA Old Havana" in t for _, t in out)

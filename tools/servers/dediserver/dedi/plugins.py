@@ -214,8 +214,13 @@ class ServerAPI:
         """Set the map shape for new joiners: 'city' (full city) or 'mp'."""
         return self._s.set_map_mode(mode)
 
+    def arena_ok(self, city, arena):
+        """True when every player can load this multiplayer map: MP 0/1 always.
+        Vegas MP 2/3 wait on a held hello field, so they are not offered yet."""
+        return self._s.arena_ok(city, arena)
+
     def set_arena(self, arena):
-        """Which of the city's two multiplayer maps (0/1) new joiners load (the
+        """Which of the city's multiplayer maps (0/1; Vegas also 2/3) new joiners load (the
         game's -mp 0 / -mp 1). The welcome and start carry it and the discovery
         listing is refreshed. Players already in a level stay on the old map until
         they rejoin. Returns the new arena."""

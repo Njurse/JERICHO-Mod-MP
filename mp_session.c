@@ -364,6 +364,19 @@ void MpLaunchLocal(void)
 	 * from the shape the host published, so the host and a client that booted with
 	 * a different -mp still load the SAME map. It used to be hardcoded 0, which
 	 * silently ignored the arena on every machine. */
+
+	/* An extra arena is only loose mission files. Without them the BLK
+	 * has no such mission and the load reads garbage, so fall back to MP 0 and
+	 * say why. */
+	if (gBootMpLevel && !MpArenaInstalled(gMp.city, gBootMpArena))
+	{
+		if (gMpCtx)
+			gMpCtx->jer_log(gMpCtx, "[mp] arena %d of city %d is not installed here (run BAKE_D1_CARS to build Vegas MP 2/3) - loading MP 0 instead\n",
+				gBootMpArena, gMp.city);
+		jer_notify("This map is not installed - run Bake to add Vegas MP 2/3", 4, 4);
+		gBootMpArena = 0;
+	}
+
 	gSubGameNumber = gBootMpLevel ? gBootMpArena : 0;
 
 	if (gMp.timeOfDay >= 0)
@@ -542,6 +555,69 @@ void MpSetMapShape(int mpLevel, int arena)
 {
 	gBootMpLevel = mpLevel ? 1 : 0;
 	gBootMpArena = arena & MP_SESSION_ARENA_MASK;
+}
+
+/* ---- EXTRA ARENAS -----------------------------------------------------------
+ * Driver 2 ships two multiplayer maps per city (arena 0 and 1, in MISSIONS.BLK).
+ * Vegas has two more regions in its multiplayer level that only the 2-player
+ * Checkpoint races reach; tools/make_vegas_arenas.py (run by BAKE_D1_CARS) writes
+ * them as loose MISSIONS\M<n>.D2MS files, which LoadMission reads before the BLK.
+ * Arena n of city c is mission 58 + c*2 + night + n*440 (glaunch.c).
+ *
+ * WITHOUT the files the BLK has no such entry and LoadMission reads garbage, so
+ * every path that could load one (the menus, the votes, the rotation and the
+ * launch itself) asks here first. */
+#define MP_ARENA_CITY_VEGAS	2
+
+static int MpArenaMission(int city, int night, int arena)
+{
+	return 58 + city * 2 + (night ? 1 : 0) + arena * 440;
+}
+
+int MpArenaCount(int city)
+{
+	return (city == MP_ARENA_CITY_VEGAS) ? 4 : 2;
+}
+
+int MpArenaInstalled(int city, int arena)
+{
+	static unsigned long checkedAt;
+	static int have = -1;
+
+	if (arena >= 0 && arena < 2)
+		return 1;
+
+	if (city != MP_ARENA_CITY_VEGAS || arena < 0 || arena >= MpArenaCount(city))
+		return 0;
+
+	/* the menus ask every frame: look at the disk at most once a second */
+	if (have < 0 || MpNowMs() - checkedAt > 1000)
+	{
+		int a, night;
+		char name[40];
+
+		have = 1;
+		for (a = 2; a < 4 && have; a++)
+		{
+			for (night = 0; night < 2 && have; night++)
+			{
+				snprintf(name, sizeof(name), "MISSIONS\\M%d.D2MS", MpArenaMission(city, night, a));
+				if (!FileExists(name))
+					have = 0;
+			}
+		}
+		checkedAt = MpNowMs();
+	}
+
+	return have;
+}
+
+int MpArenaEveryoneHas(int city, int arena)
+{
+	/* Peer bits need the JPAR hello block (held: new optional wire field).
+	 * Until that is approved, only this machine's files are checked; a peer
+	 * without them falls back to MP 0 at launch. */
+	return MpArenaInstalled(city, arena);
 }
 
 /* The name the frontend already printed for this city's multiplayer map.

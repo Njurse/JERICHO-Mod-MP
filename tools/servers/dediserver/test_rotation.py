@@ -16,8 +16,10 @@ def check(name, condition):
 def main():
     fails = 0
     d = r.default_rotation()
-    fails += check("default: 8 stops, city 0 mp 0 then mp 1 then city 1",
-                   [(s["city"], s["arena"]) for s in d[:3]] == [(0, 0), (0, 1), (1, 0)] and len(d) == 8)
+    fails += check("default: 10 stops, city 0 mp 0 then mp 1 then city 1; Vegas mp 0..3",
+                   [(s["city"], s["arena"]) for s in d[:3]] == [(0, 0), (0, 1), (1, 0)] and len(d) == 10
+                   and [s["arena"] for s in d if s["city"] == 2] == [0, 1, 2, 3])
+    fails += check("parse vegas mp 3", r.parse_stop("vegas mp 3")["arena"] == 3)
     fails += check("parse string", r.parse_stop("havana mp 1") == {"city": 1, "map_mode": "mp", "arena": 1, "area": -1})
     fails += check("parse city", r.parse_stop("vegas city")["map_mode"] == "city")
     fails += check("parse dict", r.parse_stop({"city": "rio", "arena": 1})["city"] == 3)
@@ -50,6 +52,7 @@ def main():
         def set_arena(self, a): self.cfg["arena"] = a
         def kick(self, p, *a, **k): self.kicked.append(k.get("rejoin"))
         def save_config(self, *k): self.saved = True
+        def arena_ok(self, c, a): return a < 2 or self.cfg.get("have_vegas", False)
     f = Fake()
     r.on_load(f)
     r.SWITCH_DELAY = 0
@@ -63,6 +66,17 @@ def main():
     f.cfg["rounds_per_map"] = 0
     f.rnd = (3, True); r.on_tick(); f.rnd = (4, True); r.on_tick()
     fails += check("rounds_per_map 0: off", f.cfg["arena"] == 1 and len(f.kicked) == 1)
+
+    # Vegas MP 2/3: skipped while a player lacks the files, taken when all have them
+    for have, want in ((False, (3, 0)), (True, (2, 2))):
+        f = Fake()
+        f.cfg.update(city=2, arena=1, rounds_per_map=1, have_vegas=have)
+        r.on_load(f)
+        r.on_tick()
+        f.rnd = (1, True); r.on_tick(); r.on_tick()
+        fails += check("after vegas mp 1 (%s the files) -> city %d mp %d"
+                       % ("everyone has" if have else "a player lacks", want[0], want[1]),
+                       (f.cfg["city"], f.cfg["arena"]) == want)
 
     print("\nrotation tests: %s" % ("PASS" if not fails else "FAIL (%d)" % fails))
     return 1 if fails else 0

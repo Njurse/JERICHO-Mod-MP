@@ -403,6 +403,11 @@ def build_hello(name, mods=(), build=0, player_id=None, version=None, password=N
     return body
 
 
+def arena_count(city):
+    """mp_session.c MpArenaCount: Vegas (2) has MP 0..3, every other city MP 0/1."""
+    return 4 if int(city) == 2 else 2
+
+
 def parse_hello_password(payload):
     """The JPPW password after the manifest, JPID and JPVR blocks (each optional),
     or None when the client sent none. The game's MpHelloPassword, mp_lobby.c."""

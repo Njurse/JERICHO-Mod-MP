@@ -33,7 +33,7 @@ def main():
             actual = repr(exc)
         fails += check("parse %r -> %r" % (command, expected), actual == expected)
 
-    for command in ("city", "city chicago mp 2", "city chicago nonsense", "mp 3"):
+    for command in ("city", "city chicago mp 4", "city chicago nonsense", "mp 5"):
         try:
             vote.parse_target(command)
             valid = False

@@ -73,6 +73,7 @@ enum
 	M_HOST_ROUNDS,	/* Host Game > Round Settings (time, intermission) */
 	M_HOST_RULES,	/* Host Game > Session Rules (police, immunity, invulnerability) */
 	M_HOST_ACCESS,	/* Host Game > Access (password, mod matching) */
+	M_VEGAS_MAPS,	/* Vegas multiplayer maps, MP 0..3 (the stock list has 2) */
 	M_COUNT
 };
 
@@ -81,7 +82,7 @@ enum
 static const char* const kMenuIds[M_COUNT] = {
 	"mp.root", "mp.lan", "mp.online", "mp.host", "mp.mode", "mp.join",
 	"mp.lobby", "mp.jmpoptions", "mp.name", "mp.manual", "mp.gamemode",
-	"mp.host.rounds", "mp.host.rules", "mp.host.access"
+	"mp.host.rounds", "mp.host.rules", "mp.host.access", "mp.vegasmaps"
 };
 static int gMenuIdx[M_COUNT];
 static int gMenusResolved;	/* set once MpResolveMenus has run: an index is only
@@ -396,14 +397,56 @@ static int ActModeMP(void* ud)
 {
 	(void)ud;
 
-	/* The city's small multiplayer map. Which ARENA (0/1) is chosen on the stock
+	/* The city's small multiplayer map. Which ARENA is chosen on the stock
 	 * per-city level list reached below, whose buttons write gSubGameNumber
 	 * (SetVariable code 8); the host's START turns that into the session arena. */
 	MpSetMapShape(1, 0);
 
+	/* Vegas has four maps (MP 2 and 3 are the cut ones, built by the bake),
+	 * and the stock list is game data with two buttons -- so Vegas gets
+	 * mp's own list instead. */
+	if ((MpGetGameLevel() & 3) == 2 && gMenuIdx[M_VEGAS_MAPS] >= 0)
+	{
+		jer_frontend_open(gMenuIdx[M_VEGAS_MAPS]);
+		return 1;
+	}
+
 	/* 35..38 are the per-city multiplayer level lists (35 = Chicago,
 	 * 36 = Havana, 37 = Las Vegas, 38 = Rio). */
 	jer_frontend_goto(35 + (MpGetGameLevel() & 3));
+	return 1;
+}
+
+/* The Vegas map list: an installed map sets the arena (and gSubGameNumber, which
+ * the confirm hook reads back) and continues the stock flow to time of day; a
+ * missing one says how to get it. Labels use the real Driver 2 area names. */
+static void LblVegasMap(void* ud, char* o, int n)
+{
+	int arena = (int)(intptr_t)ud;
+	const char* name = MpArenaTitle(2, arena);
+	char fallback[16];
+
+	if (name == NULL)
+	{
+		snprintf(fallback, sizeof(fallback), "mp %d", arena);
+		name = fallback;
+	}
+	snprintf(o, n, "%s%s", name, MpArenaInstalled(2, arena) ? "" : " (not installed)");
+}
+
+static int ActVegasMap(void* ud)
+{
+	int arena = (int)(intptr_t)ud;
+
+	if (!MpArenaInstalled(2, arena))
+	{
+		MpNotify("Run Bake (BAKE_D1_CARS) to build Vegas MP 2 and 3");
+		return 1;
+	}
+
+	MpSetMapShape(1, arena);
+	MpSetSubGame(arena);
+	jer_frontend_goto(3);		/* the stock flow: time of day */
 	return 1;
 }
 
@@ -1061,6 +1104,17 @@ static const JER_FE_ITEM kHostAccessItems[] =
 };
 static const JER_FE_MENU kHostAccessMenu = { "mp.host.access", kHostAccessItems,
 	(int)(sizeof(kHostAccessItems) / sizeof(kHostAccessItems[0])), NULL, NULL, "ACCESS" };
+
+static const JER_FE_ITEM kVegasMapItems[] =
+{
+	{ NULL, LblVegasMap, (void*)(intptr_t)0, ActVegasMap, NULL, -1, 0 },
+	{ NULL, LblVegasMap, (void*)(intptr_t)1, ActVegasMap, NULL, -1, 0 },
+	{ NULL, LblVegasMap, (void*)(intptr_t)2, ActVegasMap, NULL, -1, 0 },
+	{ NULL, LblVegasMap, (void*)(intptr_t)3, ActVegasMap, NULL, -1, 0 },
+	{ "Back",            NULL, NULL, NULL, NULL, -1, 1 },
+};
+static const JER_FE_MENU kVegasMapMenu = { "mp.vegasmaps", kVegasMapItems,
+	(int)(sizeof(kVegasMapItems) / sizeof(kVegasMapItems[0])), NULL, NULL, "LAS VEGAS" };
 
 /* GAME MODE LIST: the host's first screen after Host Game, a stock-style list of
  * every selectable mode with Take a Ride on top (then the table's order, mp_mode.c).
@@ -2811,6 +2865,7 @@ void MpUiInit(void)
 	jer_frontend_register_menu(&kHostRuleMenu);
 	jer_frontend_register_menu(&kHostAccessMenu);
 	jer_frontend_register_menu(&kHostSetMenu);
+	jer_frontend_register_menu(&kVegasMapMenu);
 	jer_frontend_register_menu(&gJoinMenu);
 	jer_frontend_register_menu(&gLobbyMenu);
 	jer_frontend_register_menu(&kJmpOptionsMenu);

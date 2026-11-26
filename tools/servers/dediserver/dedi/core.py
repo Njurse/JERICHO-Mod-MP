@@ -700,6 +700,17 @@ class Dedicated:
         self.readvertise()
         return mode
 
+    def arena_ok(self, city, arena):
+        """May the server send everyone to this multiplayer map? MP 0/1 always.
+        Vegas MP 2/3 need every peer to have reported the files; that report
+        is a held hello field (JPAR), so 2/3 are not offered yet."""
+        city, arena = int(city), int(arena)
+        if not 0 <= arena < m.arena_count(city):
+            return False
+        if arena < 2:
+            return True
+        return False
+
     def set_arena(self, arena):
         arena = int(arena)
         if not 0 <= arena <= m.ARENA_MAX:

@@ -1,9 +1,9 @@
-"""Vote for a map: !vote <city> [mp [0|1]].
+"""Vote for a map: !vote <city> [mp [0-3]].
 
   !vote <city>           the city's full single-player city map
   !vote <city> mp        the city's multiplayer map, keeping the current arena
-  !vote <city> mp 0|1    explicitly select multiplayer arena 0 or 1
-  !vote mp [0|1]         vote for a multiplayer map in the current city
+  !vote <city> mp 0-3    explicitly select a multiplayer arena (2/3: Vegas only)
+  !vote mp [0-3]         vote for a multiplayer map in the current city
   !vote                  show the vote in progress
   !vote cancel           admins: stop the vote
 
@@ -13,13 +13,13 @@ players reconnect because the game cannot change levels under a live session.
 """
 import time
 
-DESCRIPTION = "!vote <city> [mp [0|1]] - vote for the city or its multiplayer map"
+DESCRIPTION = "!vote <city> [mp [0-3]] - vote for the city or its multiplayer map"
 COLOR = "#FFD24A"
 CITIES = ("chicago", "havana", "vegas", "rio")
 from dedi.mapnames import where as map_where
 ALIASES = {"las vegas": 2, "lasvegas": 2, "las_vegas": 2}
-USAGE = "!vote <city> [mp [0|1]]"
-START_HINT = USAGE + " (or !vote mp [0|1]) starts one"
+USAGE = "!vote <city> [mp [0-3]]"
+START_HINT = USAGE + " (or !vote mp [0-3]) starts one"
 DEFAULT_COOLDOWN_S = 15
 now = time.monotonic
 
@@ -35,14 +35,14 @@ def on_load(server):
     _cooldown_until = 0.0
     server.register_command(
         "vote", cmd_vote, console=True,
-        help="!vote <city> [mp [0|1]]: a city name is the single-player map, mp = multiplayer; "
-             "!vote mp [0|1] changes the current city's multiplayer map; admins: !vote cancel")
+        help="!vote <city> [mp [0-3]]: a city name is the single-player map, mp = multiplayer; "
+             "!vote mp [0-3] changes the current city's multiplayer map; admins: !vote cancel")
     server.register_command(
         "endvote", cmd_endvote, admin=True, console=True,
         help="!endvote - cancel the active map vote")
     server.register_command(
         "map", cmd_map, admin=True, console=True,
-        help="!map <city> [mp [0|1]] | !map mp [0|1] [save] - switch map immediately")
+        help="!map <city> [mp [0-3]] | !map mp [0-3] [save] - switch map immediately")
 
 
 def city_index(text):
@@ -74,8 +74,8 @@ def _where(city, mode, arena):
 def _mp_value(words):
     if not words:
         return None
-    if words[0] not in ("0", "1"):
-        raise ValueError("mp is 0 or 1 (the city's two multiplayer maps), not '%s'" % words[0])
+    if words[0] not in ("0", "1", "2", "3"):
+        raise ValueError("mp is 0 or 1 (Vegas: 0-3), not '%s'" % words[0])
     if len(words) > 1:
         raise ValueError("unknown option '%s' -- %s" % (" ".join(words[1:]), USAGE))
     return int(words[0])
@@ -85,7 +85,7 @@ def parse_target(text):
     """Return (city, mode, arena); None means keep the current value.
 
     `<city>` targets the full city; appending `mp` targets multiplayer.
-    `mp [0|1]` targets multiplayer in the current city.
+    `mp [0-3]` targets multiplayer in the current city.
     The optional `city` keyword (`!vote city <city>`) is still accepted.
     """
     words = str(text).strip().lower().split()
@@ -97,7 +97,7 @@ def parse_target(text):
 
     if words[0] == "city":
         if len(words) < 2:
-            raise ValueError("usage: !vote <city> [mp [0|1]]")
+            raise ValueError("usage: !vote <city> [mp [0-3]]")
         name, rest = words[1], words[2:]
     else:
         name, rest = words[0], words[1:]  # !vote <city> [mp ...]
@@ -157,6 +157,11 @@ def cmd_vote(caller, args):
     cur_mode = str(_server.config_get("map_mode", "mp"))
     city = cur_city if city is None else city
     arena = (cur_arena if arena is None else arena) if mode == "mp" else cur_arena
+
+    if mode == "mp" and not _server.arena_ok(city, arena):
+        if arena >= (4 if city == 2 else 2):
+            return "%s has only mp 0 and mp 1" % CITIES[city].upper()
+        return "not everyone has %s installed (BAKE_D1_CARS builds Vegas MP 2/3)" % _where(city, mode, arena)
 
     if _vote is None:
         if t < _cooldown_until:
@@ -248,19 +253,23 @@ def cmd_map(caller, args):
     cur_arena = int(_server.config_get("arena", 0))
     cur_mode = str(_server.config_get("map_mode", "mp"))
     if not words:
-        return ("current map: %s -- usage: !map <city> [mp [0|1]] | !map mp [0|1] [save]"
+        return ("current map: %s -- usage: !map <city> [mp [0-3]] | !map mp [0-3] [save]"
                 % _where(cur_city, cur_mode, cur_arena))
     save = words[-1].lower() == "save"
     if save:
         words = words[:-1]
     if not words:
-        return "usage: !map <city> [mp [0|1]] | !map mp [0|1] [save]"
+        return "usage: !map <city> [mp [0-3]] | !map mp [0-3] [save]"
     try:
         city, mode, arena = parse_target(" ".join(words))
     except ValueError as e:
         return str(e)
     city = cur_city if city is None else city
     arena = (cur_arena if arena is None else arena) if mode == "mp" else cur_arena
+    if mode == "mp" and not _server.arena_ok(city, arena):
+        if arena >= (4 if city == 2 else 2):
+            return "%s has only mp 0 and mp 1" % CITIES[city].upper()
+        return "not everyone has %s installed (BAKE_D1_CARS builds Vegas MP 2/3)" % _where(city, mode, arena)
     if (city, mode, arena) == (cur_city, cur_mode, cur_arena):
         return "the server is already on %s" % _where(city, mode, arena)
     _vote = None

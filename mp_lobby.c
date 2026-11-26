@@ -35,13 +35,13 @@
 #define MP_LVOTE_COOLDOWN_MS	15000
 #define MP_ROTATE_DELAY_MS	4000	/* after the round's end: let the result show */
 #define MP_ROT_CITIES		4
-#define MP_ROT_ARENAS		2
+#define MP_ROT_ARENAS_MAX	4	/* Vegas has 4 (MpArenaCount); the rest 2 */
 
 typedef struct
 {
 	int city;	/* GameLevel 0..3 */
 	int shape;	/* 1 = multiplayer map, 0 = the full city */
-	int arena;	/* the multiplayer map, 0/1 */
+	int arena;	/* the multiplayer map, 0..3 */
 	int area;	/* reserved: a stop inside one map; -1 = the whole level */
 } MP_ROT_STOP;
 
@@ -1656,22 +1656,42 @@ void MpHandleHello(int connIndex, const unsigned char* p, int len)
 			matched ? "" : " [mods differ]");
 }
 
-static int MpRotStopCount(void)
+/* The default order: every city's multiplayer maps in turn (Vegas MP 2 and 3
+ * only when this machine has them: MpArenaEveryoneHas, local-install until
+ * JPAR is approved). Built on each call so a missing bake drops them. */
+static int MpRotStops(MP_ROT_STOP* out, int max)
 {
-	return MP_ROT_CITIES * MP_ROT_ARENAS;
+	int c, a, n = 0;
+
+	for (c = 0; c < MP_ROT_CITIES; c++)
+	{
+		for (a = 0; a < MpArenaCount(c) && a < MP_ROT_ARENAS_MAX; a++)
+		{
+			if (!MpArenaEveryoneHas(c, a) || n >= max)
+				continue;
+			out[n].city = c;
+			out[n].shape = 1;
+			out[n].arena = a;
+			out[n].area = -1;
+			n++;
+		}
+	}
+	return n;
 }
 
-/* The default order: stop i = city i/2, multiplayer map i%2. */
+static int MpRotStopCount(void)
+{
+	MP_ROT_STOP s[MP_ROT_CITIES * MP_ROT_ARENAS_MAX];
+
+	return MpRotStops(s, MP_ROT_CITIES * MP_ROT_ARENAS_MAX);
+}
+
 static MP_ROT_STOP MpRotStop(int i)
 {
-	MP_ROT_STOP s;
+	MP_ROT_STOP s[MP_ROT_CITIES * MP_ROT_ARENAS_MAX];
+	int n = MpRotStops(s, MP_ROT_CITIES * MP_ROT_ARENAS_MAX);
 
-	i %= MpRotStopCount();
-	s.city = i / MP_ROT_ARENAS;
-	s.shape = 1;
-	s.arena = i % MP_ROT_ARENAS;
-	s.area = -1;
-	return s;
+	return s[(n > 0) ? (i % n) : 0];	/* arenas 0/1 always count, so n >= 8 */
 }
 
 static MP_ROT_STOP MpRotationNext(int city, int shape, int arena)
@@ -1744,7 +1764,8 @@ static int MpLVoteCityIndex(const char* w)
 	return -1;
 }
 
-/* vote.py parse_target: "city <city> [mp [0|1]]", "mp [0|1]", legacy "<city> [mp ..]".
+/* vote.py parse_target: "city <city> [mp [0-3]]", "mp [0-3]", legacy "<city> [mp ..]".
+ * The arena is checked against the city by the caller (MpArenaEveryoneHas).
  * Fills `to` from the current level for what the words leave out. 0 = bad. */
 static int MpLVoteParse(const char* args, MP_ROT_STOP* to)
 {
@@ -1793,7 +1814,7 @@ static int MpLVoteParse(const char* args, MP_ROT_STOP* to)
 	i++;
 	if (i < n)
 	{
-		if ((w[i][0] != '0' && w[i][0] != '1') || w[i][1] != '\0' || i + 1 < n)
+		if (w[i][0] < '0' || w[i][0] > '3' || w[i][1] != '\0' || i + 1 < n)
 			return 0;
 		to->arena = w[i][0] - '0';
 	}
@@ -1836,7 +1857,7 @@ static void MpListenVote(int pid, const char* args)
 			snprintf(line, sizeof(line), "vote in progress -- %s", tally);
 		}
 		else
-			snprintf(line, sizeof(line), "no vote; !vote <city> [mp [0|1]] or !vote mp [0|1]");
+			snprintf(line, sizeof(line), "no vote; !vote <city> [mp [0-3]] or !vote mp [0-3]");
 		MpHostSay(line);
 		return;
 	}
@@ -1858,7 +1879,17 @@ static void MpListenVote(int pid, const char* args)
 
 	if (!MpLVoteParse(args, &to))
 	{
-		MpHostSay("usage: !vote <city> [mp [0|1]] or !vote mp [0|1]");
+		MpHostSay("usage: !vote <city> [mp [0-3]] or !vote mp [0-3] (MP 2/3: Vegas)");
+		return;
+	}
+
+	/* MP 2/3 exist in Vegas only, and only when the files are installed here
+	 * (peer install checks wait on the held JPAR hello block). */
+	if (to.shape && (to.arena >= MpArenaCount(to.city) || !MpArenaEveryoneHas(to.city, to.arena)))
+	{
+		MpHostSay(to.arena >= MpArenaCount(to.city)
+			? "that city has only MP 0 and MP 1"
+			: "that map is not installed (BAKE_D1_CARS builds Vegas MP 2/3)");
 		return;
 	}
 
@@ -2287,7 +2318,7 @@ static void MpListenHelp(int pid, int connIndex, const char* args, int isHost)
 	}
 
 	if (strcmp(word, "map") == 0 || strcmp(word, "changemap") == 0)
-		MpHostReply(pid, connIndex, "!map <city> [mp [0|1]] | !map mp [0|1] -- force map switch (host)");
+		MpHostReply(pid, connIndex, "!map <city> [mp [0-3]] | !map mp [0-3] -- force map switch (host)");
 	else if (strcmp(word, "mode") == 0 || strcmp(word, "gamemode") == 0)
 		MpHostReply(pid, connIndex, "!mode [0-3|ride|fox|bomb|cnr] [minutes] -- show or switch mode (host)");
 	else if (strcmp(word, "endvote") == 0 || strcmp(word, "cancelvote") == 0)
@@ -2299,7 +2330,7 @@ static void MpListenHelp(int pid, int connIndex, const char* args, int isHost)
 	else if (strcmp(word, "kick") == 0)
 		MpHostReply(pid, connIndex, "!kick <slot|name> [reason] -- remove a player (host)");
 	else if (strcmp(word, "vote") == 0)
-		MpHostReply(pid, connIndex, "!vote <city> [mp [0|1]] | !vote mp [0|1] | !vote cancel");
+		MpHostReply(pid, connIndex, "!vote <city> [mp [0-3]] | !vote mp [0-3] | !vote cancel");
 	else
 		MpHostReply(pid, connIndex, "unknown command (try !help)");
 }
@@ -2347,13 +2378,20 @@ static void MpListenCommand(int pid, int connIndex, const char* text)
 			char where[24];
 
 			MpRotWhere(&cur, where, sizeof(where));
-			snprintf(line, sizeof(line), "map: %s -- !map <city> [mp [0|1]] | !map mp [0|1]", where);
+			snprintf(line, sizeof(line), "map: %s -- !map <city> [mp [0-3]] | !map mp [0-3]", where);
 			MpHostReply(pid, connIndex, line);
 			break;
 		}
 		if (!MpLVoteParse(cmd.args, &to))
 		{
-			MpHostReply(pid, connIndex, "usage: !map <city> [mp [0|1]] | !map mp [0|1]");
+			MpHostReply(pid, connIndex, "usage: !map <city> [mp [0-3]] | !map mp [0-3]");
+			break;
+		}
+		if (to.shape && (to.arena >= MpArenaCount(to.city) || !MpArenaEveryoneHas(to.city, to.arena)))
+		{
+			MpHostReply(pid, connIndex, to.arena >= MpArenaCount(to.city)
+				? "that city has only MP 0 and MP 1"
+				: "that map is not installed (BAKE_D1_CARS builds Vegas MP 2/3)");
 			break;
 		}
 		if (to.city == GameLevel && to.shape == (gBootMpLevel ? 1 : 0) &&

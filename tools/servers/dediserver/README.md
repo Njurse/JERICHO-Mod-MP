@@ -40,7 +40,7 @@ supervisor (or a test) can pipe commands in.
 --port N             TCP session port (default 1318)
 --name "..."         name shown in the browser / registered with the master
 --city N             GameLevel the clients should load (0..3)
---arena N            which of that city's two multiplayer maps (0 or 1; the game's
+--arena N            which of that city's multiplayer maps (0 or 1, Vegas also 2 or 3; the game's
                      -mp 0 / -mp 1). Default 0
 --gamemode MODE      the game mode, by id or name (default 0): 0 takearide,
                      1 foxnhounds, 2 carbombtag, 3 copsnrobbers (also ride / fox /
@@ -105,7 +105,7 @@ existing file). Updates and `git pull` therefore leave your settings alone.
   "port": 1318,
   "name": "Dedicated",
   "city": 0,
-  "arena": 0,               // which of the city's two multiplayer maps (0/1;
+  "arena": 0,               // which of the city's multiplayer maps (0/1; Vegas also 2/3;
                             // the game's -mp 0 / -mp 1). The server hosts the
                             // multiplayer map, never the full single-player city
   "password": "",           // players must enter this to join ("" = open). In the
@@ -175,7 +175,7 @@ the other players; the reply comes back privately. `!help` lists what *you* can 
 | `!map <city> [mp [0\|1]] [save]`, `!map mp [0\|1] [save]` | admin | switch map immediately (cancels any active vote; `save` writes `dediserver.json`) |
 | `!mode [id\|name] [minutes] [save]`, `!modetime <1..5>` | everyone (view) / admin (change) | show or switch game mode (`takearide`, `fox`, `bomb`, `cnr`) and round time |
 | `!endround`, `!restart` | admin | end the active timed round now, or restart the current round |
-| `!vote <city>`, `!vote <city> mp [0\|1]`, `!vote mp [0\|1]`, `!vote` / `!vote cancel` / `!endvote` | everyone / admin to cancel | vote for the full city or its multiplayer map (see below) |
+| `!vote <city>`, `!vote <city> mp [0-3]`, `!vote mp [0-3]`, `!vote` / `!vote cancel` / `!endvote` | everyone / admin to cancel | vote for the full city or its multiplayer map (see below) |
 
 `map`, `mode`, `modetime`, `endvote`, `endround`, `restart`, `vote`, `cops`, `difficulty`, `time`, `weather`, `motd` and `admin` also work at the server
 console. Every admin command is logged with who ran it. Joins and leaves are
@@ -186,9 +186,10 @@ announced in chat (`"announce_joins": false` turns that off). Saving rewrites
 
 `!vote <city>` starts a vote for the full single-player city map. Add `mp` to
 target that city's multiplayer map; the optional `0` or `1` selects an explicit
-arena: `!vote <city> mp`, `!vote <city> mp 0`, or `!vote <city> mp 1`. Use
-`!vote mp [0|1]` to change only the multiplayer map in the current city.
-`!vote city <city> ...` is still accepted (the `city` word is optional).
+arena: `!vote <city> mp`, `!vote <city> mp 0`, or `!vote <city> mp 1`
+(Vegas also `mp 2` / `mp 3`). Use `!vote mp [0-3]` to change only the
+multiplayer map in the current city. `!vote city <city> ...` is still
+accepted (the `city` word is optional).
 One vote per player id. The vote passes when the configured threshold is met, or
 fails after its duration; admins can use `!vote cancel`.
 
@@ -214,14 +215,15 @@ the server announces the next stop, waits 4 s, switches and reconnects everyone
 (the same rejoin as a vote). `"rotation"` is the ordered list of stops, each
 `"chicago mp 0"`, `"havana mp 1"`, `"vegas city"`, or
 `{"city": 1, "map_mode": "mp", "arena": 0, "area": -1}`. Without it the order is
-every city's two multiplayer maps, city by city. `area` is reserved for stops
+every city's multiplayer maps, city by city (Vegas MP 2 and 3 are listed,
+but skipped until every player can load them). `area` is reserved for stops
 inside one map (arenas within the big city map) and must be `-1` for now. A
 rotation step is never saved: `dediserver.json` is not rewritten, and neither key
 is added to it (both default in code). A vote resets the round count. The
 listen host's mp.ini `rounds_per_map` follows the same default order.
 
 Session settings in `dediserver.json`: `"city"` (`0`-`3`) and `"arena"` (`0`/`1`,
-the city's two multiplayer maps), `"map_mode"` (`"city"` or `"mp"`), `"time_of_day"` (`dawn`, `day`, `dusk`, `night`)
+the city's multiplayer maps; Vegas also 2/3), `"map_mode"` (`"city"` or `"mp"`), `"time_of_day"` (`dawn`, `day`, `dusk`, `night`)
 and `"weather"` (`clear`, `rain`, `wet`), or `--city` / `--arena` /
 `--time-of-day` / `--weather`. Players read them (and the cops rules) as they load a
 level, so a change reaches a player the next time they join or load.
@@ -471,3 +473,15 @@ forwarded, the clocks win and lose, and `mode_time` is optional:
 python JERICHO/MODS/mp/tools/servers/dediserver/test_round.py
 python JERICHO/MODS/mp/tools/servers/dediserver/test_marks.py
 ```
+
+
+### Vegas MP 2 and 3
+
+Vegas has two extra multiplayer maps (MP 2 and MP 3, the cut Ghost Town / North
+Vegas regions). They are not in the retail mission list: each player's own
+`BAKE_D1_CARS` builds them from their `DRIVER2/MISSIONS/MISSIONS.BLK`
+(`tools/make_vegas_arenas.py`). The listen host only offers a map this machine
+has the files for (and falls back to MP 0 at launch if a peer is missing them).
+A hello field that would let the dedicated server skip 2/3 when any player
+lacks the files is held and not on the wire yet, so the dedi will not rotate
+or vote to Vegas MP 2/3 until that is approved.

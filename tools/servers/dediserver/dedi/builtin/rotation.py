@@ -7,9 +7,11 @@ NOT save dediserver.json, so a restart begins where the operator configured):
   "rotation": [...]       the stops, in order. Each is a string
                           ("chicago mp 0", "havana mp", "vegas city") or an
                           object {"city": 1, "map_mode": "mp", "arena": 0,
-                          "area": -1}. Default: every city's two multiplayer
-                          maps, city by city (areas within a city first, then
-                          the next city).
+                          "area": -1}. Default: every city's multiplayer
+                          maps, city by city (Vegas has MP 0..3, the rest
+                          MP 0/1). A Vegas MP 2/3 stop is skipped until every
+                          player can load it (server.arena_ok; peer bits wait
+                          on a held hello field).
 
 `area` is reserved: a stop inside one map (an arena region of a big city
 map) for the arena work. Today a stop is a level: city + map mode + arena, and
@@ -32,7 +34,7 @@ _state = None
 def default_rotation():
     """Every city's multiplayer maps, areas within a city before the next city."""
     return [{"city": c, "map_mode": "mp", "arena": a, "area": -1}
-            for c in range(len(CITIES)) for a in (0, 1)]
+            for c in range(len(CITIES)) for a in range(4 if c == 2 else 2)]
 
 
 def parse_stop(stop):
@@ -58,8 +60,8 @@ def parse_stop(stop):
         raise ValueError("unknown city in stop %r" % (stop,))
     if mode not in ("mp", "city"):
         raise ValueError("map mode is mp or city in stop %r" % (stop,))
-    if arena not in (0, 1):
-        raise ValueError("arena is 0 or 1 in stop %r" % (stop,))
+    if not 0 <= arena < (4 if city == 2 else 2):
+        raise ValueError("arena is 0 or 1 (Vegas: 0..3) in stop %r" % (stop,))
     if mode == "city":
         arena = 0
     return {"city": city, "map_mode": mode, "arena": arena, "area": area}
@@ -122,7 +124,9 @@ def on_tick():
             except ValueError as e:
                 _server.log.warning("rotation: %s - using the default order" % e)
                 stops = default_rotation()
-            to = next_stop(stops, *level)
+            playable = [s for s in stops if s["map_mode"] == "city"
+                        or _server.arena_ok(s["city"], s["arena"])] or default_rotation()[:1]
+            to = next_stop(playable, *level)
             if (to["city"], to["map_mode"], to["arena"]) != level:
                 _state["to"] = to
                 _state["switch_at"] = now() + SWITCH_DELAY
